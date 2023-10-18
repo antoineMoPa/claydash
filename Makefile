@@ -7,7 +7,7 @@ build:
 	  --target web target/wasm32-unknown-unknown/release/main.wasm
 
 serve:
-	python3 -m http.server --directory www
+	python3 -m http.server --directory www 3001
 
 
 doc:

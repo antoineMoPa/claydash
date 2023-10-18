@@ -2,15 +2,15 @@
 #[allow(unused_imports)]
 use std::fs::read_to_string;
 
-
 use bevy::{
     input::{keyboard::KeyCode, Input},
     pbr::DirectionalLightShadowMap,
     prelude::*
 };
 
-fn main() {
+use wasm_bindgen::{prelude::*};
 
+fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .insert_resource(DirectionalLightShadowMap { size: 2048 })
@@ -22,6 +22,7 @@ fn main() {
         .add_startup_system(setup_graphics)
         .add_startup_system(setup_window_size)
         .add_system(keyboard_input_system)
+        .add_system(cursor_system)
         .run();
 }
 
@@ -77,4 +78,26 @@ fn keyboard_input_system(
     if keyboard_input.pressed(KeyCode::W) {
         // todo
     }
+}
+
+
+fn cursor_system(
+    mut windows: ResMut<Windows>,
+    _mouse_input: Res<Input<MouseButton>>,
+) {
+    let window = match windows.get_primary_mut() {
+        Some(window) => window,
+        _ => {
+            return;
+        }
+    };
+
+    match window.cursor_position() {
+        Some(p) => {
+            //print!("{} {} \n", p.x, p.y);
+        },
+        _ => {
+            return;
+        }
+    };
 }
