@@ -4,13 +4,16 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-bevy = "0.8.1"
+bevy = "0.11.3"
 serde = "1.0.*"
 serde_json = "1.0.*"
 wasm-bindgen = "0.2.83"
 wasm-bindgen-futures = "0.4.33"
 futures = "0.3"
 js-sys = "0.3.60"
+bevy_asset = "0.11.3"
+bevy_reflect = "0.11.3"
+bevy_pbr = "0.11.3"
 
 [dependencies.web-sys]
 version = "0.3.60"
