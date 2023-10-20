@@ -1,6 +1,7 @@
 // The time since startup data is in the globals binding which is part of the mesh_view_bindings import
 #import bevy_pbr::mesh_view_bindings globals
 
+// TODO: see if using AssetLoader fixes import
 struct VertexOutput {
     // This is `clip position` when the struct is used as a vertex stage output
     // and `frag coord` when used as a fragment stage input
@@ -25,7 +26,5 @@ struct VertexOutput {
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let t_1 = sin(globals.time) * 0.5 + 0.5;
 
-    let red = vec3<f32>(0.627955, 0.224863, 0.125846);
-
-    return vec4<f32>(red, 1.0);
+    return vec4<f32>(in.position.x / 2000.0, in.position.y / 2000.0, 0.0, 1.0);
 }
