@@ -34,15 +34,31 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let direction = vec3(0.0, 0.0, -1.0);
 
-
     let sphere_r = 0.02 + cos(position.y * 40.0 + globals.time) * 0.002;
     let sphere_position = vec3(material.mouse.x, material.mouse.y, 0.0);
+
+    let box_position = vec3(0.0, 0.0, 0.0);
+    let box_parameters = vec3(0.08, 0.08, 0.08);
+
     var d_sphere = 0.0;
+    var d_box = 0.0;
+    var box_q = vec3(0.0);
+    var max_box_q = vec3(0.0);
+    var min_d = 0.0;
 
     for (var i: i32 = 0; i < 30; i++) {
         d_sphere = length(position - sphere_position) - sphere_r;
-        position += direction * d_sphere;
+
+        box_q = abs(position - box_position) - box_parameters;
+        max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
+        d_box = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
+
+        d_box *= 1.0 + 0.8 * cos(position.y * 120.0 + globals.time);
+
+        min_d = min(abs(d_sphere), abs(d_box));
+
+        position += direction * min_d;
     }
 
-    return vec4<f32>(in.position.x / 2000.0, in.position.y / 2000.0, 1.0/d_sphere, 1.0);
+    return vec4<f32>(0.0, 0.0, 1.0/min_d, 1.0);
 }
