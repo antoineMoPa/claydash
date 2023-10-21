@@ -64,29 +64,65 @@ fn keyboard_input_system(
     }
 }
 
+fn screen_to_centered_coords(screen_coords: Vec2, window: Mut<Window>) -> Vec2 {
+    let width = window.physical_width() as f32 / window.scale_factor() as f32;
+    let height = window.physical_height() as f32 / window.scale_factor() as f32;
+
+    let x = screen_coords.x - width / 2.0;
+    let y = -(screen_coords.y - height / 2.0);
+
+    return Vec2{x, y};
+}
+
+
+fn screen_to_world_coords(screen_coords: Vec2, window: Mut<Window>) -> Vec2 {
+    let width = window.physical_width() as f32 / window.scale_factor() as f32;
+    let coords = screen_to_centered_coords(screen_coords, window);
+
+    let x = coords.x / width;
+    let y = coords.y / width;
+
+    return Vec2{x, y};
+}
 
 fn cursor_system(
     mut windows: Query<&mut Window>,
     _mouse_input: Res<Input<MouseButton>>,
+    material_handle: Query<&Handle<CustomMaterial>>,
+    mut materials: ResMut<Assets<CustomMaterial>>,
 ) {
     let window = windows.single_mut();
 
     match window.cursor_position() {
-        Some(p) => {
-            //print!("{} {} \n", p.x, p.y);
-        },
+        Some(cursor_position) => {
+            let window = windows.single_mut();
+            let handle = material_handle.single();
+            let material = materials.get_mut(handle).unwrap();
+            let coords = screen_to_world_coords(cursor_position, window);
+
+            material.mouse.x = coords.x;
+            material.mouse.y = coords.y;
+         },
         _ => {
             return;
         }
     };
-
 }
-
-
 
 #[derive(TypeUuid, TypePath, AsBindGroup, Debug, Clone)]
 #[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
-struct CustomMaterial {}
+struct CustomMaterial {
+    #[uniform(0)]
+    mouse: Vec2,
+}
+
+impl Default for CustomMaterial {
+    fn default() -> Self {
+        Self {
+            mouse: Vec2 { x: 0.0, y: 0.0 }
+        }
+    }
+}
 
 impl Material for CustomMaterial {
     fn fragment_shader() -> ShaderRef {
@@ -98,7 +134,7 @@ fn setup_camera(
     mut commands: Commands,
 ) {
     commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 0.0, 1.0).looking_at(Vec3::ZERO, Vec3::Y),
+        transform: Transform::from_xyz(0.0, 0.0, 0.5).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 }
@@ -121,7 +157,7 @@ fn build_projection_surface(
             scale: Vec3::new(1.0, 1.0, window_aspect_ratio),
             ..default()
         },
-        material: materials.add(CustomMaterial {}),
+        material: materials.add(CustomMaterial { ..default() }),
         ..default()
     });
 }
