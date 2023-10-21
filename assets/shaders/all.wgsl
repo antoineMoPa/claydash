@@ -28,10 +28,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var position = in.world_position.xyz;
 
-    let direction = vec3(0.0,0.0,1.0);
+    let direction = vec3(0.0, 0.0, -1.0);
 
 
-    let sphere_r = 0.3;
+    let sphere_r = 0.2;
     let sphere_position = vec3(0.0);
     var d_sphere = 0.0;
 

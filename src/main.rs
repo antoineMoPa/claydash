@@ -28,7 +28,6 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugins(MaterialPlugin::<CustomMaterial>::default())
         .add_systems(Startup, setup_camera)
-        .add_systems(Startup, setup_graphics)
         .add_systems(Startup, setup_window_size)
         .add_systems(Startup, build_projection_surface)
         .add_systems(Update, keyboard_input_system)
@@ -37,13 +36,7 @@ fn main() {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn setup_window_size(mut windows: ResMut<Windows>) {
-    let window = match windows.get_primary_mut() {
-        Some(window) => window,
-        _ => {
-            return;
-        }
-    };
+fn setup_window_size(mut windows: Query<&mut Window>) {
     let wasm_window = match web_sys::window() {
         Some(wasm_window) => wasm_window,
         _ => {
@@ -55,32 +48,13 @@ fn setup_window_size(mut windows: ResMut<Windows>) {
         wasm_window.inner_height().unwrap().as_f64().unwrap() as f32,
     );
 
-    window.set_resolution(target_width, target_height);
+    let mut window = windows.single_mut();
+    window.resolution.set(target_width, target_height);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn setup_window_size() {
 }
-
-fn setup_graphics(
-    mut commands: Commands,
-) {
-    commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight {
-            shadows_enabled: true,
-            illuminance: 1000.0,
-            color: Color::rgb(0.5, 0.5, 2.0),
-            ..default()
-        },
-        transform: Transform {
-            translation: Vec3::new(0.0, 2.0, 0.0),
-            rotation: Quat::from_xyzw(-1.0, -0.3, 0.0, 0.0),
-            ..default()
-        },
-        ..default()
-    });
-}
-
 
 fn keyboard_input_system(
     keyboard_input: Res<Input<KeyCode>>,
@@ -124,19 +98,29 @@ fn setup_camera(
     mut commands: Commands,
 ) {
     commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
+        transform: Transform::from_xyz(0.0, 0.0, 1.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 }
+
 fn build_projection_surface(
+    mut windows: Query<&mut Window>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<CustomMaterial>>,
 ) {
+    let window = windows.single_mut();
+    let window_aspect_ratio = (window.resolution.physical_width() as f32) / (window.resolution.physical_height() as f32);
+
     // cube
     commands.spawn(MaterialMeshBundle {
         mesh: meshes.add(Mesh::from(shape::Plane { size: 1.0, subdivisions: 0 })),
-        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        transform: Transform {
+            translation: Vec3::new(0.0, 0.0, 0.0),
+            rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
+            scale: Vec3::new(1.0, 1.0, window_aspect_ratio),
+            ..default()
+        },
         material: materials.add(CustomMaterial {}),
         ..default()
     });
