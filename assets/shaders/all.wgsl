@@ -26,5 +26,19 @@ struct VertexOutput {
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let t_1 = sin(globals.time) * 0.5 + 0.5;
 
-    return vec4<f32>(in.position.x / 2000.0, in.position.y / 2000.0, 0.0, 1.0);
+    var position = in.world_position.xyz;
+
+    let direction = vec3(0.0,0.0,1.0);
+
+
+    let sphere_r = 0.3;
+    let sphere_position = vec3(0.0);
+    var d_sphere = 0.0;
+
+    for (var i: i32 = 0; i < 10; i++) {
+        d_sphere = length(position - sphere_position) - sphere_r;
+        position += direction * d_sphere;
+    }
+
+    return vec4<f32>(in.position.x / 2000.0, in.position.y / 2000.0, 1.0/d_sphere, 1.0);
 }
