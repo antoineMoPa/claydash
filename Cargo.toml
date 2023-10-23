@@ -14,6 +14,7 @@ js-sys = "0.3.60"
 bevy_asset = "0.11.3"
 bevy_reflect = "0.11.3"
 bevy_pbr = "0.11.3"
+bevy_framepace = "0.13.3"
 
 [dependencies.web-sys]
 version = "0.3.60"

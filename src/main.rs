@@ -26,13 +26,19 @@ fn main() {
             brightness: 0.6,
         })
         .add_plugins(DefaultPlugins)
+        .add_plugins(bevy_framepace::FramepacePlugin)
         .add_plugins(MaterialPlugin::<CustomMaterial>::default())
+        .add_systems(Startup, setup_frame_limit)
         .add_systems(Startup, setup_camera)
         .add_systems(Startup, setup_window_size)
         .add_systems(Startup, build_projection_surface)
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, cursor_system)
         .run();
+}
+
+fn setup_frame_limit(mut settings: ResMut<bevy_framepace::FramepaceSettings>) {
+    settings.limiter = bevy_framepace::Limiter::from_framerate(30.0);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -119,7 +125,7 @@ struct CustomMaterial {
 impl Default for CustomMaterial {
     fn default() -> Self {
         Self {
-            mouse: Vec2 { x: 0.0, y: 0.0 }
+            mouse: Vec2 { x: 0.0, y: 0.0 },
         }
     }
 }
@@ -134,7 +140,7 @@ fn setup_camera(
     mut commands: Commands,
 ) {
     commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 0.0, 0.5).looking_at(Vec3::ZERO, Vec3::Y),
+        transform: Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 }
