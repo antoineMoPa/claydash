@@ -14,6 +14,8 @@ use bevy::{
     prelude::*
 };
 
+use bevy_mod_picking::prelude::*;
+
 #[allow(unused_imports)]
 use wasm_bindgen::{prelude::*};
 
@@ -26,6 +28,7 @@ fn main() {
             brightness: 0.6,
         })
         .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPickingPlugins)
         .add_plugins(bevy_framepace::FramepacePlugin)
         .add_plugins(MaterialPlugin::<CustomMaterial>::default())
         .add_systems(Startup, setup_frame_limit)
@@ -33,7 +36,6 @@ fn main() {
         .add_systems(Startup, setup_window_size)
         .add_systems(Startup, build_projection_surface)
         .add_systems(Update, keyboard_input_system)
-        .add_systems(Update, cursor_system)
         .run();
 }
 
@@ -70,62 +72,17 @@ fn keyboard_input_system(
     }
 }
 
-fn screen_to_centered_coords(screen_coords: Vec2, window: Mut<Window>) -> Vec2 {
-    let width = window.physical_width() as f32 / window.scale_factor() as f32;
-    let height = window.physical_height() as f32 / window.scale_factor() as f32;
-
-    let x = screen_coords.x - width / 2.0;
-    let y = -(screen_coords.y - height / 2.0);
-
-    return Vec2{x, y};
-}
-
-
-fn screen_to_world_coords(screen_coords: Vec2, window: Mut<Window>) -> Vec2 {
-    let width = window.physical_width() as f32 / window.scale_factor() as f32;
-    let coords = screen_to_centered_coords(screen_coords, window);
-
-    let x = coords.x / width;
-    let y = coords.y / width;
-
-    return Vec2{x, y};
-}
-
-fn cursor_system(
-    mut windows: Query<&mut Window>,
-    _mouse_input: Res<Input<MouseButton>>,
-    material_handle: Query<&Handle<CustomMaterial>>,
-    mut materials: ResMut<Assets<CustomMaterial>>,
-) {
-    let window = windows.single_mut();
-
-    match window.cursor_position() {
-        Some(cursor_position) => {
-            let window = windows.single_mut();
-            let handle = material_handle.single();
-            let material = materials.get_mut(handle).unwrap();
-            let coords = screen_to_world_coords(cursor_position, window);
-
-            material.mouse.x = coords.x;
-            material.mouse.y = coords.y;
-         },
-        _ => {
-            return;
-        }
-    };
-}
-
 #[derive(TypeUuid, TypePath, AsBindGroup, Debug, Clone)]
 #[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
 struct CustomMaterial {
     #[uniform(0)]
-    mouse: Vec2,
+    mouse: Vec4,
 }
 
 impl Default for CustomMaterial {
     fn default() -> Self {
         Self {
-            mouse: Vec2 { x: 0.0, y: 0.0 },
+            mouse: Vec4 { w:0.0, x: 0.0, y: 0.0, z: 0.0 },
         }
     }
 }
@@ -139,10 +96,34 @@ impl Material for CustomMaterial {
 fn setup_camera(
     mut commands: Commands,
 ) {
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+    commands.spawn((
+        Camera3dBundle {
+            transform: Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ..default()
+        },
+        RaycastPickCamera::default()
+    ));
+}
+
+use bevy_mod_picking::backend::HitData;
+
+fn on_pointer_move(
+    event: Listener<Pointer<Move>>,
+    material_handle: Query<&Handle<CustomMaterial>>,
+    mut materials: ResMut<Assets<CustomMaterial>>,
+) {
+    let hit: &HitData = &event.hit;
+    let position = match hit.position {
+        Some(position) => position,
+        _ => { return; }
+    };
+
+    let handle = material_handle.single();
+    let material = materials.get_mut(handle).unwrap();
+
+    material.mouse.x = position.x;
+    material.mouse.y = position.y;
+    material.mouse.z = position.z;
 }
 
 fn build_projection_surface(
@@ -155,15 +136,20 @@ fn build_projection_surface(
     let window_aspect_ratio = (window.resolution.physical_width() as f32) / (window.resolution.physical_height() as f32);
 
     // cube
-    commands.spawn(MaterialMeshBundle {
-        mesh: meshes.add(Mesh::from(shape::Plane { size: 1.0, subdivisions: 0 })),
-        transform: Transform {
-            translation: Vec3::new(0.0, 0.0, 0.0),
-            rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
-            scale: Vec3::new(1.0, 1.0, window_aspect_ratio),
+    commands.spawn((
+        MaterialMeshBundle {
+            mesh: meshes.add(Mesh::from(shape::Plane { size: 1.0, subdivisions: 0 })),
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.0, 0.0),
+                rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
+                scale: Vec3::new(1.0, 1.0, window_aspect_ratio),
+                ..default()
+            },
+            material: materials.add(CustomMaterial { ..default() }),
             ..default()
         },
-        material: materials.add(CustomMaterial { ..default() }),
-        ..default()
-    });
+        PickableBundle::default(),      // Makes the entity pickable
+        RaycastPickTarget::default(),   // Marker for the `bevy_picking_raycast` backend
+        On::<Pointer<Move>>::run(on_pointer_move),
+    ));
 }

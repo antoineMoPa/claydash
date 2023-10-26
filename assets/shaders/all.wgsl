@@ -23,7 +23,7 @@ struct VertexOutput {
 }
 
 struct CustomMaterial {
-    mouse: vec2<f32>,
+    mouse: vec3<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material: CustomMaterial;
@@ -34,11 +34,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let direction = vec3(0.0, 0.0, -1.0);
 
-    let sphere_r = 0.02 + cos(position.y * 40.0 + globals.time) * 0.002;
-    let sphere_position = vec3(material.mouse.x, material.mouse.y, 0.0);
+    let sphere_r = 0.2 + cos(position.y * 40.0 + globals.time) * 0.02;
+    let sphere_position = material.mouse;
 
-    var box_position = vec3(0.0, 0.0, 0.0);
-    let box_parameters = vec3(0.03, 0.03, 0.03);
+    var box_position = vec3(0.0, 0.0, 0.0) + material.mouse * 0.1;
+    let box_parameters = vec3(0.3, 0.3, 0.3);
 
     var d_sphere = 0.0;
     var d_box = 0.0;
