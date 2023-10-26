@@ -6,6 +6,14 @@ build:
 	  --out-dir www/target \
 	  --target web target/wasm32-unknown-unknown/release/main.wasm
 
+	rm -r claydash-ship/ || echo "no need to remove ../claydash-ship"
+
+	git clone git@github.com:antoineMoPa/claydash-ship.git
+
+	rm -rf claydash-ship/*
+	cp -r www/* claydash-ship/
+	echo "Commit and push ../claydash-ship to release!"
+
 serve:
 	python3 -m http.server --directory www 3001
 
