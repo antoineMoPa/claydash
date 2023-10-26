@@ -6,7 +6,7 @@ build:
 	  --out-dir www/target \
 	  --target web target/wasm32-unknown-unknown/release/main.wasm
 
-	rm -r claydash-ship/ || echo "no need to remove ../claydash-ship"
+	rm -rf claydash-ship/
 
 	git clone git@github.com:antoineMoPa/claydash-ship.git
 
