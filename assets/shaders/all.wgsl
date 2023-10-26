@@ -28,35 +28,51 @@ struct CustomMaterial {
 
 @group(1) @binding(0) var<uniform> material: CustomMaterial;
 
+const MAX_ITERATIONS = 64;
+
+fn sdf_union(d1: f32, d2: f32) -> f32 {
+    return min(d1, d2);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var position = in.world_position.xyz;
 
     let direction = vec3(0.0, 0.0, -1.0);
 
-    let sphere_r = 0.2 + cos(position.y * 40.0 + globals.time) * 0.02;
-    let sphere_position = material.mouse;
+    let sphere_r = 0.2;
+    let sphere_position = material.mouse + vec3(0.0, 0.0, -0.3);
 
-    var box_position = vec3(0.0, 0.0, 0.0) + material.mouse * 0.1;
+    var box_position = vec3(0.3 * cos(globals.time * 0.3), 0.0, -0.3 + 0.3 * cos(globals.time * 0.3));
     let box_parameters = vec3(0.3, 0.3, 0.3);
 
     var d_sphere = 0.0;
     var d_box = 0.0;
     var box_q = vec3(0.0);
     var max_box_q = vec3(0.0);
-    var min_d = 0.0;
+    var d = 0.0;
+    var i: i32 = 0;
 
-    for (var i: i32 = 0; i < 30; i++) {
-        d_sphere = length(position - sphere_position) - sphere_r;
-
+    for (; i < MAX_ITERATIONS; i++) {
         box_q = abs(position - box_position) - box_parameters;
         max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
         d_box = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
 
-        min_d = min(abs(d_sphere), abs(d_box));
+        d_sphere = length(position - sphere_position) - sphere_r;
+        d = sdf_union(d_sphere, d_box);
 
-        position += direction * min_d;
+        position += direction * d;
+
+        if(d < 0.001){
+            break;
+        }
     }
 
-    return vec4<f32>(0.2, 0.0, 1.0/min_d, 1.0);
+    if(d < 0.001){
+        let AOLight: f32 = 1.0 / (f32(i)/f32(MAX_ITERATIONS));
+
+        return vec4<f32>(0.2, 0.1, 1.0/d, 1.0) + AOLight * vec4(0.01);
+    }
+
+    return vec4<f32>(0.8, 0.0, 0.04, 1.0);
 }
