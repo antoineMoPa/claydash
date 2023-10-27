@@ -19,8 +19,8 @@ pub type CommandMap = HashMap<String, CommandParam>;
 
 #[derive(Clone)]
 pub struct CommandParam {
-    docs: String,
-    float: Option<f32>,
+    pub docs: String,
+    pub float: Option<f32>,
 }
 
 impl Default for CommandParam {
