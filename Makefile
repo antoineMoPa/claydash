@@ -6,11 +6,10 @@ build:
 	  --out-dir www/target \
 	  --target web target/wasm32-unknown-unknown/release/main.wasm
 
-	rm -rf claydash-ship/
-
-	git clone git@github.com:antoineMoPa/claydash-ship.git
-
-	rm -rf claydash-ship/*
+deploy:
+	echo "At this point, we expect the ship repo to exist locally."
+	echo "Get the repo with:"
+	echo "git clone git@github.com:antoineMoPa/claydash-ship.git"
 	cp -r www/* claydash-ship/
 	echo "Commit and push ../claydash-ship to release!"
 

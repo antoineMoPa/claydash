@@ -10,6 +10,7 @@ use bevy_reflect::{
 
 use bevy::{
     input::{keyboard::KeyCode, Input},
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     pbr::DirectionalLightShadowMap,
     render::render_resource::{AsBindGroup, ShaderRef},
     prelude::*
@@ -29,9 +30,13 @@ fn main() {
             brightness: 0.6,
         })
         .add_plugins(DefaultPlugins)
-        .add_plugins(DefaultPickingPlugins)
         .add_plugins(bevy_framepace::FramepacePlugin)
+        .add_plugins(DefaultPickingPlugins)
         .add_plugins(MaterialPlugin::<CustomMaterial>::default())
+        .add_plugins((
+            FrameTimeDiagnosticsPlugin,
+            LogDiagnosticsPlugin::default()
+        ))
         .add_systems(Startup, remove_picking_logs)
         .add_systems(Startup, setup_commands)
         .add_systems(Startup, setup_frame_limit)
@@ -51,6 +56,16 @@ fn remove_picking_logs (
 }
 
 fn setup_commands() {
+    let mut params = command_central::CommandMap::new();
+    params.insert("x".to_string(), command_central::CommandParam {
+        docs: "X position of the mouse.".to_string(),
+        ..default()
+    });
+    params.insert("y".to_string(), command_central::CommandParam {
+        docs: "Y position of the mouse.".to_string(),
+        ..default()
+    });
+
     command_central::add_command(&"test-command".to_string(), Command {
         title: "Test Command".to_string(),
         docs: "Here are some docs about the command".to_string(),
@@ -59,7 +74,7 @@ fn setup_commands() {
 }
 
 fn setup_frame_limit(mut settings: ResMut<bevy_framepace::FramepaceSettings>) {
-    settings.limiter = bevy_framepace::Limiter::from_framerate(30.0);
+    settings.limiter = bevy_framepace::Limiter::from_framerate(60.0);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -175,14 +190,38 @@ fn build_projection_surface(
 
 fn launch_mouse_commands(
     buttons: Res<Input<MouseButton>>,
+    mut windows: Query<&mut Window>,
 ) {
     if buttons.just_pressed(MouseButton::Left) {
-        command_central::run(&"test-command".to_string())
+        let window = windows.single_mut();
+        let position = window.cursor_position().unwrap();
+
+        let mut params = command_central::CommandMap::new();
+        params.insert("x".to_string(), command_central::CommandParam {
+            docs: "X position of the mouse.".to_string(),
+            float: Some(position.x),
+            ..default()
+        });
+        params.insert("y".to_string(), command_central::CommandParam {
+            docs: "Y position of the mouse.".to_string(),
+            float: Some(position.y),
+            ..default()
+        });
+
+        command_central::run_with_params(&"test-command".to_string(), &params);
     }
 }
 
 fn run_commands() {
-    if command_central::check_if_has_to_run(&"test-command".to_string()).is_some() {
-        info!("Running Command!")
+    let command = command_central::check_if_has_to_run(&"test-command".to_string());
+    match command {
+        Some(command) => {
+            let x = command.parameters.get("x").unwrap().float.unwrap();
+            let y = command.parameters.get("y").unwrap().float.unwrap();
+            info!("Running Command! x: {}, y: {}", x, y);
+        },
+        _ => {
+            // Nothing to do
+        }
     }
 }
