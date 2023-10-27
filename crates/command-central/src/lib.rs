@@ -16,13 +16,34 @@ use lazy_static::lazy_static;
 use std::sync::Mutex;
 
 #[derive(Clone)]
+pub struct CommandParam {
+    docs: String,
+    float: Option<f32>,
+}
+
+impl Default for CommandParam {
+    fn default() -> Self {
+        return Self {
+            docs: "".to_string(),
+            float: None,
+        };
+    }
+}
+
+impl CommandParam {
+    fn clear(&mut self) {
+        self.float = None;
+    }
+}
+
+#[derive(Clone)]
 pub struct Command {
     pub title: String,
     pub docs: String,
     pub keybinding: String,
     pub requested_runs: i32,
+    pub parameters: HashMap<String, CommandParam>,
 }
-
 
 impl Command {
     fn run(&mut self) {
@@ -45,6 +66,7 @@ impl Default for Command {
             docs: "".to_string(),
             keybinding: "".to_string(),
             requested_runs: 0,
+            parameters: HashMap::new(),
         };
     }
 }
@@ -91,10 +113,41 @@ pub fn check_if_has_to_run(system_name: &String) -> Option<Command> {
 /// Requests to run a command by name.
 pub fn run(system_name: &String) {
     let mut commands = COMMANDS_MAP.lock().unwrap();
-    let command = commands.get_mut(system_name);
-    return command.unwrap().run();
+    let command = commands.get_mut(system_name).unwrap();
+    let mut params = command.parameters.clone();
+
+    for (_, param) in params.iter_mut() {
+        param.clear();
+    }
+
+    command.parameters = params;
+
+    return command.run();
 }
 
+
+/// Requests to run a command by name again with last used parameters.
+pub fn repeat(system_name: &String) {
+    let mut commands = COMMANDS_MAP.lock().unwrap();
+    let command = commands.get_mut(system_name).unwrap();
+    return command.run();
+}
+
+/// Requests to run a command by name.
+pub fn run_with_params(system_name: &String, parameters: &HashMap<String, CommandParam>) {
+    let mut commands = COMMANDS_MAP.lock().unwrap();
+    let command_option = commands.get_mut(system_name);
+
+    match command_option {
+        Some(command) => {
+            command.parameters = parameters.clone();
+            command.run();
+        }
+        _ => {
+            panic!("Could not get command!");
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -168,5 +221,111 @@ mod tests {
         let sys_name = "not-existing-command".to_string();
 
         assert_eq!(check_if_has_to_run(&sys_name).is_none(), true);
+    }
+
+    #[test]
+    fn creates_and_runs_command_with_parameters() {
+        let sys_name = "test-command-with-params".to_string();
+
+        let mut params: HashMap<String, CommandParam>= HashMap::new();
+
+        params.insert("x".to_string(), CommandParam {
+            docs: "X position of the mouse.".to_string(),
+            ..CommandParam::default()
+        });
+
+        params.insert("y".to_string(), CommandParam {
+            docs: "Y position of the mouse.".to_string(),
+            ..CommandParam::default()
+        });
+
+        add_command(&sys_name, Command {
+            title: "Test Command".to_string(),
+            docs: "Here are some docs about the command".to_string(),
+            parameters: params,
+            ..Command::default()
+        });
+
+        assert_eq!(
+            read_command(&sys_name).unwrap().parameters["x"].docs,
+            "X position of the mouse.".to_string()
+        );
+
+        // Simulate application part where we would trigger the command
+        {
+            let mut params: HashMap<String, CommandParam>= HashMap::new();
+
+            params.insert("x".to_string(), CommandParam {
+                docs: "X position of the mouse.".to_string(),
+                float: Some(998.3),
+                ..CommandParam::default()
+            });
+
+            run_with_params(&sys_name, &params);
+        }
+
+        let mut side_effect_result: f32 = 0.0;
+
+        // simulate application loop where we would process the command:
+        {
+            let command = check_if_has_to_run(&sys_name).unwrap();
+
+            let original_x = command.parameters.get(&"x".to_string()).unwrap().float.unwrap();
+
+            side_effect_result = original_x * 2.0;
+        }
+
+        assert_eq!(side_effect_result, 998.3 * 2.0);
+    }
+
+    #[test]
+    fn repeats_last_command_with_parameters() {
+        let sys_name = "test-command-with-params-2".to_string();
+
+        let mut params: HashMap<String, CommandParam>= HashMap::new();
+
+        params.insert("x".to_string(), CommandParam {
+            docs: "X position of the mouse.".to_string(),
+            ..CommandParam::default()
+        });
+
+        add_command(&sys_name, Command {
+            title: "Test Command".to_string(),
+            docs: "Here are some docs about the command".to_string(),
+            parameters: params,
+            ..Command::default()
+        });
+
+        // Simulate application part where we would trigger the command
+        {
+            let mut params: HashMap<String, CommandParam>= HashMap::new();
+
+            params.insert("x".to_string(), CommandParam {
+                docs: "X position of the mouse.".to_string(),
+                float: Some(12.3),
+                ..CommandParam::default()
+            });
+
+            run_with_params(&sys_name, &params);
+        }
+
+        // simulate application loop where we would process the command:
+        {
+            let command = check_if_has_to_run(&sys_name).unwrap();
+            let float_val = command.parameters.get(&"x".to_string()).unwrap().float.unwrap();
+            assert_eq!(float_val, 12.3);
+        }
+
+        // Simulate application part where we would trigger a repeat of last command.
+        {
+            repeat(&sys_name);
+        }
+
+        // simulate application loop where we would process the command again:
+        {
+            let command = check_if_has_to_run(&sys_name).unwrap();
+            let float_val = command.parameters.get(&"x".to_string()).unwrap().float.unwrap();
+            assert_eq!(float_val, 12.3);
+        }
     }
 }
