@@ -1,6 +1,7 @@
 // This is only for native builds
 #[allow(unused_imports)]
 use std::fs::read_to_string;
+use command_central::Command;
 
 use bevy_reflect::{
     TypePath,
@@ -31,12 +32,30 @@ fn main() {
         .add_plugins(DefaultPickingPlugins)
         .add_plugins(bevy_framepace::FramepacePlugin)
         .add_plugins(MaterialPlugin::<CustomMaterial>::default())
+        .add_systems(Startup, remove_picking_logs)
+        .add_systems(Startup, setup_commands)
         .add_systems(Startup, setup_frame_limit)
         .add_systems(Startup, setup_camera)
         .add_systems(Startup, setup_window_size)
         .add_systems(Startup, build_projection_surface)
         .add_systems(Update, keyboard_input_system)
+        .add_systems(Update, launch_mouse_commands)
+        .add_systems(Update, run_commands)
         .run();
+}
+
+fn remove_picking_logs (
+    mut logging_next_state: ResMut<NextState<debug::DebugPickingMode>>,
+) {
+    logging_next_state.set(debug::DebugPickingMode::Disabled);
+}
+
+fn setup_commands() {
+    command_central::add_command(&"test-command".to_string(), Command {
+        title: "Test Command".to_string(),
+        docs: "Here are some docs about the command".to_string(),
+        ..Command::default()
+    });
 }
 
 fn setup_frame_limit(mut settings: ResMut<bevy_framepace::FramepaceSettings>) {
@@ -152,4 +171,18 @@ fn build_projection_surface(
         RaycastPickTarget::default(),   // Marker for the `bevy_picking_raycast` backend
         On::<Pointer<Move>>::run(on_pointer_move),
     ));
+}
+
+fn launch_mouse_commands(
+    buttons: Res<Input<MouseButton>>,
+) {
+    if buttons.just_pressed(MouseButton::Left) {
+        command_central::run(&"test-command".to_string())
+    }
+}
+
+fn run_commands() {
+    if command_central::check_if_has_to_run(&"test-command".to_string()).is_some() {
+        info!("Running Command!")
+    }
 }
