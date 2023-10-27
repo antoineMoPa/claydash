@@ -1,3 +1,16 @@
+//!
+//! Command Central
+//!
+//! The idea of command central is that any function in an app, every button is tied to a command.
+//! Each command is documented, potentially reusable in scripts.
+//!
+//! This implementation is a pretty early and inefficient version, but it should help getting started.
+//! Later, it would be good to:
+//!  - Find an efficient way to notify commands that does not require checking all of commands.
+//!  - Accept parameters and return values
+//!  - Make it scriptable
+//!
+
 use std::collections::HashMap;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
@@ -10,6 +23,7 @@ pub struct Command {
     pub keybinding: String,
     pub requested_runs: i32,
 }
+
 
 impl Command {
     fn run(&mut self) {
