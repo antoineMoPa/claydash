@@ -70,13 +70,22 @@ pub fn read_command(system_name: &String) -> Option<Command> {
     return commands.get(system_name).cloned();
 }
 
-/// Returns true and decrements internal counter if the command has to be run.
+/// Returns copy of command  and decrements internal counter if the command has to be run.
 ///
-/// Returns false if nothing has to be done.
-pub fn check_if_has_to_run(system_name: &String) -> bool {
+/// Returns None if nothing has to be done.
+pub fn check_if_has_to_run(system_name: &String) -> Option<Command> {
     let mut commands = COMMANDS_MAP.lock().unwrap();
-    let command = commands.get_mut(system_name);
-    return command.unwrap().check_if_has_to_run();
+
+    match commands.get_mut(system_name) {
+        Some(command) => {
+            if command.check_if_has_to_run() {
+                return Some(command.clone());
+            } else {
+                return None;
+            }
+        },
+        _ => { return None; }
+    }
 }
 
 /// Requests to run a command by name.
@@ -142,15 +151,22 @@ mod tests {
         request_run(&sys_name);
 
         // Should return true 1 time
-        assert_eq!(check_if_has_to_run(&sys_name), true);
-        assert_eq!(check_if_has_to_run(&sys_name), false);
+        assert_eq!(check_if_has_to_run(&sys_name).is_some(), true);
+        assert_eq!(check_if_has_to_run(&sys_name).is_some(), false);
 
         request_run(&sys_name);
         request_run(&sys_name);
 
         // Should return true 2 times
-        assert_eq!(check_if_has_to_run(&sys_name), true);
-        assert_eq!(check_if_has_to_run(&sys_name), true);
-        assert_eq!(check_if_has_to_run(&sys_name), false);
+        assert_eq!(check_if_has_to_run(&sys_name).is_some(), true);
+        assert_eq!(check_if_has_to_run(&sys_name).is_some(), true);
+        assert_eq!(check_if_has_to_run(&sys_name).is_some(), false);
+    }
+
+    #[test]
+    fn does_not_run_non_existant_command() {
+        let sys_name = "not-existing-command".to_string();
+
+        assert_eq!(check_if_has_to_run(&sys_name).is_none(), true);
     }
 }
