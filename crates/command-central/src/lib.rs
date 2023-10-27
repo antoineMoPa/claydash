@@ -89,7 +89,7 @@ pub fn check_if_has_to_run(system_name: &String) -> Option<Command> {
 }
 
 /// Requests to run a command by name.
-pub fn request_run(system_name: &String) {
+pub fn run(system_name: &String) {
     let mut commands = COMMANDS_MAP.lock().unwrap();
     let command = commands.get_mut(system_name);
     return command.unwrap().run();
@@ -148,14 +148,14 @@ mod tests {
         });
         read_command(&sys_name).unwrap();
 
-        request_run(&sys_name);
+        run(&sys_name);
 
         // Should return true 1 time
         assert_eq!(check_if_has_to_run(&sys_name).is_some(), true);
         assert_eq!(check_if_has_to_run(&sys_name).is_some(), false);
 
-        request_run(&sys_name);
-        request_run(&sys_name);
+        run(&sys_name);
+        run(&sys_name);
 
         // Should return true 2 times
         assert_eq!(check_if_has_to_run(&sys_name).is_some(), true);
