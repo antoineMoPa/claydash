@@ -1,3 +1,6 @@
+#define TYPE_SPHERE: i32: 0;
+#define TYPE_RECTANGLE: i32: 1;
+
 // The time since startup data is in the globals binding which is part of the mesh_view_bindings import
 #import bevy_pbr::mesh_view_bindings globals
 
@@ -23,6 +26,7 @@ struct VertexOutput {
 }
 
 struct CustomMaterial {
+    object_types: array<vec4<i32>, 510>,
     mouse: vec3<f32>,
 };
 
@@ -52,8 +56,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var max_box_q = vec3(0.0);
     var d = 0.0;
     var i: i32 = 0;
+    var d_object = 0.0;
+
+    if (#{MAX_SDFS_PER_ENTITY} == 512) {
+        return vec4(1.0,0.0,0.0,0.0);
+    }
 
     for (; i < MAX_ITERATIONS; i++) {
+
+        for (var object_index: i32 = 0; object_index < 2; object_index++) {
+            //if (OBJECT_[object_index] == TYPE_SPHERE) {
+            //    d_object = length(position - sphere_position) - sphere_r;
+            //}
+        }
+
         box_q = abs(position - box_position) - box_parameters;
         max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
         d_box = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));

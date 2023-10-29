@@ -9,11 +9,21 @@ use bevy_reflect::{
 };
 
 use bevy::{
+
     input::{keyboard::KeyCode, Input},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    pbr::DirectionalLightShadowMap,
-    render::render_resource::{AsBindGroup, ShaderRef},
-    prelude::*
+    pbr::{
+        MaterialPipeline,
+        MaterialPipelineKey,
+        DirectionalLightShadowMap
+    },
+    prelude::*,
+    render::{
+        mesh::MeshVertexBufferLayout,
+        render_resource::{
+            AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError, ShaderDefVal,
+        },
+    },
 };
 
 use bevy_mod_picking::prelude::*;
@@ -106,24 +116,41 @@ fn keyboard_input_system(
     }
 }
 
+const MAX_SDFS_PER_ENTITY: usize = 512;
+
 #[derive(TypeUuid, TypePath, AsBindGroup, Debug, Clone)]
 #[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
 struct CustomMaterial {
     #[uniform(0)]
-    mouse: Vec4,
+    objects: [IVec4; MAX_SDFS_PER_ENTITY],
+    #[uniform(1)]
+    mouse: Vec3,
 }
 
 impl Default for CustomMaterial {
     fn default() -> Self {
         Self {
-            mouse: Vec4 { w:0.0, x: 0.0, y: 0.0, z: 0.0 },
+            objects: [IVec4 { w: 0, x: 1, y: 2, z: 3}; MAX_SDFS_PER_ENTITY],
+            mouse: Vec3 { x: 0.0, y: 0.0, z: 0.0 },
         }
     }
 }
 
 impl Material for CustomMaterial {
     fn fragment_shader() -> ShaderRef {
-        "shaders/all.wgsl".into()
+        return "shaders/all.wgsl".into();
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline<Self>,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayout,
+        key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        let fragment = descriptor.fragment.as_mut().unwrap();
+        let val = ShaderDefVal::UInt("MAX_SDFS_PER_ENTITY".into(), MAX_SDFS_PER_ENTITY as u32);
+        fragment.shader_defs.push(val);
+        Ok(())
     }
 }
 
