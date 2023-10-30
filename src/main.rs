@@ -101,7 +101,6 @@ const MAX_SDFS_PER_ENTITY: i32 = 512;
 
 #[derive(TypeUuid, TypePath, AsBindGroup, Clone)]
 #[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
-#[repr(C,align(16))]
 struct SDFObjectMaterial {
     #[uniform(0)]
     mouse: Vec4,

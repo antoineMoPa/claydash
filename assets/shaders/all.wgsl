@@ -1,6 +1,3 @@
-#define TYPE_SPHERE: i32: 0;
-#define TYPE_RECTANGLE: i32: 1;
-
 // The time since startup data is in the globals binding which is part of the mesh_view_bindings import
 #import bevy_pbr::mesh_view_bindings globals
 
@@ -45,6 +42,8 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
 }
 
 const TYPE_END: i32 = #{TYPE_END};
+const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
+const TYPE_RECTANGLE: i32 = #{TYPE_RECTANGLE};
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -74,10 +73,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             if (sdf_types[sdf_index] == TYPE_END) {
                 break;
             }
-            let p = sdf_positions[sdf_index].xyz;
 
-            d_sphere = length(position - p) - sphere_r;
-            d = sdf_union(d_sphere, d);
+            if (sdf_types[sdf_index] == TYPE_SPHERE) {
+                let p = sdf_positions[sdf_index].xyz;
+
+                d_sphere = length(position - p) - sphere_r;
+                d = sdf_union(d_sphere, d);
+            }
         }
 
         position += direction * d;
