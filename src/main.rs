@@ -224,7 +224,7 @@ fn build_projection_surface(
 }
 
 fn register_commands() {
-    let mut params = command_central::CommandMap::new();
+    let mut params = command_central::CommandParamMap::new();
     params.insert("x".to_string(), command_central::CommandParam {
         docs: "X position of the sphere.".to_string(),
         ..default()
@@ -256,7 +256,7 @@ fn on_mouse_down(
             _ => { return; }
         };
 
-        let mut params = command_central::CommandMap::new();
+        let mut params = command_central::CommandParamMap::new();
         params.insert("x".to_string(), command_central::CommandParam {
             float: Some(position.x),
             ..default()

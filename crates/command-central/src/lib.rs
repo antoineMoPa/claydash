@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
-pub type CommandMap = HashMap<String, CommandParam>;
+pub type CommandParamMap = HashMap<String, CommandParam>;
 
 #[derive(Clone)]
 pub struct CommandParam {
@@ -44,7 +44,7 @@ pub struct CommandInfo {
     pub docs: String,
     pub keybinding: String,
     pub requested_runs: i32,
-    pub parameters: CommandMap,
+    pub parameters: CommandParamMap,
 }
 
 impl CommandInfo {
@@ -136,7 +136,7 @@ pub fn repeat(system_name: &String) {
 }
 
 /// Requests to run a command by name.
-pub fn run_with_params(system_name: &String, parameters: &CommandMap) {
+pub fn run_with_params(system_name: &String, parameters: &CommandParamMap) {
     let mut commands = COMMANDS_MAP.lock().unwrap();
     let command_option = commands.get_mut(system_name);
 
@@ -229,7 +229,7 @@ mod tests {
     fn creates_and_runs_command_with_parameters() {
         let sys_name = "test-command-with-params".to_string();
 
-        let mut params: CommandMap= HashMap::new();
+        let mut params: CommandParamMap= HashMap::new();
 
         params.insert("x".to_string(), CommandParam {
             docs: "X position of the mouse.".to_string(),
@@ -255,7 +255,7 @@ mod tests {
 
         // Simulate application part where we would trigger the command
         {
-            let mut params: CommandMap= HashMap::new();
+            let mut params: CommandParamMap= HashMap::new();
 
             params.insert("x".to_string(), CommandParam {
                 docs: "X position of the mouse.".to_string(),
@@ -284,7 +284,7 @@ mod tests {
     fn repeats_last_command_with_parameters() {
         let sys_name = "test-command-with-params-2".to_string();
 
-        let mut params: CommandMap= HashMap::new();
+        let mut params: CommandParamMap= HashMap::new();
 
         params.insert("x".to_string(), CommandParam {
             docs: "X position of the mouse.".to_string(),
@@ -300,7 +300,7 @@ mod tests {
 
         // Simulate application part where we would trigger the command
         {
-            let mut params: CommandMap= HashMap::new();
+            let mut params: CommandParamMap= HashMap::new();
 
             params.insert("x".to_string(), CommandParam {
                 docs: "X position of the mouse.".to_string(),
