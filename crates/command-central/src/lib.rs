@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
-pub type CommandMap = HashMap<String, CommandParam>;
+pub type CommandParamMap = HashMap<String, CommandParam>;
 
 #[derive(Clone)]
 pub struct CommandParam {
@@ -39,15 +39,15 @@ impl CommandParam {
 }
 
 #[derive(Clone)]
-pub struct Command {
+pub struct CommandInfo {
     pub title: String,
     pub docs: String,
     pub keybinding: String,
     pub requested_runs: i32,
-    pub parameters: CommandMap,
+    pub parameters: CommandParamMap,
 }
 
-impl Command {
+impl CommandInfo {
     fn run(&mut self) {
         self.requested_runs = self.requested_runs + 1;
     }
@@ -61,7 +61,7 @@ impl Command {
     }
 }
 
-impl Default for Command {
+impl Default for CommandInfo {
     fn default() -> Self {
         return Self {
             title: "".to_string(),
@@ -74,10 +74,10 @@ impl Default for Command {
 }
 
 lazy_static! {
-    static ref COMMANDS_MAP: Mutex<HashMap<String, Command>> = Mutex::new(HashMap::new());
+    static ref COMMANDS_MAP: Mutex<HashMap<String, CommandInfo>> = Mutex::new(HashMap::new());
 }
 
-pub fn add_command(system_name: &String, command: Command) {
+pub fn add_command(system_name: &String, command: CommandInfo) {
     lazy_static::initialize(&COMMANDS_MAP);
     let mut commands = COMMANDS_MAP.lock().unwrap();
 
@@ -89,7 +89,7 @@ pub fn add_command(system_name: &String, command: Command) {
 }
 
 /// Returns a copy of the command
-pub fn read_command(system_name: &String) -> Option<Command> {
+pub fn read_command(system_name: &String) -> Option<CommandInfo> {
     let commands = COMMANDS_MAP.lock().unwrap();
     return commands.get(system_name).cloned();
 }
@@ -97,7 +97,7 @@ pub fn read_command(system_name: &String) -> Option<Command> {
 /// Returns copy of command  and decrements internal counter if the command has to be run.
 ///
 /// Returns None if nothing has to be done.
-pub fn check_if_has_to_run(system_name: &String) -> Option<Command> {
+pub fn check_if_has_to_run(system_name: &String) -> Option<CommandInfo> {
     let mut commands = COMMANDS_MAP.lock().unwrap();
 
     match commands.get_mut(system_name) {
@@ -136,7 +136,7 @@ pub fn repeat(system_name: &String) {
 }
 
 /// Requests to run a command by name.
-pub fn run_with_params(system_name: &String, parameters: &CommandMap) {
+pub fn run_with_params(system_name: &String, parameters: &CommandParamMap) {
     let mut commands = COMMANDS_MAP.lock().unwrap();
     let command_option = commands.get_mut(system_name);
 
@@ -157,10 +157,10 @@ mod tests {
 
     #[test]
     fn it_adds_and_gets_new_command() {
-        add_command(&"test-command".to_string(), Command {
+        add_command(&"test-command".to_string(), CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
-            ..Command::default()
+            ..CommandInfo::default()
         });
         let command = read_command(&"test-command".to_string()).unwrap();
         assert_eq!(command.title, "Test Command".to_string());
@@ -181,25 +181,25 @@ mod tests {
     #[test]
     #[should_panic]
     fn it_detects_if_command_already_exists() {
-        add_command(&"test-command-duplicated".to_string(), Command {
+        add_command(&"test-command-duplicated".to_string(), CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
-            ..Command::default()
+            ..CommandInfo::default()
         });
-        add_command(&"test-command-duplicated".to_string(), Command {
+        add_command(&"test-command-duplicated".to_string(), CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
-            ..Command::default()
+            ..CommandInfo::default()
         });
     }
 
     #[test]
     fn runs_commands() {
         let sys_name = "test-command-with-callback".to_string();
-        add_command(&sys_name, Command {
+        add_command(&sys_name, CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
-            ..Command::default()
+            ..CommandInfo::default()
         });
         read_command(&sys_name).unwrap();
 
@@ -229,7 +229,7 @@ mod tests {
     fn creates_and_runs_command_with_parameters() {
         let sys_name = "test-command-with-params".to_string();
 
-        let mut params: CommandMap= HashMap::new();
+        let mut params: CommandParamMap= HashMap::new();
 
         params.insert("x".to_string(), CommandParam {
             docs: "X position of the mouse.".to_string(),
@@ -241,11 +241,11 @@ mod tests {
             ..CommandParam::default()
         });
 
-        add_command(&sys_name, Command {
+        add_command(&sys_name, CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
             parameters: params,
-            ..Command::default()
+            ..CommandInfo::default()
         });
 
         assert_eq!(
@@ -255,7 +255,7 @@ mod tests {
 
         // Simulate application part where we would trigger the command
         {
-            let mut params: CommandMap= HashMap::new();
+            let mut params: CommandParamMap= HashMap::new();
 
             params.insert("x".to_string(), CommandParam {
                 docs: "X position of the mouse.".to_string(),
@@ -284,23 +284,23 @@ mod tests {
     fn repeats_last_command_with_parameters() {
         let sys_name = "test-command-with-params-2".to_string();
 
-        let mut params: CommandMap= HashMap::new();
+        let mut params: CommandParamMap= HashMap::new();
 
         params.insert("x".to_string(), CommandParam {
             docs: "X position of the mouse.".to_string(),
             ..CommandParam::default()
         });
 
-        add_command(&sys_name, Command {
+        add_command(&sys_name, CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
             parameters: params,
-            ..Command::default()
+            ..CommandInfo::default()
         });
 
         // Simulate application part where we would trigger the command
         {
-            let mut params: CommandMap= HashMap::new();
+            let mut params: CommandParamMap= HashMap::new();
 
             params.insert("x".to_string(), CommandParam {
                 docs: "X position of the mouse.".to_string(),

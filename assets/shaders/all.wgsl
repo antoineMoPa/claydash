@@ -1,6 +1,3 @@
-#define TYPE_SPHERE: i32: 0;
-#define TYPE_RECTANGLE: i32: 1;
-
 // The time since startup data is in the globals binding which is part of the mesh_view_bindings import
 #import bevy_pbr::mesh_view_bindings globals
 
@@ -25,18 +22,21 @@ struct VertexOutput {
 #endif
 }
 
-struct CustomMaterial {
-    object_types: array<vec4<i32>, 510>,
-    mouse: vec3<f32>,
-};
+@group(1) @binding(0)
+var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(0) var<uniform> material: CustomMaterial;
+@group(1) @binding(1)
+var<uniform> sdf_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 const MAX_ITERATIONS = 64;
 
 fn sdf_union(d1: f32, d2: f32) -> f32 {
     return min(d1, d2);
 }
+
+const TYPE_END: i32 = #{TYPE_END};
+const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
+const TYPE_RECTANGLE: i32 = #{TYPE_RECTANGLE};
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -45,8 +45,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let direction = vec3(0.0, 0.0, -1.0);
 
     let sphere_r = 0.2;
-    let sphere_position = material.mouse + vec3(0.0, 0.0, -0.3);
-
     var box_position = vec3(0.3 * cos(globals.time * 0.3), 0.0, -0.3 + 0.3 * cos(globals.time * 0.3));
     let box_parameters = vec3(0.3, 0.3, 0.3);
 
@@ -58,24 +56,24 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var i: i32 = 0;
     var d_object = 0.0;
 
-    if (#{MAX_SDFS_PER_ENTITY} == 512) {
-        return vec4(1.0,0.0,0.0,0.0);
-    }
-
     for (; i < MAX_ITERATIONS; i++) {
-
-        for (var object_index: i32 = 0; object_index < 2; object_index++) {
-            //if (OBJECT_[object_index] == TYPE_SPHERE) {
-            //    d_object = length(position - sphere_position) - sphere_r;
-            //}
-        }
-
         box_q = abs(position - box_position) - box_parameters;
         max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
         d_box = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
+        d = d_box;
 
-        d_sphere = length(position - sphere_position) - sphere_r;
-        d = sdf_union(d_sphere, d_box);
+        for (var sdf_index: i32 = 0; sdf_index < #{MAX_SDFS_PER_ENTITY}; sdf_index++) {
+            if (sdf_types[sdf_index].w == TYPE_END) {
+                break;
+            }
+
+            if (sdf_types[sdf_index].w == TYPE_SPHERE) {
+                let p = sdf_positions[sdf_index].xyz;
+
+                d_sphere = length(position - p) - sphere_r;
+                d = sdf_union(d_sphere, d);
+            }
+        }
 
         position += direction * d;
 
