@@ -2,6 +2,17 @@
 #[allow(unused_imports)]
 use std::fs::read_to_string;
 use command_central::CommandInfo;
+use smooth_bevy_cameras::{
+    LookTransform,
+    LookTransformBundle,
+    LookTransformPlugin,
+    Smoother,
+    controllers::orbit::{
+        OrbitCameraPlugin,
+        OrbitCameraBundle,
+        OrbitCameraController
+    }
+};
 
 mod sdf_consts;
 use sdf_consts::*;
@@ -50,6 +61,10 @@ fn main() {
         .add_plugins((
             FrameTimeDiagnosticsPlugin,
             LogDiagnosticsPlugin::default()
+        ))
+        .add_plugins((
+            LookTransformPlugin,
+            OrbitCameraPlugin::default()
         ))
         .add_systems(Startup, remove_picking_logs)
         .add_systems(Startup, register_commands)
@@ -123,7 +138,6 @@ impl Default for SDFObjectMaterial {
     }
 }
 
-
 impl Material for SDFObjectMaterial {
     fn fragment_shader() -> ShaderRef {
         return "shaders/all.wgsl".into();
@@ -157,11 +171,18 @@ fn setup_camera(
 ) {
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
+            //transform: Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },
-        RaycastPickCamera::default()
-    ));
+        RaycastPickCamera::default())
+    ).insert(
+        OrbitCameraBundle::new(
+            OrbitCameraController::default(),
+            Vec3::new(0.0, 0.0, 5.0),
+            Vec3::new(0., 0., 0.),
+            Vec3::Y,
+        )
+    );
 }
 
 fn build_projection_surface(
