@@ -3,6 +3,9 @@
 use std::fs::read_to_string;
 use command_central::CommandInfo;
 
+mod sdf_consts;
+use sdf_consts::*;
+
 use bevy_reflect::{
     TypePath,
     TypeUuid
@@ -111,20 +114,12 @@ struct SDFObjectMaterial {
     sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
 }
 
-
-// SDF types definition
-const TYPE_END: i32 = 0; // No more SDF to process
-const TYPE_SPHERE: i32 = 1;
-const TYPE_RECTANGLE: i32 = 2;
-
 impl Default for SDFObjectMaterial {
     fn default() -> Self {
-        let mut default = Self {
+        Self {
             sdf_types: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
             sdf_positions: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
-        };
-
-        return default;
+        }
     }
 }
 
@@ -138,7 +133,7 @@ impl Material for SDFObjectMaterial {
         _pipeline: &MaterialPipeline<Self>,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayout,
-        key: MaterialPipelineKey<Self>,
+        _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         let fragment = descriptor.fragment.as_mut().unwrap();
         ShaderDefVal::Int("MAX_SDFS_PER_ENTITY".into(), MAX_SDFS_PER_ENTITY);
