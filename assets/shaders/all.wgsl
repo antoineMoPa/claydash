@@ -45,7 +45,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let direction = vec3(0.0, 0.0, -1.0);
 
     let sphere_r = 0.2;
-    var box_position = vec3(0.3 * cos(globals.time * 0.3), 0.0, -0.3 + 0.3 * cos(globals.time * 0.3));
+    var box_position = vec3(0.3 * cos(globals.time * 0.3), 0.0, 0.2 * cos(globals.time * 0.3));
     let box_parameters = vec3(0.3, 0.3, 0.3);
 
     var d_sphere = 0.0;
@@ -75,7 +75,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
 
-        position += direction * d;
+        position += direction * d * 0.8;
 
         if(d < 0.001){
             break;
@@ -83,7 +83,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     if(d < 0.001){
-        let AOLight: f32 = 1.0 / (f32(i)/f32(MAX_ITERATIONS));
+        let AOLight: f32 = 2.0 / (f32(i)/f32(MAX_ITERATIONS));
 
         return vec4<f32>(0.2, 0.1, 1.0/d, 1.0) + AOLight * vec4(0.01);
     }
