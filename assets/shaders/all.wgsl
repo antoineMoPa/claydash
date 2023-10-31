@@ -22,17 +22,10 @@ struct VertexOutput {
 #endif
 }
 
-struct CustomMaterial {
-    mouse: vec4<f32>,
-};
-
 @group(1) @binding(0)
-var<uniform> material: CustomMaterial;
-
-@group(1) @binding(1)
 var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(2)
+@group(1) @binding(1)
 var<uniform> sdf_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 const MAX_ITERATIONS = 64;

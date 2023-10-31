@@ -27,6 +27,7 @@ use bevy::{
 };
 
 use bevy_mod_picking::prelude::*;
+use bevy_mod_picking::backend::HitData;
 
 #[allow(unused_imports)]
 use wasm_bindgen::{prelude::*};
@@ -105,10 +106,8 @@ const MAX_SDFS_PER_ENTITY: i32 = 512;
 #[repr(C,align(16))]
 struct SDFObjectMaterial {
     #[uniform(0)]
-    mouse: Vec4,
-    #[uniform(1)]
     sdf_types: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
-    #[uniform(2)]
+    #[uniform(1)]
     sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
 }
 
@@ -123,7 +122,6 @@ impl Default for SDFObjectMaterial {
         let mut default = Self {
             sdf_types: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
             sdf_positions: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
-            mouse: Vec4 { x: 0.0, y: 0.0, z: 0.0, w: 0.0 },
         };
 
         return default;
@@ -171,27 +169,6 @@ fn setup_camera(
     ));
 }
 
-use bevy_mod_picking::backend::HitData;
-
-fn on_pointer_move(
-    event: Listener<Pointer<Move>>,
-    material_handle: Query<&Handle<SDFObjectMaterial>>,
-    mut materials: ResMut<Assets<SDFObjectMaterial>>,
-) {
-    let hit: &HitData = &event.hit;
-    let position = match hit.position {
-        Some(position) => position,
-        _ => { return; }
-    };
-
-    let handle = material_handle.single();
-    let material = materials.get_mut(handle).unwrap();
-
-    material.mouse.x = position.x;
-    material.mouse.y = position.y;
-    material.mouse.z = position.z;
-}
-
 fn build_projection_surface(
     mut windows: Query<&mut Window>,
     mut commands: Commands,
@@ -216,7 +193,6 @@ fn build_projection_surface(
         },
         PickableBundle::default(),      // Makes the entity pickable
         RaycastPickTarget::default(),   // Marker for the `bevy_picking_raycast` backend
-        On::<Pointer<Move>>::run(on_pointer_move),
         On::<Pointer<Down>>::run(on_mouse_down),
     ));
 }
