@@ -30,10 +30,10 @@ struct CustomMaterial {
 var<uniform> material: CustomMaterial;
 
 @group(1) @binding(1)
-var<storage> sdf_types: array<i32>;
+var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
 
 @group(1) @binding(2)
-var<storage> sdf_positions: array<vec4<f32>>;
+var<uniform> sdf_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 const MAX_ITERATIONS = 64;
 
@@ -70,11 +70,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         d = d_box;
 
         for (var sdf_index: i32 = 0; sdf_index < #{MAX_SDFS_PER_ENTITY}; sdf_index++) {
-            if (sdf_types[sdf_index] == TYPE_END) {
+            if (sdf_types[sdf_index].w == TYPE_END) {
                 break;
             }
 
-            if (sdf_types[sdf_index] == TYPE_SPHERE) {
+            if (sdf_types[sdf_index].w == TYPE_SPHERE) {
                 let p = sdf_positions[sdf_index].xyz;
 
                 d_sphere = length(position - p) - sphere_r;

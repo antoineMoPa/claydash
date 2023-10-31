@@ -99,15 +99,17 @@ fn keyboard_input_system(
 
 const MAX_SDFS_PER_ENTITY: i32 = 512;
 
+// TODO: move to strorage buffers once chrome supports it.
 #[derive(TypeUuid, TypePath, AsBindGroup, Clone)]
 #[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
+#[repr(C,align(16))]
 struct SDFObjectMaterial {
     #[uniform(0)]
     mouse: Vec4,
-    #[storage(1, read_only)]
-    sdf_types: Vec<i32>,
-    #[storage(2, read_only)]
-    sdf_positions: Vec<Vec4>, // Vec4 is 16 bit aligned. It makes our life easier than Vec3
+    #[uniform(1)]
+    sdf_types: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
+    #[uniform(2)]
+    sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
 }
 
 
@@ -119,13 +121,10 @@ const TYPE_RECTANGLE: i32 = 2;
 impl Default for SDFObjectMaterial {
     fn default() -> Self {
         let mut default = Self {
-            sdf_types: Vec::new(),
-            sdf_positions: Vec::new(),
+            sdf_types: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
+            sdf_positions: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
             mouse: Vec4 { x: 0.0, y: 0.0, z: 0.0, w: 0.0 },
         };
-
-        default.sdf_types.push(TYPE_END);
-        default.sdf_positions.push(Vec4::new(0.0, 0.0, 0.0, 0.0));
 
         return default;
     }
@@ -290,18 +289,20 @@ fn run_commands(
 
             // Find last object
             for (i, sdf_type) in material.sdf_types.iter().enumerate()  {
-                if sdf_type == &TYPE_END {
+                if sdf_type.w == TYPE_END {
                     last_sdf = i;
+                    break;
                 }
             }
 
-            material.sdf_types.push(TYPE_END);
-            material.sdf_positions.push(Vec4::new(0.0, 0.0, 0.0, 0.0));
-
-            material.sdf_types[last_sdf] = TYPE_SPHERE;
+            material.sdf_types[last_sdf].w = TYPE_SPHERE;
             material.sdf_positions[last_sdf].x = x;
             material.sdf_positions[last_sdf].y = y;
             material.sdf_positions[last_sdf].z = z;
+
+            material.sdf_types[last_sdf + 1].w = TYPE_END;
+            material.sdf_positions[last_sdf + 1] = Vec4::new(0.0, 0.0, 0.0, 0.0);
+
 
             info!("Spawning sphere! x: {}, y: {}, z: {}", material.sdf_positions[0].x, material.sdf_positions[0].y, material.sdf_positions[0].z);
         },
