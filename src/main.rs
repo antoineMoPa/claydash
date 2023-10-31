@@ -235,7 +235,7 @@ fn on_mouse_down(
             ..default()
         });
         params.insert("z".to_string(), command_central::CommandParam {
-            float: Some(position.z),
+            float: Some(position.z - 0.5),
             ..default()
         });
 
