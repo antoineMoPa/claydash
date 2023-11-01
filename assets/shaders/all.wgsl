@@ -23,7 +23,7 @@ struct VertexOutput {
 }
 
 @group(1) @binding(0)
-var<uniform> camera: vec3<f32>;
+var<uniform> camera: vec4<f32>;
 
 @group(1) @binding(1)
 var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
@@ -45,7 +45,7 @@ const FAR_DIST = 2000.0;
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var position = in.world_position.xyz;
-    var ray = normalize(position - camera);
+    var ray = normalize(position - camera.xyz);
     let direction = ray;
 
     let sphere_r = 0.2;
@@ -98,5 +98,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
         return vec4<f32>(0.2, 0.1, 1.0/d, 1.0) + AOLight * vec4(0.01);
     }
+
     return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }
