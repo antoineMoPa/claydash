@@ -13,8 +13,11 @@
       }
     </style>
   </head>
-  <script type="module">
-    import init from './target/app.js'
-    init()
-  </script>
+  <!-- Fix orbit camera -->
+  <body oncontextmenu="return false">
+    <script type="module">
+      import init from './target/app.js'
+      init()
+    </script>
+  </body>
 </html>
