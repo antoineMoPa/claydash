@@ -40,6 +40,7 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
 const TYPE_END: i32 = #{TYPE_END};
 const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
 const TYPE_RECTANGLE: i32 = #{TYPE_RECTANGLE};
+const FAR_DIST = 2000.0;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -83,6 +84,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         if(d < 0.001){
             break;
         }
+
+        if (d > FAR_DIST) {
+            // We are probably past the object.
+            // Note that this will not always be true: ex.: for ground objects.
+            // But for now it's a valuable optimization.
+            break;
+        }
     }
 
     if(d < 0.001){
@@ -90,6 +98,5 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
         return vec4<f32>(0.2, 0.1, 1.0/d, 1.0) + AOLight * vec4(0.01);
     }
-
-    return vec4<f32>(0.8, 0.0, 0.04, 1.0);
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }
