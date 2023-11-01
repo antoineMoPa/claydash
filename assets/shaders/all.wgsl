@@ -23,9 +23,12 @@ struct VertexOutput {
 }
 
 @group(1) @binding(0)
-var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
+var<uniform> camera: vec4<f32>;
 
 @group(1) @binding(1)
+var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
+
+@group(1) @binding(2)
 var<uniform> sdf_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 const MAX_ITERATIONS = 64;
@@ -37,12 +40,13 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
 const TYPE_END: i32 = #{TYPE_END};
 const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
 const TYPE_RECTANGLE: i32 = #{TYPE_RECTANGLE};
+const FAR_DIST = 2000.0;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var position = in.world_position.xyz;
-
-    let direction = vec3(0.0, 0.0, -1.0);
+    var ray = normalize(position - camera.xyz);
+    let direction = ray;
 
     let sphere_r = 0.2;
     var box_position = vec3(0.3 * cos(globals.time * 0.3), 0.0, 0.2 * cos(globals.time * 0.3));
@@ -80,6 +84,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         if(d < 0.001){
             break;
         }
+
+        if (d > FAR_DIST) {
+            // We are probably past the object.
+            // Note that this will not always be true: ex.: for ground objects.
+            // But for now it's a valuable optimization.
+            break;
+        }
     }
 
     if(d < 0.001){
@@ -88,5 +99,5 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.2, 0.1, 1.0/d, 1.0) + AOLight * vec4(0.01);
     }
 
-    return vec4<f32>(0.8, 0.0, 0.04, 1.0);
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }

@@ -3,10 +3,7 @@
 use std::fs::read_to_string;
 use command_central::CommandInfo;
 use smooth_bevy_cameras::{
-    LookTransform,
-    LookTransformBundle,
     LookTransformPlugin,
-    Smoother,
     controllers::orbit::{
         OrbitCameraPlugin,
         OrbitCameraBundle,
@@ -23,7 +20,6 @@ use bevy_reflect::{
 };
 
 use bevy::{
-
     input::{keyboard::KeyCode, Input},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     pbr::{
@@ -74,15 +70,18 @@ fn main() {
         .add_systems(Startup, build_projection_surface)
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, run_commands)
+        .add_systems(Update, update_camera)
         .run();
 }
 
+/// By default, the object bevy_mod_picking is too verbose.
 fn remove_picking_logs (
     mut logging_next_state: ResMut<NextState<debug::DebugPickingMode>>,
 ) {
     logging_next_state.set(debug::DebugPickingMode::Disabled);
 }
 
+/// Prevent using too much CPU. 60 fps should be enough. 30fps feels not so smooth.
 fn setup_frame_limit(mut settings: ResMut<bevy_framepace::FramepaceSettings>) {
     settings.limiter = bevy_framepace::Limiter::from_framerate(60.0);
 }
@@ -108,6 +107,8 @@ fn setup_window_size(mut windows: Query<&mut Window>) {
 fn setup_window_size() {
 }
 
+/// Keyboard input system
+/// Lept for later, currently empty.
 fn keyboard_input_system(
     keyboard_input: Res<Input<KeyCode>>,
 ) {
@@ -118,20 +119,25 @@ fn keyboard_input_system(
 
 const MAX_SDFS_PER_ENTITY: i32 = 512;
 
+/// SDFObjectMaterial
+/// This material uses our raymarching shader to display SDF objects.
 // TODO: move to strorage buffers once chrome supports it.
 #[derive(TypeUuid, TypePath, AsBindGroup, Clone)]
 #[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
 #[repr(C,align(16))]
 struct SDFObjectMaterial {
     #[uniform(0)]
-    sdf_types: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
+    camera: Vec4,
     #[uniform(1)]
+    sdf_types: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
+    #[uniform(2)]
     sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
 }
 
 impl Default for SDFObjectMaterial {
     fn default() -> Self {
         Self {
+            camera: Vec4::new(0.0, 0.0, 0.0, 0.0),
             sdf_types: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
             sdf_positions: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
         }
@@ -166,6 +172,7 @@ impl Material for SDFObjectMaterial {
     }
 }
 
+/// Setup orbit camera controls.
 fn setup_camera(
     mut commands: Commands,
 ) {
@@ -185,6 +192,7 @@ fn setup_camera(
     );
 }
 
+/// Build an object with our SDF material.
 fn build_projection_surface(
     mut windows: Query<&mut Window>,
     mut commands: Commands,
@@ -197,7 +205,7 @@ fn build_projection_surface(
     // cube
     commands.spawn((
         MaterialMeshBundle {
-            mesh: meshes.add(Mesh::from(shape::Plane { size: 1.0, subdivisions: 0 })),
+            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
             transform: Transform {
                 translation: Vec3::new(0.0, 0.0, 0.0),
                 rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
@@ -213,6 +221,7 @@ fn build_projection_surface(
     ));
 }
 
+/// Register commands that can be used in command_cental
 fn register_commands() {
     let mut params = command_central::CommandParamMap::new();
     params.insert("x".to_string(), command_central::CommandParam {
@@ -235,6 +244,7 @@ fn register_commands() {
     });
 }
 
+/// Handle click to add a sphere.
 fn on_mouse_down(
     event: Listener<Pointer<Down>>,
     buttons: Res<Input<MouseButton>>,
@@ -256,7 +266,7 @@ fn on_mouse_down(
             ..default()
         });
         params.insert("z".to_string(), command_central::CommandParam {
-            float: Some(position.z - 0.5),
+            float: Some(position.z),
             ..default()
         });
 
@@ -264,6 +274,7 @@ fn on_mouse_down(
     }
 }
 
+/// Run any command that has been issued since last update
 fn run_commands(
     material_handle: Query<&Handle<SDFObjectMaterial>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
@@ -302,4 +313,19 @@ fn run_commands(
             // Nothing to do
         }
     }
+}
+
+/// Update camera position uniform
+fn update_camera(
+    material_handle: Query<&Handle<SDFObjectMaterial>>,
+    mut materials: ResMut<Assets<SDFObjectMaterial>>,
+    camera_transforms: Query<&mut Transform, With<Camera>>,
+) {
+    let camera_transform: &Transform = camera_transforms.single();
+    let handle = material_handle.single();
+    let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+
+    material.camera.x = camera_transform.translation.x; // Uniform is a Vec4
+    material.camera.y = camera_transform.translation.y; // due to bit alignement.
+    material.camera.z = camera_transform.translation.z; // ...so we can't directly assign.
 }
