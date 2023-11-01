@@ -74,6 +74,7 @@ fn main() {
         .add_systems(Startup, build_projection_surface)
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, run_commands)
+        .add_systems(Update, update_camera)
         .run();
 }
 
@@ -124,14 +125,17 @@ const MAX_SDFS_PER_ENTITY: i32 = 512;
 #[repr(C,align(16))]
 struct SDFObjectMaterial {
     #[uniform(0)]
-    sdf_types: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
+    camera: Vec3,
     #[uniform(1)]
+    sdf_types: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
+    #[uniform(2)]
     sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
 }
 
 impl Default for SDFObjectMaterial {
     fn default() -> Self {
         Self {
+            camera: Vec3::new(0.0, 0.0, 0.0),
             sdf_types: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
             sdf_positions: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
         }
@@ -197,7 +201,7 @@ fn build_projection_surface(
     // cube
     commands.spawn((
         MaterialMeshBundle {
-            mesh: meshes.add(Mesh::from(shape::Plane { size: 1.0, subdivisions: 0 })),
+            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
             transform: Transform {
                 translation: Vec3::new(0.0, 0.0, 0.0),
                 rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
@@ -256,7 +260,7 @@ fn on_mouse_down(
             ..default()
         });
         params.insert("z".to_string(), command_central::CommandParam {
-            float: Some(position.z - 0.5),
+            float: Some(position.z),
             ..default()
         });
 
@@ -302,4 +306,16 @@ fn run_commands(
             // Nothing to do
         }
     }
+}
+
+/// Update camera uniform
+fn update_camera(
+    material_handle: Query<&Handle<SDFObjectMaterial>>,
+    mut materials: ResMut<Assets<SDFObjectMaterial>>,
+    mut camera_transforms: Query<&mut Transform, With<Camera>>,
+) {
+    let camera_transform: &Transform = camera_transforms.single();
+    let handle = material_handle.single();
+    let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+    material.camera = camera_transform.translation;
 }

@@ -23,9 +23,12 @@ struct VertexOutput {
 }
 
 @group(1) @binding(0)
-var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
+var<uniform> camera: vec3<f32>;
 
 @group(1) @binding(1)
+var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
+
+@group(1) @binding(2)
 var<uniform> sdf_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 const MAX_ITERATIONS = 64;
@@ -41,8 +44,8 @@ const TYPE_RECTANGLE: i32 = #{TYPE_RECTANGLE};
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var position = in.world_position.xyz;
-
-    let direction = vec3(0.0, 0.0, -1.0);
+    var ray = normalize(position - camera);
+    let direction = ray;
 
     let sphere_r = 0.2;
     var box_position = vec3(0.3 * cos(globals.time * 0.3), 0.0, 0.2 * cos(globals.time * 0.3));
