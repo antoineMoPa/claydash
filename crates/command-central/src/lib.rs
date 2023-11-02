@@ -167,6 +167,9 @@ pub fn search(search: &String, limit: usize) -> CommandInfoMap {
             results.insert(system_name.to_string(), command.clone());
         }
 
+        if results.len() == limit {
+            break;
+        }
     }
     return results;
 }
@@ -356,12 +359,9 @@ mod tests {
     fn searches_commands_by_system_name() {
         let sys_name = "command-to-search-1".to_string();
 
-        let mut params: CommandParamMap= HashMap::new();
-
         add_command(&sys_name, CommandInfo {
             title: "A command to search".to_string(),
             docs: "Here are some docs about the command".to_string(),
-            parameters: params,
             ..CommandInfo::default()
         });
 
@@ -376,12 +376,9 @@ mod tests {
     fn searches_commands_by_title() {
         let sys_name = "command-to-search-2".to_string();
 
-        let mut params: CommandParamMap= HashMap::new();
-
         add_command(&sys_name, CommandInfo {
             title: "A command to search by title".to_string(),
             docs: "Here are some docs about the command".to_string(),
-            parameters: params,
             ..CommandInfo::default()
         });
 
@@ -396,13 +393,10 @@ mod tests {
     fn searches_commands_by_docs() {
         let sys_name = "command-to-search-3".to_string();
 
-        let mut params: CommandParamMap= HashMap::new();
-
         // Note that case is changed to check that search is case insensitive.
         add_command(&sys_name, CommandInfo {
             title: "A third command to search by docs".to_string(),
             docs: "Here are some docs about THIS epic COMMAND".to_string(),
-            parameters: params,
             ..CommandInfo::default()
         });
 
@@ -410,5 +404,33 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results["command-to-search-3"].title, "A third command to search by docs");
+    }
+
+    #[test]
+    fn searches_is_limited() {
+        let sys_name = "command-to-search-4-A".to_string();
+
+        // Note that case is changed to check that search is case insensitive.
+        add_command(&sys_name, CommandInfo {
+            ..CommandInfo::default()
+        });
+
+        let sys_name = "command-to-search-4-B".to_string();
+
+        // Note that case is changed to check that search is case insensitive.
+        add_command(&sys_name, CommandInfo {
+            ..CommandInfo::default()
+        });
+
+        let sys_name = "command-to-search-4-C".to_string();
+
+        // Note that case is changed to check that search is case insensitive.
+        add_command(&sys_name, CommandInfo {
+            ..CommandInfo::default()
+        });
+
+        let results = search(&"command-to-search-4".to_string(), 2);
+
+        assert_eq!(results.len(), 2);
     }
 }
