@@ -2,6 +2,7 @@
 #[allow(unused_imports)]
 use std::fs::read_to_string;
 use command_central::CommandInfo;
+use claydash_ui::ClaydashUIPlugin;
 use smooth_bevy_cameras::{
     LookTransformPlugin,
     controllers::orbit::{
@@ -42,6 +43,7 @@ use bevy_mod_picking::backend::HitData;
 #[allow(unused_imports)]
 use wasm_bindgen::{prelude::*};
 
+
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
@@ -62,6 +64,7 @@ fn main() {
             LookTransformPlugin,
             OrbitCameraPlugin::default()
         ))
+        .add_plugins(ClaydashUIPlugin)
         .add_systems(Startup, remove_picking_logs)
         .add_systems(Startup, register_commands)
         .add_systems(Startup, setup_frame_limit)
