@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
+pub type CommandInfoMap = HashMap<String, CommandInfo>;
 pub type CommandParamMap = HashMap<String, CommandParam>;
 
 #[derive(Clone)]
@@ -74,7 +75,7 @@ impl Default for CommandInfo {
 }
 
 lazy_static! {
-    static ref COMMANDS_MAP: Mutex<HashMap<String, CommandInfo>> = Mutex::new(HashMap::new());
+    static ref COMMANDS_MAP: Mutex<CommandInfoMap> = Mutex::new(HashMap::new());
 }
 
 pub fn add_command(system_name: &String, command: CommandInfo) {
@@ -150,6 +151,26 @@ pub fn run_with_params(system_name: &String, parameters: &CommandParamMap) {
         }
     }
 }
+
+/// Search through commands
+pub fn search(search: &String, limit: usize) -> CommandInfoMap {
+    let search_lower = search.to_lowercase();
+    let mut commands = COMMANDS_MAP.lock().unwrap();
+    let mut results: CommandInfoMap = CommandInfoMap::new();
+    for command in commands.iter() {
+        let system_name = command.0;
+        let command = command.1;
+
+        if system_name.to_lowercase().contains(&search_lower) ||
+            command.title.to_lowercase().contains(&search_lower) ||
+            command.docs.to_lowercase().contains(&search_lower) {
+            results.insert(system_name.to_string(), command.clone());
+        }
+
+    }
+    return results;
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -329,5 +350,65 @@ mod tests {
             let float_val = command.parameters.get(&"x".to_string()).unwrap().float.unwrap();
             assert_eq!(float_val, 12.3);
         }
+    }
+
+    #[test]
+    fn searches_commands_by_system_name() {
+        let sys_name = "command-to-search-1".to_string();
+
+        let mut params: CommandParamMap= HashMap::new();
+
+        add_command(&sys_name, CommandInfo {
+            title: "A command to search".to_string(),
+            docs: "Here are some docs about the command".to_string(),
+            parameters: params,
+            ..CommandInfo::default()
+        });
+
+        // Note that case is changed to check that search is case insensitive.
+        let results = search(&"to-SEARCH-1".to_string(), 5);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results["command-to-search-1"].title, "A command to search");
+    }
+
+    #[test]
+    fn searches_commands_by_title() {
+        let sys_name = "command-to-search-2".to_string();
+
+        let mut params: CommandParamMap= HashMap::new();
+
+        add_command(&sys_name, CommandInfo {
+            title: "A command to search by title".to_string(),
+            docs: "Here are some docs about the command".to_string(),
+            parameters: params,
+            ..CommandInfo::default()
+        });
+
+        // Note that case is changed to check that search is case insensitive.
+        let results = search(&"search by TITLE".to_string(), 5);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results["command-to-search-2"].title, "A command to search by title");
+    }
+
+    #[test]
+    fn searches_commands_by_docs() {
+        let sys_name = "command-to-search-3".to_string();
+
+        let mut params: CommandParamMap= HashMap::new();
+
+        // Note that case is changed to check that search is case insensitive.
+        add_command(&sys_name, CommandInfo {
+            title: "A third command to search by docs".to_string(),
+            docs: "Here are some docs about THIS epic COMMAND".to_string(),
+            parameters: params,
+            ..CommandInfo::default()
+        });
+
+        let results = search(&"THIS EPIC COMMAND".to_string(), 5);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results["command-to-search-3"].title, "A third command to search by docs");
     }
 }
