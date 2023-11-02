@@ -157,7 +157,7 @@ pub fn run_with_params(system_name: &String, parameters: &CommandParamMap) {
 /// Search through commands
 pub fn search(search: &String, limit: usize) -> CommandInfoMap {
     let search_lower = search.to_lowercase();
-    let mut commands = COMMANDS_MAP.lock().unwrap();
+    let commands = COMMANDS_MAP.lock().unwrap();
     let mut results: CommandInfoMap = CommandInfoMap::new();
     for command in commands.iter() {
         let system_name = command.0;

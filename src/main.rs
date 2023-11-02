@@ -254,25 +254,19 @@ fn on_mouse_down(
     buttons: Res<Input<MouseButton>>,
 ) {
     if buttons.just_pressed(MouseButton::Left) {
+        let command: CommandInfo = command_central::read_command(&"spawn-sphere".to_string()).unwrap();
+
         let hit: &HitData = &event.hit;
         let position = match hit.position {
             Some(position) => position,
             _ => { return; }
         };
 
-        let mut params = command_central::CommandParamMap::new();
-        params.insert("x".to_string(), command_central::CommandParam {
-            float: Some(position.x),
-            ..default()
-        });
-        params.insert("y".to_string(), command_central::CommandParam {
-            float: Some(position.y),
-            ..default()
-        });
-        params.insert("z".to_string(), command_central::CommandParam {
-            float: Some(position.z),
-            ..default()
-        });
+        let mut params = command.parameters;
+
+        params.get_mut("x").unwrap().float = Some(position.x);
+        params.get_mut("y").unwrap().float = Some(position.y);
+        params.get_mut("z").unwrap().float = Some(position.z);
 
         command_central::run_with_params(&"spawn-sphere".to_string(), &params);
     }

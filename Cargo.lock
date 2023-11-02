@@ -1372,6 +1372,7 @@ dependencies = [
  "bevy_app",
  "bevy_egui",
  "command-central",
+ "epaint",
 ]
 
 [[package]]
