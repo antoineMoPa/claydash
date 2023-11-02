@@ -143,7 +143,9 @@ pub fn run_with_params(system_name: &String, parameters: &CommandParamMap) {
 
     match command_option {
         Some(command) => {
-            command.parameters = parameters.clone();
+            for parameter in parameters.iter() {
+                command.parameters.insert(parameter.0.to_string(), parameter.1.clone());
+            }
             command.run();
         }
         _ => {

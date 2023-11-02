@@ -243,6 +243,7 @@ fn register_commands() {
     command_central::add_command(&"spawn-sphere".to_string(), CommandInfo {
         title: "Spawn sphere".to_string(),
         docs: "Spawn a sphere at the given position in the current object.".to_string(),
+        parameters: params,
         ..CommandInfo::default()
     });
 }
@@ -285,9 +286,9 @@ fn run_commands(
     let command = command_central::check_if_has_to_run(&"spawn-sphere".to_string());
     match command {
         Some(command) => {
-            let x = command.parameters.get("x").unwrap().float.unwrap();
-            let y = command.parameters.get("y").unwrap().float.unwrap();
-            let z = command.parameters.get("z").unwrap().float.unwrap();
+            let x = command.parameters.get("x").unwrap().float.unwrap_or(0.0);
+            let y = command.parameters.get("y").unwrap().float.unwrap_or(0.0);
+            let z = command.parameters.get("z").unwrap().float.unwrap_or(0.0);
 
             let handle = material_handle.single();
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();

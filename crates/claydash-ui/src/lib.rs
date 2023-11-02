@@ -53,11 +53,14 @@ fn command_ui(
 
             match commands {
                 Some(commands) => {
-                    for command in commands.iter() {
-                        ui.add(Label::new(&command.1.title));
-                        ui.label(command.0);
-                        ui.label(&command.1.docs);
+                    for (system_name, command_info) in commands.iter() {
+                        ui.add(Label::new(&command_info.title));
+                        ui.label(system_name);
+                        ui.label(&command_info.docs);
                         ui.end_row();
+                        if ui.small_button("Run").clicked() {
+                            command_central::run(system_name);
+                        }
                     }
                 },
                 _ => {}
