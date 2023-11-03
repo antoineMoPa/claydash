@@ -39,7 +39,7 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
 
 const TYPE_END: i32 = #{TYPE_END};
 const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
-const TYPE_RECTANGLE: i32 = #{TYPE_RECTANGLE};
+const TYPE_CUBE: i32 = #{TYPE_CUBE};
 const FAR_DIST = 2000.0;
 
 @fragment
@@ -52,36 +52,38 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var box_position = vec3(0.3 * cos(globals.time * 0.3), 0.0, 0.2 * cos(globals.time * 0.3));
     let box_parameters = vec3(0.3, 0.3, 0.3);
 
-    var d_sphere = 0.0;
     var d_box = 0.0;
     var box_q = vec3(0.0);
     var max_box_q = vec3(0.0);
-    var d = 0.0;
+    var d = 10000.0;
     var i: i32 = 0;
-    var d_object = 0.0;
+    var d_current_object = 0.0;
 
+    // Walk the ray through the scene
     for (; i < MAX_ITERATIONS; i++) {
-        box_q = abs(position - box_position) - box_parameters;
-        max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
-        d_box = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
-        d = d_box;
-
+        // Loop through all objects
         for (var sdf_index: i32 = 0; sdf_index < #{MAX_SDFS_PER_ENTITY}; sdf_index++) {
             if (sdf_types[sdf_index].w == TYPE_END) {
                 break;
             }
+            let p = sdf_positions[sdf_index].xyz;
 
+            // Find distance based on object type
             if (sdf_types[sdf_index].w == TYPE_SPHERE) {
-                let p = sdf_positions[sdf_index].xyz;
-
-                d_sphere = length(position - p) - sphere_r;
-                d = sdf_union(d_sphere, d);
+                d_current_object = length(position - p) - sphere_r;
             }
+            else if (sdf_types[sdf_index].w == TYPE_CUBE) {
+                box_q = abs(position - box_position) - box_parameters;
+                max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
+                d_current_object = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
+            }
+
+            d = sdf_union(d_current_object, d);
         }
 
         position += direction * d * 0.8;
 
-        if(d < 0.001){
+        if (d < 0.001){
             break;
         }
 

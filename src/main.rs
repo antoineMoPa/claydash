@@ -134,7 +134,7 @@ fn build_projection_surface(
     // cube
     commands.spawn((
         MaterialMeshBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
+            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.5 })),
             transform: Transform {
                 translation: Vec3::new(0.0, 0.0, 0.0),
                 rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
@@ -152,6 +152,11 @@ fn build_projection_surface(
 
 /// Register commands that can be used in command_cental
 fn register_commands() {
+    register_spawn_sphere();
+    register_spawn_cube();
+}
+
+fn register_spawn_sphere() {
     let mut params = command_central::CommandParamMap::new();
     params.insert("x".to_string(), command_central::CommandParam {
         docs: "X position of the sphere.".to_string(),
@@ -168,7 +173,30 @@ fn register_commands() {
 
     command_central::add_command(&"spawn-sphere".to_string(), CommandInfo {
         title: "Spawn sphere".to_string(),
-        docs: "Spawn a sphere at the given position in the current object.".to_string(),
+        docs: "Spawn a sphere at the given position.".to_string(),
+        parameters: params,
+        ..CommandInfo::default()
+    });
+}
+
+fn register_spawn_cube() {
+    let mut params = command_central::CommandParamMap::new();
+    params.insert("x".to_string(), command_central::CommandParam {
+        docs: "X position of the sphere.".to_string(),
+        ..default()
+    });
+    params.insert("y".to_string(), command_central::CommandParam {
+        docs: "Y position of the sphere.".to_string(),
+        ..default()
+    });
+    params.insert("z".to_string(), command_central::CommandParam {
+        docs: "Z position of the sphere.".to_string(),
+        ..default()
+    });
+
+    command_central::add_command(&"spawn-cube".to_string(), CommandInfo {
+        title: "Spawn cube".to_string(),
+        docs: "Spawn a cube at the given position.".to_string(),
         parameters: params,
         ..CommandInfo::default()
     });
@@ -203,8 +231,8 @@ fn run_commands(
     material_handle: Query<&Handle<SDFObjectMaterial>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
 ) {
-    let command = command_central::check_if_has_to_run(&"spawn-sphere".to_string());
-    match command {
+    let spawn_sphere_command = command_central::check_if_has_to_run(&"spawn-sphere".to_string());
+    match spawn_sphere_command {
         Some(command) => {
             let x = command.parameters.get("x").unwrap().float.unwrap_or(0.0);
             let y = command.parameters.get("y").unwrap().float.unwrap_or(0.0);
@@ -237,7 +265,44 @@ fn run_commands(
             // Nothing to do
         }
     }
+
+    let spawn_cube_command = command_central::check_if_has_to_run(&"spawn-cube".to_string());
+    match spawn_cube_command {
+        Some(command) => {
+            let x = command.parameters.get("x").unwrap().float.unwrap_or(0.0);
+            let y = command.parameters.get("y").unwrap().float.unwrap_or(0.0);
+            let z = command.parameters.get("z").unwrap().float.unwrap_or(0.0);
+
+            let handle = material_handle.single();
+            let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+            let mut last_sdf = 0;
+
+            // Find last object
+            for (i, sdf_type) in material.sdf_types.iter().enumerate()  {
+                if sdf_type.w == TYPE_END {
+                    last_sdf = i;
+                    break;
+                }
+            }
+
+            material.sdf_types[last_sdf].w = TYPE_CUBE;
+            material.sdf_positions[last_sdf].x = x;
+            material.sdf_positions[last_sdf].y = y;
+            material.sdf_positions[last_sdf].z = z;
+
+            material.sdf_types[last_sdf + 1].w = TYPE_END;
+            material.sdf_positions[last_sdf + 1] = Vec4::new(0.0, 0.0, 0.0, 0.0);
+
+
+            info!("Spawning sphere! x: {}, y: {}, z: {}", material.sdf_positions[0].x, material.sdf_positions[0].y, material.sdf_positions[0].z);
+        },
+        _ => {
+            // Nothing to do
+        }
+    }
 }
+
+
 
 /// Update camera position uniform
 fn update_camera(

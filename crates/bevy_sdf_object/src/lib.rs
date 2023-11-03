@@ -76,7 +76,7 @@ impl Material for SDFObjectMaterial {
         );
         defs.push(ShaderDefVal::Int("TYPE_END".into(), TYPE_END));
         defs.push(ShaderDefVal::Int("TYPE_SPHERE".into(), TYPE_SPHERE));
-        defs.push(ShaderDefVal::Int("TYPE_RECTANGLE".into(), TYPE_RECTANGLE));
+        defs.push(ShaderDefVal::Int("TYPE_CUBE".into(), TYPE_CUBE));
 
         Ok(())
     }
