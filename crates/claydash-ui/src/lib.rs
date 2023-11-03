@@ -32,7 +32,7 @@ fn command_ui(
     let ctx = contexts.ctx_mut();
     let rounding = Rounding::same(5.0);
 
-    egui::SidePanel::right("my_left_panel")
+    egui::SidePanel::right("right_panel")
         .frame(Frame {
             outer_margin: egui::style::Margin::symmetric(20.0, 0.0),
             inner_margin: egui::style::Margin::same(0.0),
@@ -74,7 +74,7 @@ fn command_ui(
             ui.put(
                 widget_rect,
                 egui::TextEdit::singleline(&mut command_search_state.command_search_str)
-                    .hint_text("Search Command...")
+                    .hint_text("Search Commands...")
             );
             ui.end_row();
             ui.add_space(10.0);
