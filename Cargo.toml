@@ -4,6 +4,8 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
+bevy_sdf_object = { path = "crates/bevy_sdf_object"}
+sdf_consts = { path = "crates/sdf_consts"}
 command-central = { path = "crates/command-central"}
 claydash-ui = { path = "crates/claydash-ui"}
 bevy = "0.11.3"

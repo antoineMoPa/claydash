@@ -12,31 +12,15 @@ use smooth_bevy_cameras::{
     }
 };
 
-mod sdf_consts;
 use sdf_consts::*;
-
-use bevy_reflect::{
-    TypePath,
-    TypeUuid
-};
 
 use bevy::{
     input::{keyboard::KeyCode, Input},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    pbr::{
-        MaterialPipeline,
-        MaterialPipelineKey,
-        DirectionalLightShadowMap
-    },
     prelude::*,
-    render::{
-        mesh::MeshVertexBufferLayout,
-        render_resource::{
-            AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError, ShaderDefVal,
-        },
-    },
 };
 
+use bevy_sdf_object::*;
 use bevy_mod_picking::prelude::*;
 use bevy_mod_picking::backend::HitData;
 
@@ -47,24 +31,21 @@ use wasm_bindgen::{prelude::*};
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
-        .insert_resource(DirectionalLightShadowMap { size: 2048 })
         .insert_resource(AmbientLight {
             color: Color::rgb(1.0, 0.8, 0.9),
             brightness: 0.6,
         })
-        .add_plugins(DefaultPlugins)
-        .add_plugins(bevy_framepace::FramepacePlugin)
-        .add_plugins(DefaultPickingPlugins)
-        .add_plugins(MaterialPlugin::<SDFObjectMaterial>::default())
         .add_plugins((
+            DefaultPlugins,
+            bevy_framepace::FramepacePlugin,
+            DefaultPickingPlugins,
             FrameTimeDiagnosticsPlugin,
-            LogDiagnosticsPlugin::default()
-        ))
-        .add_plugins((
+            LogDiagnosticsPlugin::default(),
             LookTransformPlugin,
-            OrbitCameraPlugin::default()
+            OrbitCameraPlugin::default(),
+            BevySDFObjectPlugin,
+            ClaydashUIPlugin
         ))
-        .add_plugins(ClaydashUIPlugin)
         .add_systems(Startup, remove_picking_logs)
         .add_systems(Startup, register_commands)
         .add_systems(Startup, setup_frame_limit)
@@ -117,61 +98,6 @@ fn keyboard_input_system(
 ) {
     if keyboard_input.pressed(KeyCode::W) {
         // todo
-    }
-}
-
-const MAX_SDFS_PER_ENTITY: i32 = 512;
-
-/// SDFObjectMaterial
-/// This material uses our raymarching shader to display SDF objects.
-// TODO: move to strorage buffers once chrome supports it.
-#[derive(TypeUuid, TypePath, AsBindGroup, Clone)]
-#[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
-#[repr(C,align(16))]
-struct SDFObjectMaterial {
-    #[uniform(0)]
-    camera: Vec4,
-    #[uniform(1)]
-    sdf_types: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
-    #[uniform(2)]
-    sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
-}
-
-impl Default for SDFObjectMaterial {
-    fn default() -> Self {
-        Self {
-            camera: Vec4::new(0.0, 0.0, 0.0, 0.0),
-            sdf_types: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
-            sdf_positions: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
-        }
-    }
-}
-
-impl Material for SDFObjectMaterial {
-    fn fragment_shader() -> ShaderRef {
-        return "shaders/all.wgsl".into();
-    }
-
-    fn specialize(
-        _pipeline: &MaterialPipeline<Self>,
-        descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayout,
-        _key: MaterialPipelineKey<Self>,
-    ) -> Result<(), SpecializedMeshPipelineError> {
-        let fragment = descriptor.fragment.as_mut().unwrap();
-        ShaderDefVal::Int("MAX_SDFS_PER_ENTITY".into(), MAX_SDFS_PER_ENTITY);
-
-        let defs = &mut fragment.shader_defs;
-
-        defs.push(ShaderDefVal::Int(
-            "MAX_SDFS_PER_ENTITY".into(),
-            MAX_SDFS_PER_ENTITY)
-        );
-        defs.push(ShaderDefVal::Int("TYPE_END".into(), TYPE_END));
-        defs.push(ShaderDefVal::Int("TYPE_SPHERE".into(), TYPE_SPHERE));
-        defs.push(ShaderDefVal::Int("TYPE_RECTANGLE".into(), TYPE_RECTANGLE));
-
-        Ok(())
     }
 }
 
