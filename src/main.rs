@@ -154,53 +154,35 @@ fn build_projection_surface(
 fn register_commands() {
     register_spawn_sphere();
     register_spawn_cube();
+    register_clear_everything();
 }
 
 fn register_spawn_sphere() {
-    let mut params = command_central::CommandParamMap::new();
-    params.insert("x".to_string(), command_central::CommandParam {
-        docs: "X position of the sphere.".to_string(),
-        ..default()
-    });
-    params.insert("y".to_string(), command_central::CommandParam {
-        docs: "Y position of the sphere.".to_string(),
-        ..default()
-    });
-    params.insert("z".to_string(), command_central::CommandParam {
-        docs: "Z position of the sphere.".to_string(),
-        ..default()
-    });
+    let mut builder = command_central::CommandBuilder::new();
 
-    command_central::add_command(&"spawn-sphere".to_string(), CommandInfo {
-        title: "Spawn sphere".to_string(),
-        docs: "Spawn a sphere at the given position.".to_string(),
-        parameters: params,
-        ..CommandInfo::default()
-    });
+    builder.insert_param("x", "X position of the sphere.");
+    builder.insert_param("y", "Y position of the sphere.");
+    builder.insert_param("z", "Z position of the sphere.");
+
+    builder.build("spawn-sphere", "Spawn Sphere", "Spawn a sphere at the given position.");
+
 }
 
 fn register_spawn_cube() {
-    let mut params = command_central::CommandParamMap::new();
-    params.insert("x".to_string(), command_central::CommandParam {
-        docs: "X position of the sphere.".to_string(),
-        ..default()
-    });
-    params.insert("y".to_string(), command_central::CommandParam {
-        docs: "Y position of the sphere.".to_string(),
-        ..default()
-    });
-    params.insert("z".to_string(), command_central::CommandParam {
-        docs: "Z position of the sphere.".to_string(),
-        ..default()
-    });
+    let mut builder = command_central::CommandBuilder::new();
 
-    command_central::add_command(&"spawn-cube".to_string(), CommandInfo {
-        title: "Spawn cube".to_string(),
-        docs: "Spawn a cube at the given position.".to_string(),
-        parameters: params,
-        ..CommandInfo::default()
-    });
+    builder.insert_param("x", "X position of the cube.");
+    builder.insert_param("y", "Y position of the cube.");
+    builder.insert_param("z", "Z position of the cube.");
+
+    builder.build("spawn-cube", "Spawn Cube", "Spawn a cube at the given position.");
 }
+
+fn register_clear_everything() {
+    let mut builder = command_central::CommandBuilder::new();
+    builder.build("clear-everything", "Clear Everything", "Remove all sdfs in the object.");
+}
+
 
 /// Handle click to add a sphere.
 fn on_mouse_down(
@@ -300,6 +282,19 @@ fn run_commands(
             // Nothing to do
         }
     }
+
+    let clear_everything_command = command_central::check_if_has_to_run(&"clear-everything".to_string());
+    match clear_everything_command {
+        Some(_command) => {
+            let handle = material_handle.single();
+            let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+            material.sdf_types[0].w = TYPE_END;
+        },
+        _ => {
+            // Nothing to do
+        }
+    }
+
 }
 
 
