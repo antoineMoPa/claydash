@@ -11,12 +11,14 @@
 //!  - Make it scriptable
 //!
 
-use std::collections::HashMap;
+// We want a orderered version of HashMap. Turns our BTreeMap is ordered!
+// So, using BTreeMap avoids order constantly flickering, example: when searching.
+use std::collections::BTreeMap;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
-pub type CommandInfoMap = HashMap<String, CommandInfo>;
-pub type CommandParamMap = HashMap<String, CommandParam>;
+pub type CommandInfoMap = BTreeMap<String, CommandInfo>;
+pub type CommandParamMap = BTreeMap<String, CommandParam>;
 
 #[derive(Clone)]
 pub struct CommandParam {
@@ -36,6 +38,34 @@ impl Default for CommandParam {
 impl CommandParam {
     fn clear(&mut self) {
         self.float = None;
+    }
+}
+
+pub struct CommandBuilder {
+    pub command_param_map: CommandParamMap,
+}
+
+impl CommandBuilder {
+    pub fn new() -> Self {
+        return Self {
+            command_param_map: CommandParamMap::new()
+        };
+    }
+
+    pub fn insert_param(&mut self,  system_name: &str, docs: &str) {
+        self.command_param_map.insert(system_name.to_string(), CommandParam {
+            docs: docs.to_string(),
+            ..CommandParam::default()
+        });
+    }
+
+    pub fn build(&mut self, sys_name: &str, title: &str, docs: &str) {
+        add_command(&sys_name.to_string(), CommandInfo {
+            title: title.to_string(),
+            docs: docs.to_string(),
+            parameters: self.command_param_map.clone(),
+            ..CommandInfo::default()
+        });
     }
 }
 
@@ -69,13 +99,13 @@ impl Default for CommandInfo {
             docs: "".to_string(),
             keybinding: "".to_string(),
             requested_runs: 0,
-            parameters: HashMap::new(),
+            parameters: BTreeMap::new(),
         };
     }
 }
 
 lazy_static! {
-    static ref COMMANDS_MAP: Mutex<CommandInfoMap> = Mutex::new(HashMap::new());
+    static ref COMMANDS_MAP: Mutex<CommandInfoMap> = Mutex::new(BTreeMap::new());
 }
 
 pub fn add_command(system_name: &String, command: CommandInfo) {
@@ -255,24 +285,13 @@ mod tests {
     fn creates_and_runs_command_with_parameters() {
         let sys_name = "test-command-with-params".to_string();
 
-        let mut params: CommandParamMap= HashMap::new();
+        let mut builder = CommandBuilder::new();
 
-        params.insert("x".to_string(), CommandParam {
-            docs: "X position of the mouse.".to_string(),
-            ..CommandParam::default()
-        });
+        builder.insert_param("x", "X position of the mouse.");
+        builder.insert_param("y", "Y position of the mouse.");
+        builder.insert_param("z", "Z position of the mouse.");
 
-        params.insert("y".to_string(), CommandParam {
-            docs: "Y position of the mouse.".to_string(),
-            ..CommandParam::default()
-        });
-
-        add_command(&sys_name, CommandInfo {
-            title: "Test Command".to_string(),
-            docs: "Here are some docs about the command".to_string(),
-            parameters: params,
-            ..CommandInfo::default()
-        });
+        builder.build(&sys_name, "Test Command", "Here are some docs about the command");
 
         assert_eq!(
             read_command(&sys_name).unwrap().parameters["x"].docs,
@@ -281,7 +300,7 @@ mod tests {
 
         // Simulate application part where we would trigger the command
         {
-            let mut params: CommandParamMap= HashMap::new();
+            let mut params: CommandParamMap= BTreeMap::new();
 
             params.insert("x".to_string(), CommandParam {
                 docs: "X position of the mouse.".to_string(),
@@ -310,7 +329,7 @@ mod tests {
     fn repeats_last_command_with_parameters() {
         let sys_name = "test-command-with-params-2".to_string();
 
-        let mut params: CommandParamMap= HashMap::new();
+        let mut params: CommandParamMap= BTreeMap::new();
 
         params.insert("x".to_string(), CommandParam {
             docs: "X position of the mouse.".to_string(),
@@ -326,7 +345,7 @@ mod tests {
 
         // Simulate application part where we would trigger the command
         {
-            let mut params: CommandParamMap= HashMap::new();
+            let mut params: CommandParamMap= BTreeMap::new();
 
             params.insert("x".to_string(), CommandParam {
                 docs: "X position of the mouse.".to_string(),
