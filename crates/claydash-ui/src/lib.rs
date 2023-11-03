@@ -20,7 +20,8 @@ impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CommandSearchState>()
             .add_plugins(EguiPlugin)
-            .add_systems(Update, command_ui);
+            .add_systems(Update, command_ui)
+            .add_systems(Startup, color_picker_ui);
     }
 }
 
@@ -146,4 +147,25 @@ fn command_results_ui(
                 ui.add_space(10.0);
             });
     }
+}
+
+fn color_picker_ui(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>
+) {
+    commands.spawn(ImageBundle {
+        style: Style {
+            width: Val::Px(100.0),
+            height: Val::Px(100.0),
+            margin: UiRect {
+                left: Val::Px(10.0),
+                right: Val::Px(10.0),
+                top: Val::Px(10.0),
+                bottom: Val::Px(10.0)
+            },
+            ..default()
+        },
+        image: asset_server.load("colorpicker.png").into(),
+        ..default()
+    });
 }
