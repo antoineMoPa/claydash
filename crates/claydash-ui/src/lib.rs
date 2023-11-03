@@ -6,7 +6,7 @@ use egui::style::{
     WidgetVisuals
 };
 use egui::Color32;
-use epaint::Stroke;
+use epaint::{Stroke, Pos2};
 use epaint::Rounding;
 
 pub struct ClaydashUIPlugin;
@@ -21,9 +21,19 @@ impl Plugin for ClaydashUIPlugin {
         app.init_resource::<CommandSearchState>()
             .add_plugins(EguiPlugin)
             .add_systems(Update, command_ui)
+            .add_systems(Update, color_picker_egui_ui)
             .add_systems(Startup, color_picker_ui);
     }
 }
+
+const IMAGE_WIDTH: f32 = 131.0;
+const IMAGE_HEIGHT: f32 = 131.0;
+const CIRCLE_MARGIN_LEFT: f32 = 10.0;
+const CIRCLE_MARGIN_TOP: f32 = 10.0;
+const CIRCLE_CENTER_X: f32 = IMAGE_WIDTH / 2.0 + CIRCLE_MARGIN_LEFT;
+const CIRCLE_CENTER_Y: f32 = IMAGE_HEIGHT / 2.0 + CIRCLE_MARGIN_TOP;
+const CIRCLE_BORDER_APPROX: f32 = 8.0;
+const CIRCLE_USEFUL_RADIUS: f32 = 65.0 - CIRCLE_BORDER_APPROX;
 
 fn command_ui(
     mut contexts: EguiContexts,
@@ -151,22 +161,98 @@ fn command_results_ui(
 
 fn color_picker_ui(
     mut commands: Commands,
-    asset_server: Res<AssetServer>
+    asset_server: Res<AssetServer>,
+    mut windows: Query<&mut Window>,
 ) {
     // TODO: activate color picker
-    //commands.spawn(ImageBundle {
-    //    style: Style {
-    //        width: Val::Px(100.0),
-    //        height: Val::Px(100.0),
-    //        margin: UiRect {
-    //            left: Val::Px(10.0),
-    //            right: Val::Px(10.0),
-    //            top: Val::Px(10.0),
-    //            bottom: Val::Px(10.0)
-    //        },
-    //        ..default()
-    //    },
-    //    image: asset_server.load("colorpicker.png").into(),
-    //    ..default()
-    //});
+    commands.spawn(ImageBundle {
+        style: Style {
+            width: Val::Px(IMAGE_WIDTH),
+            height: Val::Px(IMAGE_HEIGHT),
+            margin: UiRect {
+                left: Val::Px(CIRCLE_MARGIN_LEFT),
+                top: Val::Px(CIRCLE_MARGIN_TOP),
+                right: Val::Px(0.0),
+                bottom: Val::Px(0.0)
+            },
+            ..default()
+        },
+        image: asset_server.load("colorpicker.png").into(),
+        ..default()
+    });
+}
+
+fn color_picker_egui_ui(
+    mut contexts: EguiContexts,
+    asset_server: Res<AssetServer>,
+    assets: Res<Assets<Image>>
+) {
+    let ctx = contexts.ctx_mut();
+
+    egui::SidePanel::left("left_panel")
+        .frame(Frame {
+            outer_margin: egui::style::Margin::symmetric(20.0, 0.0),
+            inner_margin: egui::style::Margin::same(0.0),
+            fill: Color32::TRANSPARENT,
+            ..default()
+        })
+        .show(ctx, |ui| {
+            let (pointer_position, any_button_down) = ctx.input(| reader | {
+                return (
+                    reader.pointer.latest_pos(),
+                    reader.pointer.any_down()
+                );
+            });
+
+            if !any_button_down {
+                return;
+            }
+
+            match pointer_position {
+                Some(pointer_position) => {
+
+                    let distance_from_wheel_center =
+                        ((pointer_position.x - CIRCLE_CENTER_X).powi(2) +
+                         (pointer_position.y - CIRCLE_CENTER_Y).powi(2)).sqrt();
+
+                    if distance_from_wheel_center > CIRCLE_USEFUL_RADIUS {
+                        return;
+                    }
+
+                    let image_handle: Handle<Image> = asset_server.load("colorpicker.png");
+                    let image = assets.get(&image_handle).unwrap();
+                    let index_i_in_image = (pointer_position.x - CIRCLE_MARGIN_LEFT) as i32;
+                    let index_j_in_image = (pointer_position.y - CIRCLE_MARGIN_TOP) as i32;
+                    let image_size = image.size();
+                    let width = image_size.x;
+                    let datatype_size = 4; // I assume 4 rgba bytes
+                    let line_size = datatype_size * (width as i32);
+                    let index_in_image =
+                        index_i_in_image * datatype_size +
+                        index_j_in_image * line_size;
+
+                    if index_in_image < (image.data.len() as i32 - 4) {
+                        let r = image.data[index_in_image as usize + 0];
+                        let g = image.data[index_in_image as usize + 1];
+                        let b = image.data[index_in_image as usize + 2];
+                        let a = image.data[index_in_image as usize + 3];
+
+                        ui.painter()
+                            .circle(
+                                Pos2 {
+                                    x: pointer_position.x,
+                                    y: pointer_position.y
+                                },
+                                6.0,
+                                Color32::from_rgba_unmultiplied(r, g, b, a),
+                                Stroke {
+                                    width: 2.0,
+                                    color: Color32::BLACK,
+                                }
+                            );
+                    }
+                }
+                _ => {}
+            }
+        });
 }
