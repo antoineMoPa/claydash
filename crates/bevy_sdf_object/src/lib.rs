@@ -42,6 +42,8 @@ pub struct SDFObjectMaterial {
     pub sdf_types: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
     #[uniform(2)]
     pub sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
+    #[uniform(3)]
+    pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
 }
 
 impl Default for SDFObjectMaterial {
@@ -50,6 +52,7 @@ impl Default for SDFObjectMaterial {
             camera: Vec4::new(0.0, 0.0, 0.0, 0.0),
             sdf_types: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
             sdf_positions: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
+            sdf_colors: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
         }
     }
 }

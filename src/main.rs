@@ -6,7 +6,7 @@ use command_central::{
     CommandBuilder,
     CommandMap,
 };
-use claydash_ui::ClaydashUIPlugin;
+use claydash_ui::{ClaydashUIPlugin, ClaydashUIState};
 use smooth_bevy_cameras::{
     LookTransformPlugin,
     controllers::orbit::{
@@ -27,7 +27,7 @@ use sdf_consts::*;
 use bevy::{
     input::{keyboard::KeyCode, Input},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    prelude::*, render::render_resource::encase::vector::FromVectorParts,
+    prelude::*,
 };
 
 use bevy_sdf_object::*;
@@ -179,6 +179,10 @@ fn register_spawn_sphere(commands: &mut CommandMap<ParamType>) {
             vec3_value: Some(Vec3::ZERO),
             ..default()
         }))
+        .insert_param("color", "New object color.", Some(ParamType{
+            vec3_value: Some(Vec3::ZERO),
+            ..default()
+        }))
         .write(commands);
 }
 
@@ -188,6 +192,10 @@ fn register_spawn_cube(commands: &mut CommandMap<ParamType>) {
         .system_name("spawn-cube")
         .docs("Add a cube at the given position")
         .insert_param("position", "New object position vector", Some(ParamType{
+            vec3_value: Some(Vec3::ZERO),
+            ..default()
+        }))
+        .insert_param("color", "New object color.", Some(ParamType{
             vec3_value: Some(Vec3::ZERO),
             ..default()
         }))
@@ -231,7 +239,8 @@ fn on_mouse_down(
 fn run_commands(
     material_handle: Query<&Handle<SDFObjectMaterial>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
-    mut bevy_command_central: ResMut<CommandCentralState>
+    mut bevy_command_central: ResMut<CommandCentralState>,
+    claydash_ui_state: ResMut<ClaydashUIState>
 ) {
     let spawn_sphere_command = bevy_command_central.commands.check_if_has_to_run(&"spawn-sphere".to_string());
     match spawn_sphere_command {
@@ -252,6 +261,9 @@ fn run_commands(
 
             material.sdf_types[last_sdf].w = TYPE_SPHERE;
             material.sdf_positions[last_sdf] = Vec4::new(position.x, position.y, position.z, 0.0);
+            // TODO: do we really need to clone?
+            material.sdf_colors[last_sdf] = claydash_ui_state.color.clone();
+
 
             material.sdf_types[last_sdf + 1].w = TYPE_END;
             material.sdf_positions[last_sdf + 1] = Vec4::new(0.0, 0.0, 0.0, 0.0);
@@ -289,6 +301,9 @@ fn run_commands(
 
             material.sdf_types[last_sdf].w = TYPE_CUBE;
             material.sdf_positions[last_sdf] = Vec4::new(position.x, position.y, position.z, 0.0);
+            // TODO: do we really need to clone?
+            material.sdf_colors[last_sdf] = claydash_ui_state.color.clone();
+
             material.sdf_types[last_sdf + 1].w = TYPE_END;
             material.sdf_positions[last_sdf + 1] = Vec4::new(0.0, 0.0, 0.0, 0.0);
 

@@ -13,13 +13,14 @@ use bevy_command_central_plugin::*;
 pub struct ClaydashUIPlugin;
 
 #[derive(Default, Resource)]
-pub struct CommandSearchState {
+pub struct ClaydashUIState {
     pub command_search_str: String,
+    pub color: Vec4,
 }
 
 impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CommandSearchState>()
+        app.init_resource::<ClaydashUIState>()
             .add_plugins(EguiPlugin)
             .add_systems(Update, command_ui)
             .add_systems(Update, color_picker_egui_ui)
@@ -38,7 +39,7 @@ const CIRCLE_USEFUL_RADIUS: f32 = 65.0 - CIRCLE_BORDER_APPROX;
 
 fn command_ui(
     mut contexts: EguiContexts,
-    mut command_search_state: ResMut<CommandSearchState>,
+    mut claydash_ui_state: ResMut<ClaydashUIState>,
     command_central_state: ResMut<CommandCentralState>
 ) {
     let ctx = contexts.ctx_mut();
@@ -85,13 +86,13 @@ fn command_ui(
             ui.style_mut().visuals.extreme_bg_color = bg_color;
             ui.put(
                 widget_rect,
-                egui::TextEdit::singleline(&mut command_search_state.command_search_str)
+                egui::TextEdit::singleline(&mut claydash_ui_state.command_search_str)
                     .hint_text("Search Commands...")
             );
             ui.end_row();
             ui.add_space(10.0);
 
-            let command_search_str: &mut String = &mut command_search_state.command_search_str;
+            let command_search_str: &mut String = &mut claydash_ui_state.command_search_str;
             if command_search_str.len() > 0 {
                 egui::Frame::none()
                     .fill(Color32::from_rgba_unmultiplied(200, 200, 200, 10))
@@ -100,7 +101,7 @@ fn command_ui(
                     .inner_margin(egui::style::Margin::symmetric(10.0, 0.0))
                     .show(ui, |ui| {
                         ui.set_width(280.0);
-                        command_results_ui(ui, command_search_state, command_central_state);
+                        command_results_ui(ui, claydash_ui_state, command_central_state);
                     });
             }
         });
@@ -108,11 +109,11 @@ fn command_ui(
 
 fn command_results_ui(
     ui: &mut egui::Ui,
-    mut command_search_state: ResMut<CommandSearchState>,
+    mut claydash_ui_state: ResMut<ClaydashUIState>,
     mut bevy_command_central: ResMut<CommandCentralState>
 ) {
     let rounding = Rounding::same(5.0);
-    let command_search_str: &mut String = &mut command_search_state.command_search_str;
+    let command_search_str: &mut String = &mut claydash_ui_state.command_search_str;
     let commands = match command_search_str.len() {
         0 => { return },
         _ => { bevy_command_central.commands.search(command_search_str, 5) }
@@ -186,7 +187,8 @@ fn color_picker_ui(
 fn color_picker_egui_ui(
     mut contexts: EguiContexts,
     asset_server: Res<AssetServer>,
-    assets: Res<Assets<Image>>
+    assets: Res<Assets<Image>>,
+    mut claydash_ui_state: ResMut<ClaydashUIState>,
 ) {
     let ctx = contexts.ctx_mut();
 
@@ -237,6 +239,11 @@ fn color_picker_egui_ui(
                         let g = image.data[index_in_image as usize + 1];
                         let b = image.data[index_in_image as usize + 2];
                         let a = image.data[index_in_image as usize + 3];
+
+                        claydash_ui_state.color.x = r as f32 / 255.0;
+                        claydash_ui_state.color.y = g as f32 / 255.0;
+                        claydash_ui_state.color.z = b as f32 / 255.0;
+                        claydash_ui_state.color.w = a as f32 / 255.0;
 
                         ui.painter()
                             .circle(

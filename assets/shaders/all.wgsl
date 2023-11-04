@@ -31,6 +31,9 @@ var<uniform> sdf_types: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
 @group(1) @binding(2)
 var<uniform> sdf_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
+@group(1) @binding(3)
+var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
+
 const MAX_ITERATIONS = 64;
 
 fn sdf_union(d1: f32, d2: f32) -> f32 {
@@ -40,7 +43,7 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
 const TYPE_END: i32 = #{TYPE_END};
 const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
 const TYPE_CUBE: i32 = #{TYPE_CUBE};
-const FAR_DIST = 2000.0;
+const FAR_DIST = 100.0;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -58,6 +61,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var d = 10000.0;
     var i: i32 = 0;
     var d_current_object = 0.0;
+    var color = vec4(0.0, 0.0, 0.0, 1.0);
 
     // Walk the ray through the scene
     for (; i < MAX_ITERATIONS; i++) {
@@ -98,8 +102,31 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if(d < 0.001){
         let AOLight: f32 = 2.0 / (f32(i)/f32(MAX_ITERATIONS));
 
-        return vec4<f32>(0.2, 0.1, 1.0/d, 1.0) + AOLight * vec4(0.01);
+        for (var sdf_index: i32 = 0; sdf_index < #{MAX_SDFS_PER_ENTITY}; sdf_index++) {
+            if (sdf_types[sdf_index].w == TYPE_END) {
+                break;
+            }
+            let p = sdf_positions[sdf_index].xyz;
+
+            // Find distance based on object type
+            if (sdf_types[sdf_index].w == TYPE_SPHERE) {
+                d_current_object = length(position - p) - sphere_r;
+            }
+            else if (sdf_types[sdf_index].w == TYPE_CUBE) {
+                box_q = abs(position - box_position) - box_parameters;
+                max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
+                d_current_object = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
+            }
+
+            var blend_dist = 0.003;
+            color = mix(color, sdf_colors[sdf_index], clamp(1.0 - pow(d_current_object / blend_dist, 4.0), 0.0, 1.0));
+
+            d = sdf_union(d_current_object, d);
+        }
+
+
+        return vec4(color.rgb, 1.0);// - AOLight * vec4(0.01);
     }
 
-    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }
