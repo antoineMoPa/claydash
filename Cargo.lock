@@ -403,6 +403,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_command_central_plugin"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_app",
+ "command-central",
+]
+
+[[package]]
 name = "bevy_core"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1357,6 +1366,7 @@ version = "0.0.0"
 dependencies = [
  "bevy",
  "bevy_asset",
+ "bevy_command_central_plugin",
  "bevy_egui",
  "bevy_framepace",
  "bevy_mod_picking",
@@ -1382,6 +1392,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_app",
+ "bevy_command_central_plugin",
  "bevy_egui",
  "command-central",
  "epaint",

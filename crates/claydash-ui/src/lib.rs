@@ -8,10 +8,11 @@ use egui::style::{
 use egui::Color32;
 use epaint::{Stroke, Pos2};
 use epaint::Rounding;
+use bevy_command_central_plugin::*;
 
 pub struct ClaydashUIPlugin;
 
-#[derive(Default,Resource)]
+#[derive(Default, Resource)]
 pub struct CommandSearchState {
     pub command_search_str: String,
 }
@@ -37,8 +38,8 @@ const CIRCLE_USEFUL_RADIUS: f32 = 65.0 - CIRCLE_BORDER_APPROX;
 
 fn command_ui(
     mut contexts: EguiContexts,
-    mut command_search_state: ResMut<CommandSearchState>
-
+    mut command_search_state: ResMut<CommandSearchState>,
+    command_central_state: ResMut<CommandCentralState>
 ) {
     let ctx = contexts.ctx_mut();
     let rounding = Rounding::same(5.0);
@@ -99,7 +100,7 @@ fn command_ui(
                     .inner_margin(egui::style::Margin::symmetric(10.0, 0.0))
                     .show(ui, |ui| {
                         ui.set_width(280.0);
-                        command_results_ui(ui, command_search_state);
+                        command_results_ui(ui, command_search_state, command_central_state);
                     });
             }
         });
@@ -107,13 +108,14 @@ fn command_ui(
 
 fn command_results_ui(
     ui: &mut egui::Ui,
-    mut command_search_state: ResMut<CommandSearchState>
+    mut command_search_state: ResMut<CommandSearchState>,
+    mut bevy_command_central: ResMut<CommandCentralState>
 ) {
     let rounding = Rounding::same(5.0);
     let command_search_str: &mut String = &mut command_search_state.command_search_str;
     let commands = match command_search_str.len() {
         0 => { return },
-        _ => { command_central::search(command_search_str, 5) }
+        _ => { bevy_command_central.commands.search(command_search_str, 5) }
     };
 
     for (system_name, command_info) in commands.iter() {
@@ -151,7 +153,7 @@ fn command_results_ui(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
                     ui.add_space(10.0);
                     if ui.small_button("Run").clicked() {
-                        command_central::run(system_name);
+                        bevy_command_central.commands.run(system_name);
                     }
                 });
                 ui.add_space(10.0);
@@ -162,7 +164,6 @@ fn command_results_ui(
 fn color_picker_ui(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut windows: Query<&mut Window>,
 ) {
     // TODO: activate color picker
     commands.spawn(ImageBundle {
