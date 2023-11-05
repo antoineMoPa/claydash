@@ -175,7 +175,6 @@ fn color_picker_ui(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    // TODO: activate color picker
     commands.spawn(ImageBundle {
         style: Style {
             width: Val::Px(IMAGE_WIDTH),
