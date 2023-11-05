@@ -1,15 +1,11 @@
 [package]
-name = "claydash-ui"
+name = "bevy_command_central_egui"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 command-central = { path = "../command-central"}
 bevy_command_central_plugin = { path = "../bevy_command_central_plugin"}
-bevy_command_central_egui = { path = "../bevy_command_central_egui"}
 bevy = "0.11.3"
-bevy_app = "0.11.3"
 bevy_egui = "0.22.0"
 epaint = "0.23.0"
