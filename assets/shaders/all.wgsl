@@ -51,6 +51,9 @@ const BLEND_DIST = 0.03;
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var position = in.world_position.xyz;
     var ray = normalize(position - camera.xyz);
+    // Make objects out of the domain visible for a certain range
+    // (mostly to have a nicer default view)
+    position -= normalize(ray);
     let direction = ray;
 
     let sphere_r = 0.2;

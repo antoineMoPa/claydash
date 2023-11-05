@@ -227,7 +227,7 @@ fn on_mouse_down(
 
         let mut params = command.parameters;
         params.get_mut("position").unwrap().value = Some(ParamType {
-            vec3_value: Some(position * 0.9),
+            vec3_value: Some(position),
             ..default()
         });
 
