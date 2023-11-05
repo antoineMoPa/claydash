@@ -12,11 +12,21 @@ use bevy_command_central_plugin::*;
 
 pub struct ClaydashUIPlugin;
 
-#[derive(Default, Resource)]
+#[derive(Resource)]
 pub struct ClaydashUIState {
     pub command_search_str: String,
     pub color: Vec4,
 }
+
+impl Default for ClaydashUIState {
+    fn default() -> Self {
+        Self {
+            color: Vec4::new(0.2, 0.1, 1.0, 1.0),
+            command_search_str: "".to_string(),
+        }
+    }
+}
+
 
 impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {

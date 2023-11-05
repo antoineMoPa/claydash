@@ -44,6 +44,8 @@ const TYPE_END: i32 = #{TYPE_END};
 const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
 const TYPE_CUBE: i32 = #{TYPE_CUBE};
 const FAR_DIST = 100.0;
+const CLOSE_DIST = 0.01;
+const BLEND_DIST = 0.03;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -67,27 +69,34 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     for (; i < MAX_ITERATIONS; i++) {
         // Loop through all objects
         for (var sdf_index: i32 = 0; sdf_index < #{MAX_SDFS_PER_ENTITY}; sdf_index++) {
-            if (sdf_types[sdf_index].w == TYPE_END) {
+            let t = sdf_types[sdf_index].w;
+            if (t == TYPE_END) {
                 break;
             }
             let p = sdf_positions[sdf_index].xyz;
 
             // Find distance based on object type
-            if (sdf_types[sdf_index].w == TYPE_SPHERE) {
+            if (t == TYPE_SPHERE) {
                 d_current_object = length(position - p) - sphere_r;
             }
-            else if (sdf_types[sdf_index].w == TYPE_CUBE) {
+            else if (t == TYPE_CUBE) {
                 box_q = abs(position - box_position) - box_parameters;
                 max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
                 d_current_object = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
             }
 
             d = sdf_union(d_current_object, d);
+            color = mix(color, sdf_colors[sdf_index], clamp(1.0 - pow(d_current_object / BLEND_DIST, 4.0), 0.0, 1.0));
+
+            if (d < CLOSE_DIST) {
+                break;
+            }
         }
 
         position += direction * d * 0.8;
+        position += direction * 0.005;
 
-        if (d < 0.001){
+        if (d < CLOSE_DIST) {
             break;
         }
 
@@ -99,33 +108,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    if(d < 0.001){
+    if (d < CLOSE_DIST) {
         let AOLight: f32 = 2.0 / (f32(i)/f32(MAX_ITERATIONS));
-
-        for (var sdf_index: i32 = 0; sdf_index < #{MAX_SDFS_PER_ENTITY}; sdf_index++) {
-            if (sdf_types[sdf_index].w == TYPE_END) {
-                break;
-            }
-            let p = sdf_positions[sdf_index].xyz;
-
-            // Find distance based on object type
-            if (sdf_types[sdf_index].w == TYPE_SPHERE) {
-                d_current_object = length(position - p) - sphere_r;
-            }
-            else if (sdf_types[sdf_index].w == TYPE_CUBE) {
-                box_q = abs(position - box_position) - box_parameters;
-                max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
-                d_current_object = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
-            }
-
-            var blend_dist = 0.003;
-            color = mix(color, sdf_colors[sdf_index], clamp(1.0 - pow(d_current_object / blend_dist, 4.0), 0.0, 1.0));
-
-            d = sdf_union(d_current_object, d);
-        }
-
-
-        return vec4(color.rgb, 1.0);// - AOLight * vec4(0.01);
+        return vec4(color.rgb, 1.0) - AOLight * vec4(0.01);
     }
 
     return vec4<f32>(0.0, 0.0, 0.0, 0.0);

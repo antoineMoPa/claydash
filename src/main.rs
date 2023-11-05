@@ -261,8 +261,7 @@ fn run_commands(
 
             material.sdf_types[last_sdf].w = TYPE_SPHERE;
             material.sdf_positions[last_sdf] = Vec4::new(position.x, position.y, position.z, 0.0);
-            // TODO: do we really need to clone?
-            material.sdf_colors[last_sdf] = claydash_ui_state.color.clone();
+            material.sdf_colors[last_sdf] = claydash_ui_state.color;
 
 
             material.sdf_types[last_sdf + 1].w = TYPE_END;
@@ -301,8 +300,7 @@ fn run_commands(
 
             material.sdf_types[last_sdf].w = TYPE_CUBE;
             material.sdf_positions[last_sdf] = Vec4::new(position.x, position.y, position.z, 0.0);
-            // TODO: do we really need to clone?
-            material.sdf_colors[last_sdf] = claydash_ui_state.color.clone();
+            material.sdf_colors[last_sdf] = claydash_ui_state.color;
 
             material.sdf_types[last_sdf + 1].w = TYPE_END;
             material.sdf_positions[last_sdf + 1] = Vec4::new(0.0, 0.0, 0.0, 0.0);
