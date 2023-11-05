@@ -7,11 +7,9 @@ build:
 	  --target web target/wasm32-unknown-unknown/release/main.wasm
 
 deploy:
-	echo "At this point, we expect the ship repo to exist locally."
-	echo "Get the repo with:"
-	echo "git clone git@github.com:antoineMoPa/claydash-ship.git"
+	du -h target/wasm32-unknown-unknown/release/main.wasm
 	cp -r www/* claydash-ship/
-	echo "Commit and push ../claydash-ship to release!"
+
 
 serve:
 	python3 -m http.server --directory www 3001
