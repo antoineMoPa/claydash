@@ -403,6 +403,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_command_central_egui"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_command_central_plugin",
+ "bevy_egui",
+ "command-central",
+ "epaint",
+]
+
+[[package]]
 name = "bevy_command_central_plugin"
 version = "0.1.0"
 dependencies = [
@@ -1392,6 +1403,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_app",
+ "bevy_command_central_egui",
  "bevy_command_central_plugin",
  "bevy_egui",
  "command-central",
