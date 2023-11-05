@@ -32,7 +32,7 @@ impl Plugin for ClaydashUIPlugin {
         app.init_resource::<ClaydashUIState>()
             .add_plugins(EguiPlugin)
             .add_systems(Update, command_ui)
-            .add_systems(Update, color_picker_egui_ui)
+            .add_systems(Update, left_panel_ui)
             .add_systems(Startup, color_picker_ui);
     }
 }
@@ -48,11 +48,10 @@ const CIRCLE_USEFUL_RADIUS: f32 = 65.0 - CIRCLE_BORDER_APPROX;
 
 fn command_ui(
     mut contexts: EguiContexts,
-    mut claydash_ui_state: ResMut<ClaydashUIState>,
+    claydash_ui_state: ResMut<ClaydashUIState>,
     command_central_state: ResMut<CommandCentralState>
 ) {
     let ctx = contexts.ctx_mut();
-    let rounding = Rounding::same(5.0);
 
     egui::SidePanel::right("right_panel")
         .frame(Frame {
@@ -64,56 +63,65 @@ fn command_ui(
         .resizable(false)
         .show(ctx, |ui| {
             ui.set_width(320.0);
-            let widget_offset = egui::vec2(10.0, 20.0);
-            let widget_size = egui::vec2(300.0, 20.0);
-            let widget_rect = egui::Rect::from_min_size(
-                ui.min_rect().min + widget_offset,
-                widget_size
-            );
-
-            let mut visuals = ui.visuals().clone();
-            visuals.override_text_color = Some(Color32::from_rgb(170, 170, 170));
-            let widget_visuals = WidgetVisuals {
-                weak_bg_fill: Color32::from_gray(27),
-                bg_fill: Color32::from_gray(27),
-                bg_stroke: Stroke::new(1.0, Color32::TRANSPARENT), // separators, indentation lines
-                fg_stroke: Stroke::new(1.0, Color32::TRANSPARENT),
-
-                rounding: rounding,
-                expansion: 10.0,
-            };
-            visuals.widgets = Widgets {
-                noninteractive: widget_visuals.clone(),
-                inactive: widget_visuals.clone(),
-                hovered: widget_visuals.clone(),
-                active: widget_visuals.clone(),
-                open: widget_visuals.clone(),
-            };
-            ctx.set_visuals(visuals);
-
-            let bg_color = Color32::from_rgba_unmultiplied(200, 200, 200, 10);
-            ui.style_mut().visuals.extreme_bg_color = bg_color;
-            ui.put(
-                widget_rect,
-                egui::TextEdit::singleline(&mut claydash_ui_state.command_search_str)
-                    .hint_text("Search Commands...")
-            );
-            ui.end_row();
-            ui.add_space(10.0);
-
-            let command_search_str: &mut String = &mut claydash_ui_state.command_search_str;
-            if command_search_str.len() > 0 {
-                egui::Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(200, 200, 200, 10))
-                    .rounding(rounding)
-                    .outer_margin(egui::style::Margin::symmetric(0.0, 10.0))
-                    .inner_margin(egui::style::Margin::symmetric(10.0, 0.0))
-                    .show(ui, |ui| {
-                        ui.set_width(280.0);
-                        command_results_ui(ui, claydash_ui_state, command_central_state);
-                    });
-            }
+            command_search_field(ui, ctx.clone(), claydash_ui_state, command_central_state);
         });
+}
+
+fn command_search_field(
+    ui: &mut egui::Ui,
+    ctx: egui::Context,
+    mut claydash_ui_state: ResMut<ClaydashUIState>,
+    command_central_state: ResMut<CommandCentralState>
+) {
+    let rounding: Rounding = Rounding::same(5.0);
+    let widget_offset = egui::vec2(10.0, 20.0);
+    let widget_size = egui::vec2(300.0, 20.0);
+    let widget_rect = egui::Rect::from_min_size(
+        ui.min_rect().min + widget_offset,
+        widget_size
+    );
+
+    let mut visuals = ui.visuals().clone();
+    visuals.override_text_color = Some(Color32::from_rgb(170, 170, 170));
+    let widget_visuals = WidgetVisuals {
+        weak_bg_fill: Color32::from_gray(27),
+        bg_fill: Color32::from_gray(27),
+        bg_stroke: Stroke::new(1.0, Color32::TRANSPARENT), // separators, indentation lines
+        fg_stroke: Stroke::new(1.0, Color32::TRANSPARENT),
+        rounding,
+        expansion: 10.0,
+    };
+    visuals.widgets = Widgets {
+        noninteractive: widget_visuals.clone(),
+        inactive: widget_visuals.clone(),
+        hovered: widget_visuals.clone(),
+        active: widget_visuals.clone(),
+        open: widget_visuals.clone(),
+    };
+    ctx.set_visuals(visuals);
+
+    let bg_color = Color32::from_rgba_unmultiplied(200, 200, 200, 10);
+    ui.style_mut().visuals.extreme_bg_color = bg_color;
+    ui.put(
+        widget_rect,
+        egui::TextEdit::singleline(&mut claydash_ui_state.command_search_str)
+            .hint_text("Search Commands...")
+    );
+    ui.end_row();
+    ui.add_space(10.0);
+
+    let command_search_str: &mut String = &mut claydash_ui_state.command_search_str;
+    if command_search_str.len() > 0 {
+        egui::Frame::none()
+            .fill(Color32::from_rgba_unmultiplied(200, 200, 200, 10))
+            .rounding(rounding)
+            .outer_margin(egui::style::Margin::symmetric(0.0, 10.0))
+            .inner_margin(egui::style::Margin::symmetric(10.0, 0.0))
+            .show(ui, |ui| {
+                ui.set_width(280.0);
+                command_results_ui(ui, claydash_ui_state, command_central_state);
+            });
+    }
 }
 
 fn command_results_ui(
@@ -192,11 +200,11 @@ fn color_picker_ui(
     });
 }
 
-fn color_picker_egui_ui(
+fn left_panel_ui(
     mut contexts: EguiContexts,
     asset_server: Res<AssetServer>,
     assets: Res<Assets<Image>>,
-    mut claydash_ui_state: ResMut<ClaydashUIState>,
+    claydash_ui_state: ResMut<ClaydashUIState>,
 ) {
     let ctx = contexts.ctx_mut();
 
@@ -221,54 +229,70 @@ fn color_picker_egui_ui(
 
             match pointer_position {
                 Some(pointer_position) => {
-
-                    let distance_from_wheel_center =
-                        ((pointer_position.x - CIRCLE_CENTER_X).powi(2) +
-                         (pointer_position.y - CIRCLE_CENTER_Y).powi(2)).sqrt();
-
-                    if distance_from_wheel_center > CIRCLE_USEFUL_RADIUS {
-                        return;
-                    }
-
-                    let image_handle: Handle<Image> = asset_server.load("colorpicker.png");
-                    let image = assets.get(&image_handle).unwrap();
-                    let index_i_in_image = (pointer_position.x - CIRCLE_MARGIN_LEFT) as i32;
-                    let index_j_in_image = (pointer_position.y - CIRCLE_MARGIN_TOP) as i32;
-                    let image_size = image.size();
-                    let width = image_size.x;
-                    let datatype_size = 4; // I assume 4 rgba bytes
-                    let line_size = datatype_size * (width as i32);
-                    let index_in_image =
-                        index_i_in_image * datatype_size +
-                        index_j_in_image * line_size;
-
-                    if index_in_image < (image.data.len() as i32 - 4) {
-                        let r = image.data[index_in_image as usize + 0];
-                        let g = image.data[index_in_image as usize + 1];
-                        let b = image.data[index_in_image as usize + 2];
-                        let a = image.data[index_in_image as usize + 3];
-
-                        claydash_ui_state.color.x = r as f32 / 255.0;
-                        claydash_ui_state.color.y = g as f32 / 255.0;
-                        claydash_ui_state.color.z = b as f32 / 255.0;
-                        claydash_ui_state.color.w = a as f32 / 255.0;
-
-                        ui.painter()
-                            .circle(
-                                Pos2 {
-                                    x: pointer_position.x,
-                                    y: pointer_position.y
-                                },
-                                6.0,
-                                Color32::from_rgba_unmultiplied(r, g, b, a),
-                                Stroke {
-                                    width: 2.0,
-                                    color: Color32::BLACK,
-                                }
-                            );
-                    }
+                    draw_color_picker(
+                        ui,
+                        pointer_position,
+                        asset_server,
+                        claydash_ui_state,
+                        assets
+                    )
                 }
                 _ => {}
             }
         });
+}
+
+#[inline(always)]
+fn draw_color_picker(
+    ui: &mut egui::Ui,
+    pointer_position: Pos2,
+    asset_server: Res<AssetServer>,
+    mut claydash_ui_state: ResMut<ClaydashUIState>,
+    assets: Res<Assets<Image>>,
+) {
+    let distance_from_wheel_center =
+        ((pointer_position.x - CIRCLE_CENTER_X).powi(2) +
+         (pointer_position.y - CIRCLE_CENTER_Y).powi(2)).sqrt();
+
+    if distance_from_wheel_center > CIRCLE_USEFUL_RADIUS {
+        return;
+    }
+
+    let image_handle: Handle<Image> = asset_server.load("colorpicker.png");
+    let image = assets.get(&image_handle).unwrap();
+    let index_i_in_image = (pointer_position.x - CIRCLE_MARGIN_LEFT) as i32;
+    let index_j_in_image = (pointer_position.y - CIRCLE_MARGIN_TOP) as i32;
+    let image_size = image.size();
+    let width = image_size.x;
+    let datatype_size = 4; // I assume 4 rgba bytes
+    let line_size = datatype_size * (width as i32);
+    let index_in_image =
+        index_i_in_image * datatype_size +
+        index_j_in_image * line_size;
+
+    if index_in_image < (image.data.len() as i32 - 4) {
+        let r = image.data[index_in_image as usize + 0];
+        let g = image.data[index_in_image as usize + 1];
+        let b = image.data[index_in_image as usize + 2];
+        let a = image.data[index_in_image as usize + 3];
+
+        claydash_ui_state.color.x = r as f32 / 255.0;
+        claydash_ui_state.color.y = g as f32 / 255.0;
+        claydash_ui_state.color.z = b as f32 / 255.0;
+        claydash_ui_state.color.w = a as f32 / 255.0;
+
+        ui.painter()
+            .circle(
+                Pos2 {
+                    x: pointer_position.x,
+                    y: pointer_position.y
+                },
+                6.0,
+                Color32::from_rgba_unmultiplied(r, g, b, a),
+                Stroke {
+                    width: 2.0,
+                    color: Color32::BLACK,
+                }
+            );
+    }
 }
