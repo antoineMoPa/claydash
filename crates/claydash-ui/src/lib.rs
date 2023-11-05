@@ -27,7 +27,6 @@ impl Default for ClaydashUIState {
     }
 }
 
-
 impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClaydashUIState>()
