@@ -26,28 +26,48 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
         });
     }
 
-    pub fn get_path(& self, path: &str) -> Option<SceneDataValue<ValueType>> {
+    pub fn get_path(& self, path: &str) -> Option<ValueType> {
+        return match self.get_path_with_parts(&path.split(".").collect()) {
+            Some(data) => data.value,
+            _ => None
+        }
+    }
+
+    pub fn get_path_meta(& self, path: &str) -> Option<SceneDataValue<ValueType>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
     fn set_path_with_parts(&mut self, parts: Vec<&str>, value: SceneDataValue<ValueType>) {
         if parts.len() == 1 {
-            self.map.insert(parts[0].to_string(), value);
+            if !self.map.contains_key(parts[0]) {
+                self.map.insert(parts[0].to_string(), SceneDataValue::<ValueType> {
+                    ..default()
+                });
+            }
+            let leaf = &mut self.map.get_mut(parts[0]).unwrap();
+            leaf.value = value.value;
+            leaf.version += 1;
         }
         else {
             if !self.map.contains_key(parts[0]) {
-                self.map.insert(parts[0].to_string(), SceneDataValue::<ValueType> { ..default() });
+                self.map.insert(parts[0].to_string(), SceneDataValue::<ValueType> {
+                    ..default()
+                });
             }
             if self.map[parts[0]].subtree.is_none() {
-                println!("creating tree at {}", parts[0]);
                 let subtree = ClaydashSceneData {
                     ..default()
                 };
                 self.map.get_mut(parts[0]).unwrap().subtree = Some(subtree);
             };
-            let subtree = self.map.get_mut(parts[0]).unwrap().subtree.as_mut().unwrap();
+            let map = &mut self.map.get_mut(parts[0]).unwrap();
+            let subtree = &mut map.subtree.as_mut().unwrap();
+            map.version += 1;
             subtree.set_path_with_parts(parts[1..].to_vec(), value);
+            subtree.version += 1;
         }
+
+        self.version += 1;
     }
 
     fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<SceneDataValue<ValueType>> {
@@ -55,6 +75,9 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
             return self.map.get(parts[0]).cloned();
         }
         else {
+            if !self.map.contains_key(parts[0]) {
+                return None;
+            }
             if self.map[parts[0]].subtree.is_none() {
                 // TODO: return None
                 panic!("Value does not exist at {}", parts.join("."));
@@ -76,9 +99,8 @@ mod tests {
             ..default()
         };
         data.set_path("scene.some", 1234);
-        assert_eq!(data.get_path("scene.some").unwrap().value.unwrap(), 1234);
+        assert_eq!(data.get_path("scene.some").unwrap(), 1234);
     }
-
 
     #[test]
     fn it_gets_and_sets_deep_values() {
@@ -86,7 +108,66 @@ mod tests {
             ..default()
         };
         data.set_path("scene.some.very.deep.property", 1234);
-        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap().value.unwrap(), 1234);
+        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 1234);
+    }
+
+    #[test]
+    fn it_gets_none_when_not_set() {
+        let data = ClaydashSceneData::<i32> {
+            ..default()
+        };
+        assert_eq!(data.get_path("scene.property.that.does.not.exist"), None);
+    }
+
+    #[test]
+    fn it_changes_value() {
+        let mut data = ClaydashSceneData::<i32> {
+            ..default()
+        };
+        data.set_path("scene.some.very.deep.property", 1234);
+        data.set_path("scene.some.very.deep.property", 2345);
+        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 2345);
+    }
+
+    #[test]
+    fn it_increments_version_number_on_change() {
+        // Arrange
+        let mut data = ClaydashSceneData::<i32> {
+            ..default()
+        };
+
+        // Pre condition
+        assert_eq!(data.version, 0);
+
+        // Set value
+        data.set_path("scene.some.very.deep.property", 1234);
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().version, 1);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().version, 1);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().version, 1);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().version, 1);
+        assert_eq!(data.get_path_meta("scene").unwrap().version, 1);
+
+        assert_eq!(data.version, 1);
+
+        // Set value (2nd time)
+        data.set_path("scene.some.very.deep.property", 2345);
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().version, 2);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().version, 2);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().version, 2);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().version, 2);
+        assert_eq!(data.get_path_meta("scene").unwrap().version, 2);
+
+        assert_eq!(data.version, 2);
+
+        // Set value (3rd time)
+        data.set_path("scene.some.very.deep.property", 3456);
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().version, 3);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().version, 3);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().version, 3);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().version, 3);
+        assert_eq!(data.get_path_meta("scene").unwrap().version, 3);
+
+        assert_eq!(data.version, 3);
     }
 
     #[test]
@@ -95,7 +176,7 @@ mod tests {
             ..default()
         };
 
-        data.set_path("scene.some", 123.4);
+        data.set_path("scene.some.deep.property", 123.4);
 
         // Convert BevySceneData to JSON
         let serialized = serde_json::to_string(&data).unwrap();
@@ -103,6 +184,6 @@ mod tests {
         // Convert JSON back to BevySceneData
         let deserialized: ClaydashSceneData<f32> = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(deserialized.get_path("scene.some").unwrap().value.unwrap(), 123.4);
+        assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap(), 123.4);
     }
 }
