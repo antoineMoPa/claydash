@@ -11,6 +11,12 @@ pub struct SceneDataValue<ValueType: Default + Clone> {
     version: i32,
 }
 
+impl<ValueType: Default + Clone> SceneDataValue<ValueType> {
+    fn notify_change(&mut self) {
+        self.version += 1;
+    }
+}
+
 #[derive(Default,Serialize,Deserialize,Debug,Clone)]
 pub struct ClaydashSceneData<ValueType: Default + Clone> {
     map: BTreeMap<String, SceneDataValue<ValueType>>,
@@ -46,7 +52,7 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
             }
             let leaf = &mut self.map.get_mut(parts[0]).unwrap();
             leaf.value = value.value;
-            leaf.version += 1;
+            leaf.notify_change();
         }
         else {
             if !self.map.contains_key(parts[0]) {
@@ -61,13 +67,13 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
                 self.map.get_mut(parts[0]).unwrap().subtree = Some(subtree);
             };
             let map = &mut self.map.get_mut(parts[0]).unwrap();
+            map.notify_change();
             let subtree = &mut map.subtree.as_mut().unwrap();
-            map.version += 1;
             subtree.set_path_with_parts(parts[1..].to_vec(), value);
-            subtree.version += 1;
+            subtree.notify_change();
         }
 
-        self.version += 1;
+        self.notify_change();
     }
 
     fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<SceneDataValue<ValueType>> {
@@ -86,6 +92,10 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
             let value = subtree.get_path_with_parts(&parts[1..].to_vec()).unwrap();
             return Some(value);
         }
+    }
+
+    fn notify_change(&mut self) {
+        self.version += 1;
     }
 }
 
