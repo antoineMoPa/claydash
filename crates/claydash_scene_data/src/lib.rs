@@ -4,15 +4,47 @@ use bevy::prelude::*;
 
 use serde::{Serialize, Deserialize};
 
-#[derive(Default,Serialize,Deserialize,Debug,Clone)]
-pub struct ClaydashSceneData<ValueType: Default + Clone> {
-    subtree: BTreeMap<String, ClaydashSceneData<ValueType>>,
-    value: Option<ValueType>,
-    version: i32,
+
+pub trait NotifyUpdate {
+    fn notify_update(&mut self);
+    fn reset_update_cycle(&mut self);
+}
+
+#[derive(Default,Clone,Serialize,Deserialize)]
+pub struct DefaultUpdateTracker {
     updated: bool,
 }
 
-impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
+impl DefaultUpdateTracker {
+    pub fn was_updated(&self) -> bool { self.updated }
+}
+
+impl NotifyUpdate for DefaultUpdateTracker {
+    fn notify_update(&mut self) {
+        self.updated = true;
+    }
+
+    fn reset_update_cycle(&mut self) {
+        self.updated = false;
+    }
+}
+
+#[derive(Default,Serialize,Deserialize,Debug,Clone)]
+pub struct ClaydashSceneData
+    <ValueType: Default + Clone,
+     UpdateTracker: Default + Clone+ NotifyUpdate>
+{
+    subtree: BTreeMap<String, ClaydashSceneData<ValueType, UpdateTracker>>,
+    value: Option<ValueType>,
+    version: i32,
+    #[serde(skip)]
+    update_tracker: UpdateTracker,
+}
+
+impl <ValueType: Default + Clone,
+      UpdateTracker: Default + NotifyUpdate + Clone>
+    ClaydashSceneData<ValueType, UpdateTracker>
+{
     pub fn set_path(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
         self.set_path_with_parts(parts.collect(), ClaydashSceneData {
@@ -28,14 +60,14 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
         }
     }
 
-    pub fn get_path_meta(& self, path: &str) -> Option<ClaydashSceneData<ValueType>> {
+    pub fn get_path_meta(& self, path: &str) -> Option<ClaydashSceneData<ValueType, UpdateTracker>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
-    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ClaydashSceneData<ValueType>) {
+    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ClaydashSceneData<ValueType, UpdateTracker>) {
         if parts.len() == 1 {
             if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ClaydashSceneData::<ValueType> {
+                self.subtree.insert(parts[0].to_string(), ClaydashSceneData::<ValueType, UpdateTracker> {
                     ..default()
                 });
             }
@@ -45,7 +77,7 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
         }
         else {
             if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ClaydashSceneData::<ValueType> {
+                self.subtree.insert(parts[0].to_string(), ClaydashSceneData::<ValueType, UpdateTracker> {
                     ..default()
                 });
             }
@@ -56,18 +88,13 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
         self.notify_change();
     }
 
-    pub fn was_updated(&self) -> bool {
-        return self.updated;
-    }
-
     pub fn reset_update_cycle(&mut self) {
-        self.updated = false;
+        self.update_tracker.reset_update_cycle();
         for (_, node) in self.subtree.iter_mut() {
             node.reset_update_cycle();
         }
     }
-
-    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ClaydashSceneData<ValueType>> {
+    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ClaydashSceneData<ValueType, UpdateTracker>> {
         if parts.len() == 1 {
             return self.subtree.get(parts[0]).cloned();
         }
@@ -83,7 +110,7 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
 
     fn notify_change(&mut self) {
         self.version += 1;
-        self.updated = true;
+        self.update_tracker.notify_update();
     }
 }
 
@@ -93,7 +120,7 @@ mod tests {
 
     #[test]
     fn it_gets_and_sets_values() {
-        let mut data = ClaydashSceneData::<i32> {
+        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
             ..default()
         };
         data.set_path("scene.some", 1234);
@@ -102,7 +129,7 @@ mod tests {
 
     #[test]
     fn it_gets_and_sets_deep_values() {
-        let mut data = ClaydashSceneData::<i32> {
+        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
             ..default()
         };
         data.set_path("scene.some.very.deep.property", 1234);
@@ -111,7 +138,7 @@ mod tests {
 
     #[test]
     fn it_gets_none_when_not_set() {
-        let data = ClaydashSceneData::<i32> {
+        let data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
             ..default()
         };
         assert_eq!(data.get_path("scene.property.that.does.not.exist"), None);
@@ -119,7 +146,7 @@ mod tests {
 
     #[test]
     fn it_changes_value() {
-        let mut data = ClaydashSceneData::<i32> {
+        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
             ..default()
         };
         data.set_path("scene.some.very.deep.property", 1234);
@@ -130,7 +157,7 @@ mod tests {
     #[test]
     fn it_increments_version_number_on_change() {
         // Arrange
-        let mut data = ClaydashSceneData::<i32> {
+        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
             ..default()
         };
 
@@ -171,7 +198,7 @@ mod tests {
     #[test]
     fn it_detects_updates() {
         // Arrange
-        let mut data = ClaydashSceneData::<i32> {
+        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
             ..default()
         };
 
@@ -179,36 +206,36 @@ mod tests {
 
         // Set value
         data.set_path("scene.some.very.deep.property", 1234);
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().was_updated(), true);
-        assert_eq!(data.get_path_meta("scene").unwrap().was_updated(), true);
-        assert_eq!(data.updated, true);
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.update_tracker.updated, true);
 
         // Reset update cycle
         data.reset_update_cycle();
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().was_updated(), false);
-        assert_eq!(data.get_path_meta("scene").unwrap().was_updated(), false);
-        assert_eq!(data.updated, false);
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), false);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), false);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), false);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), false);
+        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), false);
+        assert_eq!(data.update_tracker.updated, false);
 
         // Set value (2nd time)
         data.set_path("scene.some.very.deep.property", 2345);
 
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().was_updated(), true);
-        assert_eq!(data.get_path_meta("scene").unwrap().was_updated(), true);
-        assert_eq!(data.updated, true);
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.update_tracker.updated, true);
     }
 
     #[test]
     fn it_serializes() {
-        let mut data = ClaydashSceneData::<f32> {
+        let mut data = ClaydashSceneData::<f32, DefaultUpdateTracker> {
             ..default()
         };
 
@@ -218,7 +245,7 @@ mod tests {
         let serialized = serde_json::to_string(&data).unwrap();
 
         // Convert JSON back to BevySceneData
-        let deserialized: ClaydashSceneData<f32> = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ClaydashSceneData<f32, DefaultUpdateTracker> = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap(), 123.4);
     }
