@@ -39,6 +39,35 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
         }
     }
 
+    pub fn run_with_path<T>(
+        &self,
+        path: &str,
+        f: &dyn Fn (Option<&SceneDataValue<ValueType>>) -> T
+    ) -> T {
+        self.run_with_path_with_parts(&path.split(".").collect(), f)
+    }
+
+    fn run_with_path_with_parts<T>(
+        &self,
+        parts: &Vec<&str>,
+        f: &dyn Fn(Option<&SceneDataValue<ValueType>>) -> T
+    ) -> T {
+        if parts.len() == 1 {
+            f(self.map.get(parts[0]))
+        }
+        else {
+            if !self.map.contains_key(parts[0]) {
+                panic!("Path not found {}", parts[0]);
+            }
+            if self.map[parts[0]].subtree.is_none() {
+                // TODO: return None
+                panic!("Value does not exist at {}", parts.join("."));
+            };
+            let subtree = &self.map.get(parts[0]).unwrap().subtree.as_ref().unwrap();
+            subtree.run_with_path_with_parts(&parts[1..].to_vec(), f)
+        }
+    }
+
     pub fn get_path_meta(& self, path: &str) -> Option<SceneDataValue<ValueType>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
@@ -178,6 +207,26 @@ mod tests {
         assert_eq!(data.get_path_meta("scene").unwrap().version, 3);
 
         assert_eq!(data.version, 3);
+    }
+
+    #[test]
+    fn it_runs_code_at_path() {
+        let mut data = ClaydashSceneData::<f32> {
+            ..default()
+        };
+
+        data.set_path("scene.some.deep.property", 123.4);
+
+        let my_closure = |arg: Option<&SceneDataValue<f32>>| {
+            return arg.unwrap().value;
+        };
+
+        let value = data.run_with_path(
+            "scene.some.deep.property",
+            &my_closure
+        );
+
+        assert_eq!(value.unwrap(), 123.4);
     }
 
     #[test]
