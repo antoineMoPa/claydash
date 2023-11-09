@@ -1,9 +1,5 @@
 use std::collections::BTreeMap;
-
-use bevy::prelude::*;
-
 use serde::{Serialize, Deserialize};
-
 
 pub trait NotifyUpdate {
     fn notify_update(&mut self);
@@ -11,15 +7,15 @@ pub trait NotifyUpdate {
 }
 
 #[derive(Default,Clone,Serialize,Deserialize)]
-pub struct DefaultUpdateTracker {
+pub struct SimpleUpdateTracker {
     updated: bool,
 }
 
-impl DefaultUpdateTracker {
+impl SimpleUpdateTracker {
     pub fn was_updated(&self) -> bool { self.updated }
 }
 
-impl NotifyUpdate for DefaultUpdateTracker {
+impl NotifyUpdate for SimpleUpdateTracker {
     fn notify_update(&mut self) {
         self.updated = true;
     }
@@ -30,11 +26,11 @@ impl NotifyUpdate for DefaultUpdateTracker {
 }
 
 #[derive(Default,Serialize,Deserialize,Debug,Clone)]
-pub struct ClaydashSceneData
+pub struct ObservableTree
     <ValueType: Default + Clone,
      UpdateTracker: Default + Clone+ NotifyUpdate>
 {
-    subtree: BTreeMap<String, ClaydashSceneData<ValueType, UpdateTracker>>,
+    subtree: BTreeMap<String, ObservableTree<ValueType, UpdateTracker>>,
     value: Option<ValueType>,
     version: i32,
     #[serde(skip)]
@@ -43,13 +39,13 @@ pub struct ClaydashSceneData
 
 impl <ValueType: Default + Clone,
       UpdateTracker: Default + NotifyUpdate + Clone>
-    ClaydashSceneData<ValueType, UpdateTracker>
+    ObservableTree<ValueType, UpdateTracker>
 {
     pub fn set_path(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
-        self.set_path_with_parts(parts.collect(), ClaydashSceneData {
+        self.set_path_with_parts(parts.collect(), ObservableTree {
             value: Some(value),
-            ..default()
+            ..ObservableTree::default()
         });
     }
 
@@ -60,16 +56,14 @@ impl <ValueType: Default + Clone,
         }
     }
 
-    pub fn get_path_meta(& self, path: &str) -> Option<ClaydashSceneData<ValueType, UpdateTracker>> {
+    pub fn get_path_meta(& self, path: &str) -> Option<ObservableTree<ValueType, UpdateTracker>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
-    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ClaydashSceneData<ValueType, UpdateTracker>) {
+    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableTree<ValueType, UpdateTracker>) {
         if parts.len() == 1 {
             if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ClaydashSceneData::<ValueType, UpdateTracker> {
-                    ..default()
-                });
+                self.subtree.insert(parts[0].to_string(), ObservableTree::default());
             }
             let leaf = &mut self.subtree.get_mut(parts[0]).unwrap();
             leaf.value = value.value;
@@ -77,9 +71,7 @@ impl <ValueType: Default + Clone,
         }
         else {
             if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ClaydashSceneData::<ValueType, UpdateTracker> {
-                    ..default()
-                });
+                self.subtree.insert(parts[0].to_string(), ObservableTree::default());
             }
             let subtree = &mut self.subtree.get_mut(parts[0]).unwrap();
             subtree.set_path_with_parts(parts[1..].to_vec(), value);
@@ -94,7 +86,7 @@ impl <ValueType: Default + Clone,
             node.reset_update_cycle();
         }
     }
-    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ClaydashSceneData<ValueType, UpdateTracker>> {
+    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableTree<ValueType, UpdateTracker>> {
         if parts.len() == 1 {
             return self.subtree.get(parts[0]).cloned();
         }
@@ -120,35 +112,27 @@ mod tests {
 
     #[test]
     fn it_gets_and_sets_values() {
-        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
-            ..default()
-        };
+        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
         data.set_path("scene.some", 1234);
         assert_eq!(data.get_path("scene.some").unwrap(), 1234);
     }
 
     #[test]
     fn it_gets_and_sets_deep_values() {
-        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
-            ..default()
-        };
+        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
         data.set_path("scene.some.very.deep.property", 1234);
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 1234);
     }
 
     #[test]
     fn it_gets_none_when_not_set() {
-        let data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
-            ..default()
-        };
+        let data = ObservableTree::<i32, SimpleUpdateTracker>::default();
         assert_eq!(data.get_path("scene.property.that.does.not.exist"), None);
     }
 
     #[test]
     fn it_changes_value() {
-        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
-            ..default()
-        };
+        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
         data.set_path("scene.some.very.deep.property", 1234);
         data.set_path("scene.some.very.deep.property", 2345);
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 2345);
@@ -157,9 +141,7 @@ mod tests {
     #[test]
     fn it_increments_version_number_on_change() {
         // Arrange
-        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
-            ..default()
-        };
+        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
 
         // Pre condition
         assert_eq!(data.version, 0);
@@ -198,9 +180,7 @@ mod tests {
     #[test]
     fn it_detects_updates() {
         // Arrange
-        let mut data = ClaydashSceneData::<i32, DefaultUpdateTracker> {
-            ..default()
-        };
+        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
 
         // Pre condition
 
@@ -235,9 +215,7 @@ mod tests {
 
     #[test]
     fn it_serializes() {
-        let mut data = ClaydashSceneData::<f32, DefaultUpdateTracker> {
-            ..default()
-        };
+        let mut data = ObservableTree::<f32, SimpleUpdateTracker>::default();
 
         data.set_path("scene.some.deep.property", 123.4);
 
@@ -245,7 +223,7 @@ mod tests {
         let serialized = serde_json::to_string(&data).unwrap();
 
         // Convert JSON back to BevySceneData
-        let deserialized: ClaydashSceneData<f32, DefaultUpdateTracker> = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ObservableTree<f32, SimpleUpdateTracker> = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap(), 123.4);
     }
