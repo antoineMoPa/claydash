@@ -12,6 +12,8 @@
 //!
 //! Setting and reading values:
 //! ```
+//! use observable_tree::ObservableTree;
+//! use observable_tree::SimpleUpdateTracker;
 //! // Creating an observable tree
 //! let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
 //! // Setting values
@@ -22,10 +24,16 @@
 //!
 //! Detecting changes:
 //! ```
+//! use observable_tree::ObservableTree;
+//! use observable_tree::SimpleUpdateTracker;
+//! // Creating an observable tree
+//! let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+//! // Setting values
+//! data.set_path("scene.some.property", 1234);
 //! // Detecting updates
-//! let was_updated: bool = data.get_path_meta("scene.some.property").unwrap().update_tracker.was_updated()
+//! let was_updated: bool = data.get_path_meta("scene.some.property").unwrap().update_tracker.was_updated();
 //! // Detecting updates (root level)
-//! assert_eq!(data.update_tracker.updated, true);
+//! assert_eq!(data.update_tracker.was_updated(), true);
 //! // Reset update cycle (typically, you'd call this every frame)
 //! data.reset_update_cycle();
 //! ```
@@ -76,9 +84,8 @@ pub struct ObservableTree
 {
     subtree: BTreeMap<String, ObservableTree<ValueType, UpdateTracker>>,
     value: Option<ValueType>,
-    version: i32,
     #[serde(skip)]
-    update_tracker: UpdateTracker,
+    pub update_tracker: UpdateTracker,
 }
 
 impl <ValueType: Default + Clone,
@@ -145,7 +152,6 @@ impl <ValueType: Default + Clone,
     }
 
     fn notify_change(&mut self) {
-        self.version += 1;
         self.update_tracker.notify_update();
     }
 }
@@ -180,45 +186,6 @@ mod tests {
         data.set_path("scene.some.very.deep.property", 1234);
         data.set_path("scene.some.very.deep.property", 2345);
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 2345);
-    }
-
-    #[test]
-    fn it_increments_version_number_on_change() {
-        // Arrange
-        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
-
-        // Pre condition
-        assert_eq!(data.version, 0);
-
-        // Set value
-        data.set_path("scene.some.very.deep.property", 1234);
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().version, 1);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().version, 1);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().version, 1);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().version, 1);
-        assert_eq!(data.get_path_meta("scene").unwrap().version, 1);
-
-        assert_eq!(data.version, 1);
-
-        // Set value (2nd time)
-        data.set_path("scene.some.very.deep.property", 2345);
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().version, 2);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().version, 2);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().version, 2);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().version, 2);
-        assert_eq!(data.get_path_meta("scene").unwrap().version, 2);
-
-        assert_eq!(data.version, 2);
-
-        // Set value (3rd time)
-        data.set_path("scene.some.very.deep.property", 3456);
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().version, 3);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().version, 3);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().version, 3);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().version, 3);
-        assert_eq!(data.get_path_meta("scene").unwrap().version, 3);
-
-        assert_eq!(data.version, 3);
     }
 
     #[test]
