@@ -5,34 +5,9 @@ use bevy::prelude::*;
 use serde::{Serialize, Deserialize};
 
 #[derive(Default,Serialize,Deserialize,Debug,Clone)]
-pub struct SceneDataValue<ValueType: Default + Clone> {
-    subtree: Option<ClaydashSceneData<ValueType>>,
-    value: Option<ValueType>,
-    version: i32,
-    updated: bool,
-}
-
-impl<ValueType: Default + Clone> SceneDataValue<ValueType> {
-    fn notify_change(&mut self) {
-        self.version += 1;
-        self.updated = true;
-    }
-
-    pub fn was_updated(&self) -> bool {
-        return self.updated;
-    }
-
-    pub fn reset_update_cycle(&mut self) {
-        self.updated = false;
-        for node in self.subtree.iter_mut() {
-            node.reset_update_cycle();
-        }
-    }
-}
-
-#[derive(Default,Serialize,Deserialize,Debug,Clone)]
 pub struct ClaydashSceneData<ValueType: Default + Clone> {
-    map: BTreeMap<String, SceneDataValue<ValueType>>,
+    subtree: BTreeMap<String, ClaydashSceneData<ValueType>>,
+    value: Option<ValueType>,
     version: i32,
     updated: bool,
 }
@@ -40,7 +15,7 @@ pub struct ClaydashSceneData<ValueType: Default + Clone> {
 impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
     pub fn set_path(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
-        self.set_path_with_parts(parts.collect(), SceneDataValue {
+        self.set_path_with_parts(parts.collect(), ClaydashSceneData {
             value: Some(value),
             ..default()
         });
@@ -53,63 +28,54 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
         }
     }
 
-    pub fn get_path_meta(& self, path: &str) -> Option<SceneDataValue<ValueType>> {
+    pub fn get_path_meta(& self, path: &str) -> Option<ClaydashSceneData<ValueType>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
-    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: SceneDataValue<ValueType>) {
+    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ClaydashSceneData<ValueType>) {
         if parts.len() == 1 {
-            if !self.map.contains_key(parts[0]) {
-                self.map.insert(parts[0].to_string(), SceneDataValue::<ValueType> {
+            if !self.subtree.contains_key(parts[0]) {
+                self.subtree.insert(parts[0].to_string(), ClaydashSceneData::<ValueType> {
                     ..default()
                 });
             }
-            let leaf = &mut self.map.get_mut(parts[0]).unwrap();
+            let leaf = &mut self.subtree.get_mut(parts[0]).unwrap();
             leaf.value = value.value;
             leaf.notify_change();
         }
         else {
-            if !self.map.contains_key(parts[0]) {
-                self.map.insert(parts[0].to_string(), SceneDataValue::<ValueType> {
+            if !self.subtree.contains_key(parts[0]) {
+                self.subtree.insert(parts[0].to_string(), ClaydashSceneData::<ValueType> {
                     ..default()
                 });
             }
-            if self.map[parts[0]].subtree.is_none() {
-                let subtree = ClaydashSceneData {
-                    ..default()
-                };
-                self.map.get_mut(parts[0]).unwrap().subtree = Some(subtree);
-            };
-            let map = &mut self.map.get_mut(parts[0]).unwrap();
-            map.notify_change();
-            let subtree = &mut map.subtree.as_mut().unwrap();
+            let subtree = &mut self.subtree.get_mut(parts[0]).unwrap();
             subtree.set_path_with_parts(parts[1..].to_vec(), value);
-            subtree.notify_change();
         }
 
         self.notify_change();
     }
 
+    pub fn was_updated(&self) -> bool {
+        return self.updated;
+    }
+
     pub fn reset_update_cycle(&mut self) {
         self.updated = false;
-        for (_, node) in self.map.iter_mut() {
+        for (_, node) in self.subtree.iter_mut() {
             node.reset_update_cycle();
         }
     }
 
-    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<SceneDataValue<ValueType>> {
+    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ClaydashSceneData<ValueType>> {
         if parts.len() == 1 {
-            return self.map.get(parts[0]).cloned();
+            return self.subtree.get(parts[0]).cloned();
         }
         else {
-            if !self.map.contains_key(parts[0]) {
+            if !self.subtree.contains_key(parts[0]) {
                 return None;
             }
-            if self.map[parts[0]].subtree.is_none() {
-                // TODO: return None
-                panic!("Value does not exist at {}", parts.join("."));
-            };
-            let subtree = &self.map.get(parts[0]).unwrap().subtree.as_ref().unwrap();
+            let subtree = &self.subtree.get(parts[0]).unwrap();
             let value = subtree.get_path_with_parts(&parts[1..].to_vec()).unwrap();
             return Some(value);
         }
