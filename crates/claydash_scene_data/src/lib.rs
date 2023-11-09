@@ -9,11 +9,24 @@ pub struct SceneDataValue<ValueType: Default + Clone> {
     subtree: Option<ClaydashSceneData<ValueType>>,
     value: Option<ValueType>,
     version: i32,
+    updated: bool,
 }
 
 impl<ValueType: Default + Clone> SceneDataValue<ValueType> {
     fn notify_change(&mut self) {
         self.version += 1;
+        self.updated = true;
+    }
+
+    pub fn was_updated(&self) -> bool {
+        return self.updated;
+    }
+
+    pub fn reset_update_cycle(&mut self) {
+        self.updated = false;
+        for node in self.subtree.iter_mut() {
+            node.reset_update_cycle();
+        }
     }
 }
 
@@ -21,6 +34,7 @@ impl<ValueType: Default + Clone> SceneDataValue<ValueType> {
 pub struct ClaydashSceneData<ValueType: Default + Clone> {
     map: BTreeMap<String, SceneDataValue<ValueType>>,
     version: i32,
+    updated: bool,
 }
 
 impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
@@ -32,39 +46,10 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
         });
     }
 
-    pub fn get_path(& self, path: &str) -> Option<ValueType> {
+    pub fn get_path(&self, path: &str) -> Option<ValueType> {
         return match self.get_path_with_parts(&path.split(".").collect()) {
             Some(data) => data.value,
             _ => None
-        }
-    }
-
-    pub fn run_with_path<T>(
-        &self,
-        path: &str,
-        f: &dyn Fn (Option<&SceneDataValue<ValueType>>) -> T
-    ) -> T {
-        self.run_with_path_with_parts(&path.split(".").collect(), f)
-    }
-
-    fn run_with_path_with_parts<T>(
-        &self,
-        parts: &Vec<&str>,
-        f: &dyn Fn(Option<&SceneDataValue<ValueType>>) -> T
-    ) -> T {
-        if parts.len() == 1 {
-            f(self.map.get(parts[0]))
-        }
-        else {
-            if !self.map.contains_key(parts[0]) {
-                panic!("Path not found {}", parts[0]);
-            }
-            if self.map[parts[0]].subtree.is_none() {
-                // TODO: return None
-                panic!("Value does not exist at {}", parts.join("."));
-            };
-            let subtree = &self.map.get(parts[0]).unwrap().subtree.as_ref().unwrap();
-            subtree.run_with_path_with_parts(&parts[1..].to_vec(), f)
         }
     }
 
@@ -105,6 +90,13 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
         self.notify_change();
     }
 
+    pub fn reset_update_cycle(&mut self) {
+        self.updated = false;
+        for (_, node) in self.map.iter_mut() {
+            node.reset_update_cycle();
+        }
+    }
+
     fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<SceneDataValue<ValueType>> {
         if parts.len() == 1 {
             return self.map.get(parts[0]).cloned();
@@ -125,6 +117,7 @@ impl<ValueType: Default + Clone> ClaydashSceneData<ValueType> {
 
     fn notify_change(&mut self) {
         self.version += 1;
+        self.updated = true;
     }
 }
 
@@ -210,23 +203,41 @@ mod tests {
     }
 
     #[test]
-    fn it_runs_code_at_path() {
-        let mut data = ClaydashSceneData::<f32> {
+    fn it_detects_updates() {
+        // Arrange
+        let mut data = ClaydashSceneData::<i32> {
             ..default()
         };
 
-        data.set_path("scene.some.deep.property", 123.4);
+        // Pre condition
 
-        let my_closure = |arg: Option<&SceneDataValue<f32>>| {
-            return arg.unwrap().value;
-        };
+        // Set value
+        data.set_path("scene.some.very.deep.property", 1234);
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().was_updated(), true);
+        assert_eq!(data.get_path_meta("scene").unwrap().was_updated(), true);
+        assert_eq!(data.updated, true);
 
-        let value = data.run_with_path(
-            "scene.some.deep.property",
-            &my_closure
-        );
+        // Reset update cycle
+        data.reset_update_cycle();
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().was_updated(), false);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().was_updated(), false);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().was_updated(), false);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().was_updated(), false);
+        assert_eq!(data.get_path_meta("scene").unwrap().was_updated(), false);
+        assert_eq!(data.updated, false);
 
-        assert_eq!(value.unwrap(), 123.4);
+        // Set value (2nd time)
+        data.set_path("scene.some.very.deep.property", 2345);
+
+        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some.very").unwrap().was_updated(), true);
+        assert_eq!(data.get_path_meta("scene.some").unwrap().was_updated(), true);
+        assert_eq!(data.get_path_meta("scene").unwrap().was_updated(), true);
+        assert_eq!(data.updated, true);
     }
 
     #[test]
