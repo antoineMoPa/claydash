@@ -1,3 +1,47 @@
+//! ObservableTree is a a nested map data structure designed for applications
+//! with update cycles (example: every frame, every network sync).
+//!
+//! It's **not** observable in the sense that a callback will be run on updates.
+//!
+//! It works roughly as follows:
+//!  - Update some properties in the tree. The node and it's parent will be marked as updated.
+//!  - A the next frame, your code can parse the tree structure, skipping subtrees that have not
+//!    been updated.
+//!
+//! # Examples
+//!
+//! Setting and reading values:
+//! ```
+//! // Creating an observable tree
+//! let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+//! // Setting values
+//! data.set_path("scene.some.property", 1234);
+//! // Reading values
+//! let value = data.get_path("scene.some.property").unwrap();
+//! ```
+//!
+//! Detecting changes:
+//! ```
+//! // Detecting updates
+//! let was_updated: bool = data.get_path_meta("scene.some.property").unwrap().update_tracker.was_updated()
+//! // Detecting updates (root level)
+//! assert_eq!(data.update_tracker.updated, true);
+//! // Reset update cycle (typically, you'd call this every frame)
+//! data.reset_update_cycle();
+//! ```
+//!
+//! ## Customizing Update Tracker
+//! You can build your own UpdateTracker as long as it implements NotifyUpdate trait.
+//! This could be useful if you application has multiple update cycles.
+//!
+//! See SimpleUpdateTracker for a reference implementation.
+//!
+//! ## Notes
+//!  - We consider a value updated even if it was set to the same value again.
+//!  - We consider the parent nodes as updated if a child value was updated.
+//!  - Nodes can contain a value and a sub tree at the same time.
+//!
+
 use std::collections::BTreeMap;
 use serde::{Serialize, Deserialize};
 
