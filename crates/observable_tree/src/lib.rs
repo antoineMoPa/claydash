@@ -36,6 +36,7 @@
 //! assert_eq!(data.update_tracker.was_updated(), true);
 //! // Reset update cycle (typically, you'd call this every frame)
 //! data.reset_update_cycle();
+//! assert_eq!(data.update_tracker.was_updated(), false);
 //! ```
 //!
 //! ## Customizing Update Tracker
