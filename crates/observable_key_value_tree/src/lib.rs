@@ -1,21 +1,31 @@
-//! ObservableTree is a a nested map data structure designed for applications
+//! ObservableKVTree is a a nested map data structure designed for applications
 //! with update cycles (example: every frame, every network sync).
 //!
-//! It's **not** observable in the sense that a callback will be run on updates.
+//! A note about the "Observable" word, that usually comes with callback expectations:
+//!  - It's **not** observable in the sense that a callback will be run on updates.
 //!
-//! It works roughly as follows:
+//!  - It's obsevable in the sense that you can efficiently determine which part was changed as part of your application's main loop.
+//!  - Although, potentially, with a custom update tracker, it could be possible to work with callbacks.
+//!
+//! The intended use is roughly as follows:
 //!  - Update some properties in the tree. The node and it's parent will be marked as updated.
 //!  - A the next frame, your code can parse the tree structure, skipping subtrees that have not
 //!    been updated.
+//!
+//! Here are the important parts of the API:
+//!  - `data.set_path("scene.some.property", 1234)`
+//!  - `data.get_path("scene.some.property")`
+//!  - `data.update_tracker.was_updated()`
+//!  - `data.get_path_meta("scene.some.property").unwrap().update_tracker.was_updated()`
 //!
 //! # Examples
 //!
 //! Setting and reading values:
 //! ```
-//! use observable_tree::ObservableTree;
-//! use observable_tree::SimpleUpdateTracker;
+//! use observable_key_value_tree::ObservableKVTree;
+//! use observable_key_value_tree::SimpleUpdateTracker;
 //! // Creating an observable tree
-//! let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+//! let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
 //! // Setting values
 //! data.set_path("scene.some.property", 1234);
 //! // Reading values
@@ -24,10 +34,10 @@
 //!
 //! Detecting changes:
 //! ```
-//! use observable_tree::ObservableTree;
-//! use observable_tree::SimpleUpdateTracker;
+//! use observable_key_value_tree::ObservableKVTree;
+//! use observable_key_value_tree::SimpleUpdateTracker;
 //! // Creating an observable tree
-//! let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+//! let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
 //! // Setting values
 //! data.set_path("scene.some.property", 1234);
 //! // Detecting updates
@@ -79,11 +89,11 @@ impl NotifyUpdate for SimpleUpdateTracker {
 }
 
 #[derive(Default,Serialize,Deserialize,Debug,Clone)]
-pub struct ObservableTree
+pub struct ObservableKVTree
     <ValueType: Default + Clone,
      UpdateTracker: Default + Clone+ NotifyUpdate>
 {
-    subtree: BTreeMap<String, ObservableTree<ValueType, UpdateTracker>>,
+    subtree: BTreeMap<String, ObservableKVTree<ValueType, UpdateTracker>>,
     value: Option<ValueType>,
     #[serde(skip)]
     pub update_tracker: UpdateTracker,
@@ -91,13 +101,13 @@ pub struct ObservableTree
 
 impl <ValueType: Default + Clone,
       UpdateTracker: Default + NotifyUpdate + Clone>
-    ObservableTree<ValueType, UpdateTracker>
+    ObservableKVTree<ValueType, UpdateTracker>
 {
     pub fn set_path(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
-        self.set_path_with_parts(parts.collect(), ObservableTree {
+        self.set_path_with_parts(parts.collect(), ObservableKVTree {
             value: Some(value),
-            ..ObservableTree::default()
+            ..ObservableKVTree::default()
         });
     }
 
@@ -108,14 +118,14 @@ impl <ValueType: Default + Clone,
         }
     }
 
-    pub fn get_path_meta(& self, path: &str) -> Option<ObservableTree<ValueType, UpdateTracker>> {
+    pub fn get_path_meta(& self, path: &str) -> Option<ObservableKVTree<ValueType, UpdateTracker>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
-    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableTree<ValueType, UpdateTracker>) {
+    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType, UpdateTracker>) {
         if parts.len() == 1 {
             if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ObservableTree::default());
+                self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
             }
             let leaf = &mut self.subtree.get_mut(parts[0]).unwrap();
             leaf.value = value.value;
@@ -123,7 +133,7 @@ impl <ValueType: Default + Clone,
         }
         else {
             if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ObservableTree::default());
+                self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
             }
             let subtree = &mut self.subtree.get_mut(parts[0]).unwrap();
             subtree.set_path_with_parts(parts[1..].to_vec(), value);
@@ -138,7 +148,7 @@ impl <ValueType: Default + Clone,
             node.reset_update_cycle();
         }
     }
-    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableTree<ValueType, UpdateTracker>> {
+    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableKVTree<ValueType, UpdateTracker>> {
         if parts.len() == 1 {
             return self.subtree.get(parts[0]).cloned();
         }
@@ -163,27 +173,27 @@ mod tests {
 
     #[test]
     fn it_gets_and_sets_values() {
-        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
         data.set_path("scene.some", 1234);
         assert_eq!(data.get_path("scene.some").unwrap(), 1234);
     }
 
     #[test]
     fn it_gets_and_sets_deep_values() {
-        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
         data.set_path("scene.some.very.deep.property", 1234);
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 1234);
     }
 
     #[test]
     fn it_gets_none_when_not_set() {
-        let data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+        let data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
         assert_eq!(data.get_path("scene.property.that.does.not.exist"), None);
     }
 
     #[test]
     fn it_changes_value() {
-        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
         data.set_path("scene.some.very.deep.property", 1234);
         data.set_path("scene.some.very.deep.property", 2345);
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 2345);
@@ -192,7 +202,7 @@ mod tests {
     #[test]
     fn it_detects_updates() {
         // Arrange
-        let mut data = ObservableTree::<i32, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
 
         // Pre condition
 
@@ -227,7 +237,7 @@ mod tests {
 
     #[test]
     fn it_serializes() {
-        let mut data = ObservableTree::<f32, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<f32, SimpleUpdateTracker>::default();
 
         data.set_path("scene.some.deep.property", 123.4);
 
@@ -235,7 +245,7 @@ mod tests {
         let serialized = serde_json::to_string(&data).unwrap();
 
         // Convert JSON back to BevySceneData
-        let deserialized: ObservableTree<f32, SimpleUpdateTracker> = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ObservableKVTree<f32, SimpleUpdateTracker> = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap(), 123.4);
     }

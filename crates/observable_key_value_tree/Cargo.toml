@@ -1,5 +1,5 @@
 [package]
-name = "observable_tree"
+name = "observable_key_value_tree"
 version = "0.1.0"
 edition = "2021"
 
