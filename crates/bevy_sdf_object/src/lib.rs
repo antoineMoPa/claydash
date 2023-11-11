@@ -29,6 +29,13 @@ impl Plugin for BevySDFObjectPlugin {
 
 const MAX_SDFS_PER_ENTITY: i32 = 512;
 
+#[derive(Default,Clone)]
+pub struct SDFObject {
+    pub position: Vec3,
+    pub color: Vec4,
+    pub object_type: i32,
+}
+
 /// SDFObjectMaterial
 /// This material uses our raymarching shader to display SDF objects.
 // TODO: move to strorage buffers once chrome supports it.
@@ -77,6 +84,7 @@ impl Material for SDFObjectMaterial {
             "MAX_SDFS_PER_ENTITY".into(),
             MAX_SDFS_PER_ENTITY)
         );
+
         defs.push(ShaderDefVal::Int("TYPE_END".into(), TYPE_END));
         defs.push(ShaderDefVal::Int("TYPE_SPHERE".into(), TYPE_SPHERE));
         defs.push(ShaderDefVal::Int("TYPE_CUBE".into(), TYPE_CUBE));

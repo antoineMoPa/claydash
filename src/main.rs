@@ -37,6 +37,7 @@ use bevy_mod_picking::backend::HitData;
 #[allow(unused_imports)]
 use wasm_bindgen::{prelude::*};
 
+use claydash_data::ClaydashDataPlugin;
 
 fn main() {
     App::new()
@@ -46,6 +47,7 @@ fn main() {
             brightness: 0.6,
         })
         .add_plugins((
+            ClaydashDataPlugin,
             DefaultPlugins,
             BevyCommandCentralPlugin,
             bevy_framepace::FramepacePlugin,

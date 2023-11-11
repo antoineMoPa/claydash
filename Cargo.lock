@@ -1385,6 +1385,7 @@ dependencies = [
  "bevy_reflect",
  "bevy_sdf_object",
  "claydash-ui",
+ "claydash_data",
  "command-central",
  "futures",
  "js-sys",
@@ -1408,6 +1409,16 @@ dependencies = [
  "bevy_egui",
  "command-central",
  "epaint",
+]
+
+[[package]]
+name = "claydash_data"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_sdf_object",
+ "observable_key_value_tree",
+ "sdf_consts",
 ]
 
 [[package]]
@@ -2920,6 +2931,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "observable_key_value_tree"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ogg"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3273,9 +3292,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.107"
+version = "1.0.108"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b420ce6e3d8bd882e9b243c6eed35dbc9a6110c9769e74b584e0d68d1f20c65"
+checksum = "3d1c7e3eac408d115102c4c24ad393e0821bb3a5df4d506a80f85f7a742a526b"
 dependencies = [
  "itoa",
  "ryu",
