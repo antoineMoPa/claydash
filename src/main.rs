@@ -37,7 +37,11 @@ use bevy_mod_picking::backend::HitData;
 #[allow(unused_imports)]
 use wasm_bindgen::{prelude::*};
 
-use claydash_data::ClaydashDataPlugin;
+use claydash_data::{
+    ClaydashDataPlugin,
+    ClaydashData,
+    ClaydashValue
+};
 
 fn main() {
     App::new()
@@ -242,7 +246,8 @@ fn run_commands(
     material_handle: Query<&Handle<SDFObjectMaterial>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
     mut bevy_command_central: ResMut<CommandCentralState>,
-    claydash_ui_state: ResMut<ClaydashUIState>
+    claydash_ui_state: ResMut<ClaydashUIState>,
+    mut data_resource: ResMut<ClaydashData>
 ) {
     let spawn_sphere_command = bevy_command_central.commands.check_if_has_to_run(&"spawn-sphere".to_string());
     match spawn_sphere_command {
@@ -251,24 +256,21 @@ fn run_commands(
 
             let handle = material_handle.single();
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
-            let mut last_sdf = 0;
+            let tree = &mut data_resource.as_mut().tree;
 
-            // Find last object
-            for (i, sdf_type) in material.sdf_types.iter().enumerate()  {
-                if sdf_type.w == TYPE_END {
-                    last_sdf = i;
-                    break;
-                }
+            match tree.get_path("scene.sdf_objects").unwrap() {
+                ClaydashValue::VecSDFObject(data) => {
+                    let mut objects = data.clone();
+                    objects.push(SDFObject {
+                        object_type: TYPE_SPHERE,
+                        position,
+                        color: claydash_ui_state.color,
+                        ..default()
+                    });
+                    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+                },
+                _ => { }
             }
-
-            material.sdf_types[last_sdf].w = TYPE_SPHERE;
-            material.sdf_positions[last_sdf] = Vec4::new(position.x, position.y, position.z, 0.0);
-            material.sdf_colors[last_sdf] = claydash_ui_state.color;
-
-
-            material.sdf_types[last_sdf + 1].w = TYPE_END;
-            material.sdf_positions[last_sdf + 1] = Vec4::new(0.0, 0.0, 0.0, 0.0);
-
 
             info!("Spawning sphere! x: {}, y: {}, z: {}", material.sdf_positions[0].x, material.sdf_positions[0].y, material.sdf_positions[0].z);
         },
@@ -290,23 +292,22 @@ fn run_commands(
 
             let handle = material_handle.single();
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
-            let mut last_sdf = 0;
+            let tree = &mut data_resource.as_mut().tree;
 
-            // Find last object
-            for (i, sdf_type) in material.sdf_types.iter().enumerate()  {
-                if sdf_type.w == TYPE_END {
-                    last_sdf = i;
-                    break;
-                }
+            match tree.get_path("scene.sdf_objects").unwrap() {
+                ClaydashValue::VecSDFObject(data) => {
+                    let mut objects = data.clone();
+
+                    objects.push(SDFObject {
+                        object_type: TYPE_CUBE,
+                        position,
+                        color: claydash_ui_state.color,
+                        ..default()
+                    });
+                    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+                },
+                _ => { }
             }
-
-            material.sdf_types[last_sdf].w = TYPE_CUBE;
-            material.sdf_positions[last_sdf] = Vec4::new(position.x, position.y, position.z, 0.0);
-            material.sdf_colors[last_sdf] = claydash_ui_state.color;
-
-            material.sdf_types[last_sdf + 1].w = TYPE_END;
-            material.sdf_positions[last_sdf + 1] = Vec4::new(0.0, 0.0, 0.0, 0.0);
-
 
             info!("Spawning sphere! x: {}, y: {}, z: {}", material.sdf_positions[0].x, material.sdf_positions[0].y, material.sdf_positions[0].z);
         },
@@ -318,9 +319,8 @@ fn run_commands(
     let clear_everything_command = bevy_command_central.commands.check_if_has_to_run(&"clear-everything".to_string());
     match clear_everything_command {
         Some(_command) => {
-            let handle = material_handle.single();
-            let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
-            material.sdf_types[0].w = TYPE_END;
+            let data = data_resource.as_mut();
+            data.tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(Vec::new()));
         },
         _ => {
             // Nothing to do

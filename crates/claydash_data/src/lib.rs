@@ -23,7 +23,7 @@ impl Default for ClaydashValue {
 
 #[derive(Resource, Default)]
 pub struct ClaydashData {
-    tree: ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
+    pub tree: ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
 }
 
 pub struct ClaydashDataPlugin;
@@ -47,9 +47,19 @@ fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
         ..default()
     });
 
+    sdf_objects.push(SDFObject {
+        object_type: TYPE_CUBE,
+        position: Vec3::new(-0.2, 0.3, 0.0),
+        color: Vec4::new(0.8, 0.0, 0.6, 1.0),
+        ..default()
+    });
+
     data.tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
 }
 
+
+/// Translate SDFObject in our data structure into material uniform parameters
+/// That can be consumed by the GPU.
 fn update_sdf_objects(
     mut data_resource: ResMut<ClaydashData>,
     material_handle: Query<&Handle<SDFObjectMaterial>>,
@@ -57,14 +67,12 @@ fn update_sdf_objects(
 ) {
     let data = data_resource.as_mut();
     if data.tree.update_tracker.was_updated() {
+        let handle = material_handle.single();
+        let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+        material.sdf_types[0].w = TYPE_END;
 
         match data.tree.get_path("scene.sdf_objects").unwrap() {
             ClaydashValue::VecSDFObject(data) => {
-                println!("updated!");
-
-                let handle = material_handle.single();
-                let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
-
                 for (index, object) in data.iter().enumerate() {
                     material.sdf_types[index].w = object.object_type;
                     material.sdf_positions[index] = Vec4 {
