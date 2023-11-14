@@ -220,9 +220,41 @@ fn register_clear_everything(commands: &mut CommandMap<ParamType>) {
 fn on_mouse_down(
     event: Listener<Pointer<Down>>,
     buttons: Res<Input<MouseButton>>,
-    mut bevy_command_central: ResMut<CommandCentralState>
+    mut bevy_command_central: ResMut<CommandCentralState>,
+    mut data_resource: ResMut<ClaydashData>,
+    camera_transforms: Query<&mut Transform, With<Camera>>,
 ) {
-    if buttons.just_pressed(MouseButton::Left) {
+    // let add_sphere = buttons.just_pressed(MouseButton::Left);
+    let add_sphere = false;
+
+    let select = true;
+
+    if select {
+        let tree = &mut data_resource.as_mut().tree;
+        match tree.get_path("scene.sdf_objects").unwrap() {
+            ClaydashValue::VecSDFObject(objects) => {
+                let hit: &HitData = &event.hit;
+                let position = match hit.position {
+                    Some(position) => position,
+                    _ => { return; }
+                };
+                let camera_transform: &Transform = camera_transforms.single();
+                let camera_position = camera_transform.translation;
+                let ray = position - camera_position;
+                println!("ray: {}", ray);
+                let hit_uuid = bevy_sdf_object::raymarch(position, ray, objects);
+
+                match hit_uuid {
+                    Some(hit) => {
+                        println!("HIT: {}", hit);
+                    },
+                    _ => { return; }
+                }
+            },
+            _ => {}
+        }
+    }
+    if add_sphere {
         let command: CommandInfo<ParamType> = bevy_command_central.commands.read_command(&"spawn-sphere".to_string()).unwrap();
 
         let hit: &HitData = &event.hit;

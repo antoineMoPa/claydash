@@ -1021,6 +1021,7 @@ dependencies = [
  "bevy_reflect",
  "claydash-ui",
  "sdf_consts",
+ "uuid",
 ]
 
 [[package]]

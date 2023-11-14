@@ -56,8 +56,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     position -= normalize(ray);
     let direction = ray;
 
+    // TODO un-hardcode
     let sphere_r = 0.2;
-    var box_position = vec3(0.3 * cos(globals.time * 0.3), 0.0, 0.2 * cos(globals.time * 0.3));
     let box_parameters = vec3(0.3, 0.3, 0.3);
 
     var d_box = 0.0;
@@ -83,7 +83,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                 d_current_object = length(position - p) - sphere_r;
             }
             else if (t == TYPE_CUBE) {
-                box_q = abs(position - box_position) - box_parameters;
+                box_q = abs(position - p) - box_parameters;
                 max_box_q = vec3(max(box_q.x, 0.0), max(box_q.y, 0.0), max(box_q.z, 0.0));
                 d_current_object = length(max_box_q + min(max(box_q.x, max(box_q.y, box_q.z)), 0.0));
             }
@@ -96,8 +96,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
 
-        position += direction * d * 0.8;
-        position += direction * 0.005;
+        position += direction * d;
 
         if (d < CLOSE_DIST) {
             break;
