@@ -1420,6 +1420,7 @@ dependencies = [
  "bevy_sdf_object",
  "observable_key_value_tree",
  "sdf_consts",
+ "uuid",
 ]
 
 [[package]]

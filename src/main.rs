@@ -247,6 +247,10 @@ fn on_mouse_down(
                 match hit_uuid {
                     Some(hit) => {
                         println!("HIT: {}", hit);
+                        tree.set_path(
+                            "scene.selected_uuids",
+                            ClaydashValue::UUIDList(vec!(hit))
+                        );
                     },
                     _ => { return; }
                 }
