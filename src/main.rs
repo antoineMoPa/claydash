@@ -126,8 +126,7 @@ fn setup_camera(
         Camera3dBundle {
             //transform: Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
-        },
-        RaycastPickCamera::default())
+        })
     ).insert(
         OrbitCameraBundle::new(
             OrbitCameraController::default(),
@@ -162,7 +161,6 @@ fn build_projection_surface(
             ..default()
         },
         PickableBundle::default(),      // Makes the entity pickable
-        RaycastPickTarget::default(),   // Marker for the `bevy_picking_raycast` backend
         On::<Pointer<Down>>::run(on_mouse_down),
     ));
 }

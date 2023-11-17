@@ -13,7 +13,7 @@
 
 // We want a orderered version of HashMap. Turns our BTreeMap is ordered!
 // So, using BTreeMap avoids order constantly flickering, example: when searching.
-use std::{collections::BTreeMap};
+use std::collections::BTreeMap;
 
 pub type CommandInfoMap<ParamType> = BTreeMap<String, CommandInfo<ParamType>>;
 pub type CommandParamMap<ParamType> = BTreeMap<String, CommandParam<ParamType>>;

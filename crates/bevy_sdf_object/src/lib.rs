@@ -46,7 +46,7 @@ impl Default for SDFObject {
 /// SDFObjectMaterial
 /// This material uses our raymarching shader to display SDF objects.
 // TODO: move to strorage buffers once chrome supports it.
-#[derive(TypeUuid, TypePath, AsBindGroup, Clone)]
+#[derive(Asset, TypeUuid, TypePath, AsBindGroup, Clone)]
 #[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
 #[repr(C,align(16))]
 pub struct SDFObjectMaterial {

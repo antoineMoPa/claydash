@@ -18,7 +18,7 @@ pub struct ParamType {
 
 pub struct BevyCommandCentralPlugin;
 
-#[derive(Default,Resource)]
+#[derive(Resource, Default)]
 pub struct CommandCentralState {
     pub commands: CommandMap<ParamType>,
 }
