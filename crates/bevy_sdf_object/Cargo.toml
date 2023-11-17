@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 sdf_consts = { workspace = true }
-claydash-ui = { workspace = true }
+claydash_ui = { workspace = true }
 bevy = { workspace = true }
 bevy_reflect = { workspace = true }
 uuid = { workspace = true }

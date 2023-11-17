@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-command-central = { path = "../command-central"}
+command_central = { path = "../command_central"}
 bevy_command_central_plugin = { path = "../bevy_command_central_plugin"}
 bevy = "0.11.3"
 bevy_egui = "0.22.0"
