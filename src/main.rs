@@ -242,15 +242,30 @@ fn on_mouse_down(
                 let camera_position = camera_transform.translation;
                 let ray = position - camera_position;
                 println!("ray: {}", ray);
-                let hit_uuid = bevy_sdf_object::raymarch(position, ray, objects);
+                let maybe_hit_uuid = bevy_sdf_object::raymarch(position, ray, objects);
 
-                match hit_uuid {
+                match maybe_hit_uuid {
                     Some(hit) => {
-                        println!("HIT: {}", hit);
-                        tree.set_path(
-                            "scene.selected_uuids",
-                            ClaydashValue::UUIDList(vec!(hit))
-                        );
+                        let selected_uuids: Vec<uuid::Uuid> = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::UUIDList(vec!())) {
+                            ClaydashValue::UUIDList(list) => list,
+                            _ => vec!()
+                        };
+                        let is_selected = selected_uuids.contains(&hit);
+
+                        if is_selected {
+                            // un-select object
+                            tree.set_path(
+                                "scene.selected_uuids",
+                                ClaydashValue::UUIDList(selected_uuids
+                                    .into_iter()
+                                    .filter(|item| *item != hit).collect())
+                            );
+                        } else {
+                            tree.set_path(
+                                "scene.selected_uuids",
+                                ClaydashValue::UUIDList(vec!(hit))
+                            );
+                        }
                     },
                     _ => { return; }
                 }

@@ -35,6 +35,7 @@ command_central = { workspace = true }
 bevy_command_central_plugin = { workspace = true }
 claydash_ui = { workspace = true }
 bevy_reflect = { workspace = true }
+uuid = { workspace = true }
 wasm-bindgen = "0.2.83"
 wasm-bindgen-futures = "0.4.33"
 futures = "0.3"
