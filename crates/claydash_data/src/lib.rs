@@ -19,7 +19,7 @@ pub enum ClaydashValue {
 
 impl Default for ClaydashValue {
     fn default() -> Self {
-        ClaydashValue::F32(0.0)
+        ClaydashValue::None
     }
 }
 

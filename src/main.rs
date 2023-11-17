@@ -246,7 +246,7 @@ fn on_mouse_down(
 
                 match maybe_hit_uuid {
                     Some(hit) => {
-                        let selected_uuids: Vec<uuid::Uuid> = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::UUIDList(vec!())) {
+                        let selected_uuids: Vec<uuid::Uuid> = match tree.get_path("scene.selected_uuids").unwrap_or_default() {
                             ClaydashValue::UUIDList(list) => list,
                             _ => vec!()
                         };
