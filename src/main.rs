@@ -183,7 +183,7 @@ fn register_commands(
     register_clear_everything(&mut bevy_command_central.commands);
 }
 
-fn register_spawn_sphere(commands: &mut CommandMap<ClaydashValue, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>>) {
+fn register_spawn_sphere(commands: &mut CommandMap<ClaydashValue>) {
     CommandBuilder::new()
         .title("Spawn Sphere")
         .system_name("spawn-sphere")
@@ -193,7 +193,7 @@ fn register_spawn_sphere(commands: &mut CommandMap<ClaydashValue, ObservableKVTr
         .write(commands);
 }
 
-fn register_spawn_cube(commands: &mut CommandMap<ClaydashValue, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>>) {
+fn register_spawn_cube(commands: &mut CommandMap<ClaydashValue>) {
     CommandBuilder::new()
         .title("Spawn Cube")
         .system_name("spawn-cube")
@@ -203,7 +203,7 @@ fn register_spawn_cube(commands: &mut CommandMap<ClaydashValue, ObservableKVTree
         .write(commands);
 }
 
-fn register_clear_everything(commands: &mut CommandMap<ClaydashValue, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>>) {
+fn register_clear_everything(commands: &mut CommandMap<ClaydashValue>) {
     CommandBuilder::new()
         .title("Clear Everything")
         .system_name("clear-everything")
@@ -269,7 +269,7 @@ fn on_mouse_down(
         }
     }
     if add_sphere {
-        let command: CommandInfo<ClaydashValue, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>> = bevy_command_central.commands.read_command(&"spawn-sphere".to_string()).unwrap();
+        let command: CommandInfo<ClaydashValue> = bevy_command_central.commands.read_command(&"spawn-sphere".to_string()).unwrap();
 
         let hit: &HitData = &event.hit;
         let position = match hit.position {

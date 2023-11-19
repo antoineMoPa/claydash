@@ -15,8 +15,7 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .docs("Start moving selection")
         .shortcut("g")
         .insert_param("start_position", "Initial mouse position.", Some(ClaydashValue::Vec3(Vec3::ZERO)))
-        .insert_param("callback", "system callback", Some(ClaydashValue::Vec3(Vec3::ZERO)))
-        .callback(start_grab)
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(start_grab)))
         .write(commands);
 }
 
@@ -44,8 +43,8 @@ pub fn run_shortcut_commands(
             continue;
         }
         if keys.just_released(str_to_key(&command.shortcut)) {
-            match command.callback {
-                Some(callback) => callback(tree),
+            match command.parameters["callback"].value.clone().unwrap() {
+                ClaydashValue::Fn(callback) => callback(tree),
                 _ => {}
             };
         }

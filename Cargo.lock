@@ -486,7 +486,6 @@ dependencies = [
  "bevy_app",
  "claydash_data",
  "command_central",
- "observable_key_value_tree",
 ]
 
 [[package]]

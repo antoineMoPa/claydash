@@ -1,9 +1,5 @@
 use bevy::prelude::*;
 use command_central::CommandMap;
-use observable_key_value_tree::{
-    ObservableKVTree,
-    SimpleUpdateTracker
-};
 
 use claydash_data::ClaydashValue;
 
@@ -11,7 +7,7 @@ pub struct BevyCommandCentralPlugin;
 
 #[derive(Resource, Default)]
 pub struct CommandCentralState {
-    pub commands: CommandMap<ClaydashValue, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>>,
+    pub commands: CommandMap<ClaydashValue>,
 }
 
 impl Plugin for BevyCommandCentralPlugin {

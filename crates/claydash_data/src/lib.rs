@@ -15,7 +15,7 @@ pub enum ClaydashValue {
     F32(f32),
     Vec3(Vec3),
     VecSDFObject(Vec<SDFObject>),
-    Fn(fn(ClaydashValue)),
+    Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
     None,
 }
 

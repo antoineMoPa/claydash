@@ -15,22 +15,22 @@
 // So, using BTreeMap avoids order constantly flickering, example: when searching.
 use std::collections::BTreeMap;
 
-pub type CommandInfoMap<ParamType, CallbackParam> = BTreeMap<String, CommandInfo<ParamType, CallbackParam>>;
+pub type CommandInfoMap<ParamType> = BTreeMap<String, CommandInfo<ParamType>>;
 pub type CommandParamMap<ParamType> = BTreeMap<String, CommandParam<ParamType>>;
 
 #[derive(Clone, Default)]
-pub struct CommandMap<ParamType: Clone, CallbackParam: Clone> {
-    pub commands: CommandInfoMap<ParamType, CallbackParam>,
+pub struct CommandMap<ParamType: Clone> {
+    pub commands: CommandInfoMap<ParamType>,
 }
 
-impl<ParamType: Clone, CallbackParam: Clone> CommandMap<ParamType, CallbackParam> {
+impl<ParamType: Clone> CommandMap<ParamType> {
     pub fn new() -> Self {
         Self {
             commands: CommandInfoMap::new()
         }
     }
 
-    pub fn add_command(&mut self, system_name: &String, command: CommandInfo<ParamType, CallbackParam>) {
+    pub fn add_command(&mut self, system_name: &String, command: CommandInfo<ParamType>) {
         if self.commands.contains_key(system_name) {
             panic!("Command {} already defined.", system_name);
         }
@@ -39,14 +39,14 @@ impl<ParamType: Clone, CallbackParam: Clone> CommandMap<ParamType, CallbackParam
     }
 
     /// Returns a copy of the command
-    pub fn read_command(&mut self, system_name: &String) -> Option<CommandInfo<ParamType, CallbackParam>> {
+    pub fn read_command(&mut self, system_name: &String) -> Option<CommandInfo<ParamType>> {
         return self.commands.get(system_name).cloned();
     }
 
     /// Returns copy of command  and decrements internal counter if the command has to be run.
     ///
     /// Returns None if nothing has to be done.
-    pub fn check_if_has_to_run(&mut self, system_name: &String) -> Option<CommandInfo<ParamType, CallbackParam>> {
+    pub fn check_if_has_to_run(&mut self, system_name: &String) -> Option<CommandInfo<ParamType>> {
         match &mut self.commands.get_mut(system_name) {
             Some(command) => {
                 if command.check_if_has_to_run() {
@@ -93,9 +93,9 @@ impl<ParamType: Clone, CallbackParam: Clone> CommandMap<ParamType, CallbackParam
     }
 
     /// Search through commands
-    pub fn search(&mut self, search: &String, limit: usize) -> CommandInfoMap<ParamType, CallbackParam> {
+    pub fn search(&mut self, search: &String, limit: usize) -> CommandInfoMap<ParamType> {
         let search_lower = search.to_lowercase();
-        let mut results: CommandInfoMap<ParamType, CallbackParam> = CommandInfoMap::new();
+        let mut results: CommandInfoMap<ParamType> = CommandInfoMap::new();
         for command in self.commands.iter() {
             let system_name = command.0;
             let command = command.1;
@@ -132,16 +132,15 @@ impl<ParamType: Clone> Default for CommandParam<ParamType> {
 }
 
 #[derive(Clone)]
-pub struct CommandBuilder<ParamType: Clone, CallbackParam: Clone> {
+pub struct CommandBuilder<ParamType: Clone> {
     pub command_param_map: CommandParamMap<ParamType>,
     pub system_name: String,
     pub title: String,
     pub docs: String,
     pub shortcut: String,
-    pub callback: Option<fn(&mut CallbackParam)>,
 }
 
-impl<ParamType: Clone, CallbackParam: Clone> CommandBuilder<ParamType, CallbackParam> {
+impl<ParamType: Clone> CommandBuilder<ParamType> {
     pub fn new() -> Self {
         return Self {
             system_name: "".to_string(),
@@ -149,7 +148,6 @@ impl<ParamType: Clone, CallbackParam: Clone> CommandBuilder<ParamType, CallbackP
             docs: "".to_string(),
             shortcut: "".to_string(),
             command_param_map: CommandParamMap::new(),
-            callback: None,
         };
     }
 
@@ -173,11 +171,6 @@ impl<ParamType: Clone, CallbackParam: Clone> CommandBuilder<ParamType, CallbackP
         return self;
     }
 
-    pub fn callback(&mut self, callback: fn(&mut CallbackParam)) -> &mut Self {
-        self.callback = Some(callback);
-        return self;
-    }
-
     pub fn insert_param(&mut self,  system_name: &str, docs: &str, default: Option<ParamType>) -> &mut Self {
         self.command_param_map.insert(system_name.to_string(), CommandParam {
             docs: docs.to_string(),
@@ -188,29 +181,27 @@ impl<ParamType: Clone, CallbackParam: Clone> CommandBuilder<ParamType, CallbackP
         return self;
     }
 
-    pub fn write(&mut self, commands: &mut CommandMap<ParamType, CallbackParam>) {
+    pub fn write(&mut self, commands: &mut CommandMap<ParamType>) {
         commands.add_command(&self.system_name, CommandInfo {
             title: self.title.to_string(),
             docs: self.docs.to_string(),
             shortcut: self.shortcut.clone(),
             parameters: self.command_param_map.clone(),
-            callback: self.callback,
             ..CommandInfo::default()
         });
     }
 }
 
 #[derive(Clone)]
-pub struct CommandInfo<ParamType: Clone, CallbackParam> {
+pub struct CommandInfo<ParamType: Clone> {
     pub title: String,
     pub docs: String,
     pub shortcut: String,
     pub requested_runs: i32,
     pub parameters: CommandParamMap<ParamType>,
-    pub callback: Option<fn(&mut CallbackParam)>,
 }
 
-impl<ParamType: Clone, CallbackParam> CommandInfo<ParamType, CallbackParam> {
+impl<ParamType: Clone> CommandInfo<ParamType> {
     fn run(&mut self) {
         self.requested_runs = self.requested_runs + 1;
     }
@@ -224,7 +215,7 @@ impl<ParamType: Clone, CallbackParam> CommandInfo<ParamType, CallbackParam> {
     }
 }
 
-impl<ParamType: Clone, CallbackParam> Default for CommandInfo<ParamType, CallbackParam> {
+impl<ParamType: Clone> Default for CommandInfo<ParamType> {
     fn default() -> Self {
         return Self {
             title: "".to_string(),
@@ -232,7 +223,6 @@ impl<ParamType: Clone, CallbackParam> Default for CommandInfo<ParamType, Callbac
             shortcut: "".to_string(),
             requested_runs: 0,
             parameters: BTreeMap::new(),
-            callback: None,
         };
     }
 }
@@ -243,7 +233,7 @@ mod tests {
 
     #[test]
     fn it_adds_and_gets_new_command() {
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
         commands.add_command(&"test-command".to_string(), CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
@@ -259,7 +249,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn handles_not_found_commands() {
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
         commands.read_command(&"not-existing-command".to_string()).unwrap();
     }
 
@@ -269,7 +259,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn it_detects_if_command_already_exists() {
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
         commands.add_command(&"test-command-duplicated".to_string(), CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
@@ -285,7 +275,7 @@ mod tests {
     #[test]
     fn runs_commands() {
         let sys_name = "test-command-with-callback".to_string();
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
         commands.add_command(&sys_name, CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
@@ -368,7 +358,7 @@ mod tests {
 
     #[test]
     fn repeats_last_command_with_parameters() {
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
         let sys_name = "test-command-with-params-2".to_string();
 
         let mut params: CommandParamMap<f32> = BTreeMap::new();
@@ -439,7 +429,7 @@ mod tests {
     #[test]
     fn searches_commands_by_title() {
         let sys_name = "command-to-search-2".to_string();
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
 
         commands.add_command(&sys_name, CommandInfo {
             title: "A command to search by title".to_string(),
@@ -457,7 +447,7 @@ mod tests {
     #[test]
     fn searches_commands_by_docs() {
         let sys_name = "command-to-search-3".to_string();
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
 
         // Note that case is changed to check that search is case insensitive.
         commands.add_command(&sys_name, CommandInfo {
