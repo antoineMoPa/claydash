@@ -1,9 +1,11 @@
 use bevy::prelude::*;
 use command_central::CommandMap;
-use std::marker::{
-    Send,
-    Sync
+use observable_key_value_tree::{
+    ObservableKVTree,
+    SimpleUpdateTracker
 };
+
+use claydash_data::ClaydashValue;
 
 /// I don't think bevy supports generic plugins, so we have to create a param type
 /// that is as useful as possible in the context of 3d apps.
@@ -20,7 +22,7 @@ pub struct BevyCommandCentralPlugin;
 
 #[derive(Resource, Default)]
 pub struct CommandCentralState {
-    pub commands: CommandMap<ParamType>,
+    pub commands: CommandMap<ParamType, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>>,
 }
 
 impl Plugin for BevyCommandCentralPlugin {

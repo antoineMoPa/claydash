@@ -19,6 +19,7 @@ claydash_data = { path = "crates/claydash_data"}
 command_central = { path = "crates/command_central"}
 bevy_command_central_plugin = { path = "crates/bevy_command_central_plugin"}
 claydash_ui = { path = "crates/claydash_ui"}
+observable_key_value_tree = { path = "crates/observable_key_value_tree" }
 
 [package]
 name    = "claydash"
@@ -38,6 +39,7 @@ bevy_command_central_plugin = { workspace = true }
 claydash_ui = { workspace = true }
 bevy_reflect = { workspace = true }
 uuid = { workspace = true }
+observable_key_value_tree = { workspace = true }
 wasm-bindgen = "0.2.83"
 wasm-bindgen-futures = "0.4.33"
 futures = "0.3"

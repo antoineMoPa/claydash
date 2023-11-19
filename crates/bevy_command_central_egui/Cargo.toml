@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-command_central = { path = "../command_central"}
-bevy_command_central_plugin = { path = "../bevy_command_central_plugin"}
+command_central = { workspace = true }
+bevy_command_central_plugin = { workspace = true }
 bevy = { workspace = true }
 bevy_egui = { workspace = true }
 epaint = "0.23.0"

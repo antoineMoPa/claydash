@@ -35,12 +35,20 @@ use bevy_mod_picking::prelude::*;
 use bevy_mod_picking::backend::HitData;
 
 #[allow(unused_imports)]
-use wasm_bindgen::{prelude::*};
+use wasm_bindgen::prelude::*;
+
+mod interactions;
+use crate::interactions::*;
 
 use claydash_data::{
     ClaydashDataPlugin,
     ClaydashData,
     ClaydashValue
+};
+
+use observable_key_value_tree::{
+    ObservableKVTree,
+    SimpleUpdateTracker
 };
 
 fn main() {
@@ -65,12 +73,14 @@ fn main() {
         ))
         .add_systems(Startup, remove_picking_logs)
         .add_systems(Startup, register_commands)
+        .add_systems(Startup, register_interaction_commands)
         .add_systems(Startup, setup_frame_limit)
         .add_systems(Startup, setup_camera)
         .add_systems(Startup, setup_window_size)
         .add_systems(Startup, build_projection_surface)
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, run_commands)
+        .add_systems(Update, run_shortcut_commands)
         .add_systems(Update, update_camera)
         .run();
 }
@@ -122,11 +132,11 @@ fn keyboard_input_system(
 fn setup_camera(
     mut commands: Commands,
 ) {
-    commands.spawn((
+    commands.spawn(
         Camera3dBundle {
             //transform: Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
-        })
+        }
     ).insert(
         OrbitCameraBundle::new(
             OrbitCameraController::default(),
@@ -174,7 +184,7 @@ fn register_commands(
     register_clear_everything(&mut bevy_command_central.commands);
 }
 
-fn register_spawn_sphere(commands: &mut CommandMap<ParamType>) {
+fn register_spawn_sphere(commands: &mut CommandMap<ParamType, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>>) {
     CommandBuilder::new()
         .title("Spawn Sphere")
         .system_name("spawn-sphere")
@@ -190,7 +200,7 @@ fn register_spawn_sphere(commands: &mut CommandMap<ParamType>) {
         .write(commands);
 }
 
-fn register_spawn_cube(commands: &mut CommandMap<ParamType>) {
+fn register_spawn_cube(commands: &mut CommandMap<ParamType, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>>) {
     CommandBuilder::new()
         .title("Spawn Cube")
         .system_name("spawn-cube")
@@ -206,7 +216,7 @@ fn register_spawn_cube(commands: &mut CommandMap<ParamType>) {
         .write(commands);
 }
 
-fn register_clear_everything(commands: &mut CommandMap<ParamType>) {
+fn register_clear_everything(commands: &mut CommandMap<ParamType, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>>) {
     CommandBuilder::new()
         .title("Clear Everything")
         .system_name("clear-everything")
@@ -272,7 +282,7 @@ fn on_mouse_down(
         }
     }
     if add_sphere {
-        let command: CommandInfo<ParamType> = bevy_command_central.commands.read_command(&"spawn-sphere".to_string()).unwrap();
+        let command: CommandInfo<ParamType, ObservableKVTree<ClaydashValue, SimpleUpdateTracker>> = bevy_command_central.commands.read_command(&"spawn-sphere".to_string()).unwrap();
 
         let hit: &HitData = &event.hit;
         let position = match hit.position {
@@ -377,7 +387,6 @@ fn run_commands(
     }
 
 }
-
 
 
 /// Update camera position uniform

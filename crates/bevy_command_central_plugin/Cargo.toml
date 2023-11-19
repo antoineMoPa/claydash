@@ -7,5 +7,7 @@ edition = "2021"
 
 [dependencies]
 command_central = { path = "../command_central"}
+claydash_data = { path = "../claydash_data" }
+observable_key_value_tree = { path = "../observable_key_value_tree"}
 bevy = { workspace = true }
 bevy_app = { workspace = true }

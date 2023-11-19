@@ -15,22 +15,22 @@
 // So, using BTreeMap avoids order constantly flickering, example: when searching.
 use std::collections::BTreeMap;
 
-pub type CommandInfoMap<ParamType> = BTreeMap<String, CommandInfo<ParamType>>;
+pub type CommandInfoMap<ParamType, CallbackParam> = BTreeMap<String, CommandInfo<ParamType, CallbackParam>>;
 pub type CommandParamMap<ParamType> = BTreeMap<String, CommandParam<ParamType>>;
 
 #[derive(Clone, Default)]
-pub struct CommandMap<ParamType: Clone> {
-    pub commands: CommandInfoMap<ParamType>,
+pub struct CommandMap<ParamType: Clone, CallbackParam: Clone> {
+    pub commands: CommandInfoMap<ParamType, CallbackParam>,
 }
 
-impl<ParamType: Clone> CommandMap<ParamType> {
+impl<ParamType: Clone, CallbackParam: Clone> CommandMap<ParamType, CallbackParam> {
     pub fn new() -> Self {
         Self {
             commands: CommandInfoMap::new()
         }
     }
 
-    pub fn add_command(&mut self, system_name: &String, command: CommandInfo<ParamType>) {
+    pub fn add_command(&mut self, system_name: &String, command: CommandInfo<ParamType, CallbackParam>) {
         if self.commands.contains_key(system_name) {
             panic!("Command {} already defined.", system_name);
         }
@@ -39,14 +39,14 @@ impl<ParamType: Clone> CommandMap<ParamType> {
     }
 
     /// Returns a copy of the command
-    pub fn read_command(&mut self, system_name: &String) -> Option<CommandInfo<ParamType>> {
+    pub fn read_command(&mut self, system_name: &String) -> Option<CommandInfo<ParamType, CallbackParam>> {
         return self.commands.get(system_name).cloned();
     }
 
     /// Returns copy of command  and decrements internal counter if the command has to be run.
     ///
     /// Returns None if nothing has to be done.
-    pub fn check_if_has_to_run(&mut self, system_name: &String) -> Option<CommandInfo<ParamType>> {
+    pub fn check_if_has_to_run(&mut self, system_name: &String) -> Option<CommandInfo<ParamType, CallbackParam>> {
         match &mut self.commands.get_mut(system_name) {
             Some(command) => {
                 if command.check_if_has_to_run() {
@@ -93,9 +93,9 @@ impl<ParamType: Clone> CommandMap<ParamType> {
     }
 
     /// Search through commands
-    pub fn search(&mut self, search: &String, limit: usize) -> CommandInfoMap<ParamType> {
+    pub fn search(&mut self, search: &String, limit: usize) -> CommandInfoMap<ParamType, CallbackParam> {
         let search_lower = search.to_lowercase();
-        let mut results: CommandInfoMap<ParamType> = CommandInfoMap::new();
+        let mut results: CommandInfoMap<ParamType, CallbackParam> = CommandInfoMap::new();
         for command in self.commands.iter() {
             let system_name = command.0;
             let command = command.1;
@@ -132,20 +132,24 @@ impl<ParamType: Clone> Default for CommandParam<ParamType> {
 }
 
 #[derive(Clone)]
-pub struct CommandBuilder<ParamType: Clone> {
+pub struct CommandBuilder<ParamType: Clone, CallbackParam: Clone> {
     pub command_param_map: CommandParamMap<ParamType>,
     pub system_name: String,
     pub title: String,
     pub docs: String,
+    pub shortcut: String,
+    pub callback: Option<fn(&mut CallbackParam)>,
 }
 
-impl<ParamType: Clone> CommandBuilder<ParamType> {
+impl<ParamType: Clone, CallbackParam: Clone> CommandBuilder<ParamType, CallbackParam> {
     pub fn new() -> Self {
         return Self {
             system_name: "".to_string(),
             title: "".to_string(),
             docs: "".to_string(),
+            shortcut: "".to_string(),
             command_param_map: CommandParamMap::new(),
+            callback: None,
         };
     }
 
@@ -164,6 +168,16 @@ impl<ParamType: Clone> CommandBuilder<ParamType> {
         return self;
     }
 
+    pub fn shortcut(&mut self, shortcut: &str) -> &mut Self {
+        self.shortcut = shortcut.into();
+        return self;
+    }
+
+    pub fn callback(&mut self, callback: fn(&mut CallbackParam)) -> &mut Self {
+        self.callback = Some(callback);
+        return self;
+    }
+
     pub fn insert_param(&mut self,  system_name: &str, docs: &str, default: Option<ParamType>) -> &mut Self {
         self.command_param_map.insert(system_name.to_string(), CommandParam {
             docs: docs.to_string(),
@@ -174,26 +188,29 @@ impl<ParamType: Clone> CommandBuilder<ParamType> {
         return self;
     }
 
-    pub fn write(&mut self, commands: &mut CommandMap<ParamType>) {
+    pub fn write(&mut self, commands: &mut CommandMap<ParamType, CallbackParam>) {
         commands.add_command(&self.system_name, CommandInfo {
             title: self.title.to_string(),
             docs: self.docs.to_string(),
+            shortcut: self.shortcut.clone(),
             parameters: self.command_param_map.clone(),
+            callback: self.callback,
             ..CommandInfo::default()
         });
     }
 }
 
 #[derive(Clone)]
-pub struct CommandInfo<ParamType: Clone> {
+pub struct CommandInfo<ParamType: Clone, CallbackParam> {
     pub title: String,
     pub docs: String,
-    pub keybinding: String,
+    pub shortcut: String,
     pub requested_runs: i32,
     pub parameters: CommandParamMap<ParamType>,
+    pub callback: Option<fn(&mut CallbackParam)>,
 }
 
-impl<ParamType: Clone> CommandInfo<ParamType> {
+impl<ParamType: Clone, CallbackParam> CommandInfo<ParamType, CallbackParam> {
     fn run(&mut self) {
         self.requested_runs = self.requested_runs + 1;
     }
@@ -207,14 +224,15 @@ impl<ParamType: Clone> CommandInfo<ParamType> {
     }
 }
 
-impl<ParamType: Clone> Default for CommandInfo<ParamType> {
+impl<ParamType: Clone, CallbackParam> Default for CommandInfo<ParamType, CallbackParam> {
     fn default() -> Self {
         return Self {
             title: "".to_string(),
             docs: "".to_string(),
-            keybinding: "".to_string(),
+            shortcut: "".to_string(),
             requested_runs: 0,
             parameters: BTreeMap::new(),
+            callback: None,
         };
     }
 }
@@ -225,7 +243,7 @@ mod tests {
 
     #[test]
     fn it_adds_and_gets_new_command() {
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
         commands.add_command(&"test-command".to_string(), CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
@@ -241,7 +259,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn handles_not_found_commands() {
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
         commands.read_command(&"not-existing-command".to_string()).unwrap();
     }
 
@@ -251,7 +269,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn it_detects_if_command_already_exists() {
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
         commands.add_command(&"test-command-duplicated".to_string(), CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
@@ -267,7 +285,7 @@ mod tests {
     #[test]
     fn runs_commands() {
         let sys_name = "test-command-with-callback".to_string();
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
         commands.add_command(&sys_name, CommandInfo {
             title: "Test Command".to_string(),
             docs: "Here are some docs about the command".to_string(),
@@ -293,13 +311,13 @@ mod tests {
     #[test]
     fn does_not_run_non_existant_command() {
         let sys_name = "not-existing-command".to_string();
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
         assert_eq!(commands.check_if_has_to_run(&sys_name).is_none(), true);
     }
 
     #[test]
     fn creates_and_runs_command_with_parameters() {
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
         let sys_name = "test-command-with-params".to_string();
 
         CommandBuilder::new()
@@ -350,7 +368,7 @@ mod tests {
 
     #[test]
     fn repeats_last_command_with_parameters() {
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
         let sys_name = "test-command-with-params-2".to_string();
 
         let mut params: CommandParamMap<f32> = BTreeMap::new();
@@ -403,7 +421,7 @@ mod tests {
     #[test]
     fn searches_commands_by_system_name() {
         let sys_name = "command-to-search-1".to_string();
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
 
         commands.add_command(&sys_name, CommandInfo {
             title: "A command to search".to_string(),
@@ -421,7 +439,7 @@ mod tests {
     #[test]
     fn searches_commands_by_title() {
         let sys_name = "command-to-search-2".to_string();
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
 
         commands.add_command(&sys_name, CommandInfo {
             title: "A command to search by title".to_string(),
@@ -439,7 +457,7 @@ mod tests {
     #[test]
     fn searches_commands_by_docs() {
         let sys_name = "command-to-search-3".to_string();
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
 
         // Note that case is changed to check that search is case insensitive.
         commands.add_command(&sys_name, CommandInfo {
@@ -457,7 +475,7 @@ mod tests {
     #[test]
     fn searches_have_limited_result_count() {
         let sys_name = "command-to-search-4-A".to_string();
-        let mut commands: CommandMap<f32> = CommandMap::new();
+        let mut commands: CommandMap<f32, f32> = CommandMap::new();
 
         // Note that case is changed to check that search is case insensitive.
         commands.add_command(&sys_name, CommandInfo {
