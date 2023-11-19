@@ -37,17 +37,12 @@ use bevy_mod_picking::backend::HitData;
 use wasm_bindgen::prelude::*;
 
 mod interactions;
-use crate::interactions::*;
+use crate::interactions::ClaydashInteractionPlugin;
 
 use claydash_data::{
     ClaydashDataPlugin,
     ClaydashData,
     ClaydashValue
-};
-
-use observable_key_value_tree::{
-    ObservableKVTree,
-    SimpleUpdateTracker
 };
 
 fn main() {
@@ -69,17 +64,16 @@ fn main() {
             OrbitCameraPlugin::default(),
             BevySDFObjectPlugin,
             ClaydashUIPlugin,
+            ClaydashInteractionPlugin,
         ))
         .add_systems(Startup, remove_picking_logs)
         .add_systems(Startup, register_commands)
-        .add_systems(Startup, register_interaction_commands)
         .add_systems(Startup, setup_frame_limit)
         .add_systems(Startup, setup_camera)
         .add_systems(Startup, setup_window_size)
         .add_systems(Startup, build_projection_surface)
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, run_commands)
-        .add_systems(Update, run_shortcut_commands)
         .add_systems(Update, update_camera)
         .run();
 }

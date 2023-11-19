@@ -10,12 +10,22 @@ use observable_key_value_tree::{
 use bevy_sdf_object::*;
 
 #[derive(Clone)]
+pub enum EditorState {
+    Start,
+    Grabbing,
+    Scaling,
+    Escape,
+    Finish
+}
+
+#[derive(Clone)]
 pub enum ClaydashValue {
     UUIDList(Vec<uuid::Uuid>),
     F32(f32),
     Vec3(Vec3),
     VecSDFObject(Vec<SDFObject>),
     Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
+    EditorState(EditorState),
     None,
 }
 
@@ -37,7 +47,7 @@ impl Plugin for ClaydashDataPlugin {
         app.init_resource::<ClaydashData>()
             .add_systems(Startup, init_sdf_objects)
             .add_systems(Update, update_sdf_objects)
-            .add_systems(Update, update_selected_objects);
+            .add_systems(Update, update_selection_state);
     }
 }
 
@@ -97,7 +107,7 @@ fn update_sdf_objects(
 }
 
 
-fn update_selected_objects(
+fn update_selection_state(
     mut data_resource: ResMut<ClaydashData>,
     material_handle: Query<&Handle<SDFObjectMaterial>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
