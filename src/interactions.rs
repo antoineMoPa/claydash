@@ -1,9 +1,6 @@
 use bevy::prelude::*;
 use command_central::CommandBuilder;
-use bevy_command_central_plugin::{
-    CommandCentralState,
-    ParamType
-};
+use bevy_command_central_plugin::CommandCentralState;
 use claydash_data::{ClaydashData, ClaydashValue};
 use observable_key_value_tree::{
     ObservableKVTree,
@@ -17,14 +14,8 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("grab")
         .docs("Start moving selection")
         .shortcut("g")
-        .insert_param("start_position", "Initial mouse position.", Some(ParamType{
-            vec3_value: Some(Vec3::ZERO),
-            ..default()
-        }))
-        .insert_param("callback", "system callback", Some(ParamType{
-            vec3_value: Some(Vec3::ZERO),
-            ..default()
-        }))
+        .insert_param("start_position", "Initial mouse position.", Some(ClaydashValue::Vec3(Vec3::ZERO)))
+        .insert_param("callback", "system callback", Some(ClaydashValue::Vec3(Vec3::ZERO)))
         .callback(start_grab)
         .write(commands);
 }

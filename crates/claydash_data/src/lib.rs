@@ -13,6 +13,7 @@ use bevy_sdf_object::*;
 pub enum ClaydashValue {
     UUIDList(Vec<uuid::Uuid>),
     F32(f32),
+    Vec3(Vec3),
     VecSDFObject(Vec<SDFObject>),
     Fn(fn(ClaydashValue)),
     None,
