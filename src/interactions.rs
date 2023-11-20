@@ -328,6 +328,7 @@ const SCALE_MOUSE_SENSIBILITY: f32 = 1.0 / 300.0;
 /// Also, handle reseting state on click after transforming objects.
 pub fn on_mouse_down(
     event: Listener<Pointer<Down>>,
+    keys: Res<Input<KeyCode>>,
     mut data_resource: ResMut<ClaydashData>,
     camera_transforms: Query<&mut Transform, With<Camera>>,
 ) {
@@ -363,17 +364,49 @@ pub fn on_mouse_down(
                         _ => vec!()
                     };
                     let is_selected = selected_uuids.contains(&hit);
+                    let has_shift = keys.pressed(KeyCode::ShiftLeft);
 
                     if is_selected {
+                        // Remove object from selection
+                        match has_shift {
+                            true => {
+                                // Shift is pressed: remove from selection
+                                selected_uuids = selected_uuids
+                                    .into_iter()
+                                    .filter(|item| *item != hit).collect();
+                            }
+                            false => {
+                                // Shift not pressed.
+                                if selected_uuids.len() == 1 {
+                                    // Last object in selection: un-select
+                                    selected_uuids = selected_uuids
+                                        .into_iter()
+                                        .filter(|item| *item != hit).collect();
+                                } else {
+                                    // Replace entire selection with only this object
+                                    selected_uuids = vec!(hit);
+                                }
+                            }
+                        };
+
                         // un-select object
                         tree.set_path(
                             "scene.selected_uuids",
-                            ClaydashValue::UUIDList(selected_uuids
-                                                    .into_iter()
-                                                    .filter(|item| *item != hit).collect())
+                            ClaydashValue::UUIDList(selected_uuids)
                         );
                     } else {
-                        selected_uuids.push(hit);
+                        // Add object to selection
+                        match has_shift {
+                            true => {
+                                // Shift is pressed: Additive selection
+                                selected_uuids.push(hit);
+                            }
+                            false => {
+                                // Shift is not pressed: Replace selection with new hit
+                                selected_uuids = vec!(hit);
+                            }
+                        };
+
                         tree.set_path(
                             "scene.selected_uuids",
                             ClaydashValue::UUIDList(selected_uuids)
