@@ -177,9 +177,6 @@ fn update_transformations(
     };
 
     match state {
-        ClaydashValue::EditorState(Start) => {
-            return;
-        }
         ClaydashValue::EditorState(Grabbing) => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
@@ -238,7 +235,7 @@ pub fn on_mouse_down(
 
             match maybe_hit_uuid {
                 Some(hit) => {
-                    let selected_uuids: Vec<uuid::Uuid> = match tree.get_path("scene.selected_uuids").unwrap_or_default() {
+                    let mut selected_uuids: Vec<uuid::Uuid> = match tree.get_path("scene.selected_uuids").unwrap_or_default() {
                         ClaydashValue::UUIDList(list) => list,
                         _ => vec!()
                     };
@@ -253,9 +250,10 @@ pub fn on_mouse_down(
                                                     .filter(|item| *item != hit).collect())
                         );
                     } else {
+                        selected_uuids.push(hit);
                         tree.set_path(
                             "scene.selected_uuids",
-                            ClaydashValue::UUIDList(vec!(hit))
+                            ClaydashValue::UUIDList(selected_uuids)
                         );
                     }
                 },
