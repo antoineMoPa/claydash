@@ -134,7 +134,7 @@ fn setup_camera(
         OrbitCameraBundle::new(
             OrbitCameraController::default(),
             Vec3::new(0.0, 0.0, 5.0),
-            Vec3::new(0., 0., 0.),
+            Vec3::ZERO,
             Vec3::Y,
         )
     );
@@ -155,7 +155,7 @@ fn build_projection_surface(
         MaterialMeshBundle {
             mesh: meshes.add(Mesh::from(shape::Cube { size: 1.5 })),
             transform: Transform {
-                translation: Vec3::new(0.0, 0.0, 0.0),
+                translation: Vec3::ZERO,
                 rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
                 scale: Vec3::new(1.0, 1.0, window_aspect_ratio),
                 ..default()

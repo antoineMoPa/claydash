@@ -55,7 +55,7 @@ fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
     let mut sdf_objects: Vec<SDFObject> = Vec::new();
     sdf_objects.push(SDFObject {
         object_type: TYPE_SPHERE,
-        position: Vec3::new(0.0, 0.0, 0.0),
+        position: Vec3::ZERO,
         color: Vec4::new(0.3, 0.0, 0.6, 1.0),
         ..default()
     });
@@ -94,6 +94,12 @@ fn sync_to_bevy(
                             x: object.position.x,
                             y: object.position.y,
                             z: object.position.z,
+                            w: 0.0
+                        };
+                        material.sdf_scales[index] = Vec4 {
+                            x: object.scale.x,
+                            y: object.scale.y,
+                            z: object.scale.z,
                             w: 0.0
                         };
                         material.sdf_colors[index] = object.color;

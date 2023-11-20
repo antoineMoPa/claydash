@@ -56,6 +56,15 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .shortcut("Return")
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(finish)))
         .write(commands);
+
+    CommandBuilder::new()
+        .title("Delete")
+        .system_name("delete")
+        .docs("Delete/Remove selection.")
+        .shortcut("Back")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(delete)))
+        .write(commands);
+
 }
 
 fn start_grab(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
@@ -75,12 +84,32 @@ fn finish(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 }
 
+fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    // Find selected objects
+    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
+        ClaydashValue::UUIDList(uuids) => uuids,
+        _ => { return default(); }
+    };
+
+    let filtered_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+        ClaydashValue::VecSDFObject(objects) => {
+            objects.iter().filter(|object| {
+                !selected_object_uuids.contains(&object.uuid)
+            }).cloned().collect()
+        },
+        _ => { return; }
+    };
+
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(filtered_objects));
+}
+
 fn str_to_key(key_str: &String) -> KeyCode {
     return match key_str.as_str() {
         "G" => KeyCode::G,
         "S" => KeyCode::S,
         "Escape" => KeyCode::Escape,
         "Return" => KeyCode::Return,
+        "Back" => KeyCode::Back,
         _ => {
             panic!("str not mapped to a keycode {}", key_str)
         }
@@ -131,6 +160,7 @@ fn set_objects_initial_position(
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
             tree.set_path(&format!("editor.initial_position.{}", object.uuid), ClaydashValue::Vec3(object.position));
+            tree.set_path(&format!("editor.initial_scale.{}", object.uuid), ClaydashValue::Vec3(object.scale));
         }
     }
 }
@@ -193,13 +223,29 @@ fn update_transformations(
                 }
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
-        }
+        },
+        ClaydashValue::EditorState(Scaling) => {
+            for object in objects.iter_mut() {
+                if selected_object_uuids.contains(&object.uuid) {
+                    let initial_scale = match tree.get_path(&format!("editor.initial_scale.{}", object.uuid)).unwrap_or(ClaydashValue::Vec3(Vec3::ONE)) {
+                        ClaydashValue::Vec3(scale) => scale,
+                        _ => Vec3::ONE
+                    };
+
+                    object.scale = initial_scale +
+                        (delta_cursor_position.x + delta_cursor_position.y) *
+                        SCALE_MOUSE_SENSIBILITY * Vec3::ONE;
+                }
+            }
+            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+        },
         _ => {}
     };
 }
 
 // How much objects move in space when mouse moves by 1px.
 const MOUSE_SENSIBILITY: f32 = 1.0 / 100.0;
+const SCALE_MOUSE_SENSIBILITY: f32 = 1.0 / 300.0;
 
 /// Handle selection
 /// Also, handle reseting state on click after transforming objects.

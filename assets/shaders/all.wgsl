@@ -32,6 +32,9 @@ var<uniform> sdf_meta: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
 var<uniform> sdf_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 @group(1) @binding(3)
+var<uniform> sdf_scales: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
+
+@group(1) @binding(4)
 var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 const MAX_ITERATIONS = 64;
@@ -71,13 +74,15 @@ fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
     var d_current_object: f32 = FAR_DIST;
     let t = sdf_meta[sdf_index].w;
     let sdf_position = sdf_positions[sdf_index].xyz;
+    let sdf_scale = sdf_scales[sdf_index].xyz;
+    let scaled_position = (p - sdf_position) / sdf_scale;
 
     // Find distance based on object type
     if (t == TYPE_SPHERE) {
-        d_current_object = sphere_sdf(p - sdf_position, sphere_r);
+        d_current_object = sphere_sdf(scaled_position, sphere_r);
     }
     else if (t == TYPE_CUBE) {
-        d_current_object = box_sdf(p - sdf_position, box_parameters);
+        d_current_object = box_sdf(scaled_position, box_parameters);
     }
 
     return d_current_object;

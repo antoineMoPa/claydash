@@ -161,6 +161,9 @@ impl<ParamType: Clone> CommandBuilder<ParamType> {
         return self;
     }
 
+    /// command docs
+    /// This is a good place to use synonyms to increase the chance of finding
+    /// commands.
     pub fn docs(&mut self, docs: &str) -> &mut Self {
         self.docs = docs.into();
         return self;

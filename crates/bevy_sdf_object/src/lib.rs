@@ -28,6 +28,7 @@ const MAX_SDFS_PER_ENTITY: i32 = 512;
 pub struct SDFObject {
     pub uuid: uuid::Uuid,
     pub position: Vec3,
+    pub scale: Vec3,
     pub color: Vec4,
     pub object_type: i32,
 }
@@ -37,6 +38,7 @@ impl Default for SDFObject {
         Self {
             uuid: uuid::Uuid::new_v4(),
             position: Vec3::default(),
+            scale: Vec3::ONE,
             color: Vec4::default(),
             object_type: TYPE_END,
         }
@@ -59,7 +61,23 @@ pub struct SDFObjectMaterial {
     #[uniform(2)]
     pub sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(3)]
+    pub sdf_scales: [Vec4; MAX_SDFS_PER_ENTITY as usize],
+    #[uniform(4)]
     pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
+}
+
+fn sphere_sdf(p: Vec3, r: f32) -> f32 {
+    return p.length() - r;
+}
+
+fn box_sdf(p: Vec3, box_parameters: Vec3) -> f32 {
+    let box_q = p.abs() - box_parameters;
+    let max_box_q = Vec3::new(
+        box_q.x.max(0.0),
+        box_q.y.max(0.0),
+        box_q.z.max(0.0)
+    );
+    return (max_box_q + box_q.x.max(box_q.y.max(box_q.z)).min(0.0)).length();
 }
 
 /// Compute the union of 2 distance fields.
@@ -86,18 +104,13 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
     for _i in 1..RUST_RAYMARCH_ITERATIONS {
         for obj in objects.iter() {
             let t = obj.object_type;
+            let scaled_position = (position - obj.position) / obj.scale;
 
             if t == TYPE_SPHERE {
-                d_current_object = (position - obj.position).length() - sphere_r;
+                d_current_object = sphere_sdf(scaled_position, sphere_r);
             }
             else if t == TYPE_CUBE {
-                let box_q = (position - obj.position).abs() - box_parameters;
-                let max_box_q = Vec3::new(
-                    box_q.x.max(0.0),
-                    box_q.y.max(0.0),
-                    box_q.z.max(0.0)
-                );
-                d_current_object = (max_box_q + box_q.x.max(box_q.y.max(box_q.z)).min(0.0)).length();
+                d_current_object = box_sdf(scaled_position, box_parameters);
             }
 
             d = sdf_union(d_current_object, d);
@@ -116,10 +129,11 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
 impl Default for SDFObjectMaterial {
     fn default() -> Self {
         Self {
-            camera: Vec4::new(0.0, 0.0, 0.0, 0.0),
+            camera: Vec4::ZERO,
             sdf_meta: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
-            sdf_positions: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
-            sdf_colors: [Vec4::new(0.0, 0.0, 0.0, 0.0); MAX_SDFS_PER_ENTITY as usize],
+            sdf_positions: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
+            sdf_scales: [Vec4::ONE; MAX_SDFS_PER_ENTITY as usize],
+            sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
         }
     }
 }
