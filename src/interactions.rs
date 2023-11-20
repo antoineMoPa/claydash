@@ -139,7 +139,14 @@ fn set_objects_initial_position(
 fn update_transformations(
     mut data_resource: ResMut<ClaydashData>,
     windows: Query<&Window>,
+    camera_transforms: Query<&mut Transform, With<Camera>>,
 ) {
+    // Based on camera rotation, find what direction mouse moves corresponds to in
+    // 3D space.
+    let camera_transform: &Transform = camera_transforms.single();
+    let x_vec = camera_transform.right();
+    let y_vec = camera_transform.up();
+
     let tree = &mut data_resource.as_mut().tree;
 
     let state = tree.get_path("editor.state").unwrap_or(ClaydashValue::EditorState(Start)).into();
@@ -182,8 +189,11 @@ fn update_transformations(
                         _ => Vec3::ZERO
                     };
 
-                    object.position.x = initial_position.x + delta_cursor_position.x / 100.0;
-                    object.position.y = initial_position.y - delta_cursor_position.y / 100.0;
+                    object.position = initial_position +
+                        1.0/100.0 * (
+                            delta_cursor_position.x * x_vec +
+                                -delta_cursor_position.y * y_vec
+                        );
                 }
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
