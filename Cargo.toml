@@ -5,16 +5,21 @@ members = [
 ]
 
 [workspace.dependencies]
+bevy_reflect = "0.12"
+bevy = "0.12"
+serde = "1.0.*"
+serde_json = "1.0.*"
+bevy_egui = "0.23.0"
+uuid = "1.5.0"
+bevy_app = "0.12"
+bevy_ecs = "0.12"
 sdf_consts = { path = "crates/sdf_consts"}
 bevy_sdf_object = { path = "crates/bevy_sdf_object" }
 claydash_data = { path = "crates/claydash_data"}
-command-central = { path = "crates/command-central"}
+command_central = { path = "crates/command_central"}
 bevy_command_central_plugin = { path = "crates/bevy_command_central_plugin"}
-claydash-ui = { path = "crates/claydash-ui"}
-bevy = "0.11.3"
-serde = "1.0.*"
-serde_json = "1.0.*"
-bevy_egui = "0.22.0"
+claydash_ui = { path = "crates/claydash_ui"}
+observable_key_value_tree = { path = "crates/observable_key_value_tree" }
 
 [package]
 name    = "claydash"
@@ -29,19 +34,21 @@ serde_json = { workspace = true }
 bevy_egui = { workspace = true }
 bevy_sdf_object = { workspace = true }
 claydash_data = { workspace = true }
-command-central = { workspace = true }
+command_central = { workspace = true }
 bevy_command_central_plugin = { workspace = true }
-claydash-ui = { workspace = true }
+claydash_ui = { workspace = true }
+bevy_reflect = { workspace = true }
+uuid = { workspace = true }
+observable_key_value_tree = { workspace = true }
 wasm-bindgen = "0.2.83"
 wasm-bindgen-futures = "0.4.33"
 futures = "0.3"
 js-sys = "0.3.60"
-bevy_asset = "0.11.3"
-bevy_reflect = "0.11.3"
-bevy_pbr = "0.11.3"
-bevy_framepace = "0.13.3"
-bevy_mod_picking = "0.15.0"
-smooth-bevy-cameras = "0.9.0"
+bevy_asset = "0.12"
+bevy_pbr = "0.12"
+bevy_framepace = "0.14.1"
+bevy_mod_picking = "0.17"
+smooth-bevy-cameras = "0.10.0"
 
 [dependencies.web-sys]
 version = "0.3.60"

@@ -8,3 +8,4 @@ observable_key_value_tree = { path = "../observable_key_value_tree"}
 bevy_sdf_object = { workspace = true }
 bevy = { workspace = true }
 sdf_consts = { workspace = true }
+uuid = { workspace = true }

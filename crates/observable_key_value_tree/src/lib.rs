@@ -157,7 +157,10 @@ impl <ValueType: Default + Clone,
                 return None;
             }
             let subtree = &self.subtree.get(parts[0]).unwrap();
-            let value = subtree.get_path_with_parts(&parts[1..].to_vec()).unwrap();
+            let value = match subtree.get_path_with_parts(&parts[1..].to_vec()) {
+                Some(value) => value,
+                _ => { return None },
+            };
             return Some(value);
         }
     }

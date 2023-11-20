@@ -1,26 +1,13 @@
 use bevy::prelude::*;
 use command_central::CommandMap;
-use std::marker::{
-    Send,
-    Sync
-};
 
-/// I don't think bevy supports generic plugins, so we have to create a param type
-/// that is as useful as possible in the context of 3d apps.
-/// Most importantly, it should be able to contain floats and vectors.
-/// Ideally, we find a way to make the Plugin generic.
-#[derive(Default, Clone, Copy)]
-pub struct ParamType {
-    pub f32_value: Option<f32>,
-    pub vec3_value: Option<Vec3>,
-    pub vec4_value: Option<Vec4>,
-}
+use claydash_data::ClaydashValue;
 
 pub struct BevyCommandCentralPlugin;
 
-#[derive(Default,Resource)]
+#[derive(Resource, Default)]
 pub struct CommandCentralState {
-    pub commands: CommandMap<ParamType>,
+    pub commands: CommandMap<ClaydashValue>,
 }
 
 impl Plugin for BevyCommandCentralPlugin {

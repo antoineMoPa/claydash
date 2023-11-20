@@ -19,7 +19,6 @@ use smooth_bevy_cameras::{
 use bevy_command_central_plugin::{
     CommandCentralState,
     BevyCommandCentralPlugin,
-    ParamType
 };
 
 use sdf_consts::*;
@@ -35,7 +34,10 @@ use bevy_mod_picking::prelude::*;
 use bevy_mod_picking::backend::HitData;
 
 #[allow(unused_imports)]
-use wasm_bindgen::{prelude::*};
+use wasm_bindgen::prelude::*;
+
+mod interactions;
+use crate::interactions::ClaydashInteractionPlugin;
 
 use claydash_data::{
     ClaydashDataPlugin,
@@ -62,6 +64,7 @@ fn main() {
             OrbitCameraPlugin::default(),
             BevySDFObjectPlugin,
             ClaydashUIPlugin,
+            ClaydashInteractionPlugin,
         ))
         .add_systems(Startup, remove_picking_logs)
         .add_systems(Startup, register_commands)
@@ -122,17 +125,16 @@ fn keyboard_input_system(
 fn setup_camera(
     mut commands: Commands,
 ) {
-    commands.spawn((
+    commands.spawn(
         Camera3dBundle {
             //transform: Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
-        },
-        RaycastPickCamera::default())
+        }
     ).insert(
         OrbitCameraBundle::new(
             OrbitCameraController::default(),
             Vec3::new(0.0, 0.0, 5.0),
-            Vec3::new(0., 0., 0.),
+            Vec3::ZERO,
             Vec3::Y,
         )
     );
@@ -153,7 +155,7 @@ fn build_projection_surface(
         MaterialMeshBundle {
             mesh: meshes.add(Mesh::from(shape::Cube { size: 1.5 })),
             transform: Transform {
-                translation: Vec3::new(0.0, 0.0, 0.0),
+                translation: Vec3::ZERO,
                 rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
                 scale: Vec3::new(1.0, 1.0, window_aspect_ratio),
                 ..default()
@@ -162,8 +164,7 @@ fn build_projection_surface(
             ..default()
         },
         PickableBundle::default(),      // Makes the entity pickable
-        RaycastPickTarget::default(),   // Marker for the `bevy_picking_raycast` backend
-        On::<Pointer<Down>>::run(on_mouse_down),
+        On::<Pointer<Down>>::run(interactions::on_mouse_down),
     ));
 }
 
@@ -176,39 +177,27 @@ fn register_commands(
     register_clear_everything(&mut bevy_command_central.commands);
 }
 
-fn register_spawn_sphere(commands: &mut CommandMap<ParamType>) {
+fn register_spawn_sphere(commands: &mut CommandMap<ClaydashValue>) {
     CommandBuilder::new()
         .title("Spawn Sphere")
         .system_name("spawn-sphere")
         .docs("Add a sphere at the given position")
-        .insert_param("position", "New object position vector", Some(ParamType{
-            vec3_value: Some(Vec3::ZERO),
-            ..default()
-        }))
-        .insert_param("color", "New object color.", Some(ParamType{
-            vec3_value: Some(Vec3::ZERO),
-            ..default()
-        }))
+        .insert_param("position", "New object position vector", Some(ClaydashValue::Vec3(Vec3::ZERO)))
+        .insert_param("color", "New object color.", Some(ClaydashValue::Vec3(Vec3::ZERO)))
         .write(commands);
 }
 
-fn register_spawn_cube(commands: &mut CommandMap<ParamType>) {
+fn register_spawn_cube(commands: &mut CommandMap<ClaydashValue>) {
     CommandBuilder::new()
         .title("Spawn Cube")
         .system_name("spawn-cube")
         .docs("Add a cube at the given position")
-        .insert_param("position", "New object position vector", Some(ParamType{
-            vec3_value: Some(Vec3::ZERO),
-            ..default()
-        }))
-        .insert_param("color", "New object color.", Some(ParamType{
-            vec3_value: Some(Vec3::ZERO),
-            ..default()
-        }))
+        .insert_param("position", "New object position vector", Some(ClaydashValue::Vec3(Vec3::ZERO)))
+        .insert_param("color", "New object color.", Some(ClaydashValue::Vec3(Vec3::ZERO)))
         .write(commands);
 }
 
-fn register_clear_everything(commands: &mut CommandMap<ParamType>) {
+fn register_clear_everything(commands: &mut CommandMap<ClaydashValue>) {
     CommandBuilder::new()
         .title("Clear Everything")
         .system_name("clear-everything")
@@ -216,14 +205,15 @@ fn register_clear_everything(commands: &mut CommandMap<ParamType>) {
         .write(commands);
 }
 
-/// Handle click to add a sphere.
+/// Handle click
 fn on_mouse_down(
     event: Listener<Pointer<Down>>,
-    buttons: Res<Input<MouseButton>>,
-    mut bevy_command_central: ResMut<CommandCentralState>
+    mut bevy_command_central: ResMut<CommandCentralState>,
 ) {
-    if buttons.just_pressed(MouseButton::Left) {
-        let command: CommandInfo<ParamType> = bevy_command_central.commands.read_command(&"spawn-sphere".to_string()).unwrap();
+    // let add_sphere = buttons.just_pressed(MouseButton::Left);
+    let add_sphere = false;
+    if add_sphere {
+        let command: CommandInfo<ClaydashValue> = bevy_command_central.commands.read_command(&"spawn-sphere".to_string()).unwrap();
 
         let hit: &HitData = &event.hit;
         let position = match hit.position {
@@ -232,10 +222,7 @@ fn on_mouse_down(
         };
 
         let mut params = command.parameters;
-        params.get_mut("position").unwrap().value = Some(ParamType {
-            vec3_value: Some(position),
-            ..default()
-        });
+        params.get_mut("position").unwrap().value = Some(ClaydashValue::Vec3(position));
 
         bevy_command_central.commands.run_with_params(&"spawn-sphere".to_string(), &params);
     }
@@ -252,7 +239,10 @@ fn run_commands(
     let spawn_sphere_command = bevy_command_central.commands.check_if_has_to_run(&"spawn-sphere".to_string());
     match spawn_sphere_command {
         Some(command) => {
-            let position = command.parameters.get("position").unwrap().value.unwrap().vec3_value.unwrap_or(Vec3::ZERO);
+            let position = match command.parameters.get("position").unwrap().value.clone().unwrap() {
+                ClaydashValue::Vec3(position) => position,
+                _ => Vec3::ZERO
+            };
 
             let handle = material_handle.single();
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
@@ -282,13 +272,10 @@ fn run_commands(
     let spawn_cube_command = bevy_command_central.commands.check_if_has_to_run(&"spawn-cube".to_string());
     match spawn_cube_command {
         Some(command) => {
-            let position = command.parameters
-                .get("position")
-                .unwrap()
-                .value
-                .unwrap()
-                .vec3_value
-                .unwrap_or(Vec3::ZERO);
+            let position = match command.parameters.get("position").unwrap().value.clone().unwrap() {
+                ClaydashValue::Vec3(position) => position,
+                _ => Vec3::ZERO
+            };
 
             let handle = material_handle.single();
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
@@ -326,10 +313,7 @@ fn run_commands(
             // Nothing to do
         }
     }
-
 }
-
-
 
 /// Update camera position uniform
 fn update_camera(

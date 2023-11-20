@@ -11,9 +11,9 @@
 //!  - Make it scriptable
 //!
 
-// We want a orderered version of HashMap. Turns our BTreeMap is ordered!
+// We want a version of HashMap that is ordered by key. Turns our BTreeMap is ordered by key!
 // So, using BTreeMap avoids order constantly flickering, example: when searching.
-use std::{collections::BTreeMap};
+use std::collections::BTreeMap;
 
 pub type CommandInfoMap<ParamType> = BTreeMap<String, CommandInfo<ParamType>>;
 pub type CommandParamMap<ParamType> = BTreeMap<String, CommandParam<ParamType>>;
@@ -137,6 +137,7 @@ pub struct CommandBuilder<ParamType: Clone> {
     pub system_name: String,
     pub title: String,
     pub docs: String,
+    pub shortcut: String,
 }
 
 impl<ParamType: Clone> CommandBuilder<ParamType> {
@@ -145,6 +146,7 @@ impl<ParamType: Clone> CommandBuilder<ParamType> {
             system_name: "".to_string(),
             title: "".to_string(),
             docs: "".to_string(),
+            shortcut: "".to_string(),
             command_param_map: CommandParamMap::new(),
         };
     }
@@ -159,8 +161,16 @@ impl<ParamType: Clone> CommandBuilder<ParamType> {
         return self;
     }
 
+    /// command docs
+    /// This is a good place to use synonyms to increase the chance of finding
+    /// commands.
     pub fn docs(&mut self, docs: &str) -> &mut Self {
         self.docs = docs.into();
+        return self;
+    }
+
+    pub fn shortcut(&mut self, shortcut: &str) -> &mut Self {
+        self.shortcut = shortcut.into();
         return self;
     }
 
@@ -178,6 +188,7 @@ impl<ParamType: Clone> CommandBuilder<ParamType> {
         commands.add_command(&self.system_name, CommandInfo {
             title: self.title.to_string(),
             docs: self.docs.to_string(),
+            shortcut: self.shortcut.clone(),
             parameters: self.command_param_map.clone(),
             ..CommandInfo::default()
         });
@@ -188,7 +199,7 @@ impl<ParamType: Clone> CommandBuilder<ParamType> {
 pub struct CommandInfo<ParamType: Clone> {
     pub title: String,
     pub docs: String,
-    pub keybinding: String,
+    pub shortcut: String,
     pub requested_runs: i32,
     pub parameters: CommandParamMap<ParamType>,
 }
@@ -212,7 +223,7 @@ impl<ParamType: Clone> Default for CommandInfo<ParamType> {
         return Self {
             title: "".to_string(),
             docs: "".to_string(),
-            keybinding: "".to_string(),
+            shortcut: "".to_string(),
             requested_runs: 0,
             parameters: BTreeMap::new(),
         };
