@@ -58,7 +58,6 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_z)))
         .write(commands);
 
-
     CommandBuilder::new()
         .title("Scale")
         .system_name("scale")
@@ -91,6 +90,21 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(delete)))
         .write(commands);
 
+    CommandBuilder::new()
+        .title("Select all")
+        .system_name("select_all")
+        .docs("Add all objects to selection.")
+        .shortcut("Shift+A")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(select_all)))
+        .write(commands);
+
+    CommandBuilder::new()
+        .title("Duplicate")
+        .system_name("duplicate")
+        .docs("Duplicate selection.")
+        .shortcut("Shift+D")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(duplicate)))
+        .write(commands);
 }
 
 fn reset_constraints(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
@@ -138,6 +152,24 @@ fn finish(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 }
 
+fn duplicate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    println!("TODO: duplicate");
+}
+
+fn select_all(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    match tree.get_path("scene.sdf_objects").unwrap() {
+        ClaydashValue::VecSDFObject(objects) => {
+            tree.set_path(
+                "scene.selected_uuids",
+                ClaydashValue::UUIDList(objects.iter().map(|object| { object.uuid }).collect())
+            );
+        }
+        _ => { }
+    };
+
+    tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+}
+
 fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     // Find selected objects
     let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
@@ -157,20 +189,44 @@ fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(filtered_objects));
 }
 
-fn str_to_key(key_str: &String) -> KeyCode {
-    return match key_str.as_str() {
-        "X" => KeyCode::X,
-        "Y" => KeyCode::Y,
-        "Z" => KeyCode::Z,
-        "G" => KeyCode::G,
-        "S" => KeyCode::S,
-        "Escape" => KeyCode::Escape,
-        "Return" => KeyCode::Return,
-        "Back" => KeyCode::Back,
+fn key_to_name(key: &KeyCode) -> String {
+    return match key {
+        KeyCode::A => "A",
+        KeyCode::B => "B",
+        KeyCode::C => "C",
+        KeyCode::D => "D",
+        KeyCode::E => "E",
+        KeyCode::F => "F",
+        KeyCode::G => "G",
+        KeyCode::H => "H",
+        KeyCode::I => "I",
+        KeyCode::J => "J",
+        KeyCode::K => "K",
+        KeyCode::L => "L",
+        KeyCode::M => "M",
+        KeyCode::N => "N",
+        KeyCode::O => "O",
+        KeyCode::P => "P",
+        KeyCode::Q => "Q",
+        KeyCode::R => "R",
+        KeyCode::S => "S",
+        KeyCode::T => "T",
+        KeyCode::U => "U",
+        KeyCode::V => "V",
+        KeyCode::W => "W",
+        KeyCode::X => "X",
+        KeyCode::Y => "Y",
+        KeyCode::Z => "Z",
+        KeyCode::Escape => "Escape",
+        KeyCode::Return => "Return",
+        KeyCode::Back => "Back",
+        KeyCode::ShiftLeft => "Shift",
+        KeyCode::ControlLeft => "Ctrl",
         _ => {
-            panic!("str not mapped to a keycode {}", key_str)
+            println!("note: last typed keycode not mapped to key.");
+            ""
         }
-    };
+    }.to_string();
 }
 
 pub fn run_shortcut_commands(
@@ -181,12 +237,30 @@ pub fn run_shortcut_commands(
 ){
     let commands = &mut bevy_command_central.commands.commands;
     let tree = &mut data_resource.as_mut().tree;
+    let mut shortcut_sequence: String = String::new();
+
+    for key in keys.get_just_released() {
+        let keyname = key_to_name(key);
+        let has_shift = keys.pressed(KeyCode::ShiftLeft);
+        let has_control = keys.pressed(KeyCode::ControlLeft);
+
+        let modifiers = match (has_control, has_shift) {
+            (true, true) => { "Ctrl+Shift+" },
+            (true, false) => { "Ctrl+" },
+            (false, true) => { "Shift+" },
+            _ => { "" }
+        };
+
+        let combo_name = format!("{}{}", modifiers, keyname);
+
+        shortcut_sequence += &combo_name;
+    }
 
     for (_key, command) in commands.iter() {
         if command.shortcut.is_empty() {
             continue;
         }
-        if keys.just_released(str_to_key(&command.shortcut)) {
+        if shortcut_sequence == command.shortcut {
             let window = windows.single();
             tree.set_path(
                 "editor.initial_mouse_position",
