@@ -125,7 +125,6 @@ fn sync_to_bevy(
                             material.sdf_meta[index].x = 0;
                         }
                     }
-
                 },
                 _ => { return; }
             }

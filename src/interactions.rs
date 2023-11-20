@@ -1,17 +1,16 @@
-use bevy::prelude::{*};
-use bevy::input::{keyboard::KeyCode, Input};
-use bevy_mod_picking::prelude::*;
-use bevy_mod_picking::backend::HitData;
-
-use bevy_sdf_object::SDFObject;
-use command_central::CommandBuilder;
+use bevy::{
+    prelude::*,
+    input::{keyboard::KeyCode, Input}
+};
 use bevy_command_central_plugin::CommandCentralState;
-use claydash_data::{ClaydashData, ClaydashValue};
+use bevy_mod_picking::{backend::HitData, prelude::*};
+use bevy_sdf_object::SDFObject;
+use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
+use command_central::CommandBuilder;
 use observable_key_value_tree::{
     ObservableKVTree,
     SimpleUpdateTracker
 };
-use claydash_data::EditorState::*;
 
 pub struct ClaydashInteractionPlugin;
 
@@ -190,7 +189,7 @@ fn update_transformations(
                     };
 
                     object.position = initial_position +
-                        1.0/100.0 * (
+                        MOUSE_SENSIBILITY * (
                             delta_cursor_position.x * x_vec +
                                 -delta_cursor_position.y * y_vec
                         );
@@ -201,6 +200,9 @@ fn update_transformations(
         _ => {}
     };
 }
+
+// How much objects move in space when mouse moves by 1px.
+const MOUSE_SENSIBILITY: f32 = 1.0 / 100.0;
 
 /// Handle selection
 /// Also, handle reseting state on click after transforming objects.
@@ -232,7 +234,6 @@ pub fn on_mouse_down(
             let camera_transform: &Transform = camera_transforms.single();
             let camera_position = camera_transform.translation;
             let ray = position - camera_position;
-            println!("ray: {}", ray);
             let maybe_hit_uuid = bevy_sdf_object::raymarch(position, ray, objects);
 
             match maybe_hit_uuid {

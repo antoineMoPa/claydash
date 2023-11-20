@@ -62,9 +62,12 @@ pub struct SDFObjectMaterial {
     pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
 }
 
+/// Compute the union of 2 distance fields.
 fn sdf_union(d1: f32, d2: f32) -> f32 {
     return d1.min(d2);
 }
+
+const RUST_RAYMARCH_ITERATIONS: i32 = 64;
 
 /// Raymarch/Raycast, e.g.: To find which object was clicked
 /// This is not meant to be used in real time rendering.
@@ -80,7 +83,7 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
     let mut d_current_object: f32 = 0.0;
     let selection_distance_threshold = 0.01;
 
-    for _i in 1..64 {
+    for _i in 1..RUST_RAYMARCH_ITERATIONS {
         for obj in objects.iter() {
             let t = obj.object_type;
 
@@ -106,8 +109,6 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
 
         position += direction * d;
     }
-
-    println!("D {}", d);
 
     return None
 }

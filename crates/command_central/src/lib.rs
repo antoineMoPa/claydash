@@ -11,7 +11,7 @@
 //!  - Make it scriptable
 //!
 
-// We want a orderered version of HashMap. Turns our BTreeMap is ordered!
+// We want a version of HashMap that is ordered by key. Turns our BTreeMap is ordered by key!
 // So, using BTreeMap avoids order constantly flickering, example: when searching.
 use std::collections::BTreeMap;
 
@@ -301,13 +301,13 @@ mod tests {
     #[test]
     fn does_not_run_non_existant_command() {
         let sys_name = "not-existing-command".to_string();
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
         assert_eq!(commands.check_if_has_to_run(&sys_name).is_none(), true);
     }
 
     #[test]
     fn creates_and_runs_command_with_parameters() {
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
         let sys_name = "test-command-with-params".to_string();
 
         CommandBuilder::new()
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn searches_commands_by_system_name() {
         let sys_name = "command-to-search-1".to_string();
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
 
         commands.add_command(&sys_name, CommandInfo {
             title: "A command to search".to_string(),
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn searches_have_limited_result_count() {
         let sys_name = "command-to-search-4-A".to_string();
-        let mut commands: CommandMap<f32, f32> = CommandMap::new();
+        let mut commands: CommandMap<f32> = CommandMap::new();
 
         // Note that case is changed to check that search is case insensitive.
         commands.add_command(&sys_name, CommandInfo {
