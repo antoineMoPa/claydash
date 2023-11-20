@@ -14,8 +14,6 @@ pub enum EditorState {
     Start,
     Grabbing,
     Scaling,
-    Escape,
-    Finish
 }
 
 #[derive(Clone)]
@@ -23,6 +21,7 @@ pub enum ClaydashValue {
     UUIDList(Vec<uuid::Uuid>),
     F32(f32),
     Vec3(Vec3),
+    Vec2(Vec2),
     VecSDFObject(Vec<SDFObject>),
     Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
     EditorState(EditorState),
@@ -46,8 +45,7 @@ impl Plugin for ClaydashDataPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClaydashData>()
             .add_systems(Startup, init_sdf_objects)
-            .add_systems(Update, update_sdf_objects)
-            .add_systems(Update, update_selection_state);
+            .add_systems(Update, sync_to_bevy);
     }
 }
 
@@ -72,71 +70,67 @@ fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
     data.tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
 }
 
-
-/// Translate SDFObject in our data structure into material uniform parameters
-/// That can be consumed by the GPU.
-fn update_sdf_objects(
+// Sync tree to bevy
+// Once the tree supports different update flags, we can split this in separate systems again.
+fn sync_to_bevy(
     mut data_resource: ResMut<ClaydashData>,
     material_handle: Query<&Handle<SDFObjectMaterial>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
 ) {
     let data = data_resource.as_mut();
+
     if data.tree.update_tracker.was_updated() {
-        let handle = material_handle.single();
-        let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
-        material.sdf_meta[0].w = TYPE_END;
+        // Update sdf objects
+        {
+            let handle = material_handle.single();
+            let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+            material.sdf_meta[0].w = TYPE_END;
 
-        match data.tree.get_path("scene.sdf_objects").unwrap() {
-            ClaydashValue::VecSDFObject(data) => {
-                for (index, object) in data.iter().enumerate() {
-                    material.sdf_meta[index].w = object.object_type;
-                    material.sdf_positions[index] = Vec4 {
-                        x: object.position.x,
-                        y: object.position.y,
-                        z: object.position.z,
-                        w: 0.0
-                    };
-                    material.sdf_colors[index] = object.color;
-                    material.sdf_meta[index + 1].w = TYPE_END;
-                }
-            },
-            _ => { }
-        }
-        data.tree.reset_update_cycle();
-    }
-}
-
-
-fn update_selection_state(
-    mut data_resource: ResMut<ClaydashData>,
-    material_handle: Query<&Handle<SDFObjectMaterial>>,
-    mut materials: ResMut<Assets<SDFObjectMaterial>>,
-) {
-    let data = data_resource.as_mut();
-    if data.tree.update_tracker.was_updated() {
-        let handle = material_handle.single();
-        let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
-
-        let objects = match data.tree.get_path("scene.sdf_objects").unwrap() {
-            ClaydashValue::VecSDFObject(data) => data,
-            _ => { return; }
-        };
-
-        match data.tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-            ClaydashValue::UUIDList(uuids) => {
-                for (index, object) in objects.iter().enumerate() {
-                    if uuids.contains(&object.uuid) {
-                        // Mark as selected
-                        material.sdf_meta[index].x = 1;
-                    } else {
-                        // Mark as not-selected
-                        material.sdf_meta[index].x = 0;
+            match data.tree.get_path("scene.sdf_objects").unwrap() {
+                ClaydashValue::VecSDFObject(data) => {
+                    for (index, object) in data.iter().enumerate() {
+                        material.sdf_meta[index].w = object.object_type;
+                        material.sdf_positions[index] = Vec4 {
+                            x: object.position.x,
+                            y: object.position.y,
+                            z: object.position.z,
+                            w: 0.0
+                        };
+                        material.sdf_colors[index] = object.color;
+                        material.sdf_meta[index + 1].w = TYPE_END;
                     }
-                }
-
-            },
-            _ => { return; }
+                },
+                _ => { }
+            }
         }
-        data.tree.reset_update_cycle();
+
+        // Update selection state
+        {
+            let handle = material_handle.single();
+            let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+
+            let objects = match data.tree.get_path("scene.sdf_objects").unwrap() {
+                ClaydashValue::VecSDFObject(data) => data,
+                _ => { return; }
+            };
+
+            match data.tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
+                ClaydashValue::UUIDList(uuids) => {
+                    for (index, object) in objects.iter().enumerate() {
+                        if uuids.contains(&object.uuid) {
+                            // Mark as selected
+                            material.sdf_meta[index].x = 1;
+                        } else {
+                            // Mark as not-selected
+                            material.sdf_meta[index].x = 0;
+                        }
+                    }
+
+                },
+                _ => { return; }
+            }
+        }
     }
+
+    data.tree.reset_update_cycle();
 }

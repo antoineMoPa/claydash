@@ -142,7 +142,7 @@ fn command_results_ui(
 
                 ui.add_space(10.0);
 
-                if command_info.parameters.len() > 0 {
+                if !command_info.parameters.is_empty() {
                     ui.heading("Parameters:");
                 }
 
@@ -153,6 +153,13 @@ fn command_results_ui(
                         ui.label(&param.docs);
                         ui.end_row();
                     });
+                }
+
+                if !command_info.shortcut.is_empty() {
+                    ui.add_space(10.0);
+                    ui.heading("Shortcut:");
+                    ui.label(&command_info.shortcut);
+                    ui.end_row();
                 }
 
                 ui.set_height(30.0);

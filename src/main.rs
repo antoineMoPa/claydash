@@ -164,7 +164,7 @@ fn build_projection_surface(
             ..default()
         },
         PickableBundle::default(),      // Makes the entity pickable
-        On::<Pointer<Down>>::run(on_mouse_down),
+        On::<Pointer<Down>>::run(interactions::on_mouse_down),
     ));
 }
 
@@ -205,63 +205,13 @@ fn register_clear_everything(commands: &mut CommandMap<ClaydashValue>) {
         .write(commands);
 }
 
-/// Handle click to add a sphere.
+/// Handle click
 fn on_mouse_down(
     event: Listener<Pointer<Down>>,
-    buttons: Res<Input<MouseButton>>,
     mut bevy_command_central: ResMut<CommandCentralState>,
-    mut data_resource: ResMut<ClaydashData>,
-    camera_transforms: Query<&mut Transform, With<Camera>>,
 ) {
     // let add_sphere = buttons.just_pressed(MouseButton::Left);
     let add_sphere = false;
-
-    let select = true;
-
-    if select {
-        let tree = &mut data_resource.as_mut().tree;
-        match tree.get_path("scene.sdf_objects").unwrap() {
-            ClaydashValue::VecSDFObject(objects) => {
-                let hit: &HitData = &event.hit;
-                let position = match hit.position {
-                    Some(position) => position,
-                    _ => { return; }
-                };
-                let camera_transform: &Transform = camera_transforms.single();
-                let camera_position = camera_transform.translation;
-                let ray = position - camera_position;
-                println!("ray: {}", ray);
-                let maybe_hit_uuid = bevy_sdf_object::raymarch(position, ray, objects);
-
-                match maybe_hit_uuid {
-                    Some(hit) => {
-                        let selected_uuids: Vec<uuid::Uuid> = match tree.get_path("scene.selected_uuids").unwrap_or_default() {
-                            ClaydashValue::UUIDList(list) => list,
-                            _ => vec!()
-                        };
-                        let is_selected = selected_uuids.contains(&hit);
-
-                        if is_selected {
-                            // un-select object
-                            tree.set_path(
-                                "scene.selected_uuids",
-                                ClaydashValue::UUIDList(selected_uuids
-                                    .into_iter()
-                                    .filter(|item| *item != hit).collect())
-                            );
-                        } else {
-                            tree.set_path(
-                                "scene.selected_uuids",
-                                ClaydashValue::UUIDList(vec!(hit))
-                            );
-                        }
-                    },
-                    _ => { return; }
-                }
-            },
-            _ => {}
-        }
-    }
     if add_sphere {
         let command: CommandInfo<ClaydashValue> = bevy_command_central.commands.read_command(&"spawn-sphere".to_string()).unwrap();
 
