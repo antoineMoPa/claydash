@@ -34,6 +34,32 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .write(commands);
 
     CommandBuilder::new()
+        .title("Constrain editing to X axis")
+        .system_name("constrain_x")
+        .docs("Add a X constraint to current editing mode.")
+        .shortcut("X")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_x)))
+        .write(commands);
+
+
+    CommandBuilder::new()
+        .title("Constrain editing to Y axis")
+        .system_name("constrain_y")
+        .docs("Add a Y constraint to current editing mode.")
+        .shortcut("Y")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_y)))
+        .write(commands);
+
+    CommandBuilder::new()
+        .title("Constrain editing to Z axis")
+        .system_name("constrain_z")
+        .docs("Add a Z constraint to current editing mode.")
+        .shortcut("Z")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_z)))
+        .write(commands);
+
+
+    CommandBuilder::new()
         .title("Scale")
         .system_name("scale")
         .docs("Start scaling selection.")
@@ -67,11 +93,39 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
 
 }
 
+fn reset_constraints(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    tree.set_path("editor.constrain_x", ClaydashValue::Bool(false));
+    tree.set_path("editor.constrain_y", ClaydashValue::Bool(false));
+    tree.set_path("editor.constrain_z", ClaydashValue::Bool(false));
+}
+
 fn start_grab(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    reset_constraints(tree);
     tree.set_path("editor.state", ClaydashValue::EditorState(Grabbing));
 }
 
+fn toggle_path(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, path: String) {
+    let current_value = match tree.get_path("editor.constrain_x").unwrap() {
+        ClaydashValue::Bool(value) => value,
+        _ => false
+    };
+    tree.set_path(&path, ClaydashValue::Bool(!current_value));
+}
+
+fn constrain_x(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    toggle_path(tree, "editor.constrain_x".to_string());
+}
+
+fn constrain_y(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    toggle_path(tree, "editor.constrain_y".to_string());
+}
+
+fn constrain_z(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    toggle_path(tree, "editor.constrain_z".to_string());
+}
+
 fn start_scale(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    reset_constraints(tree);
     tree.set_path("editor.state", ClaydashValue::EditorState(Scaling));
 }
 
@@ -105,6 +159,9 @@ fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
 
 fn str_to_key(key_str: &String) -> KeyCode {
     return match key_str.as_str() {
+        "X" => KeyCode::X,
+        "Y" => KeyCode::Y,
+        "Z" => KeyCode::Z,
         "G" => KeyCode::G,
         "S" => KeyCode::S,
         "Escape" => KeyCode::Escape,
@@ -206,6 +263,19 @@ fn update_transformations(
         _ => { return default(); }
     };
 
+    let constrain_x = match tree.get_path("editor.constrain_x").unwrap() {
+        ClaydashValue::Bool(value) => value,
+        _ => false
+    };
+    let constrain_y = match tree.get_path("editor.constrain_y").unwrap() {
+        ClaydashValue::Bool(value) => value,
+        _ => false
+    };
+    let constrain_z = match tree.get_path("editor.constrain_z").unwrap() {
+        ClaydashValue::Bool(value) => value,
+        _ => false
+    };
+
     match state {
         ClaydashValue::EditorState(Grabbing) => {
             for object in objects.iter_mut() {
@@ -232,9 +302,16 @@ fn update_transformations(
                         _ => Vec3::ONE
                     };
 
+                    let has_constrains = constrain_x || constrain_y || constrain_z;
+                    let constraints = if has_constrains { Vec3::new(
+                        if constrain_x { 1.0 } else { 0.0 },
+                        if constrain_y { 1.0 } else { 0.0 },
+                        if constrain_z { 1.0 } else { 0.0 },
+                    )} else { Vec3::ONE };
+
                     object.scale = initial_scale +
                         (delta_cursor_position.x + delta_cursor_position.y) *
-                        SCALE_MOUSE_SENSIBILITY * Vec3::ONE;
+                        SCALE_MOUSE_SENSIBILITY * Vec3::ONE * constraints;
                 }
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));

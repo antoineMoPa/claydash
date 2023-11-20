@@ -25,6 +25,7 @@ pub enum ClaydashValue {
     VecSDFObject(Vec<SDFObject>),
     Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
     EditorState(EditorState),
+    Bool(bool),
     None,
 }
 
