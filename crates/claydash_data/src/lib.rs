@@ -43,6 +43,20 @@ impl ClaydashValue {
             _ => { return default_value }
         }
     }
+
+    pub fn get_uuid_list_or_empty_vec(&self) -> Vec<uuid::Uuid> {
+        match self {
+            ClaydashValue::UUIDList(value) => { return value.to_vec(); },
+            _ => { return vec!() }
+        }
+    }
+
+    pub fn get_vec_sdf_objects_or_empty_vec(&self) -> Vec<SDFObject> {
+        match self {
+            ClaydashValue::VecSDFObject(value) => { return value.to_vec(); },
+            _ => { return vec!() }
+        }
+    }
 }
 
 #[derive(Resource, Default)]

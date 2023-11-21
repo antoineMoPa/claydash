@@ -92,11 +92,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .write(commands);
 
     CommandBuilder::new()
-        .title("Select all")
-        .system_name("select_all")
-        .docs("Add all objects to selection.")
+        .title("Select all/none")
+        .system_name("select_all_or_none")
+        .docs("Toggle selecting all objects.")
         .shortcut("Shift+A")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(select_all)))
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(select_all_or_none)))
         .write(commands);
 
     CommandBuilder::new()
@@ -187,18 +187,22 @@ fn duplicate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     start_grab(tree);
 }
 
-fn select_all(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    match tree.get_path("scene.sdf_objects").unwrap() {
-        ClaydashValue::VecSDFObject(objects) => {
-            tree.set_path(
-                "scene.selected_uuids",
-                ClaydashValue::UUIDList(objects.iter().map(|object| { object.uuid }).collect())
-            );
-        }
-        _ => { }
-    };
+fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    let selected_uuids = tree.get_path("scene.selected_uuids").unwrap_or_default().get_uuid_list_or_empty_vec();
+    let sdf_objects = tree.get_path("scene.sdf_objects").unwrap_or_default().get_vec_sdf_objects_or_empty_vec();
 
-    tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+
+    if selected_uuids.len() == sdf_objects.len() {
+        // Everything is selected: now select none
+        tree.set_path("scene.selected_uuids", ClaydashValue::UUIDList(default()));
+    } else {
+        // Select all
+        tree.set_path(
+            "scene.selected_uuids",
+            ClaydashValue::UUIDList(sdf_objects.iter().map(|object| { object.uuid }).collect())
+        );
+        tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+    }
 }
 
 fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
@@ -252,6 +256,9 @@ fn key_to_name(key: &KeyCode) -> String {
         KeyCode::Return => "Return",
         KeyCode::Back => "Back",
         KeyCode::ShiftLeft => "Shift",
+        // Mac command button is equivalent to shift in our system.
+        // Shift+A == Command+A
+        KeyCode::SuperLeft => "Shift",
         KeyCode::ControlLeft => "Ctrl",
         _ => {
             println!("note: last typed keycode not mapped to key.");
@@ -269,10 +276,17 @@ pub fn run_shortcut_commands(
     let commands = &mut bevy_command_central.commands.commands;
     let tree = &mut data_resource.as_mut().tree;
     let mut shortcut_sequence: String = String::new();
-
-    for key in keys.get_just_released() {
+    for key in keys.get_just_pressed() {
+        // Modifiers are not part of sequence themselves
+        match key {
+            KeyCode::ShiftLeft => { return }
+            KeyCode::SuperLeft => { return },
+            KeyCode::ControlLeft => { return },
+            _ => {}
+        }
         let keyname = key_to_name(key);
-        let has_shift = keys.pressed(KeyCode::ShiftLeft);
+        // Mac command button is equivalent to shift in our system.
+        let has_shift = keys.any_pressed(vec!(KeyCode::ShiftLeft, KeyCode::SuperLeft));
         let has_control = keys.pressed(KeyCode::ControlLeft);
 
         let modifiers = match (has_control, has_shift) {
