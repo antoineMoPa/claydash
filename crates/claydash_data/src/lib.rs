@@ -36,6 +36,15 @@ impl Default for ClaydashValue {
     }
 }
 
+impl ClaydashValue {
+    pub fn get_vec4_or(&self, default_value: Vec4) -> Vec4 {
+        match self {
+            ClaydashValue::Vec4(value) => { return *value },
+            _ => { return default_value }
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct ClaydashData {
     pub tree: ObservableKVTree<ClaydashValue, SimpleUpdateTracker>

@@ -19,6 +19,7 @@ impl Plugin for ClaydashInteractionPlugin {
         app.init_resource::<ClaydashData>()
             .add_systems(Startup, register_interaction_commands)
             .add_systems(Update, run_shortcut_commands)
+            .add_systems(Update, update_selection_color)
             .add_systems(Update, update_transformations);
     }
 }
@@ -325,6 +326,34 @@ fn set_objects_initial_properties(
     }
 }
 
+fn update_selection_color(
+    mut data_resource: ResMut<ClaydashData>,
+) {
+    let tree = &mut data_resource.as_mut().tree;
+    if !tree.was_path_updated("editor.colorpicker.color") {
+        return;
+    }
+    let color: Vec4 = tree.get_path("editor.colorpicker.color").unwrap_or_default().get_vec4_or(Vec4::ZERO);
+
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+        ClaydashValue::VecSDFObject(data) => data,
+        _ => { return; }
+    };
+
+    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
+        ClaydashValue::UUIDList(uuids) => uuids,
+        _ => { return default(); }
+    };
+
+    for object in objects.iter_mut() {
+        if selected_object_uuids.contains(&object.uuid) {
+            object.color = color;
+        }
+    }
+
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+}
+
 fn update_transformations(
     mut data_resource: ResMut<ClaydashData>,
     windows: Query<&Window>,
@@ -355,7 +384,6 @@ fn update_transformations(
     };
     let delta_cursor_position = cursor_position - initial_cursor_position;
 
-    // Find selected objects
     let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
         ClaydashValue::VecSDFObject(data) => data,
         _ => { return; }
