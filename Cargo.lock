@@ -1535,6 +1535,7 @@ version = "0.0.0"
 dependencies = [
  "bevy",
  "bevy_asset",
+ "bevy_command_central_egui",
  "bevy_command_central_plugin",
  "bevy_egui",
  "bevy_framepace",
@@ -1578,8 +1579,10 @@ dependencies = [
  "bevy_command_central_egui",
  "bevy_command_central_plugin",
  "bevy_egui",
+ "claydash_data",
  "command_central",
  "epaint",
+ "observable_key_value_tree",
 ]
 
 [[package]]

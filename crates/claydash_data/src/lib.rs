@@ -20,8 +20,9 @@ pub enum EditorState {
 pub enum ClaydashValue {
     UUIDList(Vec<uuid::Uuid>),
     F32(f32),
-    Vec3(Vec3),
     Vec2(Vec2),
+    Vec3(Vec3),
+    Vec4(Vec4),
     VecSDFObject(Vec<SDFObject>),
     Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
     EditorState(EditorState),

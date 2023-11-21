@@ -115,6 +115,7 @@ fn reset_constraints(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTrac
 
 fn start_grab(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     reset_constraints(tree);
+    set_objects_initial_properties(tree);
     tree.set_path("editor.state", ClaydashValue::EditorState(Grabbing));
 }
 
@@ -140,6 +141,7 @@ fn constrain_z(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) 
 
 fn start_scale(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     reset_constraints(tree);
+    set_objects_initial_properties(tree);
     tree.set_path("editor.state", ClaydashValue::EditorState(Scaling));
 }
 
@@ -153,7 +155,35 @@ fn finish(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
 }
 
 fn duplicate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    println!("TODO: duplicate");
+    // Find selected objects
+    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
+        ClaydashValue::UUIDList(uuids) => uuids,
+        _ => { return; }
+    };
+
+    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+        ClaydashValue::VecSDFObject(objects) => { objects },
+        _ => { return; }
+    };
+
+    let mut duplicated_objects: Vec<SDFObject> = sdf_objects.iter().filter(| sdf_object | {
+        selected_object_uuids.contains(&sdf_object.uuid)
+    }).map(|object| {
+        object.duplicate()
+    }).collect();
+
+    // List duplicated objects uuids
+    let duplicated_uuids: Vec<uuid::Uuid> = duplicated_objects.iter().map(|object| {
+        object.uuid
+    }).collect();
+
+    // Update the tree with duplicated objects
+    sdf_objects.append(&mut duplicated_objects);
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    tree.set_path("scene.selected_uuids", ClaydashValue::UUIDList(duplicated_uuids));
+
+    // Move these new objects
+    start_grab(tree);
 }
 
 fn select_all(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
@@ -266,7 +296,6 @@ pub fn run_shortcut_commands(
                 "editor.initial_mouse_position",
                 ClaydashValue::Vec2(window.cursor_position().unwrap_or(Vec2::ZERO))
             );
-            set_objects_initial_position(tree);
             match command.parameters["callback"].value.clone().unwrap() {
                 ClaydashValue::Fn(callback) => callback(tree),
                 _ => {}
@@ -275,7 +304,7 @@ pub fn run_shortcut_commands(
     }
 }
 
-fn set_objects_initial_position(
+fn set_objects_initial_properties(
     tree: &mut  ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
 ) {
     let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {

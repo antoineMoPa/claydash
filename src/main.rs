@@ -6,7 +6,7 @@ use command_central::{
     CommandBuilder,
     CommandMap,
 };
-use claydash_ui::{ClaydashUIPlugin, ClaydashUIState};
+use claydash_ui::ClaydashUIPlugin;
 use smooth_bevy_cameras::{
     LookTransformPlugin,
     controllers::orbit::{
@@ -20,6 +20,8 @@ use bevy_command_central_plugin::{
     CommandCentralState,
     BevyCommandCentralPlugin,
 };
+
+use bevy_command_central_egui::BevyCommandCentralEguiPlugin;
 
 use sdf_consts::*;
 
@@ -56,6 +58,7 @@ fn main() {
             ClaydashDataPlugin,
             DefaultPlugins,
             BevyCommandCentralPlugin,
+            BevyCommandCentralEguiPlugin,
             bevy_framepace::FramepacePlugin,
             DefaultPickingPlugins,
             FrameTimeDiagnosticsPlugin,
@@ -233,7 +236,6 @@ fn run_commands(
     material_handle: Query<&Handle<SDFObjectMaterial>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
     mut bevy_command_central: ResMut<CommandCentralState>,
-    claydash_ui_state: ResMut<ClaydashUIState>,
     mut data_resource: ResMut<ClaydashData>
 ) {
     let spawn_sphere_command = bevy_command_central.commands.check_if_has_to_run(&"spawn-sphere".to_string());
@@ -247,6 +249,10 @@ fn run_commands(
             let handle = material_handle.single();
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
             let tree = &mut data_resource.as_mut().tree;
+            let color = match tree.get_path("editor.colorpicker.color").unwrap_or(ClaydashValue::Vec4(Vec4::ZERO)) {
+                ClaydashValue::Vec4(data) => data,
+                _ => Vec4::ZERO,
+            };
 
             match tree.get_path("scene.sdf_objects").unwrap() {
                 ClaydashValue::VecSDFObject(data) => {
@@ -254,7 +260,7 @@ fn run_commands(
                     objects.push(SDFObject {
                         object_type: TYPE_SPHERE,
                         position,
-                        color: claydash_ui_state.color,
+                        color,
                         ..default()
                     });
                     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
@@ -280,6 +286,10 @@ fn run_commands(
             let handle = material_handle.single();
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
             let tree = &mut data_resource.as_mut().tree;
+            let color = match tree.get_path("editor.colorpicker.color").unwrap_or(ClaydashValue::Vec4(Vec4::ZERO)) {
+                ClaydashValue::Vec4(data) => data,
+                _ => Vec4::ZERO,
+            };
 
             match tree.get_path("scene.sdf_objects").unwrap() {
                 ClaydashValue::VecSDFObject(data) => {
@@ -288,7 +298,7 @@ fn run_commands(
                     objects.push(SDFObject {
                         object_type: TYPE_CUBE,
                         position,
-                        color: claydash_ui_state.color,
+                        color,
                         ..default()
                     });
                     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));

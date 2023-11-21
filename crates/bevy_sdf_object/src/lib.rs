@@ -33,6 +33,15 @@ pub struct SDFObject {
     pub object_type: i32,
 }
 
+impl SDFObject {
+    /// Create a new individually-addressable object (with different uuid)
+    pub fn duplicate(&self) -> Self {
+        let mut clone = self.clone();
+        clone.uuid = uuid::Uuid::new_v4();
+        return clone;
+    }
+}
+
 impl Default for SDFObject {
     fn default() -> Self {
         Self {
