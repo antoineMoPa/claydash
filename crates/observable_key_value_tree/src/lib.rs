@@ -16,7 +16,7 @@
 //!  - `data.set_path("scene.some.property", 1234)`
 //!  - `data.get_path("scene.some.property")`
 //!  - `data.update_tracker.was_updated()`
-//!  - `data.get_path_meta("scene.some.property").unwrap().update_tracker.was_updated()`
+//!  - `data.was_path_updated("scene.some.property")`
 //!
 //! # Examples
 //!
@@ -41,12 +41,12 @@
 //! // Setting values
 //! data.set_path("scene.some.property", 1234);
 //! // Detecting updates
-//! let was_updated: bool = data.get_path_meta("scene.some.property").unwrap().update_tracker.was_updated();
+//! let was_updated: bool = data.was_path_updated("scene.some.property");
 //! // Detecting updates (root level)
-//! assert_eq!(data.update_tracker.was_updated(), true);
+//! assert_eq!(data.was_updated(), true);
 //! // Reset update cycle (typically, you'd call this every frame)
 //! data.reset_update_cycle();
-//! assert_eq!(data.update_tracker.was_updated(), false);
+//! assert_eq!(data.was_updated(), false);
 //! ```
 //!
 //! ## Customizing Update Tracker
@@ -97,6 +97,22 @@ pub struct ObservableKVTree
     value: Option<ValueType>,
     #[serde(skip)]
     pub update_tracker: UpdateTracker,
+}
+
+/// Shortcut to verify if a path was modified.
+impl <ValueType: Default + Clone> ObservableKVTree<ValueType, SimpleUpdateTracker> {
+    pub fn was_updated(&self) -> bool {
+        return self.update_tracker.was_updated();
+    }
+
+    pub fn was_path_updated(&self, path: &str) -> bool {
+        match self.get_path_meta(&path) {
+            Some(value) => {
+                return value.update_tracker.was_updated();
+            },
+            _ => { return false; }
+        };
+    }
 }
 
 impl <ValueType: Default + Clone,
@@ -211,30 +227,30 @@ mod tests {
 
         // Set value
         data.set_path("scene.some.very.deep.property", 1234);
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.was_path_updated("scene.some.very.deep.property"), true);
+        assert_eq!(data.was_path_updated("scene.some.very.deep"), true);
+        assert_eq!(data.was_path_updated("scene.some.very"), true);
+        assert_eq!(data.was_path_updated("scene.some"), true);
+        assert_eq!(data.was_path_updated("scene"), true);
         assert_eq!(data.update_tracker.updated, true);
 
         // Reset update cycle
         data.reset_update_cycle();
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), false);
-        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), false);
+        assert_eq!(data.was_path_updated("scene.some.very.deep.property"), false);
+        assert_eq!(data.was_path_updated("scene.some.very.deep"), false);
+        assert_eq!(data.was_path_updated("scene.some.very"), false);
+        assert_eq!(data.was_path_updated("scene.some"), false);
+        assert_eq!(data.was_path_updated("scene"), false);
         assert_eq!(data.update_tracker.updated, false);
 
         // Set value (2nd time)
         data.set_path("scene.some.very.deep.property", 2345);
 
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.was_path_updated("scene.some.very.deep.property"), true);
+        assert_eq!(data.was_path_updated("scene.some.very.deep"), true);
+        assert_eq!(data.was_path_updated("scene.some.very"), true);
+        assert_eq!(data.was_path_updated("scene.some"), true);
+        assert_eq!(data.was_path_updated("scene"), true);
         assert_eq!(data.update_tracker.updated, true);
     }
 
