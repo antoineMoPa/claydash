@@ -474,8 +474,10 @@ dependencies = [
  "bevy",
  "bevy_command_central_plugin",
  "bevy_egui",
+ "claydash_data",
  "command_central",
  "epaint",
+ "observable_key_value_tree",
 ]
 
 [[package]]

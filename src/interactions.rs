@@ -106,6 +106,20 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .shortcut("Shift+D")
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(duplicate)))
         .write(commands);
+
+    CommandBuilder::new()
+        .title("Spawn Sphere")
+        .system_name("spawn-sphere")
+        .docs("Add a sphere at the given position")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(spawn_sphere)))
+        .write(commands);
+
+    CommandBuilder::new()
+        .title("Spawn Box")
+        .system_name("spawn-box")
+        .docs("Adds a cube at the given position")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(spawn_box)))
+        .write(commands);
 }
 
 fn reset_constraints(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
@@ -223,6 +237,55 @@ fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
 
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(filtered_objects));
 }
+
+fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    let position = Vec3::ZERO;
+    let color = match tree.get_path("editor.colorpicker.color").unwrap_or(ClaydashValue::Vec4(Vec4::ONE)) {
+        ClaydashValue::Vec4(data) => data,
+        _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
+    };
+
+    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+        ClaydashValue::VecSDFObject(objects) => { objects },
+        _ => { vec!() }
+    };
+
+    sdf_objects.push(SDFObject {
+        object_type: sdf_consts::TYPE_SPHERE,
+        position,
+        color,
+        ..default()
+    });
+
+    // Update the tree with duplicated objects
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+}
+
+fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    let position = Vec3::ZERO;
+    let color = match tree.get_path("editor.colorpicker.color").unwrap_or(ClaydashValue::Vec4(Vec4::ONE)) {
+        ClaydashValue::Vec4(data) => data,
+        _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
+    };
+
+    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+        ClaydashValue::VecSDFObject(objects) => { objects },
+        _ => { vec!() }
+    };
+
+    sdf_objects.push(SDFObject {
+        object_type: sdf_consts::TYPE_BOX,
+        position,
+        color,
+        ..default()
+    });
+
+    // Update the tree with duplicated objects
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+}
+
 
 fn key_to_name(key: &KeyCode) -> String {
     return match key {

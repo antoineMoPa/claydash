@@ -11,7 +11,11 @@ use epaint::{
     Rounding
 };
 use bevy_command_central_plugin::*;
-
+use claydash_data::{ClaydashData, ClaydashValue};
+use observable_key_value_tree::{
+    ObservableKVTree,
+    SimpleUpdateTracker
+};
 pub struct BevyCommandCentralEguiPlugin;
 
 #[derive(Resource)]
@@ -37,9 +41,11 @@ impl Plugin for BevyCommandCentralEguiPlugin {
 fn command_ui(
     mut contexts: EguiContexts,
     claydash_ui_state: ResMut<CommandCentralUiState>,
-    command_central_state: ResMut<CommandCentralState>
+    command_central_state: ResMut<CommandCentralState>,
+    mut data_resource: ResMut<ClaydashData>,
 ) {
     let ctx = contexts.ctx_mut();
+    let tree = &mut data_resource.as_mut().tree;
 
     egui::SidePanel::right("right_panel")
         .frame(Frame {
@@ -51,15 +57,16 @@ fn command_ui(
         .resizable(false)
         .show(ctx, |ui| {
             ui.set_width(320.0);
-            command_search_field(ui, ctx.clone(), claydash_ui_state, command_central_state);
+            command_search(ui, ctx.clone(), claydash_ui_state, command_central_state, tree);
         });
 }
 
-fn command_search_field(
+fn command_search(
     ui: &mut egui::Ui,
     ctx: egui::Context,
     mut claydash_ui_state: ResMut<CommandCentralUiState>,
-    command_central_state: ResMut<CommandCentralState>
+    command_central_state: ResMut<CommandCentralState>,
+    tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>,
 ) {
     let rounding: Rounding = Rounding::same(5.0);
     let widget_offset = egui::vec2(10.0, 20.0);
@@ -107,7 +114,7 @@ fn command_search_field(
             .inner_margin(egui::style::Margin::symmetric(10.0, 0.0))
             .show(ui, |ui| {
                 ui.set_width(280.0);
-                command_results_ui(ui, claydash_ui_state, command_central_state);
+                command_results_ui(ui, claydash_ui_state, command_central_state, tree);
             });
     }
 }
@@ -115,7 +122,8 @@ fn command_search_field(
 fn command_results_ui(
     ui: &mut egui::Ui,
     mut claydash_ui_state: ResMut<CommandCentralUiState>,
-    mut bevy_command_central: ResMut<CommandCentralState>
+    mut bevy_command_central: ResMut<CommandCentralState>,
+    tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
 ) {
     let rounding = Rounding::same(5.0);
     let command_search_str: &mut String = &mut claydash_ui_state.command_search_str;
@@ -124,7 +132,7 @@ fn command_results_ui(
         _ => { bevy_command_central.commands.search(command_search_str, 5) }
     };
 
-    for (system_name, command_info) in commands.iter() {
+    for (system_name, command) in commands.iter() {
         let bg_color = Color32::from_rgba_unmultiplied(217, 217, 217, 10);
 
         egui::Frame::none()
@@ -134,19 +142,19 @@ fn command_results_ui(
             .outer_margin(egui::style::Margin::symmetric(0.0, 10.0))
             .show(ui, |ui| {
                 ui.set_width(280.0);
-                ui.heading(&command_info.title);
+                ui.heading(&command.title);
                 ui.label(system_name) ;
                 ui.separator();
-                ui.label(&command_info.docs);
+                ui.label(&command.docs);
                 ui.end_row();
 
                 ui.add_space(10.0);
 
-                if !command_info.parameters.is_empty() {
+                if !command.parameters.is_empty() {
                     ui.heading("Parameters:");
                 }
 
-                for (param_name, param) in command_info.parameters.iter() {
+                for (param_name, param) in command.parameters.iter() {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
                         ui.label(param_name);
                         ui.label(":");
@@ -155,10 +163,10 @@ fn command_results_ui(
                     });
                 }
 
-                if !command_info.shortcut.is_empty() {
+                if !command.shortcut.is_empty() {
                     ui.add_space(10.0);
                     ui.heading("Shortcut:");
-                    ui.label(&command_info.shortcut);
+                    ui.label(&command.shortcut);
                     ui.end_row();
                 }
 
@@ -166,7 +174,13 @@ fn command_results_ui(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
                     ui.add_space(10.0);
                     if ui.small_button("Run").clicked() {
-                        bevy_command_central.commands.run(system_name);
+                        claydash_ui_state.command_search_str = "".to_string();
+                        match command.parameters["callback"].value.clone().unwrap() {
+                            ClaydashValue::Fn(callback) => {
+                                callback(tree);
+                            },
+                            _ => {}
+                        };
                     }
                 });
                 ui.add_space(10.0);

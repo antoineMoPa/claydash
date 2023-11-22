@@ -43,8 +43,12 @@ const CIRCLE_USEFUL_RADIUS: f32 = 65.0 - CIRCLE_BORDER_APPROX;
 
 fn color_picker_ui(
     mut commands: Commands,
+    mut data_resource: ResMut<ClaydashData>,
     asset_server: Res<AssetServer>,
 ) {
+    // Set initial color
+    let tree = &mut data_resource.as_mut().tree;
+    tree.set_path("editor.colorpicker.color", ClaydashValue::Vec4(Vec4::new(0.8, 0.0, 0.3, 1.0)));
     commands.spawn(ImageBundle {
         style: Style {
             width: Val::Px(IMAGE_WIDTH),

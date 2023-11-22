@@ -45,7 +45,7 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
 
 const TYPE_END: i32 = #{TYPE_END};
 const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
-const TYPE_CUBE: i32 = #{TYPE_CUBE};
+const TYPE_BOX: i32 = #{TYPE_BOX};
 const FAR_DIST = 100.0;
 const CLOSE_DIST = 0.003;
 const BLEND_DIST = 0.03;
@@ -81,7 +81,7 @@ fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
     if (t == TYPE_SPHERE) {
         d_current_object = sphere_sdf(scaled_position, sphere_r);
     }
-    else if (t == TYPE_CUBE) {
+    else if (t == TYPE_BOX) {
         d_current_object = box_sdf(scaled_position, box_parameters);
     }
 

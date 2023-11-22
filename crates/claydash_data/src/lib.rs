@@ -86,7 +86,7 @@ fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
     });
 
     sdf_objects.push(SDFObject {
-        object_type: TYPE_CUBE,
+        object_type: TYPE_BOX,
         position: Vec3::new(-0.2, 0.3, 0.0),
         color: Vec4::new(0.8, 0.0, 0.6, 1.0),
         ..default()

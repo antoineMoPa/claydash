@@ -118,7 +118,7 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
             if t == TYPE_SPHERE {
                 d_current_object = sphere_sdf(scaled_position, sphere_r);
             }
-            else if t == TYPE_CUBE {
+            else if t == TYPE_BOX {
                 d_current_object = box_sdf(scaled_position, box_parameters);
             }
 
@@ -170,7 +170,7 @@ impl Material for SDFObjectMaterial {
 
         defs.push(ShaderDefVal::Int("TYPE_END".into(), TYPE_END));
         defs.push(ShaderDefVal::Int("TYPE_SPHERE".into(), TYPE_SPHERE));
-        defs.push(ShaderDefVal::Int("TYPE_CUBE".into(), TYPE_CUBE));
+        defs.push(ShaderDefVal::Int("TYPE_BOX".into(), TYPE_BOX));
 
         Ok(())
     }
