@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-command_central = { path = "../command_central"}
-claydash_data = { path = "../claydash_data" }
+command_central = { workspace = true }
+claydash_data = { workspace = true }
 bevy = { workspace = true }
 bevy_app = { workspace = true }

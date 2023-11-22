@@ -43,55 +43,6 @@ impl<ParamType: Clone> CommandMap<ParamType> {
         return self.commands.get(system_name).cloned();
     }
 
-    /// Returns copy of command  and decrements internal counter if the command has to be run.
-    ///
-    /// Returns None if nothing has to be done.
-    pub fn check_if_has_to_run(&mut self, system_name: &String) -> Option<CommandInfo<ParamType>> {
-        match &mut self.commands.get_mut(system_name) {
-            Some(command) => {
-                if command.check_if_has_to_run() {
-                    return Some(command.clone());
-                } else {
-                    return None;
-                }
-            },
-            _ => { return None; }
-        }
-    }
-
-    /// Requests to run a command by name.
-    pub fn run(&mut self, system_name: &String) {
-        let command = self.commands.get_mut(system_name).unwrap();
-        let params = command.parameters.clone();
-
-        command.parameters = params;
-
-        return command.run();
-    }
-
-
-    /// Requests to run a command by name again with last used parameters.
-    pub fn repeat(&mut self, system_name: &String) {
-        self.commands.get_mut(system_name).unwrap().run();
-    }
-
-    /// Requests to run a command by name.
-    pub fn run_with_params(&mut self, system_name: &String, parameters: &CommandParamMap<ParamType>) {
-        let command_option = self.commands.get_mut(system_name);
-
-        match command_option {
-            Some(command) => {
-                for (key, value) in parameters.iter() {
-                    command.parameters.insert(key.to_string(), value.clone());
-                }
-                command.run();
-            }
-            _ => {
-                panic!("Could not get command!");
-            }
-        }
-    }
-
     /// Search through commands
     pub fn search(&mut self, search: &String, limit: usize) -> CommandInfoMap<ParamType> {
         let search_lower = search.to_lowercase();
@@ -200,22 +151,7 @@ pub struct CommandInfo<ParamType: Clone> {
     pub title: String,
     pub docs: String,
     pub shortcut: String,
-    pub requested_runs: i32,
     pub parameters: CommandParamMap<ParamType>,
-}
-
-impl<ParamType: Clone> CommandInfo<ParamType> {
-    fn run(&mut self) {
-        self.requested_runs = self.requested_runs + 1;
-    }
-
-    fn check_if_has_to_run(&mut self) -> bool {
-        if self.requested_runs > 0 {
-            self.requested_runs = self.requested_runs - 1;
-            return true;
-        }
-        return false;
-    }
 }
 
 impl<ParamType: Clone> Default for CommandInfo<ParamType> {
@@ -224,7 +160,6 @@ impl<ParamType: Clone> Default for CommandInfo<ParamType> {
             title: "".to_string(),
             docs: "".to_string(),
             shortcut: "".to_string(),
-            requested_runs: 0,
             parameters: BTreeMap::new(),
         };
     }
@@ -273,142 +208,6 @@ mod tests {
             docs: "Here are some docs about the command".to_string(),
             ..CommandInfo::default()
         });
-    }
-
-    #[test]
-    fn runs_commands() {
-        let sys_name = "test-command-with-callback".to_string();
-        let mut commands: CommandMap<f32> = CommandMap::new();
-        commands.add_command(&sys_name, CommandInfo {
-            title: "Test Command".to_string(),
-            docs: "Here are some docs about the command".to_string(),
-            ..CommandInfo::default()
-        });
-        commands.read_command(&sys_name).unwrap();
-
-        commands.run(&sys_name);
-
-        // Should return true 1 time
-        assert_eq!(commands.check_if_has_to_run(&sys_name).is_some(), true);
-        assert_eq!(commands.check_if_has_to_run(&sys_name).is_some(), false);
-
-        commands.run(&sys_name);
-        commands.run(&sys_name);
-
-        // Should return true 2 times
-        assert_eq!(commands.check_if_has_to_run(&sys_name).is_some(), true);
-        assert_eq!(commands.check_if_has_to_run(&sys_name).is_some(), true);
-        assert_eq!(commands.check_if_has_to_run(&sys_name).is_some(), false);
-    }
-
-    #[test]
-    fn does_not_run_non_existant_command() {
-        let sys_name = "not-existing-command".to_string();
-        let mut commands: CommandMap<f32> = CommandMap::new();
-        assert_eq!(commands.check_if_has_to_run(&sys_name).is_none(), true);
-    }
-
-    #[test]
-    fn creates_and_runs_command_with_parameters() {
-        let mut commands: CommandMap<f32> = CommandMap::new();
-        let sys_name = "test-command-with-params".to_string();
-
-        CommandBuilder::new()
-            .title("Test Command")
-            .system_name("test-command-with-params")
-            .docs("Here are some docs about the command")
-            .insert_param("x", "X position of the mouse.", None)
-            .insert_param("y", "Y position of the mouse.", None)
-            .insert_param("z", "Z position of the mouse.", None)
-            .insert_param("def", "Param with default value.", Some(42.0))
-            .write(&mut commands);
-
-        assert_eq!(
-            commands.read_command(&sys_name).unwrap().parameters["x"].docs,
-            "X position of the mouse.".to_string()
-        );
-
-        // Simulate application part where we would trigger the command
-        {
-            let mut params: CommandParamMap<f32> = BTreeMap::new();
-
-            params.insert("x".to_string(), CommandParam {
-                docs: "X position of the mouse.".to_string(),
-                value: Some(998.3),
-                ..CommandParam::default()
-            });
-
-            commands.run_with_params(&sys_name, &params);
-        }
-
-        #[allow(unused_assignments)]
-        let mut side_effect_result: f32 = 0.0;
-
-        // simulate application loop where we would process the command:
-        {
-            let command = commands.check_if_has_to_run(&sys_name).unwrap();
-
-            let original_x = command.parameters.get(&"x".to_string()).unwrap().value.unwrap();
-            let value_with_default = command.parameters.get(&"def".to_string()).unwrap().value.unwrap();
-
-            assert_eq!(value_with_default, 42.0);
-
-            side_effect_result = original_x * 2.0;
-        }
-
-        assert_eq!(side_effect_result, 998.3 * 2.0);
-    }
-
-    #[test]
-    fn repeats_last_command_with_parameters() {
-        let mut commands: CommandMap<f32> = CommandMap::new();
-        let sys_name = "test-command-with-params-2".to_string();
-
-        let mut params: CommandParamMap<f32> = BTreeMap::new();
-
-        params.insert("x".to_string(), CommandParam {
-            docs: "X position of the mouse.".to_string(),
-            ..CommandParam::default()
-        });
-
-        commands.add_command(&sys_name, CommandInfo {
-            title: "Test Command".to_string(),
-            docs: "Here are some docs about the command".to_string(),
-            parameters: params,
-            ..CommandInfo::default()
-        });
-
-        // Simulate application part where we would trigger the command
-        {
-            let mut params: CommandParamMap<f32> = BTreeMap::new();
-
-            params.insert("x".to_string(), CommandParam {
-                docs: "X position of the mouse.".to_string(),
-                value: Some(12.3),
-                ..CommandParam::default()
-            });
-
-            commands.run_with_params(&sys_name, &params);
-        }
-
-        // simulate application loop where we would process the command:
-        {
-            let command = commands.check_if_has_to_run(&sys_name).unwrap();
-            let float_val = command.parameters.get(&"x".to_string()).unwrap().value.unwrap();
-            assert_eq!(float_val, 12.3);
-        }
-
-        // Simulate application part where we would trigger a repeat of last command.
-        {
-            commands.repeat(&sys_name);
-        }
-
-        // simulate application loop where we would process the command again:
-        {
-            let command = commands.check_if_has_to_run(&sys_name).unwrap();
-            let float_val = command.parameters.get(&"x".to_string()).unwrap().value.unwrap();
-            assert_eq!(float_val, 12.3);
-        }
     }
 
     #[test]
