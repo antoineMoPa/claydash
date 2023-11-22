@@ -125,6 +125,7 @@ impl<ParamType: Clone> CommandBuilder<ParamType> {
         return self;
     }
 
+    /// Hack: we currently use a param to store callbacks.
     pub fn insert_param(&mut self,  system_name: &str, docs: &str, default: Option<ParamType>) -> &mut Self {
         self.command_param_map.insert(system_name.to_string(), CommandParam {
             docs: docs.to_string(),
