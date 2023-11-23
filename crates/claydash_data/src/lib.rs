@@ -104,7 +104,7 @@ fn sync_to_bevy(
 ) {
     let data = data_resource.as_mut();
 
-    if data.tree.update_tracker.was_updated() {
+    if data.tree.was_path_updated("scene.sdf_objects") {
         // Update sdf objects
         {
             let handle = material_handle.single();
@@ -134,7 +134,9 @@ fn sync_to_bevy(
                 _ => { }
             }
         }
+    }
 
+    if data.tree.was_path_updated("scene.selected_uuids") {
         // Update selection state
         {
             let handle = material_handle.single();

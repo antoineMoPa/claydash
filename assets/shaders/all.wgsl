@@ -37,6 +37,9 @@ var<uniform> sdf_scales: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 @group(1) @binding(4)
 var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
+@group(1) @binding(5)
+var<uniform> sdf_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
+
 const MAX_ITERATIONS = 64;
 
 fn sdf_union(d1: f32, d2: f32) -> f32 {

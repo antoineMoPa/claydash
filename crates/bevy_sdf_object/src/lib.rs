@@ -22,7 +22,7 @@ impl Plugin for BevySDFObjectPlugin {
     }
 }
 
-const MAX_SDFS_PER_ENTITY: i32 = 512;
+const MAX_SDFS_PER_ENTITY: i32 = 256;
 
 #[derive(Clone)]
 pub struct SDFObject {
@@ -73,6 +73,8 @@ pub struct SDFObjectMaterial {
     pub sdf_scales: [Vec4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(4)]
     pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
+    #[uniform(5)]
+    pub sdf_transforms: [Mat4; MAX_SDFS_PER_ENTITY as usize],
 }
 
 fn sphere_sdf(p: Vec3, r: f32) -> f32 {
@@ -151,6 +153,7 @@ impl Default for SDFObjectMaterial {
             sdf_positions: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             sdf_scales: [Vec4::ONE; MAX_SDFS_PER_ENTITY as usize],
             sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
+            sdf_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
         }
     }
 }
