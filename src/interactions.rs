@@ -250,16 +250,24 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)
         _ => { vec!() }
     };
 
-    sdf_objects.push(SDFObject {
+    let new_object = SDFObject {
         object_type: sdf_consts::TYPE_SPHERE,
         position,
         color,
         ..default()
-    });
+    };
+    let uuid = new_object.uuid;
+
+    sdf_objects.push(new_object);
 
     // Update the tree with duplicated objects
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+
+    tree.set_path("scene.selected_uuids", ClaydashValue::UUIDList(vec!(uuid)));
+
+    // Move new objects
+    start_grab(tree);
 }
 
 fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
@@ -274,16 +282,24 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
         _ => { vec!() }
     };
 
-    sdf_objects.push(SDFObject {
+    let new_object = SDFObject {
         object_type: sdf_consts::TYPE_BOX,
         position,
         color,
         ..default()
-    });
+    };
+    let uuid = new_object.uuid;
+
+    sdf_objects.push(new_object);
 
     // Update the tree with duplicated objects
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+
+    tree.set_path("scene.selected_uuids", ClaydashValue::UUIDList(vec!(uuid)));
+
+    // Move new objects
+    start_grab(tree);
 }
 
 

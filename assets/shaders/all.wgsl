@@ -88,7 +88,8 @@ fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
     // Correct the returned distance to account for the scale
     // Note that this is not perfect yet and only seems to work when scaling
     // uniformly (e.g. not scaling on axis).
-    return d_current_object * length(sdf_scale) / length(vec3(1.0));
+    return d_current_object *
+        length(sdf_scale) / length(vec3(1.0));
 }
 
 // Shortcut for object_distance to make next function more readable
