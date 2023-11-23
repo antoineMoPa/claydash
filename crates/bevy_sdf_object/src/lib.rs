@@ -55,7 +55,7 @@ impl Default for SDFObject {
         Self {
             uuid: uuid::Uuid::new_v4(),
             position: Vec3::default(),
-            quaternion: Quat::from_rotation_x(2.0),
+            quaternion: Quat::IDENTITY,
             scale: Vec3::ONE,
             color: Vec4::default(),
             object_type: TYPE_END,
