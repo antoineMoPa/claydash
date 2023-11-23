@@ -29,15 +29,9 @@ var<uniform> camera: vec4<f32>;
 var<uniform> sdf_meta: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
 
 @group(1) @binding(2)
-var<uniform> sdf_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
-
-@group(1) @binding(3)
-var<uniform> sdf_scales: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
-
-@group(1) @binding(4)
 var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(5)
+@group(1) @binding(3)
 var<uniform> sdf_inverse_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 const MAX_ITERATIONS = 64;
@@ -76,8 +70,6 @@ fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
     let box_parameters = vec3(0.3, 0.3, 0.3);
     var d_current_object: f32 = FAR_DIST;
     let t = sdf_meta[sdf_index].w;
-    let sdf_position = sdf_positions[sdf_index].xyz;
-    let sdf_scale = sdf_scales[sdf_index].xyz;
     let inverse_transform = sdf_inverse_transforms[sdf_index];
     let transformed_position = (inverse_transform * vec4(p, 1.0)).xyz;
 
@@ -92,8 +84,11 @@ fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
     // Correct the returned distance to account for the scale
     // Note that this is not perfect yet and only seems to work when scaling
     // uniformly (e.g. not scaling on axis).
-    return d_current_object *
-        length(sdf_scale) / length(vec3(1.0));
+    // TODO find scale from transform matrix and correct for it again.
+    // previous factor was:
+    // length(sdf_scale) / length(vec3(1.0))
+    // Or find jacobian?
+    return d_current_object;
 }
 
 // Shortcut for object_distance to make next function more readable

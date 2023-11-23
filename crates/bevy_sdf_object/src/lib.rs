@@ -43,9 +43,10 @@ impl SDFObject {
     }
 
     pub fn inverse_transform_matrix(&self) -> Mat4 {
-        return Transform::from_rotation(self.quaternion)
-            .compute_matrix()
-            .inverse();
+        let mut t = Transform::from_translation(self.position);
+        t.rotate(self.quaternion);
+        t.scale = self.scale;
+        return t.compute_matrix().inverse();
     }
 }
 
@@ -76,12 +77,8 @@ pub struct SDFObjectMaterial {
     #[uniform(1)]
     pub sdf_meta: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
     #[uniform(2)]
-    pub sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
-    #[uniform(3)]
-    pub sdf_scales: [Vec4; MAX_SDFS_PER_ENTITY as usize],
-    #[uniform(4)]
     pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
-    #[uniform(5)]
+    #[uniform(3)]
     pub sdf_inverse_transforms: [Mat4; MAX_SDFS_PER_ENTITY as usize],
 }
 
@@ -158,8 +155,6 @@ impl Default for SDFObjectMaterial {
         Self {
             camera: Vec4::ZERO,
             sdf_meta: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
-            sdf_positions: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
-            sdf_scales: [Vec4::ONE; MAX_SDFS_PER_ENTITY as usize],
             sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             sdf_inverse_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
         }

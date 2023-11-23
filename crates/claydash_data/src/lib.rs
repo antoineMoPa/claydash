@@ -118,18 +118,6 @@ fn sync_to_bevy(
                 ClaydashValue::VecSDFObject(data) => {
                     for (index, object) in data.iter().enumerate() {
                         material.sdf_meta[index].w = object.object_type;
-                        material.sdf_positions[index] = Vec4 {
-                            x: object.position.x,
-                            y: object.position.y,
-                            z: object.position.z,
-                            w: 0.0
-                        };
-                        material.sdf_scales[index] = Vec4 {
-                            x: object.scale.x,
-                            y: object.scale.y,
-                            z: object.scale.z,
-                            w: 0.0
-                        };
                         material.sdf_colors[index] = object.color;
                         material.sdf_inverse_transforms[index] = object.inverse_transform_matrix();
                         material.sdf_meta[index + 1].w = TYPE_END;
