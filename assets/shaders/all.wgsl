@@ -38,7 +38,7 @@ var<uniform> sdf_scales: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 @group(1) @binding(5)
-var<uniform> sdf_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
+var<uniform> sdf_inverse_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 const MAX_ITERATIONS = 64;
 
@@ -78,14 +78,15 @@ fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
     let t = sdf_meta[sdf_index].w;
     let sdf_position = sdf_positions[sdf_index].xyz;
     let sdf_scale = sdf_scales[sdf_index].xyz;
-    let scaled_position = (p - sdf_position) / sdf_scale;
+    let inverse_transform = sdf_inverse_transforms[sdf_index];
+    let transformed_position = (inverse_transform * vec4(p, 1.0)).xyz;
 
     // Find distance based on object type
     if (t == TYPE_SPHERE) {
-        d_current_object = sphere_sdf(scaled_position, sphere_r);
+        d_current_object = sphere_sdf(transformed_position, sphere_r);
     }
     else if (t == TYPE_BOX) {
-        d_current_object = box_sdf(scaled_position, box_parameters);
+        d_current_object = box_sdf(transformed_position, box_parameters);
     }
 
     // Correct the returned distance to account for the scale

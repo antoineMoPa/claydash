@@ -28,6 +28,7 @@ const MAX_SDFS_PER_ENTITY: i32 = 256;
 pub struct SDFObject {
     pub uuid: uuid::Uuid,
     pub position: Vec3,
+    pub quaternion: Quat,
     pub scale: Vec3,
     pub color: Vec4,
     pub object_type: i32,
@@ -40,6 +41,12 @@ impl SDFObject {
         clone.uuid = uuid::Uuid::new_v4();
         return clone;
     }
+
+    pub fn inverse_transform_matrix(&self) -> Mat4 {
+        return Transform::from_rotation(self.quaternion)
+            .compute_matrix()
+            .inverse();
+    }
 }
 
 impl Default for SDFObject {
@@ -47,6 +54,7 @@ impl Default for SDFObject {
         Self {
             uuid: uuid::Uuid::new_v4(),
             position: Vec3::default(),
+            quaternion: Quat::from_rotation_x(2.0),
             scale: Vec3::ONE,
             color: Vec4::default(),
             object_type: TYPE_END,
@@ -74,7 +82,7 @@ pub struct SDFObjectMaterial {
     #[uniform(4)]
     pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(5)]
-    pub sdf_transforms: [Mat4; MAX_SDFS_PER_ENTITY as usize],
+    pub sdf_inverse_transforms: [Mat4; MAX_SDFS_PER_ENTITY as usize],
 }
 
 fn sphere_sdf(p: Vec3, r: f32) -> f32 {
@@ -153,7 +161,7 @@ impl Default for SDFObjectMaterial {
             sdf_positions: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             sdf_scales: [Vec4::ONE; MAX_SDFS_PER_ENTITY as usize],
             sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
-            sdf_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
+            sdf_inverse_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
         }
     }
 }

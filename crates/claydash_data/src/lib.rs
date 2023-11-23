@@ -97,6 +97,8 @@ fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
 
 // Sync tree to bevy
 // Once the tree supports different update flags, we can split this in separate systems again.
+// Q: Why is this not in bevy_sdf_object?
+// R: Because bevy_sdf_object should not depend on the tree
 fn sync_to_bevy(
     mut data_resource: ResMut<ClaydashData>,
     material_handle: Query<&Handle<SDFObjectMaterial>>,
@@ -105,6 +107,7 @@ fn sync_to_bevy(
     let data = data_resource.as_mut();
 
     if data.tree.was_path_updated("scene.sdf_objects") {
+        // Potentially: move this block to bevy_sdf_object
         // Update sdf objects
         {
             let handle = material_handle.single();
@@ -128,6 +131,7 @@ fn sync_to_bevy(
                             w: 0.0
                         };
                         material.sdf_colors[index] = object.color;
+                        material.sdf_inverse_transforms[index] = object.inverse_transform_matrix();
                         material.sdf_meta[index + 1].w = TYPE_END;
                     }
                 },
@@ -137,6 +141,7 @@ fn sync_to_bevy(
     }
 
     if data.tree.was_path_updated("scene.selected_uuids") {
+        // Potentially: move this block to interactions.
         // Update selection state
         {
             let handle = material_handle.single();
