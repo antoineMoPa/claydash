@@ -434,13 +434,13 @@ fn update_selection_color(
 fn update_transformations(
     mut data_resource: ResMut<ClaydashData>,
     windows: Query<&Window>,
-    camera_transforms: Query<&mut Transform, With<Camera>>,
+    camera_global_transforms: Query<&mut GlobalTransform, With<Camera>>,
+    camera: Query<&Camera>,
 ) {
     // Based on camera rotation, find what direction mouse moves corresponds to in
     // 3D space.
-    let camera_transform: &Transform = camera_transforms.single();
-    let x_vec = camera_transform.right();
-    let y_vec = camera_transform.up();
+    let camera = camera.single();
+    let camera_global_transform = camera_global_transforms.single();
 
     let tree = &mut data_resource.as_mut().tree;
 
@@ -488,16 +488,13 @@ fn update_transformations(
         ClaydashValue::EditorState(Grabbing) => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
-                    let initial_position = match tree.get_path(&format!("editor.initial_position.{}", object.uuid)).unwrap_or(ClaydashValue::Vec3(Vec3::ZERO)) {
-                        ClaydashValue::Vec3(position) => position,
-                        _ => Vec3::ZERO
+                    match camera.viewport_to_world(camera_global_transform, cursor_position) {
+                        Some(ray) => {
+                            let object_to_viewport_dist = (object.position - ray.origin).length();
+                            object.position = ray.origin + ray.direction * object_to_viewport_dist;
+                        },
+                        _ => { }
                     };
-
-                    object.position = initial_position +
-                        MOUSE_SENSIBILITY * (
-                            delta_cursor_position.x * x_vec +
-                                -delta_cursor_position.y * y_vec
-                        );
                 }
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
