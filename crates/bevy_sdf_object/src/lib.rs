@@ -104,14 +104,13 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
 fn object_distance(p: Vec3, object: &SDFObject) -> f32 {
     let sphere_r = 0.2;
     let box_parameters = Vec3::new(0.3, 0.3, 0.3);
-
-    let scaled_position = (p - object.position) / object.scale;
+    let transformed_position = (object.inverse_transform_matrix() * Vec4::from((p, 1.0))).xyz();
     let d_current_object = match object.object_type {
         TYPE_SPHERE => {
-            sphere_sdf(scaled_position, sphere_r)
+            sphere_sdf(transformed_position, sphere_r)
         },
         TYPE_BOX => {
-            box_sdf(scaled_position, box_parameters)
+            box_sdf(transformed_position, box_parameters)
         },
         _ => { panic!("Not implemented!") }
     };
