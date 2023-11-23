@@ -85,7 +85,10 @@ fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
         d_current_object = box_sdf(scaled_position, box_parameters);
     }
 
-    return d_current_object;
+    // Correct the returned distance to account for the scale
+    // Note that this is not perfect yet and only seems to work when scaling
+    // uniformly (e.g. not scaling on axis).
+    return d_current_object * length(sdf_scale) / length(vec3(1.0));
 }
 
 // Shortcut for object_distance to make next function more readable
@@ -131,6 +134,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
             d = sdf_union(d_current_object, d);
             object_color = mix(object_color, sdf_colors[sdf_index], clamp(1.0 - pow(abs(d_current_object) / BLEND_DIST, 4.0), 0.0, 1.0));
+
+            if (d < 0.0) {
+                //p -= camera_ray * d * 1.1;
+            }
 
             if (d < CLOSE_DIST) {
                 found = true;

@@ -94,6 +94,25 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
     return d1.min(d2);
 }
 
+fn object_distance(p: Vec3, object: &SDFObject) -> f32 {
+    let sphere_r = 0.2;
+    let box_parameters = Vec3::new(0.3, 0.3, 0.3);
+
+    let scaled_position = (p - object.position) / object.scale;
+    let d_current_object = match object.object_type {
+        TYPE_SPHERE => {
+            sphere_sdf(scaled_position, sphere_r)
+        },
+        TYPE_BOX => {
+            box_sdf(scaled_position, box_parameters)
+        },
+        _ => { panic!("Not implemented!") }
+    };
+
+    // Correct the returned distance to account for the scale
+    return d_current_object * object.scale.length() / Vec3::ONE.length();
+}
+
 const RUST_RAYMARCH_ITERATIONS: i32 = 64;
 
 /// Raymarch/Raycast, e.g.: To find which object was clicked
@@ -104,23 +123,12 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
     let mut position = start_position - ray.normalize();
     let direction = ray.normalize();
     // TODO un-hardcode
-    let sphere_r = 0.2;
-    let box_parameters = Vec3::new(0.3, 0.3, 0.3);
     let mut d = 10000.0;
-    let mut d_current_object: f32 = 0.0;
     let selection_distance_threshold = 0.01;
 
     for _i in 1..RUST_RAYMARCH_ITERATIONS {
         for obj in objects.iter() {
-            let t = obj.object_type;
-            let scaled_position = (position - obj.position) / obj.scale;
-
-            if t == TYPE_SPHERE {
-                d_current_object = sphere_sdf(scaled_position, sphere_r);
-            }
-            else if t == TYPE_BOX {
-                d_current_object = box_sdf(scaled_position, box_parameters);
-            }
+            let d_current_object = object_distance(position, obj);
 
             d = sdf_union(d_current_object, d);
 

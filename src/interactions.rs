@@ -526,7 +526,6 @@ fn update_transformations(
 }
 
 // How much objects move in space when mouse moves by 1px.
-const MOUSE_SENSIBILITY: f32 = 1.0 / 100.0;
 const SCALE_MOUSE_SENSIBILITY: f32 = 1.0 / 300.0;
 
 /// Handle selection
