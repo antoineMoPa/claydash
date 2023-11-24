@@ -44,8 +44,8 @@ impl SDFObject {
 
     pub fn inverse_transform_matrix(&self) -> Mat4 {
         let mut t = Transform::from_translation(self.position);
-        t.rotate(self.quaternion);
         t.scale = self.scale;
+        t.rotate(self.quaternion);
         return t.compute_matrix().inverse();
     }
 }

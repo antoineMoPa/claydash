@@ -14,6 +14,7 @@ pub enum EditorState {
     Start,
     Grabbing,
     Scaling,
+    Rotating,
 }
 
 #[derive(Clone)]

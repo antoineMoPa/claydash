@@ -68,6 +68,15 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .write(commands);
 
     CommandBuilder::new()
+        .title("Rotate")
+        .system_name("rotate")
+        .docs("Start rotating selection.")
+        .shortcut("R")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(start_rotate)))
+        .write(commands);
+
+
+    CommandBuilder::new()
         .title("Quit")
         .system_name("quit")
         .docs("Quit and cancel current editing state.")
@@ -158,6 +167,12 @@ fn start_scale(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) 
     reset_constraints(tree);
     set_objects_initial_properties(tree);
     tree.set_path("editor.state", ClaydashValue::EditorState(Scaling));
+}
+
+fn start_rotate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    reset_constraints(tree);
+    set_objects_initial_properties(tree);
+    tree.set_path("editor.state", ClaydashValue::EditorState(Rotating));
 }
 
 fn escape(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
@@ -537,7 +552,46 @@ fn update_transformations(
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
         },
+        ClaydashValue::EditorState(Rotating) => {
+            for object in objects.iter_mut() {
+                if !selected_object_uuids.contains(&object.uuid) {
+                    continue;
+                }
+                match get_object_angle_relative_to_camera_ray(camera, camera_global_transform, cursor_position, object) {
+                    Some((ray, angle)) => {
+                        let rotation = Quat::from_axis_angle(ray.direction.normalize(), -angle);
+                        object.quaternion = rotation;
+                    }
+                    _ => {}
+                };
+            }
+            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+        },
         _ => {}
+    };
+}
+
+fn get_object_angle_relative_to_camera_ray(
+    camera: &Camera,
+    camera_global_transform: &GlobalTransform,
+    cursor_position: Vec2,
+    object: &SDFObject
+) -> Option<(Ray, f32)> {
+    let camera_right = camera_global_transform.right();
+    let camera_up = camera_global_transform.up();
+
+    match camera.viewport_to_world(camera_global_transform, cursor_position) {
+        Some(ray) => {
+            let object_to_viewport_dist = (object.position - ray.origin).length();
+            let cursor_position_near_object = ray.origin + ray.direction * object_to_viewport_dist;
+            let cursor_relative_to_up_vector = cursor_position_near_object.dot(camera_up);
+            let cursor_relative_to_right_vector = cursor_position_near_object.dot(camera_right);
+
+            return Some((ray, cursor_relative_to_up_vector.atan2(cursor_relative_to_right_vector)));
+        },
+        _ => {
+            return None;
+        }
     };
 }
 
