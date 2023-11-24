@@ -558,8 +558,8 @@ fn update_transformations(
                     continue;
                 }
                 match get_object_angle_relative_to_camera_ray(camera, camera_global_transform, cursor_position, object) {
-                    Some((ray, angle)) => {
-                        let rotation = Quat::from_axis_angle(ray.direction.normalize(), -angle);
+                    Some((axis, angle)) => {
+                        let rotation = Quat::from_axis_angle(axis.normalize(), -angle);
                         object.quaternion = rotation;
                     }
                     _ => {}
@@ -576,7 +576,7 @@ fn get_object_angle_relative_to_camera_ray(
     camera_global_transform: &GlobalTransform,
     cursor_position: Vec2,
     object: &SDFObject
-) -> Option<(Ray, f32)> {
+) -> Option<(Vec3, f32)> {
     let camera_right = camera_global_transform.right();
     let camera_up = camera_global_transform.up();
 
@@ -587,7 +587,7 @@ fn get_object_angle_relative_to_camera_ray(
             let cursor_relative_to_up_vector = cursor_position_near_object.dot(camera_up);
             let cursor_relative_to_right_vector = cursor_position_near_object.dot(camera_right);
 
-            return Some((ray, cursor_relative_to_up_vector.atan2(cursor_relative_to_right_vector)));
+            return Some((camera_global_transform.forward(), cursor_relative_to_up_vector.atan2(cursor_relative_to_right_vector)));
         },
         _ => {
             return None;
