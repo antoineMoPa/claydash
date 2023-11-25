@@ -4,7 +4,7 @@ use sdf_consts::*;
 
 use observable_key_value_tree::{
     ObservableKVTree,
-    SimpleUpdateTracker,
+    SimpleUpdateTracker, CanBeNone,
 };
 
 use bevy_sdf_object::*;
@@ -19,7 +19,8 @@ pub enum EditorState {
 
 #[derive(Clone)]
 pub enum ClaydashValue {
-    UUIDList(Vec<uuid::Uuid>),
+    VecUuid(Vec<uuid::Uuid>),
+    I32(i32),
     F32(f32),
     Vec2(Vec2),
     Vec3(Vec3),
@@ -38,7 +39,83 @@ impl Default for ClaydashValue {
     }
 }
 
+impl CanBeNone<ClaydashValue> for ClaydashValue {
+    fn none() -> Self {
+        ClaydashValue::None
+    }
+}
+
+macro_rules! define_unwrap_methods {
+    ($unwrap_method_name:ident, $unwrap_or_default_method_name:ident, $unwrap_or_method_name:ident, $variant:ident, $type:ty, $default: expr) => {
+        pub fn $unwrap_method_name(&self) -> $type {
+            match &self {
+                Self::$variant(value) => *value,
+                _ => {
+                    panic!("No {} value stored.", stringify!($type));
+                }
+            }
+        }
+
+        pub fn $unwrap_or_default_method_name(&self) -> $type {
+            match &self {
+                Self::$variant(value) => *value,
+                _ => $default
+            }
+        }
+
+        pub fn $unwrap_or_method_name(&self, default_value: $type) -> $type {
+            match &self {
+                Self::$variant(value) => *value,
+                _ => default_value
+            }
+        }
+    };
+}
+
+macro_rules! define_unwrap_methods_for_vec {
+    ($unwrap_method_name:ident, $unwrap_or_method_name:ident, $variant:ident, $type:ty) => {
+        pub fn $unwrap_method_name(&self) -> &$type {
+            match &self {
+                Self::$variant(value) => value,
+                _ => {
+                    panic!("No {} value stored.", stringify!($type));
+                }
+            }
+        }
+
+        /// Warning: this method creates a new value.
+        pub fn $unwrap_or_method_name(&self, default_value: $type) -> $type {
+            match &self {
+                Self::$variant(value) => value.clone(),
+                _ => default_value
+            }
+        }
+    };
+}
+
+
+
 impl ClaydashValue {
+    // Add a few methods to help with unwrapping.
+    define_unwrap_methods!(unwrap_i32, unwrap_i32_or_default, unwrap_i32_or, I32, i32, 0);
+    define_unwrap_methods!(unwrap_f32, unwrap_f32_or_default, unwrap_f32_or, F32, f32, 0.0);
+    define_unwrap_methods!(unwrap_vec2, unwrap_vec2_or_default, unwrap_vec2_or, Vec2, Vec2, Vec2::default());
+    define_unwrap_methods!(unwrap_vec3, unwrap_vec3_or_default, unwrap_vec3_or, Vec3, Vec3, Vec3::default());
+    define_unwrap_methods!(unwrap_vec4, unwrap_vec4_or_default, unwrap_vec4_or, Vec4, Vec4, Vec4::default());
+    define_unwrap_methods!(unwrap_transform, unwrap_transform_or_default, unwrap_transform_or, Transform, Transform, Transform::default());
+    define_unwrap_methods!(unwrap_fn, unwrap_fn_or_default, unwrap_fn_or, Fn, fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>), panic!("No Fn value stored."));
+    define_unwrap_methods!(unwrap_bool, unwrap_bool_or_default, unwrap_bool_or, Bool, bool, false);
+    define_unwrap_methods_for_vec!(unwrap_editor_state, unwrap_editor_state_or, EditorState, EditorState);
+    define_unwrap_methods_for_vec!(unwrap_vec_uuid, unwrap_vec_uuid_or, VecUuid, Vec<uuid::Uuid>);
+    define_unwrap_methods_for_vec!(unwrap_vec_sdf_object, unwrap_vec_sdf_object_or, VecSDFObject, Vec<SDFObject>);
+
+    pub fn is_none(&self) -> bool {
+        match &self {
+            Self::None => true,
+            _ => false,
+        }
+    }
+
     pub fn get_vec4_or(&self, default_value: Vec4) -> Vec4 {
         match self {
             ClaydashValue::Vec4(value) => { return *value },
@@ -48,7 +125,7 @@ impl ClaydashValue {
 
     pub fn get_uuid_list_or_empty_vec(&self) -> Vec<uuid::Uuid> {
         match self {
-            ClaydashValue::UUIDList(value) => { return value.to_vec(); },
+            ClaydashValue::VecUuid(value) => { return value.to_vec(); },
             _ => { return vec!() }
         }
     }
@@ -115,16 +192,12 @@ fn sync_to_bevy(
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
             material.sdf_meta[0].w = TYPE_END;
 
-            match data.tree.get_path("scene.sdf_objects").unwrap() {
-                ClaydashValue::VecSDFObject(data) => {
-                    for (index, object) in data.iter().enumerate() {
-                        material.sdf_meta[index].w = object.object_type;
-                        material.sdf_colors[index] = object.color;
-                        material.sdf_inverse_transforms[index] = object.inverse_transform_matrix();
-                        material.sdf_meta[index + 1].w = TYPE_END;
-                    }
-                },
-                _ => { }
+            let value = data.tree.get_path("scene.sdf_objects");
+            for (index, object) in value.unwrap_vec_sdf_object().iter().enumerate() {
+                material.sdf_meta[index].w = object.object_type;
+                material.sdf_colors[index] = object.color;
+                material.sdf_inverse_transforms[index] = object.inverse_transform_matrix();
+                material.sdf_meta[index + 1].w = TYPE_END;
             }
         }
     }
@@ -136,24 +209,19 @@ fn sync_to_bevy(
             let handle = material_handle.single();
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
 
-            let objects = match data.tree.get_path("scene.sdf_objects").unwrap() {
-                ClaydashValue::VecSDFObject(data) => data,
-                _ => { return; }
-            };
+            let objects = data.tree.get_path("scene.sdf_objects");
 
-            match data.tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-                ClaydashValue::UUIDList(uuids) => {
-                    for (index, object) in objects.iter().enumerate() {
-                        if uuids.contains(&object.uuid) {
-                            // Mark as selected
-                            material.sdf_meta[index].x = 1;
-                        } else {
-                            // Mark as not-selected
-                            material.sdf_meta[index].x = 0;
-                        }
-                    }
-                },
-                _ => { return; }
+            let uuids = data.tree.get_path("scene.selected_uuids");
+            let uuids = uuids.unwrap_vec_uuid();
+
+            for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate() {
+                if uuids.contains(&object.uuid) {
+                    // Mark as selected
+                    material.sdf_meta[index].x = 1;
+                } else {
+                    // Mark as not-selected
+                    material.sdf_meta[index].x = 0;
+                }
             }
         }
     }

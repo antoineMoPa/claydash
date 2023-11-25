@@ -144,10 +144,7 @@ fn start_grab(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
 }
 
 fn toggle_path(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, path: String) {
-    let current_value = match tree.get_path("editor.constrain_x").unwrap() {
-        ClaydashValue::Bool(value) => value,
-        _ => false
-    };
+    let current_value = tree.get_path("editor.constrain_x").unwrap_bool_or(false);
     tree.set_path(&path, ClaydashValue::Bool(!current_value));
 }
 
@@ -186,12 +183,9 @@ fn finish(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
 
 fn duplicate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     // Find selected objects
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-        ClaydashValue::UUIDList(uuids) => uuids,
-        _ => { return; }
-    };
+    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
-    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(objects) => { objects },
         _ => { return; }
     };
@@ -210,25 +204,25 @@ fn duplicate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     // Update the tree with duplicated objects
     sdf_objects.append(&mut duplicated_objects);
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
-    tree.set_path("scene.selected_uuids", ClaydashValue::UUIDList(duplicated_uuids));
+    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(duplicated_uuids));
 
     // Move these new objects
     start_grab(tree);
 }
 
 fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    let selected_uuids = tree.get_path("scene.selected_uuids").unwrap_or_default().get_uuid_list_or_empty_vec();
-    let sdf_objects = tree.get_path("scene.sdf_objects").unwrap_or_default().get_vec_sdf_objects_or_empty_vec();
+    let selected_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+    let sdf_objects = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
 
 
     if selected_uuids.len() == sdf_objects.len() {
         // Everything is selected: now select none
-        tree.set_path("scene.selected_uuids", ClaydashValue::UUIDList(default()));
+        tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(default()));
     } else {
         // Select all
         tree.set_path(
             "scene.selected_uuids",
-            ClaydashValue::UUIDList(sdf_objects.iter().map(|object| { object.uuid }).collect())
+            ClaydashValue::VecUuid(sdf_objects.iter().map(|object| { object.uuid }).collect())
         );
         tree.set_path("editor.state", ClaydashValue::EditorState(Start));
     }
@@ -236,12 +230,9 @@ fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTra
 
 fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     // Find selected objects
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-        ClaydashValue::UUIDList(uuids) => uuids,
-        _ => { return default(); }
-    };
+    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
-    let filtered_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+    let filtered_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(objects) => {
             objects.iter().filter(|object| {
                 !selected_object_uuids.contains(&object.uuid)
@@ -254,12 +245,12 @@ fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
 }
 
 fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    let color = match tree.get_path("editor.colorpicker.color").unwrap_or(ClaydashValue::Vec4(Vec4::ONE)) {
+    let color = match tree.get_path("editor.colorpicker.color") {
         ClaydashValue::Vec4(data) => data,
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
     };
 
-    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(objects) => { objects },
         _ => { vec!() }
     };
@@ -277,22 +268,19 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 
-    tree.set_path("scene.selected_uuids", ClaydashValue::UUIDList(vec!(uuid)));
+    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(vec!(uuid)));
 
     // Move new objects
     start_grab(tree);
 }
 
 fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    let color = match tree.get_path("editor.colorpicker.color").unwrap_or(ClaydashValue::Vec4(Vec4::ONE)) {
+    let color = match tree.get_path("editor.colorpicker.color") {
         ClaydashValue::Vec4(data) => data,
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
     };
 
-    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
-        ClaydashValue::VecSDFObject(objects) => { objects },
-        _ => { vec!() }
-    };
+    let mut sdf_objects: Vec<SDFObject> = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
 
     let new_object = SDFObject {
         object_type: sdf_consts::TYPE_BOX,
@@ -307,7 +295,7 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 
-    tree.set_path("scene.selected_uuids", ClaydashValue::UUIDList(vec!(uuid)));
+    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(vec!(uuid)));
 
     // Move new objects
     start_grab(tree);
@@ -412,15 +400,12 @@ pub fn run_shortcut_commands(
 fn set_objects_initial_properties(
     tree: &mut  ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
 ) {
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
         _ => { return; }
     };
 
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-        ClaydashValue::UUIDList(uuids) => uuids,
-        _ => { return default(); }
-    };
+    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
     let mut selected_object_sum_position: Vec3 = Vec3::ZERO;
     let mut selected_object_count: i32 = 0;
@@ -455,17 +440,14 @@ fn update_selection_color(
     if !tree.was_path_updated("editor.colorpicker.color") {
         return;
     }
-    let color: Vec4 = tree.get_path("editor.colorpicker.color").unwrap_or_default().get_vec4_or(Vec4::ZERO);
+    let color: Vec4 = tree.get_path("editor.colorpicker.color").unwrap_vec4_or(Vec4::ZERO);
 
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
         _ => { return; }
     };
 
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-        ClaydashValue::UUIDList(uuids) => uuids,
-        _ => { return default(); }
-    };
+    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
@@ -489,11 +471,11 @@ fn update_transformations(
 
     let tree = &mut data_resource.as_mut().tree;
 
-    let state = tree.get_path("editor.state").unwrap_or(ClaydashValue::EditorState(Start)).into();
+    let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
 
     // Return early if not editing
     match state {
-        ClaydashValue::EditorState(Start) => { return; },
+        Start => { return; },
         _ => {}
     }
 
@@ -501,41 +483,41 @@ fn update_transformations(
     let window = windows.single();
     let cursor_position = window.cursor_position().unwrap_or(Vec2::ZERO);
     let initial_cursor_position: Vec2 = match tree.get_path("editor.initial_mouse_position") {
-        Some(ClaydashValue::Vec2(vec)) => vec,
+        ClaydashValue::Vec2(vec) => vec,
         _ => Vec2::ZERO
     };
     let delta_cursor_position = cursor_position - initial_cursor_position;
 
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
         _ => { return; }
     };
 
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-        ClaydashValue::UUIDList(uuids) => uuids,
+    let selected_object_uuids = match tree.get_path("scene.selected_uuids") {
+        ClaydashValue::VecUuid(uuids) => uuids,
         _ => { return default(); }
     };
 
-    let initial_selection_transform = match tree.get_path("editor.initial_selection_transform").unwrap_or(ClaydashValue::Transform(Transform::IDENTITY)) {
+    let initial_selection_transform = match tree.get_path("editor.initial_selection_transform") {
         ClaydashValue::Transform(t) => t,
         _ => { return default(); }
     };
 
-    let constrain_x = match tree.get_path("editor.constrain_x").unwrap() {
+    let constrain_x = match tree.get_path("editor.constrain_x") {
         ClaydashValue::Bool(value) => value,
         _ => false
     };
-    let constrain_y = match tree.get_path("editor.constrain_y").unwrap() {
+    let constrain_y = match tree.get_path("editor.constrain_y") {
         ClaydashValue::Bool(value) => value,
         _ => false
     };
-    let constrain_z = match tree.get_path("editor.constrain_z").unwrap() {
+    let constrain_z = match tree.get_path("editor.constrain_z") {
         ClaydashValue::Bool(value) => value,
         _ => false
     };
 
     match state {
-        ClaydashValue::EditorState(Grabbing) => {
+        Grabbing => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
                     match camera.viewport_to_world(camera_global_transform, cursor_position) {
@@ -549,10 +531,10 @@ fn update_transformations(
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
         },
-        ClaydashValue::EditorState(Scaling) => {
+        Scaling => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
-                    let initial_transform = match tree.get_path(&format!("editor.initial_transform.{}", object.uuid)).unwrap_or(ClaydashValue::Transform(Transform::IDENTITY)) {
+                    let initial_transform = match tree.get_path(&format!("editor.initial_transform.{}", object.uuid)) {
                         ClaydashValue::Transform(t) => t,
                         _ => Transform::IDENTITY
                     };
@@ -571,7 +553,7 @@ fn update_transformations(
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
         },
-        ClaydashValue::EditorState(Rotating) => {
+        Rotating => {
             for object in objects.iter_mut() {
                 if !selected_object_uuids.contains(&object.uuid) {
                     continue;
@@ -630,10 +612,10 @@ pub fn on_mouse_down(
     camera_transforms: Query<&mut Transform, With<Camera>>,
 ) {
     let tree = &mut data_resource.as_mut().tree;
-    let state = tree.get_path("editor.state").unwrap_or(ClaydashValue::EditorState(Start)).into();
+    let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
 
     match state {
-        ClaydashValue::EditorState(Start) => { },
+        Start => { },
         _ => {
             // Exit grab/scale on click
             tree.set_path("editor.state", ClaydashValue::EditorState(Start));
@@ -642,7 +624,7 @@ pub fn on_mouse_down(
     }
 
     let tree = &mut data_resource.as_mut().tree;
-    match tree.get_path("scene.sdf_objects").unwrap() {
+    match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(objects) => {
             let hit: &HitData = &event.hit;
             let position = match hit.position {
@@ -656,10 +638,7 @@ pub fn on_mouse_down(
 
             match maybe_hit_uuid {
                 Some(hit) => {
-                    let mut selected_uuids: Vec<uuid::Uuid> = match tree.get_path("scene.selected_uuids").unwrap_or_default() {
-                        ClaydashValue::UUIDList(list) => list,
-                        _ => vec!()
-                    };
+                    let mut selected_uuids: Vec<uuid::Uuid> = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
                     let is_selected = selected_uuids.contains(&hit);
                     let has_shift = keys.pressed(KeyCode::ShiftLeft);
 
@@ -689,7 +668,7 @@ pub fn on_mouse_down(
                         // un-select object
                         tree.set_path(
                             "scene.selected_uuids",
-                            ClaydashValue::UUIDList(selected_uuids)
+                            ClaydashValue::VecUuid(selected_uuids)
                         );
                     } else {
                         // Add object to selection
@@ -706,7 +685,7 @@ pub fn on_mouse_down(
 
                         tree.set_path(
                             "scene.selected_uuids",
-                            ClaydashValue::UUIDList(selected_uuids)
+                            ClaydashValue::VecUuid(selected_uuids)
                         );
                     }
                 },
