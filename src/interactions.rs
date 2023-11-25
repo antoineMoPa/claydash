@@ -426,7 +426,8 @@ fn set_objects_initial_properties(
         if selected_object_uuids.contains(&object.uuid) {
             let mut transform_relative_to_center = object.transform;
             transform_relative_to_center.translation -= initial_selection_transform.translation;
-            tree.set_path(&format!("editor.initial_transform.{}", object.uuid), ClaydashValue::Transform(transform_relative_to_center));
+            tree.set_path(&format!("editor.initial_transform.{}", object.uuid), ClaydashValue::Transform(object.transform));
+            tree.set_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid), ClaydashValue::Transform(transform_relative_to_center));
         }
     }
 }
@@ -524,7 +525,8 @@ fn update_transformations(
 
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
-                    let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
+                    let initial_transform = tree
+                        .get_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid))
                         .unwrap_transform_or(Transform::IDENTITY);
 
                     object.transform.translation = initial_transform.translation + selection_translation;
@@ -535,10 +537,8 @@ fn update_transformations(
         Scaling => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
-                    let initial_transform = match tree.get_path(&format!("editor.initial_transform.{}", object.uuid)) {
-                        ClaydashValue::Transform(t) => t,
-                        _ => Transform::IDENTITY
-                    };
+                    let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
+                        .unwrap_transform_or(Transform::IDENTITY);
 
                     let has_constrains = constrain_x || constrain_y || constrain_z;
                     let constraints = if has_constrains { Vec3::new(
@@ -559,10 +559,21 @@ fn update_transformations(
                 if !selected_object_uuids.contains(&object.uuid) {
                     continue;
                 }
-                match get_object_angle_relative_to_camera_ray(camera, camera_global_transform, cursor_position, object) {
+                match get_object_angle_relative_to_camera_ray(
+                    camera,
+                    camera_global_transform,
+                    cursor_position,
+                    &initial_selection_transform,
+                ) {
                     Some((axis, angle)) => {
-                        let rotation = Quat::from_axis_angle(axis.normalize(), -angle);
-                        object.transform.rotation = rotation;
+                        let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
+                            .unwrap_transform_or(Transform::IDENTITY);
+
+                        let selection_center = initial_selection_transform.translation;
+                        let rotation = Quat::from_axis_angle(axis, -angle);
+
+                        object.transform = initial_transform;
+                        object.transform.rotate_around(selection_center, rotation);
                     }
                     _ => {}
                 };
@@ -577,15 +588,15 @@ fn get_object_angle_relative_to_camera_ray(
     camera: &Camera,
     camera_global_transform: &GlobalTransform,
     cursor_position: Vec2,
-    object: &SDFObject
+    object_transform: &Transform
 ) -> Option<(Vec3, f32)> {
     let camera_right = camera_global_transform.right();
     let camera_up = camera_global_transform.up();
 
     match camera.viewport_to_world(camera_global_transform, cursor_position) {
         Some(ray) => {
-            let object_to_viewport_dist = (object.transform.translation - ray.origin).length();
-            let object_position_relative_to_camera = object.transform.translation - camera_global_transform.translation();
+            let object_to_viewport_dist = (object_transform.translation - ray.origin).length();
+            let object_position_relative_to_camera = object_transform.translation - camera_global_transform.translation();
             let object_position_relative_to_camera_up = object_position_relative_to_camera.dot(camera_up);
             let object_position_relative_to_camera_right = object_position_relative_to_camera.dot(camera_right);
 
