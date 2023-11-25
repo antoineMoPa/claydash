@@ -196,27 +196,6 @@ impl ClaydashValue {
             _ => false,
         }
     }
-
-    pub fn get_vec4_or(&self, default_value: Vec4) -> Vec4 {
-        match self {
-            ClaydashValue::Vec4(value) => { return *value },
-            _ => { return default_value }
-        }
-    }
-
-    pub fn get_uuid_list_or_empty_vec(&self) -> Vec<uuid::Uuid> {
-        match self {
-            ClaydashValue::VecUuid(value) => { return value.to_vec(); },
-            _ => { return vec!() }
-        }
-    }
-
-    pub fn get_vec_sdf_objects_or_empty_vec(&self) -> Vec<SDFObject> {
-        match self {
-            ClaydashValue::VecSDFObject(value) => { return value.to_vec(); },
-            _ => { return vec!() }
-        }
-    }
 }
 
 #[derive(Resource, Default)]
