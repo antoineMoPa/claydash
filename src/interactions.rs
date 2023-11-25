@@ -496,11 +496,6 @@ fn update_transformations(
         _ => { return default(); }
     };
 
-    let initial_selection_transform = match tree.get_path("editor.initial_selection_transform") {
-        ClaydashValue::Transform(t) => t,
-        _ => { return default(); }
-    };
-
     let constrain_x = match tree.get_path("editor.constrain_x") {
         ClaydashValue::Bool(value) => value,
         _ => false
@@ -514,13 +509,14 @@ fn update_transformations(
         _ => false
     };
 
+    let initial_selection_transform = tree.get_path("editor.initial_selection_transform")
+        .unwrap_transform_or(Transform::IDENTITY);
+
     match state {
         Grabbing => {
             let selection_translation: Vec3 = match camera.viewport_to_world(camera_global_transform, cursor_position) {
                 Some(ray) => {
-                    let initial_transform = tree.get_path("editor.initial_selection_transform")
-                        .unwrap_transform_or(Transform::IDENTITY);
-                    let selection_to_viewport_dist = (initial_transform.translation - ray.origin).length();
+                    let selection_to_viewport_dist = (initial_selection_transform.translation - ray.origin).length();
                     ray.origin + ray.direction * selection_to_viewport_dist
                 },
                 _ => { return; }
