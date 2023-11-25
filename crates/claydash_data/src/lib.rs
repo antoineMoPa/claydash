@@ -97,17 +97,98 @@ macro_rules! define_unwrap_methods_for_vec {
 
 impl ClaydashValue {
     // Add a few methods to help with unwrapping.
-    define_unwrap_methods!(unwrap_i32, unwrap_i32_or_default, unwrap_i32_or, I32, i32, 0);
-    define_unwrap_methods!(unwrap_f32, unwrap_f32_or_default, unwrap_f32_or, F32, f32, 0.0);
-    define_unwrap_methods!(unwrap_vec2, unwrap_vec2_or_default, unwrap_vec2_or, Vec2, Vec2, Vec2::default());
-    define_unwrap_methods!(unwrap_vec3, unwrap_vec3_or_default, unwrap_vec3_or, Vec3, Vec3, Vec3::default());
-    define_unwrap_methods!(unwrap_vec4, unwrap_vec4_or_default, unwrap_vec4_or, Vec4, Vec4, Vec4::default());
-    define_unwrap_methods!(unwrap_transform, unwrap_transform_or_default, unwrap_transform_or, Transform, Transform, Transform::default());
-    define_unwrap_methods!(unwrap_fn, unwrap_fn_or_default, unwrap_fn_or, Fn, fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>), panic!("No Fn value stored."));
-    define_unwrap_methods!(unwrap_bool, unwrap_bool_or_default, unwrap_bool_or, Bool, bool, false);
-    define_unwrap_methods_for_vec!(unwrap_editor_state, unwrap_editor_state_or, EditorState, EditorState);
-    define_unwrap_methods_for_vec!(unwrap_vec_uuid, unwrap_vec_uuid_or, VecUuid, Vec<uuid::Uuid>);
-    define_unwrap_methods_for_vec!(unwrap_vec_sdf_object, unwrap_vec_sdf_object_or, VecSDFObject, Vec<SDFObject>);
+    define_unwrap_methods!(
+        unwrap_i32,
+        unwrap_i32_or_default,
+        unwrap_i32_or,
+        I32,
+        i32,
+        0
+    );
+
+    define_unwrap_methods!(
+        unwrap_f32,
+        unwrap_f32_or_default,
+        unwrap_f32_or,
+        F32,
+        f32,
+        0.0
+    );
+
+    define_unwrap_methods!(
+        unwrap_vec2,
+        unwrap_vec2_or_default,
+        unwrap_vec2_or,
+        Vec2,
+        Vec2,
+        Vec2::default()
+    );
+
+    define_unwrap_methods!(
+        unwrap_vec3,
+        unwrap_vec3_or_default,
+        unwrap_vec3_or,
+        Vec3,
+        Vec3,
+        Vec3::default()
+    );
+
+    define_unwrap_methods!(
+        unwrap_vec4,
+        unwrap_vec4_or_default,
+        unwrap_vec4_or,
+        Vec4,
+        Vec4,
+        Vec4::default()
+    );
+
+    define_unwrap_methods!(
+        unwrap_transform,
+        unwrap_transform_or_default,
+        unwrap_transform_or,
+        Transform,
+        Transform,
+        Transform::default()
+    );
+
+    define_unwrap_methods!(
+        unwrap_fn,
+        unwrap_fn_or_default,
+        unwrap_fn_or,
+        Fn,
+        fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>),
+        panic!("No Fn value stored.")
+    );
+
+    define_unwrap_methods!(
+        unwrap_bool,
+        unwrap_bool_or_default,
+        unwrap_bool_or,
+        Bool,
+        bool,
+        false
+    );
+
+    define_unwrap_methods_for_vec!(
+        unwrap_editor_state,
+        unwrap_editor_state_or,
+        EditorState,
+        EditorState
+    );
+
+    define_unwrap_methods_for_vec!(
+        unwrap_vec_uuid,
+        unwrap_vec_uuid_or,
+        VecUuid,
+        Vec<uuid::Uuid>
+    );
+
+    define_unwrap_methods_for_vec!(
+        unwrap_vec_sdf_object,
+        unwrap_vec_sdf_object_or,
+        VecSDFObject,
+        Vec<SDFObject>
+    );
 
     pub fn is_none(&self) -> bool {
         match &self {
