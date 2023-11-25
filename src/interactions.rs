@@ -75,7 +75,6 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(start_rotate)))
         .write(commands);
 
-
     CommandBuilder::new()
         .title("Quit")
         .system_name("quit")
@@ -422,7 +421,6 @@ fn set_objects_initial_properties(
     initial_selection_transform.translation = selected_object_sum_position / (selected_object_count as f32);
     tree.set_path("editor.initial_selection_transform", ClaydashValue::Transform(initial_selection_transform));
 
-
     // Find position of all objects relative to that center
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
@@ -518,15 +516,22 @@ fn update_transformations(
 
     match state {
         Grabbing => {
+            let selection_translation: Vec3 = match camera.viewport_to_world(camera_global_transform, cursor_position) {
+                Some(ray) => {
+                    let initial_transform = tree.get_path("editor.initial_selection_transform")
+                        .unwrap_transform_or(Transform::IDENTITY);
+                    let selection_to_viewport_dist = (initial_transform.translation - ray.origin).length();
+                    ray.origin + ray.direction * selection_to_viewport_dist
+                },
+                _ => { return; }
+            };
+
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
-                    match camera.viewport_to_world(camera_global_transform, cursor_position) {
-                        Some(ray) => {
-                            let object_to_viewport_dist = (object.transform.translation - ray.origin).length();
-                            object.transform.translation = ray.origin + ray.direction * object_to_viewport_dist;
-                        },
-                        _ => { }
-                    };
+                    let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
+                        .unwrap_transform_or(Transform::IDENTITY);
+
+                    object.transform.translation = initial_transform.translation + selection_translation;
                 }
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
