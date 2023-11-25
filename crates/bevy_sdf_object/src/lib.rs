@@ -27,9 +27,7 @@ const MAX_SDFS_PER_ENTITY: i32 = 256;
 #[derive(Clone)]
 pub struct SDFObject {
     pub uuid: uuid::Uuid,
-    pub position: Vec3,
-    pub quaternion: Quat,
-    pub scale: Vec3,
+    pub transform: Transform,
     pub color: Vec4,
     pub object_type: i32,
 }
@@ -43,10 +41,7 @@ impl SDFObject {
     }
 
     pub fn inverse_transform_matrix(&self) -> Mat4 {
-        let mut t = Transform::from_translation(self.position);
-        t.scale = self.scale;
-        t.rotate(self.quaternion);
-        return t.compute_matrix().inverse();
+        return self.transform.compute_matrix().inverse();
     }
 }
 
@@ -54,9 +49,7 @@ impl Default for SDFObject {
     fn default() -> Self {
         Self {
             uuid: uuid::Uuid::new_v4(),
-            position: Vec3::default(),
-            quaternion: Quat::IDENTITY,
-            scale: Vec3::ONE,
+            transform: Transform::IDENTITY,
             color: Vec4::default(),
             object_type: TYPE_END,
         }
@@ -116,7 +109,7 @@ fn object_distance(p: Vec3, object: &SDFObject) -> f32 {
     };
 
     // Correct the returned distance to account for the scale
-    return d_current_object * object.scale.length() / Vec3::ONE.length();
+    return d_current_object * object.transform.scale.length() / Vec3::ONE.length();
 }
 
 const RUST_RAYMARCH_ITERATIONS: i32 = 64;

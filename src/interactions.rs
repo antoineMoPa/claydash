@@ -254,7 +254,6 @@ fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
 }
 
 fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    let position = Vec3::ZERO;
     let color = match tree.get_path("editor.colorpicker.color").unwrap_or(ClaydashValue::Vec4(Vec4::ONE)) {
         ClaydashValue::Vec4(data) => data,
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
@@ -267,7 +266,6 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)
 
     let new_object = SDFObject {
         object_type: sdf_consts::TYPE_SPHERE,
-        position,
         color,
         ..default()
     };
@@ -286,7 +284,6 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)
 }
 
 fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    let position = Vec3::ZERO;
     let color = match tree.get_path("editor.colorpicker.color").unwrap_or(ClaydashValue::Vec4(Vec4::ONE)) {
         ClaydashValue::Vec4(data) => data,
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
@@ -299,7 +296,6 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
 
     let new_object = SDFObject {
         object_type: sdf_consts::TYPE_BOX,
-        position,
         color,
         ..default()
     };
@@ -428,8 +424,7 @@ fn set_objects_initial_properties(
 
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
-            tree.set_path(&format!("editor.initial_position.{}", object.uuid), ClaydashValue::Vec3(object.position));
-            tree.set_path(&format!("editor.initial_scale.{}", object.uuid), ClaydashValue::Vec3(object.scale));
+            tree.set_path(&format!("editor.initial_transform.{}", object.uuid), ClaydashValue::Transform(object.transform));
         }
     }
 }
@@ -521,8 +516,8 @@ fn update_transformations(
                 if selected_object_uuids.contains(&object.uuid) {
                     match camera.viewport_to_world(camera_global_transform, cursor_position) {
                         Some(ray) => {
-                            let object_to_viewport_dist = (object.position - ray.origin).length();
-                            object.position = ray.origin + ray.direction * object_to_viewport_dist;
+                            let object_to_viewport_dist = (object.transform.translation - ray.origin).length();
+                            object.transform.translation = ray.origin + ray.direction * object_to_viewport_dist;
                         },
                         _ => { }
                     };
@@ -533,9 +528,9 @@ fn update_transformations(
         ClaydashValue::EditorState(Scaling) => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
-                    let initial_scale = match tree.get_path(&format!("editor.initial_scale.{}", object.uuid)).unwrap_or(ClaydashValue::Vec3(Vec3::ONE)) {
-                        ClaydashValue::Vec3(scale) => scale,
-                        _ => Vec3::ONE
+                    let initial_transform = match tree.get_path(&format!("editor.initial_transform.{}", object.uuid)).unwrap_or(ClaydashValue::Transform(Transform::IDENTITY)) {
+                        ClaydashValue::Transform(t) => t,
+                        _ => Transform::IDENTITY
                     };
 
                     let has_constrains = constrain_x || constrain_y || constrain_z;
@@ -545,7 +540,7 @@ fn update_transformations(
                         if constrain_z { 1.0 } else { 0.0 },
                     )} else { Vec3::ONE };
 
-                    object.scale = initial_scale +
+                    object.transform.scale = initial_transform.scale +
                         (delta_cursor_position.x + delta_cursor_position.y) *
                         SCALE_MOUSE_SENSIBILITY * Vec3::ONE * constraints;
                 }
@@ -560,7 +555,7 @@ fn update_transformations(
                 match get_object_angle_relative_to_camera_ray(camera, camera_global_transform, cursor_position, object) {
                     Some((axis, angle)) => {
                         let rotation = Quat::from_axis_angle(axis.normalize(), -angle);
-                        object.quaternion = rotation;
+                        object.transform.rotation = rotation;
                     }
                     _ => {}
                 };
@@ -582,8 +577,8 @@ fn get_object_angle_relative_to_camera_ray(
 
     match camera.viewport_to_world(camera_global_transform, cursor_position) {
         Some(ray) => {
-            let object_to_viewport_dist = (object.position - ray.origin).length();
-            let object_position_relative_to_camera = object.position - camera_global_transform.translation();
+            let object_to_viewport_dist = (object.transform.translation - ray.origin).length();
+            let object_position_relative_to_camera = object.transform.translation - camera_global_transform.translation();
             let object_position_relative_to_camera_up = object_position_relative_to_camera.dot(camera_up);
             let object_position_relative_to_camera_right = object_position_relative_to_camera.dot(camera_right);
 

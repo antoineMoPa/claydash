@@ -24,6 +24,7 @@ pub enum ClaydashValue {
     Vec2(Vec2),
     Vec3(Vec3),
     Vec4(Vec4),
+    Transform(Transform),
     VecSDFObject(Vec<SDFObject>),
     Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
     EditorState(EditorState),
@@ -81,14 +82,13 @@ fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
     let mut sdf_objects: Vec<SDFObject> = Vec::new();
     sdf_objects.push(SDFObject {
         object_type: TYPE_SPHERE,
-        position: Vec3::ZERO,
         color: Vec4::new(0.3, 0.0, 0.6, 1.0),
         ..default()
     });
 
     sdf_objects.push(SDFObject {
         object_type: TYPE_BOX,
-        position: Vec3::new(-0.2, 0.3, 0.0),
+        transform: Transform::from_translation(Vec3::new(-0.2, 0.3, 0.0)),
         color: Vec4::new(0.8, 0.0, 0.6, 1.0),
         ..default()
     });
