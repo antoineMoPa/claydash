@@ -422,9 +422,28 @@ fn set_objects_initial_properties(
         _ => { return default(); }
     };
 
+    let mut selected_object_sum_position: Vec3 = Vec3::ZERO;
+    let mut selected_object_count: i32 = 0;
+
+    // Find center of all selected objects
+    // It will be the reference point when transforming objects.
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
-            tree.set_path(&format!("editor.initial_transform.{}", object.uuid), ClaydashValue::Transform(object.transform));
+            selected_object_sum_position += object.transform.translation;
+            selected_object_count += 1;
+        }
+    }
+    let mut initial_selection_transform = Transform::IDENTITY;
+    initial_selection_transform.translation = selected_object_sum_position / (selected_object_count as f32);
+    tree.set_path("editor.initial_selection_transform", ClaydashValue::Transform(initial_selection_transform));
+
+
+    // Find position of all objects relative to that center
+    for object in objects.iter_mut() {
+        if selected_object_uuids.contains(&object.uuid) {
+            let mut transform_relative_to_center = object.transform;
+            transform_relative_to_center.translation -= initial_selection_transform.translation;
+            tree.set_path(&format!("editor.initial_transform.{}", object.uuid), ClaydashValue::Transform(transform_relative_to_center));
         }
     }
 }
@@ -494,6 +513,11 @@ fn update_transformations(
 
     let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
         ClaydashValue::UUIDList(uuids) => uuids,
+        _ => { return default(); }
+    };
+
+    let initial_selection_transform = match tree.get_path("editor.initial_selection_transform").unwrap_or(ClaydashValue::Transform(Transform::IDENTITY)) {
+        ClaydashValue::Transform(t) => t,
         _ => { return default(); }
     };
 
