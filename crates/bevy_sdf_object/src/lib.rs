@@ -136,7 +136,7 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
             }
         }
 
-        position += direction * d;
+        position += direction * d * 0.3;
     }
 
     return None

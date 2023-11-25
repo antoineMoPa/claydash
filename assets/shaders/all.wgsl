@@ -145,7 +145,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
 
-        p += camera_ray * d;
+        p += camera_ray * d * 0.3;
 
         if (abs(d) > FAR_DIST) {
             // We are probably past the object.

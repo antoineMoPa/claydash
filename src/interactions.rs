@@ -42,7 +42,6 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_x)))
         .write(commands);
 
-
     CommandBuilder::new()
         .title("Constrain editing to Y axis")
         .system_name("constrain_y")
