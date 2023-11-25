@@ -583,9 +583,13 @@ fn get_object_angle_relative_to_camera_ray(
     match camera.viewport_to_world(camera_global_transform, cursor_position) {
         Some(ray) => {
             let object_to_viewport_dist = (object.position - ray.origin).length();
+            let object_position_relative_to_camera = object.position - camera_global_transform.translation();
+            let object_position_relative_to_camera_up = object_position_relative_to_camera.dot(camera_up);
+            let object_position_relative_to_camera_right = object_position_relative_to_camera.dot(camera_right);
+
             let cursor_position_near_object = ray.origin + ray.direction * object_to_viewport_dist;
-            let cursor_relative_to_up_vector = cursor_position_near_object.dot(camera_up);
-            let cursor_relative_to_right_vector = cursor_position_near_object.dot(camera_right);
+            let cursor_relative_to_up_vector = cursor_position_near_object.dot(camera_up) - object_position_relative_to_camera_up;
+            let cursor_relative_to_right_vector = cursor_position_near_object.dot(camera_right) - object_position_relative_to_camera_right;
 
             return Some((camera_global_transform.forward(), cursor_relative_to_up_vector.atan2(cursor_relative_to_right_vector)));
         },
