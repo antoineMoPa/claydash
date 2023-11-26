@@ -292,9 +292,36 @@ fn start_rotate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)
     tree.set_path("editor.state", ClaydashValue::EditorState(Rotating));
 }
 
+/// Cancel edit and bring back transforms to original value.
 fn escape(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
+
+    match state {
+        Start  => {
+            // Not currently editing.
+            return;
+        },
+        _ => {}
+    }
+
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
-    println!("TODO: cancel edit and go back to initial position.");
+
+    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+
+
+    let mut sdf_objects: Vec<SDFObject> = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
+
+    for object in sdf_objects.iter_mut() {
+        if !selected_object_uuids.contains(&object.uuid) {
+            continue;
+        }
+        let initial_transform = tree
+            .get_path(&format!("editor.initial_transform.{}", object.uuid))
+            .unwrap_transform_or(Transform::IDENTITY);
+        object.transform = initial_transform;
+    }
+
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
 }
 
 fn finish(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {

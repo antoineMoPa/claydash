@@ -93,8 +93,8 @@ fn update_transformations(
         _ => false
     };
 
-    let has_constrains = constrain_x || constrain_y || constrain_z;
-    let constraints = if has_constrains { Vec3::new(
+    let has_constraints = constrain_x || constrain_y || constrain_z;
+    let constraints = if has_constraints { Vec3::new(
         if constrain_x { 1.0 } else { 0.0 },
         if constrain_y { 1.0 } else { 0.0 },
         if constrain_z { 1.0 } else { 0.0 },
@@ -167,6 +167,8 @@ fn update_transformations(
                             .unwrap_transform_or(Transform::IDENTITY);
 
                         let selection_center = initial_selection_transform.translation;
+
+                        let axis = if has_constraints { constraints  } else { axis };
                         let rotation = Quat::from_axis_angle(axis, -angle);
 
                         object.transform = initial_transform;
