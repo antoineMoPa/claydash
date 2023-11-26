@@ -26,10 +26,11 @@ use bevy_mod_picking::prelude::*;
 #[allow(unused_imports)]
 use wasm_bindgen::prelude::*;
 
-mod interactions;
 use crate::interactions::ClaydashInteractionPlugin;
 
 use claydash_data::ClaydashDataPlugin;
+
+mod interactions;
 
 fn main() {
     App::new()
