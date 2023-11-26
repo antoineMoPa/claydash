@@ -93,6 +93,13 @@ fn update_transformations(
         _ => false
     };
 
+    let has_constrains = constrain_x || constrain_y || constrain_z;
+    let constraints = if has_constrains { Vec3::new(
+        if constrain_x { 1.0 } else { 0.0 },
+        if constrain_y { 1.0 } else { 0.0 },
+        if constrain_z { 1.0 } else { 0.0 },
+    )} else { Vec3::ONE };
+
     let initial_selection_transform = tree.get_path("editor.initial_selection_transform")
         .unwrap_transform_or(Transform::IDENTITY);
 
@@ -112,7 +119,7 @@ fn update_transformations(
                         .get_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid))
                         .unwrap_transform_or(Transform::IDENTITY);
 
-                    object.transform.translation = initial_transform.translation + selection_translation;
+                    object.transform.translation = initial_transform.translation + selection_translation * constraints;
                 }
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
@@ -136,13 +143,6 @@ fn update_transformations(
                     let initial_transform_relative_to_selection = tree
                         .get_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid))
                         .unwrap_transform_or(Transform::IDENTITY);
-
-                    let has_constrains = constrain_x || constrain_y || constrain_z;
-                    let constraints = if has_constrains { Vec3::new(
-                        if constrain_x { 1.0 } else { 0.0 },
-                        if constrain_y { 1.0 } else { 0.0 },
-                        if constrain_z { 1.0 } else { 0.0 },
-                    )} else { Vec3::ONE };
 
                     object.transform = initial_transform;
                     object.transform.scale += scale * constraints;
