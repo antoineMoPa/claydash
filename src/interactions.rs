@@ -420,6 +420,8 @@ fn set_objects_initial_properties(
     initial_selection_transform.translation = selected_object_sum_position / (selected_object_count as f32);
     tree.set_path("editor.initial_selection_transform", ClaydashValue::Transform(initial_selection_transform));
 
+    tree.set_path("editor.initial_radius", ClaydashValue::F32(2.0));
+
     // Find position of all objects relative to that center
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
@@ -480,11 +482,6 @@ fn update_transformations(
     // Find cursor info
     let window = windows.single();
     let cursor_position = window.cursor_position().unwrap_or(Vec2::ZERO);
-    let initial_cursor_position: Vec2 = match tree.get_path("editor.initial_mouse_position") {
-        ClaydashValue::Vec2(vec) => vec,
-        _ => Vec2::ZERO
-    };
-    let delta_cursor_position = cursor_position - initial_cursor_position;
 
     let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
@@ -512,16 +509,16 @@ fn update_transformations(
     let initial_selection_transform = tree.get_path("editor.initial_selection_transform")
         .unwrap_transform_or(Transform::IDENTITY);
 
+    let selection_translation: Vec3 = match camera.viewport_to_world(camera_global_transform, cursor_position) {
+         Some(ray) => {
+             let selection_to_viewport_dist = (initial_selection_transform.translation - ray.origin).length();
+             ray.origin + ray.direction * selection_to_viewport_dist
+         },
+         _ => { return; }
+     };
+
     match state {
         Grabbing => {
-            let selection_translation: Vec3 = match camera.viewport_to_world(camera_global_transform, cursor_position) {
-                Some(ray) => {
-                    let selection_to_viewport_dist = (initial_selection_transform.translation - ray.origin).length();
-                    ray.origin + ray.direction * selection_to_viewport_dist
-                },
-                _ => { return; }
-            };
-
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
                     let initial_transform = tree
@@ -536,7 +533,21 @@ fn update_transformations(
         Scaling => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
+                    let cursor_position_near_object = get_cursor_position_at_selection_dist(
+                        camera,
+                        camera_global_transform,
+                        cursor_position,
+                        selection_translation
+                    ).unwrap_or(Vec3::ZERO);
+
+                    let initial_radius = tree.get_path("editor.initial_radius").unwrap_f32();
+                    let current_radius = (cursor_position_near_object - initial_selection_transform.translation).length();
+                    let scale = current_radius / initial_radius;
+
                     let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
+                        .unwrap_transform_or(Transform::IDENTITY);
+                    let initial_transform_relative_to_selection = tree
+                        .get_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid))
                         .unwrap_transform_or(Transform::IDENTITY);
 
                     let has_constrains = constrain_x || constrain_y || constrain_z;
@@ -546,9 +557,9 @@ fn update_transformations(
                         if constrain_z { 1.0 } else { 0.0 },
                     )} else { Vec3::ONE };
 
-                    object.transform.scale = initial_transform.scale +
-                        (delta_cursor_position.x + delta_cursor_position.y) *
-                        SCALE_MOUSE_SENSIBILITY * Vec3::ONE * constraints;
+                    object.transform = initial_transform;
+                    object.transform.scale += scale * constraints;
+                    object.transform.translation += scale * constraints * initial_transform_relative_to_selection.translation;
                 }
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
@@ -583,6 +594,23 @@ fn update_transformations(
     };
 }
 
+fn get_cursor_position_at_selection_dist(
+    camera: &Camera,
+    camera_global_transform: &GlobalTransform,
+    cursor_position: Vec2,
+    selection_translation: Vec3
+) -> Option<Vec3> {
+    match camera.viewport_to_world(camera_global_transform, cursor_position) {
+        Some(ray) => {
+            let object_to_viewport_dist = (selection_translation - ray.origin).length();
+            return Some(ray.origin + ray.direction * object_to_viewport_dist);
+        },
+        _ => {
+            return None;
+        }
+    };
+}
+
 fn get_object_angle_relative_to_camera_ray(
     camera: &Camera,
     camera_global_transform: &GlobalTransform,
@@ -592,14 +620,20 @@ fn get_object_angle_relative_to_camera_ray(
     let camera_right = camera_global_transform.right();
     let camera_up = camera_global_transform.up();
 
-    match camera.viewport_to_world(camera_global_transform, cursor_position) {
-        Some(ray) => {
-            let object_to_viewport_dist = (object_transform.translation - ray.origin).length();
+    let cursor_position_near_object = get_cursor_position_at_selection_dist(
+        camera,
+        camera_global_transform,
+        cursor_position,
+        object_transform.translation
+    );
+
+    match cursor_position_near_object {
+        Some(cursor_position_near_object) => {
             let object_position_relative_to_camera = object_transform.translation - camera_global_transform.translation();
             let object_position_relative_to_camera_up = object_position_relative_to_camera.dot(camera_up);
             let object_position_relative_to_camera_right = object_position_relative_to_camera.dot(camera_right);
 
-            let cursor_position_near_object = ray.origin + ray.direction * object_to_viewport_dist;
+
             let cursor_relative_to_up_vector = cursor_position_near_object.dot(camera_up) - object_position_relative_to_camera_up;
             let cursor_relative_to_right_vector = cursor_position_near_object.dot(camera_right) - object_position_relative_to_camera_right;
 
@@ -610,9 +644,6 @@ fn get_object_angle_relative_to_camera_ray(
         }
     };
 }
-
-// How much objects move in space when mouse moves by 1px.
-const SCALE_MOUSE_SENSIBILITY: f32 = 1.0 / 300.0;
 
 /// Handle selection
 /// Also, handle reseting state on click after transforming objects.
