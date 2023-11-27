@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::egui;
 use egui::containers::Frame;
 use egui::style::{
     Widgets,
@@ -16,7 +16,6 @@ use observable_key_value_tree::{
     ObservableKVTree,
     SimpleUpdateTracker
 };
-pub struct BevyCommandCentralEguiPlugin;
 
 #[derive(Resource)]
 pub struct CommandCentralUiState {
@@ -31,20 +30,12 @@ impl Default for CommandCentralUiState {
     }
 }
 
-impl Plugin for BevyCommandCentralEguiPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<CommandCentralUiState>()
-            .add_systems(Update, command_ui);
-    }
-}
-
-fn command_ui(
-    mut contexts: EguiContexts,
+pub fn command_ui(
+    ctx: &egui::Context,
     claydash_ui_state: ResMut<CommandCentralUiState>,
     command_central_state: ResMut<CommandCentralState>,
     mut data_resource: ResMut<ClaydashData>,
 ) {
-    let ctx = contexts.ctx_mut();
     let tree = &mut data_resource.as_mut().tree;
 
     egui::SidePanel::right("right_panel")

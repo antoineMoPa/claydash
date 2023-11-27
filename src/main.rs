@@ -11,7 +11,6 @@ use smooth_bevy_cameras::{
 };
 
 use bevy_command_central_plugin::BevyCommandCentralPlugin;
-use bevy_command_central_egui::BevyCommandCentralEguiPlugin;
 
 use bevy::{
     input::{keyboard::KeyCode, Input},
@@ -43,7 +42,6 @@ fn main() {
             ClaydashDataPlugin,
             DefaultPlugins,
             BevyCommandCentralPlugin,
-            BevyCommandCentralEguiPlugin,
             bevy_framepace::FramepacePlugin,
             DefaultPickingPlugins,
             FrameTimeDiagnosticsPlugin,

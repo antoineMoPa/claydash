@@ -1,19 +1,20 @@
 use bevy::prelude::*;
+use bevy_command_central_plugin::CommandCentralState;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use egui::containers::Frame;
 use egui::Color32;
 use epaint::{Stroke, Pos2};
 use claydash_data::{ClaydashValue, ClaydashData};
 use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
+use bevy_command_central_egui::{CommandCentralUiState, command_ui};
 
 pub struct ClaydashUIPlugin;
 
 
 impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            EguiPlugin,
-        ))
+        app.add_plugins(EguiPlugin)
+            .init_resource::<CommandCentralUiState>()
             .add_systems(Update, claydash_ui)
             .add_systems(Startup, color_picker_ui);
     }
@@ -24,6 +25,8 @@ fn claydash_ui(
     asset_server: Res<AssetServer>,
     assets: Res<Assets<Image>>,
     mut data_resource: ResMut<ClaydashData>,
+    claydash_ui_state: ResMut<CommandCentralUiState>,
+    command_central_state: ResMut<CommandCentralState>,
 ) {
     let tree = &mut data_resource.as_mut().tree;
     let ctx = contexts.ctx_mut();
@@ -73,6 +76,8 @@ fn claydash_ui(
                 _ => {}
             }
         });
+
+    command_ui(ctx, claydash_ui_state, command_central_state, data_resource);
 }
 
 const IMAGE_WIDTH: f32 = 66.0;
