@@ -27,31 +27,43 @@ impl Plugin for ClaydashUIPlugin {
             .add_plugins((
                 EguiPlugin,
             ))
-            .add_systems(Update, top_menu_ui)
             .add_systems(Update, left_panel_ui)
             .add_systems(Startup, color_picker_ui);
     }
 }
 
-fn top_menu_ui(
-    mut contexts: EguiContexts,
+const IMAGE_WIDTH: f32 = 131.0;
+const IMAGE_HEIGHT: f32 = 131.0;
+const CIRCLE_MARGIN_LEFT: f32 = 10.0;
+const CIRCLE_MARGIN_TOP: f32 = 10.0;
+const CIRCLE_CENTER_X: f32 = IMAGE_WIDTH / 2.0 + CIRCLE_MARGIN_LEFT;
+const CIRCLE_CENTER_Y: f32 = IMAGE_HEIGHT / 2.0 + CIRCLE_MARGIN_TOP;
+const CIRCLE_BORDER_APPROX: f32 = 8.0;
+const CIRCLE_USEFUL_RADIUS: f32 = 65.0 - CIRCLE_BORDER_APPROX;
+
+fn color_picker_ui(
+    mut commands: Commands,
     mut data_resource: ResMut<ClaydashData>,
+    asset_server: Res<AssetServer>,
 ) {
-    let ctx = contexts.ctx_mut();
+    // Set initial color
     let tree = &mut data_resource.as_mut().tree;
-
-    use egui::menu;
-
-    egui::TopBottomPanel::top("top_panel")
-        .show(ctx, |ui| {
-            menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Save").clicked() {
-                        // …
-                    }
-                });
-            });
-        });
+    tree.set_path("editor.colorpicker.color", ClaydashValue::Vec4(Vec4::new(0.8, 0.0, 0.3, 1.0)));
+    commands.spawn(ImageBundle {
+        style: Style {
+            width: Val::Px(IMAGE_WIDTH),
+            height: Val::Px(IMAGE_HEIGHT),
+            margin: UiRect {
+                left: Val::Px(CIRCLE_MARGIN_LEFT),
+                top: Val::Px(CIRCLE_MARGIN_TOP),
+                right: Val::Px(0.0),
+                bottom: Val::Px(0.0)
+            },
+            ..default()
+        },
+        image: asset_server.load("colorpicker.png").into(),
+        ..default()
+    });
 }
 
 fn left_panel_ui(
@@ -95,40 +107,6 @@ fn left_panel_ui(
                 _ => {}
             }
         });
-}
-
-const IMAGE_WIDTH: f32 = 66.0;
-const IMAGE_HEIGHT: f32 = 66.0;
-const CIRCLE_MARGIN_LEFT: f32 = 10.0;
-const CIRCLE_MARGIN_TOP: f32 = 35.0;
-const CIRCLE_CENTER_X: f32 = IMAGE_WIDTH / 2.0 + CIRCLE_MARGIN_LEFT;
-const CIRCLE_CENTER_Y: f32 = IMAGE_HEIGHT / 2.0 + CIRCLE_MARGIN_TOP;
-const CIRCLE_BORDER_APPROX: f32 = 4.0;
-const CIRCLE_USEFUL_RADIUS: f32 = 32.0 - CIRCLE_BORDER_APPROX;
-
-fn color_picker_ui(
-    mut commands: Commands,
-    mut data_resource: ResMut<ClaydashData>,
-    asset_server: Res<AssetServer>,
-) {
-    // Set initial color
-    let tree = &mut data_resource.as_mut().tree;
-    tree.set_path("editor.colorpicker.color", ClaydashValue::Vec4(Vec4::new(0.8, 0.0, 0.3, 1.0)));
-    commands.spawn(ImageBundle {
-        style: Style {
-            width: Val::Px(IMAGE_WIDTH),
-            height: Val::Px(IMAGE_HEIGHT),
-            margin: UiRect {
-                left: Val::Px(CIRCLE_MARGIN_LEFT),
-                top: Val::Px(CIRCLE_MARGIN_TOP),
-                right: Val::Px(0.0),
-                bottom: Val::Px(0.0)
-            },
-            ..default()
-        },
-        image: asset_server.load("colorpicker.png").into(),
-        ..default()
-    });
 }
 
 #[inline(always)]
