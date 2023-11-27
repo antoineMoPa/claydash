@@ -18,7 +18,6 @@ bevy_sdf_object = { path = "crates/bevy_sdf_object" }
 command_central = { path = "crates/command_central"}
 bevy_command_central_plugin = { path = "crates/bevy_command_central_plugin"}
 bevy_command_central_egui = { path = "crates/bevy_command_central_egui"}
-claydash_ui = { path = "crates/claydash_ui"}
 claydash_data = { path = "crates/claydash_data"}
 observable_key_value_tree = { path = "crates/observable_key_value_tree" }
 
@@ -38,7 +37,6 @@ claydash_data = { workspace = true }
 command_central = { workspace = true }
 bevy_command_central_plugin = { workspace = true }
 bevy_command_central_egui = { workspace = true }
-claydash_ui = { workspace = true }
 bevy_reflect = { workspace = true }
 uuid = { workspace = true }
 observable_key_value_tree = { workspace = true }
@@ -51,6 +49,7 @@ bevy_pbr = "0.12"
 bevy_framepace = "0.14.1"
 bevy_mod_picking = "0.17"
 smooth-bevy-cameras = "0.10.0"
+epaint = "0.23.0"
 
 [dependencies.web-sys]
 version = "0.3.60"

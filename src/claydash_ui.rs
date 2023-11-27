@@ -8,37 +8,25 @@ use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
 
 pub struct ClaydashUIPlugin;
 
-#[derive(Resource)]
-pub struct ClaydashUIState {
-    pub color: Vec4,
-}
-
-impl Default for ClaydashUIState {
-    fn default() -> Self {
-        Self {
-            color: Vec4::new(0.2, 0.1, 1.0, 1.0),
-        }
-    }
-}
 
 impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ClaydashUIState>()
-            .add_plugins((
-                EguiPlugin,
-            ))
-            .add_systems(Update, top_menu_ui)
-            .add_systems(Update, left_panel_ui)
+        app.add_plugins((
+            EguiPlugin,
+        ))
+            .add_systems(Update, claydash_ui)
             .add_systems(Startup, color_picker_ui);
     }
 }
 
-fn top_menu_ui(
+fn claydash_ui(
     mut contexts: EguiContexts,
+    asset_server: Res<AssetServer>,
+    assets: Res<Assets<Image>>,
     mut data_resource: ResMut<ClaydashData>,
 ) {
-    let ctx = contexts.ctx_mut();
     let tree = &mut data_resource.as_mut().tree;
+    let ctx = contexts.ctx_mut();
 
     use egui::menu;
 
@@ -52,16 +40,6 @@ fn top_menu_ui(
                 });
             });
         });
-}
-
-fn left_panel_ui(
-    mut contexts: EguiContexts,
-    asset_server: Res<AssetServer>,
-    assets: Res<Assets<Image>>,
-    mut data_resource: ResMut<ClaydashData>,
-) {
-    let tree = &mut data_resource.as_mut().tree;
-    let ctx = contexts.ctx_mut();
 
     egui::SidePanel::left("left_panel")
         .frame(Frame {

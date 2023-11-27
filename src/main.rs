@@ -1,7 +1,6 @@
 // This is only for native builds
 #[allow(unused_imports)]
 use std::fs::read_to_string;
-use claydash_ui::ClaydashUIPlugin;
 use smooth_bevy_cameras::{
     LookTransformPlugin,
     controllers::orbit::{
@@ -31,6 +30,7 @@ use crate::interactions::ClaydashInteractionPlugin;
 use claydash_data::ClaydashDataPlugin;
 
 mod interactions;
+mod claydash_ui;
 
 fn main() {
     App::new()
@@ -51,7 +51,7 @@ fn main() {
             LookTransformPlugin,
             OrbitCameraPlugin::default(),
             BevySDFObjectPlugin,
-            ClaydashUIPlugin,
+            claydash_ui::ClaydashUIPlugin,
             ClaydashInteractionPlugin,
         ))
         .add_systems(Startup, remove_picking_logs)
