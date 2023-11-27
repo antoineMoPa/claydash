@@ -142,7 +142,7 @@ fn set_objects_initial_properties(
     initial_selection_transform.translation = selected_object_sum_position / (selected_object_count as f32);
     tree.set_path("editor.initial_selection_transform", ClaydashValue::Transform(initial_selection_transform));
 
-    tree.set_path("editor.initial_radius", ClaydashValue::F32(2.0));
+    tree.set_path("editor.initial_radius", ClaydashValue::F32(0.3));
 
     // Find position of all objects relative to that center
     for object in objects.iter_mut() {

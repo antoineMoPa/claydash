@@ -136,7 +136,7 @@ fn update_transformations(
 
                     let initial_radius = tree.get_path("editor.initial_radius").unwrap_f32();
                     let current_radius = (cursor_position_near_object - initial_selection_transform.translation).length();
-                    let scale = current_radius / initial_radius;
+                    let scale = current_radius / initial_radius - 1.0;
 
                     let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
                         .unwrap_transform_or(Transform::IDENTITY);
