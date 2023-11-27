@@ -50,6 +50,7 @@ bevy_framepace = "0.14.1"
 bevy_mod_picking = "0.17"
 smooth-bevy-cameras = "0.10.0"
 epaint = "0.23.0"
+rfd = "0.12.1"
 
 [dependencies.web-sys]
 version = "0.3.60"

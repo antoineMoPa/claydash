@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, winit::WinitWindows, ecs::system::CommandQueue};
 use bevy_command_central_plugin::CommandCentralState;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use egui::containers::Frame;
@@ -9,7 +9,6 @@ use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
 use bevy_command_central_egui::{CommandCentralUiState, command_ui};
 
 pub struct ClaydashUIPlugin;
-
 
 impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {
@@ -27,6 +26,7 @@ fn claydash_ui(
     mut data_resource: ResMut<ClaydashData>,
     claydash_ui_state: ResMut<CommandCentralUiState>,
     command_central_state: ResMut<CommandCentralState>,
+    mut _windows: NonSend<WinitWindows>
 ) {
     let tree = &mut data_resource.as_mut().tree;
     let ctx = contexts.ctx_mut();
@@ -38,7 +38,26 @@ fn claydash_ui(
             menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Save").clicked() {
-                        // …
+                        let task = rfd::AsyncFileDialog::new().pick_file();
+
+                        execute(async {
+                            let file = task.await;
+
+                            if let Some(file) = file {
+                                // If you are on native platform you can just get the path
+                                #[cfg(not(target_arch = "wasm32"))]
+                                println!("{:?}", file.path());
+
+                                // If you care about wasm support you just read() the file
+                                file.read().await;
+
+
+                                let mut command_queue = CommandQueue::default();
+
+
+                                tree.set_path("file", ClaydashValue::I32(3));
+                            }
+                        });
                     }
                 });
             });
@@ -78,6 +97,18 @@ fn claydash_ui(
         });
 
     command_ui(ctx, claydash_ui_state, command_central_state, data_resource);
+}
+
+use std::future::Future;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn execute<F: Future<Output = ()> + Send + 'static>(f: F) {
+    // this is stupid... use any executor of your choice instead
+    std::thread::spawn(move || futures::executor::block_on(f));
+}
+#[cfg(target_arch = "wasm32")]
+fn execute<F: Future<Output = ()> + 'static>(f: F) {
+    wasm_bindgen_futures::spawn_local(f);
 }
 
 const IMAGE_WIDTH: f32 = 66.0;
