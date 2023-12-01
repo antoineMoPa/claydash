@@ -54,7 +54,7 @@ fn handle_tasks(
 
     match ui_messages.rx.try_recv() {
         Ok(UiMessage::SaveFileHandle(file)) => {
-            match serde_json::to_vec(&tree.get_path_meta("scene")) {
+            match serde_json::to_vec(&tree.get_tree("scene")) {
                 Ok(serialized_tree) => {
                     let thread_pool = AsyncComputeTaskPool::get();
                     let _task = thread_pool.spawn(async move {
@@ -80,8 +80,8 @@ fn handle_tasks(
             let scene: Result<ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, serde_json::Error> = serde_json::from_slice(&data);
             match scene {
                 Ok(scene) => {
-                    tree.set_path_meta("scene", scene);
-                    println!("LOADED SCENE");
+                    tree.set_tree("scene", scene);
+                    println!("Updated tree! {}", tree.path_version("scene"));
                 },
                 _ => {
                     panic!("could not load data.");

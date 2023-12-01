@@ -1589,6 +1589,7 @@ dependencies = [
  "futures",
  "futures-lite 2.0.1",
  "js-sys",
+ "lazy_static",
  "observable_key_value_tree",
  "rfd",
  "sdf_consts",
@@ -1607,6 +1608,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_sdf_object",
+ "lazy_static",
  "observable_key_value_tree",
  "sdf_consts",
  "serde",

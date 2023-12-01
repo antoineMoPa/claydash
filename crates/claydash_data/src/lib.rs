@@ -9,7 +9,10 @@ use observable_key_value_tree::{
 
 use bevy_sdf_object::*;
 
-#[derive(Clone)]
+use std::sync::{Arc, Mutex};
+use lazy_static::lazy_static;
+
+#[derive(Clone, Serialize, Deserialize)]
 pub enum EditorState {
     Start,
     Grabbing,
@@ -30,7 +33,6 @@ pub enum ClaydashValue {
     VecSDFObject(Vec<SDFObject>),
     #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
-    #[serde(skip)]
     EditorState(EditorState),
     Bool(bool),
     None,
@@ -216,6 +218,10 @@ impl Plugin for ClaydashDataPlugin {
     }
 }
 
+lazy_static! {
+    static ref LAST_SYNCED_SDF_OBJECTS_VERSION: Arc<Mutex<i32>> = Arc::new(Mutex::new(-1));
+}
+
 fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
     let data = data_resource.as_mut();
 
@@ -247,7 +253,19 @@ fn sync_to_bevy(
 ) {
     let data = data_resource.as_mut();
 
-    if data.tree.was_path_updated("scene.sdf_objects") {
+    let version = data.tree.path_version("scene.sdf_objects");
+
+    let last_updated_version = LAST_SYNCED_SDF_OBJECTS_VERSION.try_lock();
+
+    let mut last_updated_version = match last_updated_version {
+        Ok(version) => { version  }
+        _ => { return }
+    };
+
+    println!("last ver: {}", last_updated_version);
+    println!("ver: {}", version);
+
+    if version > *last_updated_version  {
         // Potentially: move this block to bevy_sdf_object
         // Update sdf objects
         {
@@ -263,6 +281,8 @@ fn sync_to_bevy(
                 material.sdf_meta[index + 1].w = TYPE_END;
             }
         }
+
+        *last_updated_version = version;
     }
 
     if data.tree.was_path_updated("scene.selected_uuids") {

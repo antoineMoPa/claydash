@@ -129,7 +129,6 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
     for _i in 1..RUST_RAYMARCH_ITERATIONS {
         for obj in objects.iter() {
             let d_current_object = object_distance(position, obj);
-
             d = sdf_union(d_current_object, d);
 
             if d < selection_distance_threshold {

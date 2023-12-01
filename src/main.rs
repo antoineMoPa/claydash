@@ -1,6 +1,8 @@
 // This is only for native builds
 #[allow(unused_imports)]
 use std::fs::read_to_string;
+use command_central::CommandBuilder;
+use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
 use smooth_bevy_cameras::{
     LookTransformPlugin,
     controllers::orbit::{
@@ -10,7 +12,7 @@ use smooth_bevy_cameras::{
     }
 };
 
-use bevy_command_central_plugin::BevyCommandCentralPlugin;
+use bevy_command_central_plugin::{BevyCommandCentralPlugin, CommandCentralState};
 
 use bevy::{
     input::{keyboard::KeyCode, Input},
@@ -26,7 +28,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::interactions::ClaydashInteractionPlugin;
 
-use claydash_data::ClaydashDataPlugin;
+use claydash_data::{ClaydashDataPlugin, ClaydashValue};
 
 mod interactions;
 mod claydash_ui;
@@ -52,14 +54,31 @@ fn main() {
             claydash_ui::ClaydashUIPlugin,
             ClaydashInteractionPlugin,
         ))
-        .add_systems(Startup, remove_picking_logs)
-        .add_systems(Startup, setup_frame_limit)
-        .add_systems(Startup, setup_camera)
-        .add_systems(Startup, setup_window_size)
-        .add_systems(Startup, build_projection_surface)
+
+        .add_systems(Startup, (remove_picking_logs,
+                               setup_frame_limit,
+                               setup_camera,
+                               setup_window_size,
+                               build_projection_surface,
+                               register_debug_commands))
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, update_camera)
         .run();
+}
+
+pub fn register_debug_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
+    let commands = &mut bevy_command_central.commands;
+    CommandBuilder::new()
+        .title("Dump Tree")
+        .system_name("dump-tree")
+        .docs("Dump internal data tree to shell. This is a troubleshooting command for developers.")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(dump_tree)))
+        .write(commands);
+}
+
+pub fn dump_tree(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    let serialized = serde_json::to_string_pretty(&tree).unwrap();
+    println!("{}", serialized);
 }
 
 /// By default, the object bevy_mod_picking is too verbose.

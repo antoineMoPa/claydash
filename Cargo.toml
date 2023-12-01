@@ -19,6 +19,7 @@ bevy_command_central_plugin = { path = "crates/bevy_command_central_plugin"}
 bevy_command_central_egui = { path = "crates/bevy_command_central_egui"}
 claydash_data = { path = "crates/claydash_data"}
 observable_key_value_tree = { path = "crates/observable_key_value_tree" }
+lazy_static = "1.4.0"
 
 [package]
 name    = "claydash"
@@ -51,6 +52,7 @@ smooth-bevy-cameras = "0.10.0"
 epaint = "0.23.0"
 rfd = "0.12.1"
 futures-lite = "2.0.1"
+lazy_static.workspace = true
 
 [dependencies.web-sys]
 version = "0.3.60"

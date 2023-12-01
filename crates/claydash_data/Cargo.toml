@@ -10,3 +10,4 @@ bevy = { workspace = true }
 sdf_consts = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
+lazy_static = { workspace = true }
