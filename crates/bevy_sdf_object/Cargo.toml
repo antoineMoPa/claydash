@@ -10,3 +10,4 @@ sdf_consts = { workspace = true }
 bevy = { workspace = true }
 bevy_reflect = { workspace = true }
 uuid = { workspace = true }
+serde = { workspace = true }

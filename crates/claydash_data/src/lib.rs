@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-
+use serde::{Serialize, Deserialize};
 use sdf_consts::*;
 
 use observable_key_value_tree::{
@@ -17,7 +17,7 @@ pub enum EditorState {
     Rotating,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum ClaydashValue {
     VecUuid(Vec<uuid::Uuid>),
     I32(i32),
@@ -25,9 +25,12 @@ pub enum ClaydashValue {
     Vec2(Vec2),
     Vec3(Vec3),
     Vec4(Vec4),
+    String(String),
     Transform(Transform),
     VecSDFObject(Vec<SDFObject>),
+    #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
+    #[serde(skip)]
     EditorState(EditorState),
     Bool(bool),
     None,

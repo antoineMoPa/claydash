@@ -1,4 +1,8 @@
-use bevy::{prelude::*, winit::WinitWindows, ecs::system::CommandQueue};
+use bevy::{
+    prelude::*,
+    winit::WinitWindows,
+    tasks::AsyncComputeTaskPool,
+};
 use bevy_command_central_plugin::CommandCentralState;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use egui::containers::Frame;
@@ -7,6 +11,8 @@ use epaint::{Stroke, Pos2};
 use claydash_data::{ClaydashValue, ClaydashData};
 use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
 use bevy_command_central_egui::{CommandCentralUiState, command_ui};
+use rfd::FileHandle;
+use std::sync::mpsc::{channel, Sender, Receiver};
 
 pub struct ClaydashUIPlugin;
 
@@ -14,8 +20,75 @@ impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin)
             .init_resource::<CommandCentralUiState>()
-            .add_systems(Update, claydash_ui)
-            .add_systems(Startup, color_picker_ui);
+            .add_systems(Update, (
+                claydash_ui,
+                handle_tasks
+            ))
+            .add_systems(Startup, (setup_messages, color_picker_ui));
+    }
+}
+
+enum UiMessage {
+    SaveFileHandle(FileHandle),
+    OpenFileHandle(FileHandle),
+    VecU8(Vec<u8>),
+}
+
+struct UiMessagesTxRxResource {
+    tx: Sender<UiMessage>,
+    rx: Receiver<UiMessage>,
+}
+
+fn setup_messages(world: &mut World) {
+    let (tx, rx) = channel::<UiMessage>();
+    let ui_message: UiMessagesTxRxResource = UiMessagesTxRxResource { tx, rx };
+
+    world.insert_non_send_resource(ui_message);
+}
+
+fn handle_tasks(
+    ui_messages: NonSendMut<UiMessagesTxRxResource>,
+    mut data_resource: ResMut<ClaydashData>,
+) {
+    let tree = &mut data_resource.as_mut().tree;
+
+    match ui_messages.rx.try_recv() {
+        Ok(UiMessage::SaveFileHandle(file)) => {
+            match serde_json::to_vec(&tree.get_path_meta("scene")) {
+                Ok(serialized_tree) => {
+                    let thread_pool = AsyncComputeTaskPool::get();
+                    let _task = thread_pool.spawn(async move {
+                        let _ = file.write(&serialized_tree).await;
+                        println!("Saved file {}", file.file_name());
+                    });
+                    _task.detach();
+                }
+                _ => { panic!("Error serializing.") }
+            }
+        },
+        Ok(UiMessage::OpenFileHandle(file)) => {
+            let thread_pool = AsyncComputeTaskPool::get();
+            let tx = ui_messages.tx.clone();
+            let _task = thread_pool.spawn(async move {
+                let data = file.read().await;
+                _ = tx.send(UiMessage::VecU8(data));
+            });
+            _task.detach();
+        },
+        Ok(UiMessage::VecU8(data)) => {
+            let tree = &mut data_resource.as_mut().tree;
+            let scene: Result<ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, serde_json::Error> = serde_json::from_slice(&data);
+            match scene {
+                Ok(scene) => {
+                    tree.set_path_meta("scene", scene);
+                    println!("LOADED SCENE");
+                },
+                _ => {
+                    panic!("could not load data.");
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -26,7 +99,8 @@ fn claydash_ui(
     mut data_resource: ResMut<ClaydashData>,
     claydash_ui_state: ResMut<CommandCentralUiState>,
     command_central_state: ResMut<CommandCentralState>,
-    mut _windows: NonSend<WinitWindows>
+    mut _windows: NonSend<WinitWindows>,
+    ui_messages: NonSendMut<UiMessagesTxRxResource>
 ) {
     let tree = &mut data_resource.as_mut().tree;
     let ctx = contexts.ctx_mut();
@@ -38,26 +112,28 @@ fn claydash_ui(
             menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Save").clicked() {
+                        let task = rfd::AsyncFileDialog::new()
+                            .add_filter("claydash workspace", &["claydash"])
+                            .save_file();
+
+                        let thread_pool = AsyncComputeTaskPool::get();
+                        let tx = ui_messages.tx.clone();
+                        let _task = thread_pool.spawn(async move {
+                            let file = task.await;
+                            _ = tx.send(UiMessage::SaveFileHandle(file.unwrap()));
+                        });
+                        _task.detach();
+                    }
+                    if ui.button("Open").clicked() {
                         let task = rfd::AsyncFileDialog::new().pick_file();
 
-                        execute(async {
+                        let thread_pool = AsyncComputeTaskPool::get();
+                        let tx = ui_messages.tx.clone();
+                        let _task = thread_pool.spawn(async move {
                             let file = task.await;
-
-                            if let Some(file) = file {
-                                // If you are on native platform you can just get the path
-                                #[cfg(not(target_arch = "wasm32"))]
-                                println!("{:?}", file.path());
-
-                                // If you care about wasm support you just read() the file
-                                file.read().await;
-
-
-                                let mut command_queue = CommandQueue::default();
-
-
-                                tree.set_path("file", ClaydashValue::I32(3));
-                            }
+                            _ = tx.send(UiMessage::OpenFileHandle(file.unwrap()));
                         });
+                        _task.detach();
                     }
                 });
             });
@@ -97,18 +173,6 @@ fn claydash_ui(
         });
 
     command_ui(ctx, claydash_ui_state, command_central_state, data_resource);
-}
-
-use std::future::Future;
-
-#[cfg(not(target_arch = "wasm32"))]
-fn execute<F: Future<Output = ()> + Send + 'static>(f: F) {
-    // this is stupid... use any executor of your choice instead
-    std::thread::spawn(move || futures::executor::block_on(f));
-}
-#[cfg(target_arch = "wasm32")]
-fn execute<F: Future<Output = ()> + 'static>(f: F) {
-    wasm_bindgen_futures::spawn_local(f);
 }
 
 const IMAGE_WIDTH: f32 = 66.0;

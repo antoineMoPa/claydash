@@ -12,6 +12,7 @@ use bevy::{
         },
     },
 };
+use serde::{Serialize, Deserialize};
 use sdf_consts::*;
 
 pub struct BevySDFObjectPlugin;
@@ -24,7 +25,7 @@ impl Plugin for BevySDFObjectPlugin {
 
 const MAX_SDFS_PER_ENTITY: i32 = 256;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SDFObject {
     pub uuid: uuid::Uuid,
     pub transform: Transform,

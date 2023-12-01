@@ -135,6 +135,11 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
         });
     }
 
+    pub fn set_path_meta(&mut self, path: &str, value: ObservableKVTree<ValueType, UpdateTracker>) {
+        let parts = path.split(".");
+        self.set_path_with_parts(parts.collect(), value);
+    }
+
     pub fn get_path(&self, path: &str) -> ValueType {
         match self.get_path_with_parts(&path.split(".").collect()) {
             Some(data) => data.value,
@@ -268,6 +273,18 @@ mod tests {
         let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
         data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
+    }
+
+    #[test]
+    fn it_gets_and_sets_subtree() {
+        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+
+        let scene = data.get_path_meta("scene").unwrap();
+        let mut data2 = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        data2.set_path_meta("scene", scene);
+
+        assert_eq!(data2.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
     }
 
     #[test]
