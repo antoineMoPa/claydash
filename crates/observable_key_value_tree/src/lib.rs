@@ -104,7 +104,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     }
 
     pub fn was_path_updated(&self, path: &str) -> bool {
-        match self.get_path_meta(&path) {
+        match self.get_tree(&path) {
             Some(value) => {
                 return value.update_tracker.was_updated();
             },
@@ -135,9 +135,11 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
         });
     }
 
-    pub fn set_path_meta(&mut self, path: &str, value: ObservableKVTree<ValueType, UpdateTracker>) {
+    /// Set the value and subtree at given path
+    pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType, UpdateTracker>) {
         let parts = path.split(".");
         self.set_path_with_parts(parts.collect(), value);
+        self.notify_change();
     }
 
     pub fn get_path(&self, path: &str) -> ValueType {
@@ -147,7 +149,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
         }
     }
 
-    pub fn get_path_meta(& self, path: &str) -> Option<ObservableKVTree<ValueType, UpdateTracker>> {
+    pub fn get_tree(& self, path: &str) -> Option<ObservableKVTree<ValueType, UpdateTracker>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
@@ -158,6 +160,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
             }
             let leaf = &mut self.subtree.get_mut(parts[0]).unwrap();
             leaf.value = value.value;
+            leaf.subtree = value.subtree;
             leaf.notify_change();
         }
         else {
@@ -280,9 +283,9 @@ mod tests {
         let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
         data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
 
-        let scene = data.get_path_meta("scene").unwrap();
+        let scene = data.get_tree("scene").unwrap();
         let mut data2 = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
-        data2.set_path_meta("scene", scene);
+        data2.set_tree("scene", scene.clone());
 
         assert_eq!(data2.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
     }
