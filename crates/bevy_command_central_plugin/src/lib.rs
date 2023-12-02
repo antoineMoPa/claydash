@@ -12,13 +12,6 @@ pub struct CommandCentralState {
 
 impl Plugin for BevyCommandCentralPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CommandCentralState>()
-            .add_systems(Update, run_commands);
+        app.init_resource::<CommandCentralState>();
     }
-}
-
-fn run_commands(
-//    mut command_central_state: ResMut<CommandCentralState>
-) {
-
 }

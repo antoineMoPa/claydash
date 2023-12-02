@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-
+use serde::{Serialize, Deserialize};
 use sdf_consts::*;
 
 use observable_key_value_tree::{
@@ -9,7 +9,10 @@ use observable_key_value_tree::{
 
 use bevy_sdf_object::*;
 
-#[derive(Clone)]
+use std::sync::{Arc, Mutex};
+use lazy_static::lazy_static;
+
+#[derive(Clone, Serialize, Deserialize)]
 pub enum EditorState {
     Start,
     Grabbing,
@@ -17,7 +20,7 @@ pub enum EditorState {
     Rotating,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum ClaydashValue {
     VecUuid(Vec<uuid::Uuid>),
     I32(i32),
@@ -25,8 +28,10 @@ pub enum ClaydashValue {
     Vec2(Vec2),
     Vec3(Vec3),
     Vec4(Vec4),
+    String(String),
     Transform(Transform),
     VecSDFObject(Vec<SDFObject>),
+    #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
     EditorState(EditorState),
     Bool(bool),
@@ -208,29 +213,12 @@ pub struct ClaydashDataPlugin;
 impl Plugin for ClaydashDataPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClaydashData>()
-            .add_systems(Startup, init_sdf_objects)
             .add_systems(Update, sync_to_bevy);
     }
 }
 
-fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
-    let data = data_resource.as_mut();
-
-    let mut sdf_objects: Vec<SDFObject> = Vec::new();
-    sdf_objects.push(SDFObject {
-        object_type: TYPE_SPHERE,
-        color: Vec4::new(0.3, 0.0, 0.6, 1.0),
-        ..default()
-    });
-
-    sdf_objects.push(SDFObject {
-        object_type: TYPE_BOX,
-        transform: Transform::from_translation(Vec3::new(-0.2, 0.3, 0.0)),
-        color: Vec4::new(0.8, 0.0, 0.6, 1.0),
-        ..default()
-    });
-
-    data.tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+lazy_static! {
+    static ref LAST_SYNCED_SDF_OBJECTS_VERSION: Arc<Mutex<i32>> = Arc::new(Mutex::new(-1));
 }
 
 // Sync tree to bevy
@@ -244,7 +232,16 @@ fn sync_to_bevy(
 ) {
     let data = data_resource.as_mut();
 
-    if data.tree.was_path_updated("scene.sdf_objects") {
+    let version = data.tree.path_version("scene.sdf_objects");
+
+    let last_updated_version = LAST_SYNCED_SDF_OBJECTS_VERSION.try_lock();
+
+    let mut last_updated_version = match last_updated_version {
+        Ok(version) => { version  }
+        _ => { return }
+    };
+
+    if version > *last_updated_version  {
         // Potentially: move this block to bevy_sdf_object
         // Update sdf objects
         {
@@ -260,6 +257,8 @@ fn sync_to_bevy(
                 material.sdf_meta[index + 1].w = TYPE_END;
             }
         }
+
+        *last_updated_version = version;
     }
 
     if data.tree.was_path_updated("scene.selected_uuids") {

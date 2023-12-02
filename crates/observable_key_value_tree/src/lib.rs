@@ -70,15 +70,18 @@ pub trait NotifyUpdate {
 #[derive(Default,Clone,Serialize,Deserialize)]
 pub struct SimpleUpdateTracker {
     updated: bool,
+    version: i32,
 }
 
 impl SimpleUpdateTracker {
     pub fn was_updated(&self) -> bool { self.updated }
+    pub fn version(&self) -> i32 { self.version }
 }
 
 impl NotifyUpdate for SimpleUpdateTracker {
     fn notify_update(&mut self) {
         self.updated = true;
+        self.version += 1;
     }
 
     fn reset_update_cycle(&mut self) {
@@ -104,11 +107,20 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     }
 
     pub fn was_path_updated(&self, path: &str) -> bool {
-        match self.get_path_meta(&path) {
+        match self.get_tree(&path) {
             Some(value) => {
                 return value.update_tracker.was_updated();
             },
             _ => { return false; }
+        };
+    }
+
+    pub fn path_version(&self, path: &str) -> i32 {
+        match self.get_tree(&path) {
+            Some(value) => {
+                return value.update_tracker.version();
+            },
+            _ => { return -1; }
         };
     }
 }
@@ -132,7 +144,14 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
         self.set_path_with_parts(parts.collect(), ObservableKVTree {
             value,
             ..ObservableKVTree::default()
-        });
+        }, false);
+    }
+
+    /// Set the value and subtree at given path
+    pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType, UpdateTracker>) {
+        let parts = path.split(".");
+        self.set_path_with_parts(parts.collect(), value, true);
+        self.notify_change();
     }
 
     pub fn get_path(&self, path: &str) -> ValueType {
@@ -142,25 +161,60 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
         }
     }
 
-    pub fn get_path_meta(& self, path: &str) -> Option<ObservableKVTree<ValueType, UpdateTracker>> {
+    pub fn get_tree(& self, path: &str) -> Option<ObservableKVTree<ValueType, UpdateTracker>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
-    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType, UpdateTracker>) {
+    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType, UpdateTracker>, override_subtree: bool) {
+
         if parts.len() == 1 {
             if !self.subtree.contains_key(parts[0]) {
                 self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
             }
+
+            let mut notified_update = false;
+
             let leaf = &mut self.subtree.get_mut(parts[0]).unwrap();
             leaf.value = value.value;
-            leaf.notify_change();
+            leaf.update_tracker.notify_update();
+
+            if override_subtree {
+                let mut keys_to_remove: Vec<String> = Vec::new();
+                for (key, _subvalue) in leaf.subtree.iter() {
+                    if !value.subtree.contains_key(key) {
+                        // Value does not exist in new subtree. remove.
+                        keys_to_remove.push(key.clone());
+                    }
+                }
+
+                for key in keys_to_remove {
+                    leaf.subtree.remove(&key);
+                }
+
+                for (key, subvalue) in value.subtree.iter() {
+                    if !value.subtree.contains_key(key) {
+                        leaf.subtree.insert(key.clone(), subvalue.clone());
+                    } else {
+                        let parts: Vec<&str> = vec!(key);
+                        leaf.set_path_with_parts(parts, subvalue.clone(), override_subtree);
+                        // Prevent a double update
+                        notified_update = true;
+                    }
+                }
+
+                if !notified_update {
+                    leaf.update_tracker.notify_update();
+                }
+
+                return;
+            }
         }
         else {
             if !self.subtree.contains_key(parts[0]) {
                 self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
             }
             let subtree = &mut self.subtree.get_mut(parts[0]).unwrap();
-            subtree.set_path_with_parts(parts[1..].to_vec(), value);
+            subtree.set_path_with_parts(parts[1..].to_vec(), value, override_subtree);
         }
 
         self.notify_change();
@@ -268,6 +322,64 @@ mod tests {
         let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
         data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
+    }
+
+    #[test]
+    fn it_gets_and_sets_subtree() {
+        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+
+        let scene = data.get_tree("scene").unwrap();
+        let mut data2 = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        data.reset_update_cycle();
+
+        let initial_version = data2.path_version("scene");
+
+        data2.set_tree("scene", scene.clone());
+
+        assert!(data2.path_version("scene") > initial_version);
+        assert_eq!(data2.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
+        assert_eq!(data2.was_path_updated("scene.some.very.deep.property"), true);
+        assert_eq!(data2.was_path_updated("scene.some.very.deep"), true);
+        assert_eq!(data2.was_path_updated("scene.some.very"), true);
+        assert_eq!(data2.was_path_updated("scene.some"), true);
+        assert_eq!(data2.was_path_updated("scene"), true);
+    }
+
+    #[test]
+    fn it_increments_version() {
+        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+        data.set_path("scene.some.very.deep.property2", ExampleValueType::from(1234));
+
+        let scene = data.get_tree("scene").unwrap();
+        let mut data2 = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+
+        assert_eq!(data2.path_version("scene.some.very.deep.property"), -1);
+        assert_eq!(data2.path_version("scene.some.very.deep"), -1);
+        assert_eq!(data2.path_version("scene.some.very"), -1);
+        assert_eq!(data2.path_version("scene.some"), -1);
+        assert_eq!(data2.path_version("scene"), -1);
+
+        data2.set_tree("scene", scene.clone());
+
+        // TODO: I would expect this to start at 0
+        // Not so important because at least versions are increasing.
+        assert_eq!(data2.path_version("scene.some.very.deep.property"), 2);
+        assert_eq!(data2.path_version("scene.some.very.deep"), 1);
+        assert_eq!(data2.path_version("scene.some.very"), 1);
+        assert_eq!(data2.path_version("scene.some"), 1);
+        assert_eq!(data2.path_version("scene"), 1);
+
+        assert_eq!(data2.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
+
+        data2.set_path("scene.some.very.deep", ExampleValueType::I32(5555));
+
+        assert_eq!(data2.path_version("scene.some.very.deep.property"), 2);
+        assert_eq!(data2.path_version("scene.some.very.deep"), 2);
+        assert_eq!(data2.path_version("scene.some.very"), 2);
+        assert_eq!(data2.path_version("scene.some"), 2);
+        assert_eq!(data2.path_version("scene"), 2);
     }
 
     #[test]

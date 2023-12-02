@@ -1,7 +1,8 @@
 // This is only for native builds
 #[allow(unused_imports)]
 use std::fs::read_to_string;
-use claydash_ui::ClaydashUIPlugin;
+use command_central::CommandBuilder;
+use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
 use smooth_bevy_cameras::{
     LookTransformPlugin,
     controllers::orbit::{
@@ -11,8 +12,7 @@ use smooth_bevy_cameras::{
     }
 };
 
-use bevy_command_central_plugin::BevyCommandCentralPlugin;
-use bevy_command_central_egui::BevyCommandCentralEguiPlugin;
+use bevy_command_central_plugin::{BevyCommandCentralPlugin, CommandCentralState};
 
 use bevy::{
     input::{keyboard::KeyCode, Input},
@@ -28,9 +28,10 @@ use wasm_bindgen::prelude::*;
 
 use crate::interactions::ClaydashInteractionPlugin;
 
-use claydash_data::ClaydashDataPlugin;
+use claydash_data::{ClaydashDataPlugin, ClaydashValue, ClaydashData};
 
 mod interactions;
+mod claydash_ui;
 
 fn main() {
     App::new()
@@ -43,7 +44,6 @@ fn main() {
             ClaydashDataPlugin,
             DefaultPlugins,
             BevyCommandCentralPlugin,
-            BevyCommandCentralEguiPlugin,
             bevy_framepace::FramepacePlugin,
             DefaultPickingPlugins,
             FrameTimeDiagnosticsPlugin,
@@ -51,17 +51,44 @@ fn main() {
             LookTransformPlugin,
             OrbitCameraPlugin::default(),
             BevySDFObjectPlugin,
-            ClaydashUIPlugin,
+            claydash_ui::ClaydashUIPlugin,
             ClaydashInteractionPlugin,
         ))
-        .add_systems(Startup, remove_picking_logs)
-        .add_systems(Startup, setup_frame_limit)
-        .add_systems(Startup, setup_camera)
-        .add_systems(Startup, setup_window_size)
-        .add_systems(Startup, build_projection_surface)
+
+        .add_systems(Startup, (remove_picking_logs,
+                               setup_frame_limit,
+                               setup_camera,
+                               setup_window_size,
+                               build_projection_surface,
+                               register_debug_commands,
+                               default_duck))
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, update_camera)
         .run();
+}
+
+mod duck;
+
+pub fn default_duck(mut data_resource: ResMut<ClaydashData>) {
+    let tree = &mut data_resource.as_mut().tree;
+    let scene: Result<ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, serde_json::Error> = serde_json::from_str(duck::DEFAULT_DUCK);
+    tree.set_tree("scene", scene.unwrap());
+}
+
+pub fn register_debug_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
+    let commands = &mut bevy_command_central.commands;
+    CommandBuilder::new()
+        .title("Dump Tree")
+        .system_name("dump-tree")
+        .docs("Dump internal data tree to shell. This is a troubleshooting command for developers.")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(dump_tree)))
+        .write(commands);
+
+}
+
+pub fn dump_tree(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+    let serialized = serde_json::to_string_pretty(&tree).unwrap();
+    println!("{}", serialized);
 }
 
 /// By default, the object bevy_mod_picking is too verbose.
@@ -119,7 +146,7 @@ fn setup_camera(
     ).insert(
         OrbitCameraBundle::new(
             OrbitCameraController::default(),
-            Vec3::new(0.0, 0.0, 5.0),
+            Vec3::new(-3.3, 0.8, 1.7),
             Vec3::ZERO,
             Vec3::Y,
         )
