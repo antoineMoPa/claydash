@@ -2,7 +2,7 @@
 #[allow(unused_imports)]
 use std::fs::read_to_string;
 use command_central::CommandBuilder;
-use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
+use observable_key_value_tree::{ObservableKVTree};
 use smooth_bevy_cameras::{
     LookTransformPlugin,
     controllers::orbit::{
@@ -72,7 +72,7 @@ mod duck;
 
 pub fn default_duck(mut data_resource: ResMut<ClaydashData>) {
     let tree = &mut data_resource.as_mut().tree;
-    let scene: Result<ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, serde_json::Error> = serde_json::from_str(duck::DEFAULT_DUCK);
+    let scene: Result<ObservableKVTree<ClaydashValue>, serde_json::Error> = serde_json::from_str(duck::DEFAULT_DUCK);
     tree.set_tree("scene", scene.unwrap());
 }
 
@@ -87,7 +87,7 @@ pub fn register_debug_commands(mut bevy_command_central: ResMut<CommandCentralSt
 
 }
 
-pub fn dump_tree(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+pub fn dump_tree(tree: &mut ObservableKVTree<ClaydashValue>) {
     let serialized = serde_json::to_string_pretty(&tree).unwrap();
     println!("{}", serialized);
 }

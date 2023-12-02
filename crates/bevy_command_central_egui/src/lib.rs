@@ -12,10 +12,7 @@ use epaint::{
 };
 use bevy_command_central_plugin::*;
 use claydash_data::{ClaydashData, ClaydashValue};
-use observable_key_value_tree::{
-    ObservableKVTree,
-    SimpleUpdateTracker
-};
+use observable_key_value_tree::ObservableKVTree;
 
 #[derive(Resource)]
 pub struct CommandCentralUiState {
@@ -57,7 +54,7 @@ fn command_search(
     ctx: egui::Context,
     mut claydash_ui_state: ResMut<CommandCentralUiState>,
     command_central_state: ResMut<CommandCentralState>,
-    tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>,
+    tree: &mut ObservableKVTree<ClaydashValue>,
 ) {
     let rounding: Rounding = Rounding::same(5.0);
     let widget_offset = egui::vec2(10.0, 20.0);
@@ -114,7 +111,7 @@ fn command_results_ui(
     ui: &mut egui::Ui,
     mut claydash_ui_state: ResMut<CommandCentralUiState>,
     mut bevy_command_central: ResMut<CommandCentralState>,
-    tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
+    tree: &mut ObservableKVTree<ClaydashValue>
 ) {
     let rounding = Rounding::same(5.0);
     let command_search_str: &mut String = &mut claydash_ui_state.command_search_str;

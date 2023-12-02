@@ -22,9 +22,9 @@
 //!
 //! Setting and reading values:
 //! ```
-//! use observable_key_value_tree::{ObservableKVTree,SimpleUpdateTracker,ExampleValueType};
+//! use observable_key_value_tree::{ObservableKVTree,ExampleValueType};
 //! // Creating an observable tree
-//! let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+//! let mut data = ObservableKVTree::<ExampleValueType>::default();
 //! // Setting values
 //! data.set_path("scene.some.property", ExampleValueType::from(1234));
 //! // Reading values
@@ -33,9 +33,9 @@
 //!
 //! Detecting changes:
 //! ```
-//! use observable_key_value_tree::{ObservableKVTree,SimpleUpdateTracker,ExampleValueType};
+//! use observable_key_value_tree::{ObservableKVTree,ExampleValueType};
 //! // Creating an observable tree
-//! let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+//! let mut data = ObservableKVTree::<ExampleValueType>::default();
 //! // Setting values
 //! data.set_path("scene.some.property", ExampleValueType::from(1234));
 //! // Detecting updates
@@ -47,12 +47,6 @@
 //! assert_eq!(data.was_updated(), false);
 //! ```
 //!
-//! ## Customizing Update Tracker
-//! You can build your own UpdateTracker as long as it implements NotifyUpdate trait.
-//! This could be useful if you application has multiple update cycles.
-//!
-//! See SimpleUpdateTracker for a reference implementation.
-//!
 //! ## Notes
 //!  - We consider a value updated even if it was set to the same value again.
 //!  - We consider the parent nodes as updated if a child value was updated.
@@ -61,24 +55,32 @@
 
 use std::collections::BTreeMap;
 use serde::{Serialize, Deserialize};
+use std::sync::mpsc::{channel, Sender, Receiver};
 
 pub trait NotifyUpdate {
     fn notify_update(&mut self);
     fn reset_update_cycle(&mut self);
 }
 
-#[derive(Default,Clone,Serialize,Deserialize)]
-pub struct SimpleUpdateTracker {
+#[derive(Default,Clone,Debug)]
+pub struct UpdateTracker<ValueType> {
     updated: bool,
     version: i32,
+    update_listeners: Vec<Sender<ValueType>>,
 }
 
-impl SimpleUpdateTracker {
+impl<ValueType> UpdateTracker<ValueType> {
     pub fn was_updated(&self) -> bool { self.updated }
     pub fn version(&self) -> i32 { self.version }
+
+    fn create_update_listener(&mut self) -> Receiver<ValueType> {
+        let (sender, receiver) = channel();
+        self.update_listeners.push(sender);
+        return receiver;
+    }
 }
 
-impl NotifyUpdate for SimpleUpdateTracker {
+impl<ValueType> NotifyUpdate for UpdateTracker<ValueType> {
     fn notify_update(&mut self) {
         self.updated = true;
         self.version += 1;
@@ -90,18 +92,16 @@ impl NotifyUpdate for SimpleUpdateTracker {
 }
 
 #[derive(Default,Serialize,Deserialize,Debug,Clone)]
-pub struct ObservableKVTree
-    <ValueType: Default + Clone + CanBeNone<ValueType>,
-     UpdateTracker: Default + Clone + NotifyUpdate>
+pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
 {
-    subtree: BTreeMap<String, ObservableKVTree<ValueType, UpdateTracker>>,
+    subtree: BTreeMap<String, ObservableKVTree<ValueType>>,
     value: ValueType,
     #[serde(skip)]
-    pub update_tracker: UpdateTracker,
+    pub update_tracker: UpdateTracker<ValueType>,
 }
 
 /// Shortcut to verify if a path was modified.
-impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType, SimpleUpdateTracker> {
+impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType> {
     pub fn was_updated(&self) -> bool {
         return self.update_tracker.was_updated();
     }
@@ -135,9 +135,7 @@ impl<T> CanBeNone<Option<T>> for Option<T> {
     }
 }
 
-impl <ValueType: Default + Clone + CanBeNone<ValueType>,
-      UpdateTracker: Default + NotifyUpdate + Clone>
-    ObservableKVTree<ValueType, UpdateTracker>
+impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType>
 {
     pub fn set_path(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
@@ -148,7 +146,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
     }
 
     /// Set the value and subtree at given path
-    pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType, UpdateTracker>) {
+    pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType>) {
         let parts = path.split(".");
         self.set_path_with_parts(parts.collect(), value, true);
         self.notify_change();
@@ -161,11 +159,11 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
         }
     }
 
-    pub fn get_tree(& self, path: &str) -> Option<ObservableKVTree<ValueType, UpdateTracker>> {
+    pub fn get_tree(& self, path: &str) -> Option<ObservableKVTree<ValueType>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
-    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType, UpdateTracker>, override_subtree: bool) {
+    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType>, override_subtree: bool) {
 
         if parts.len() == 1 {
             if !self.subtree.contains_key(parts[0]) {
@@ -226,7 +224,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
             node.reset_update_cycle();
         }
     }
-    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableKVTree<ValueType, UpdateTracker>> {
+    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableKVTree<ValueType>> {
         if parts.len() == 1 {
             return self.subtree.get(parts[0]).cloned();
         }
@@ -312,25 +310,25 @@ mod tests {
 
     #[test]
     fn it_gets_and_sets_values() {
-        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
         data.set_path("scene.some", ExampleValueType::I32(1234));
         assert_eq!(data.get_path("scene.some").unwrap_i32(), 1234);
     }
 
     #[test]
     fn it_gets_and_sets_deep_values() {
-        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
         data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
     }
 
     #[test]
     fn it_gets_and_sets_subtree() {
-        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
         data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
 
         let scene = data.get_tree("scene").unwrap();
-        let mut data2 = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data2 = ObservableKVTree::<ExampleValueType>::default();
         data.reset_update_cycle();
 
         let initial_version = data2.path_version("scene");
@@ -348,12 +346,12 @@ mod tests {
 
     #[test]
     fn it_increments_version() {
-        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
         data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
         data.set_path("scene.some.very.deep.property2", ExampleValueType::from(1234));
 
         let scene = data.get_tree("scene").unwrap();
-        let mut data2 = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data2 = ObservableKVTree::<ExampleValueType>::default();
 
         assert_eq!(data2.path_version("scene.some.very.deep.property"), -1);
         assert_eq!(data2.path_version("scene.some.very.deep"), -1);
@@ -384,13 +382,13 @@ mod tests {
 
     #[test]
     fn it_gets_none_when_not_set() {
-        let data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let data = ObservableKVTree::<ExampleValueType>::default();
         assert_eq!(data.get_path("scene.property.that.does.not.exist").is_none(), true);
     }
 
     #[test]
     fn it_changes_value() {
-        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
         data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
         data.set_path("scene.some.very.deep.property", ExampleValueType::from(2345));
         assert_eq!(data.get_path("scene.some.very.deep.property").unwrap_i32(), 2345);
@@ -399,7 +397,7 @@ mod tests {
     #[test]
     fn it_detects_updates() {
         // Arrange
-        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
 
         // Pre condition
 
@@ -434,7 +432,7 @@ mod tests {
 
     #[test]
     fn it_serializes() {
-        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
 
         data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
 
@@ -442,7 +440,7 @@ mod tests {
         let serialized = serde_json::to_string(&data).unwrap();
 
         // Convert JSON back to BevySceneData
-        let deserialized: ObservableKVTree<ExampleValueType, SimpleUpdateTracker> = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ObservableKVTree<ExampleValueType> = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
     }

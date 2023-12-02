@@ -4,7 +4,7 @@ use sdf_consts::*;
 
 use observable_key_value_tree::{
     ObservableKVTree,
-    SimpleUpdateTracker, CanBeNone,
+    CanBeNone,
 };
 
 use bevy_sdf_object::*;
@@ -32,7 +32,7 @@ pub enum ClaydashValue {
     Transform(Transform),
     VecSDFObject(Vec<SDFObject>),
     #[serde(skip)]
-    Fn(fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)),
+    Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
     EditorState(EditorState),
     Bool(bool),
     None,
@@ -161,7 +161,7 @@ impl ClaydashValue {
         unwrap_fn_or_default,
         unwrap_fn_or,
         Fn,
-        fn(&mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>),
+        fn(&mut ObservableKVTree<ClaydashValue>),
         panic!("No Fn value stored.")
     );
 
@@ -205,7 +205,7 @@ impl ClaydashValue {
 
 #[derive(Resource, Default)]
 pub struct ClaydashData {
-    pub tree: ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
+    pub tree: ObservableKVTree<ClaydashValue>
 }
 
 pub struct ClaydashDataPlugin;

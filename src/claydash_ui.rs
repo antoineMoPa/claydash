@@ -9,7 +9,7 @@ use egui::containers::Frame;
 use egui::Color32;
 use epaint::{Stroke, Pos2};
 use claydash_data::{ClaydashValue, ClaydashData};
-use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
+use observable_key_value_tree::{ObservableKVTree};
 use bevy_command_central_egui::{CommandCentralUiState, command_ui};
 use rfd::FileHandle;
 use std::sync::mpsc::{channel, Sender, Receiver};
@@ -77,7 +77,7 @@ fn handle_tasks(
         },
         Ok(UiMessage::VecU8(data)) => {
             let tree = &mut data_resource.as_mut().tree;
-            let scene: Result<ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, serde_json::Error> = serde_json::from_slice(&data);
+            let scene: Result<ObservableKVTree<ClaydashValue>, serde_json::Error> = serde_json::from_slice(&data);
             match scene {
                 Ok(scene) => {
                     tree.set_tree("scene", scene);
@@ -215,7 +215,7 @@ fn draw_color_picker(
     pointer_position: Pos2,
     asset_server: Res<AssetServer>,
     assets: Res<Assets<Image>>,
-    tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
+    tree: &mut ObservableKVTree<ClaydashValue>
 ) {
     let distance_from_wheel_center =
         ((pointer_position.x - CIRCLE_CENTER_X).powi(2) +
