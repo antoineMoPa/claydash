@@ -6,7 +6,7 @@ use claydash_data::{ClaydashValue, ClaydashData};
 use bevy_command_central_plugin::CommandCentralState;
 use observable_key_value_tree::{
     ObservableKVTree,
-    SimpleUpdateTracker
+    UpdateTracker
 };
 use bevy_sdf_object::SDFObject;
 use command_central::CommandBuilder;
@@ -118,7 +118,7 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
 }
 
 fn set_objects_initial_properties(
-    tree: &mut  ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
+    tree: &mut  ObservableKVTree<ClaydashValue>
 ) {
     let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
@@ -251,49 +251,49 @@ fn key_to_name(key: &KeyCode) -> String {
 }
 
 
-fn reset_constraints(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn reset_constraints(tree: &mut ObservableKVTree<ClaydashValue>) {
     tree.set_path("editor.constrain_x", ClaydashValue::Bool(false));
     tree.set_path("editor.constrain_y", ClaydashValue::Bool(false));
     tree.set_path("editor.constrain_z", ClaydashValue::Bool(false));
 }
 
-fn start_grab(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn start_grab(tree: &mut ObservableKVTree<ClaydashValue>) {
     reset_constraints(tree);
     set_objects_initial_properties(tree);
     tree.set_path("editor.state", ClaydashValue::EditorState(Grabbing));
 }
 
-fn toggle_path(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, path: String) {
+fn toggle_path(tree: &mut ObservableKVTree<ClaydashValue>, path: String) {
     let current_value = tree.get_path("editor.constrain_x").unwrap_bool_or(false);
     tree.set_path(&path, ClaydashValue::Bool(!current_value));
 }
 
-fn constrain_x(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn constrain_x(tree: &mut ObservableKVTree<ClaydashValue>) {
     toggle_path(tree, "editor.constrain_x".to_string());
 }
 
-fn constrain_y(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn constrain_y(tree: &mut ObservableKVTree<ClaydashValue>) {
     toggle_path(tree, "editor.constrain_y".to_string());
 }
 
-fn constrain_z(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn constrain_z(tree: &mut ObservableKVTree<ClaydashValue>) {
     toggle_path(tree, "editor.constrain_z".to_string());
 }
 
-fn start_scale(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn start_scale(tree: &mut ObservableKVTree<ClaydashValue>) {
     reset_constraints(tree);
     set_objects_initial_properties(tree);
     tree.set_path("editor.state", ClaydashValue::EditorState(Scaling));
 }
 
-fn start_rotate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn start_rotate(tree: &mut ObservableKVTree<ClaydashValue>) {
     reset_constraints(tree);
     set_objects_initial_properties(tree);
     tree.set_path("editor.state", ClaydashValue::EditorState(Rotating));
 }
 
 /// Cancel edit and bring back transforms to original value.
-fn escape(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn escape(tree: &mut ObservableKVTree<ClaydashValue>) {
     let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
 
     match state {
@@ -324,11 +324,11 @@ fn escape(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
 }
 
-fn finish(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn finish(tree: &mut ObservableKVTree<ClaydashValue>) {
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 }
 
-fn duplicate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn duplicate(tree: &mut ObservableKVTree<ClaydashValue>) {
     // Find selected objects
     let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
@@ -357,7 +357,7 @@ fn duplicate(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     start_grab(tree);
 }
 
-fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue>) {
     let selected_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
     let sdf_objects = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
 
@@ -375,7 +375,7 @@ fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTra
     }
 }
 
-fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn delete(tree: &mut ObservableKVTree<ClaydashValue>) {
     // Find selected objects
     let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
@@ -391,7 +391,7 @@ fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(filtered_objects));
 }
 
-fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
     let color = match tree.get_path("editor.colorpicker.color") {
         ClaydashValue::Vec4(data) => data,
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
@@ -421,7 +421,7 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>)
     start_grab(tree);
 }
 
-fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
+fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue>) {
     let color = match tree.get_path("editor.colorpicker.color") {
         ClaydashValue::Vec4(data) => data,
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
