@@ -16,37 +16,35 @@
 //!  - `data.set_path("scene.some.property", 1234)`
 //!  - `data.get_path("scene.some.property")`
 //!  - `data.update_tracker.was_updated()`
-//!  - `data.get_path_meta("scene.some.property").unwrap().update_tracker.was_updated()`
+//!  - `data.was_path_updated("scene.some.property")`
 //!
 //! # Examples
 //!
 //! Setting and reading values:
 //! ```
-//! use observable_key_value_tree::ObservableKVTree;
-//! use observable_key_value_tree::SimpleUpdateTracker;
+//! use observable_key_value_tree::{ObservableKVTree,SimpleUpdateTracker,ExampleValueType};
 //! // Creating an observable tree
-//! let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
+//! let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
 //! // Setting values
-//! data.set_path("scene.some.property", 1234);
+//! data.set_path("scene.some.property", ExampleValueType::from(1234));
 //! // Reading values
-//! let value = data.get_path("scene.some.property").unwrap();
+//! let value = data.get_path("scene.some.property").unwrap_i32();
 //! ```
 //!
 //! Detecting changes:
 //! ```
-//! use observable_key_value_tree::ObservableKVTree;
-//! use observable_key_value_tree::SimpleUpdateTracker;
+//! use observable_key_value_tree::{ObservableKVTree,SimpleUpdateTracker,ExampleValueType};
 //! // Creating an observable tree
-//! let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
+//! let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
 //! // Setting values
-//! data.set_path("scene.some.property", 1234);
+//! data.set_path("scene.some.property", ExampleValueType::from(1234));
 //! // Detecting updates
-//! let was_updated: bool = data.get_path_meta("scene.some.property").unwrap().update_tracker.was_updated();
+//! let was_updated: bool = data.was_path_updated("scene.some.property");
 //! // Detecting updates (root level)
-//! assert_eq!(data.update_tracker.was_updated(), true);
+//! assert_eq!(data.was_updated(), true);
 //! // Reset update cycle (typically, you'd call this every frame)
 //! data.reset_update_cycle();
-//! assert_eq!(data.update_tracker.was_updated(), false);
+//! assert_eq!(data.was_updated(), false);
 //! ```
 //!
 //! ## Customizing Update Tracker
@@ -90,31 +88,57 @@ impl NotifyUpdate for SimpleUpdateTracker {
 
 #[derive(Default,Serialize,Deserialize,Debug,Clone)]
 pub struct ObservableKVTree
-    <ValueType: Default + Clone,
-     UpdateTracker: Default + Clone+ NotifyUpdate>
+    <ValueType: Default + Clone + CanBeNone<ValueType>,
+     UpdateTracker: Default + Clone + NotifyUpdate>
 {
     subtree: BTreeMap<String, ObservableKVTree<ValueType, UpdateTracker>>,
-    value: Option<ValueType>,
+    value: ValueType,
     #[serde(skip)]
     pub update_tracker: UpdateTracker,
 }
 
-impl <ValueType: Default + Clone,
+/// Shortcut to verify if a path was modified.
+impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType, SimpleUpdateTracker> {
+    pub fn was_updated(&self) -> bool {
+        return self.update_tracker.was_updated();
+    }
+
+    pub fn was_path_updated(&self, path: &str) -> bool {
+        match self.get_path_meta(&path) {
+            Some(value) => {
+                return value.update_tracker.was_updated();
+            },
+            _ => { return false; }
+        };
+    }
+}
+
+pub trait CanBeNone<T: Default> {
+    fn none() -> T;
+}
+
+impl<T> CanBeNone<Option<T>> for Option<T> {
+    fn none() -> Option<T> {
+        None
+    }
+}
+
+impl <ValueType: Default + Clone + CanBeNone<ValueType>,
       UpdateTracker: Default + NotifyUpdate + Clone>
     ObservableKVTree<ValueType, UpdateTracker>
 {
     pub fn set_path(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
         self.set_path_with_parts(parts.collect(), ObservableKVTree {
-            value: Some(value),
+            value,
             ..ObservableKVTree::default()
         });
     }
 
-    pub fn get_path(&self, path: &str) -> Option<ValueType> {
-        return match self.get_path_with_parts(&path.split(".").collect()) {
+    pub fn get_path(&self, path: &str) -> ValueType {
+        match self.get_path_with_parts(&path.split(".").collect()) {
             Some(data) => data.value,
-            _ => None
+            _ => ValueType::none()
         }
     }
 
@@ -170,86 +194,144 @@ impl <ValueType: Default + Clone,
     }
 }
 
+
+// This is a simple value type for docs and testing.
+// In real applications, we expect that a more complex value type will be used
+// to store whatever is needed depending on the context.
+#[derive(Debug,Clone,Serialize,Deserialize)]
+pub enum ExampleValueType{
+    I32(i32),
+    F32(f32),
+    None,
+}
+
+impl From<i32> for ExampleValueType {
+    fn from (value: i32) -> Self {
+        return Self::I32(value);
+    }
+}
+
+impl From<f32> for ExampleValueType {
+    fn from (value: f32) -> Self {
+        return Self::F32(value);
+    }
+}
+
+impl CanBeNone<ExampleValueType> for ExampleValueType {
+    fn none() -> ExampleValueType {
+        return ExampleValueType::None;
+    }
+}
+
+impl Default for ExampleValueType {
+    fn default() -> Self {
+        return Self::None;
+    }
+}
+
+impl ExampleValueType {
+    pub fn unwrap_i32(&self) -> i32 {
+        match &self {
+            Self::I32(value) => *value,
+            _ => { panic!("No i32 value stored.") }
+        }
+    }
+
+    pub fn unwrap_f32(&self) -> f32 {
+        match &self {
+            Self::F32(value) => *value,
+            _ => { panic!("No f32 value stored.") }
+        }
+    }
+
+    pub fn is_none(&self) -> bool {
+        match &self {
+            Self::None => true,
+            _ => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn it_gets_and_sets_values() {
-        let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
-        data.set_path("scene.some", 1234);
-        assert_eq!(data.get_path("scene.some").unwrap(), 1234);
+        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        data.set_path("scene.some", ExampleValueType::I32(1234));
+        assert_eq!(data.get_path("scene.some").unwrap_i32(), 1234);
     }
 
     #[test]
     fn it_gets_and_sets_deep_values() {
-        let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
-        data.set_path("scene.some.very.deep.property", 1234);
-        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 1234);
+        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
     }
 
     #[test]
     fn it_gets_none_when_not_set() {
-        let data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
-        assert_eq!(data.get_path("scene.property.that.does.not.exist"), None);
+        let data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        assert_eq!(data.get_path("scene.property.that.does.not.exist").is_none(), true);
     }
 
     #[test]
     fn it_changes_value() {
-        let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
-        data.set_path("scene.some.very.deep.property", 1234);
-        data.set_path("scene.some.very.deep.property", 2345);
-        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap(), 2345);
+        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(2345));
+        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap_i32(), 2345);
     }
 
     #[test]
     fn it_detects_updates() {
         // Arrange
-        let mut data = ObservableKVTree::<i32, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
 
         // Pre condition
 
         // Set value
-        data.set_path("scene.some.very.deep.property", 1234);
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), true);
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+        assert_eq!(data.was_path_updated("scene.some.very.deep.property"), true);
+        assert_eq!(data.was_path_updated("scene.some.very.deep"), true);
+        assert_eq!(data.was_path_updated("scene.some.very"), true);
+        assert_eq!(data.was_path_updated("scene.some"), true);
+        assert_eq!(data.was_path_updated("scene"), true);
         assert_eq!(data.update_tracker.updated, true);
 
         // Reset update cycle
         data.reset_update_cycle();
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), false);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), false);
-        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), false);
+        assert_eq!(data.was_path_updated("scene.some.very.deep.property"), false);
+        assert_eq!(data.was_path_updated("scene.some.very.deep"), false);
+        assert_eq!(data.was_path_updated("scene.some.very"), false);
+        assert_eq!(data.was_path_updated("scene.some"), false);
+        assert_eq!(data.was_path_updated("scene"), false);
         assert_eq!(data.update_tracker.updated, false);
 
         // Set value (2nd time)
-        data.set_path("scene.some.very.deep.property", 2345);
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(2345));
 
-        assert_eq!(data.get_path_meta("scene.some.very.deep.property").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very.deep").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some.very").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene.some").unwrap().update_tracker.was_updated(), true);
-        assert_eq!(data.get_path_meta("scene").unwrap().update_tracker.was_updated(), true);
+        assert_eq!(data.was_path_updated("scene.some.very.deep.property"), true);
+        assert_eq!(data.was_path_updated("scene.some.very.deep"), true);
+        assert_eq!(data.was_path_updated("scene.some.very"), true);
+        assert_eq!(data.was_path_updated("scene.some"), true);
+        assert_eq!(data.was_path_updated("scene"), true);
         assert_eq!(data.update_tracker.updated, true);
     }
 
     #[test]
     fn it_serializes() {
-        let mut data = ObservableKVTree::<f32, SimpleUpdateTracker>::default();
+        let mut data = ObservableKVTree::<ExampleValueType, SimpleUpdateTracker>::default();
 
-        data.set_path("scene.some.deep.property", 123.4);
+        data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
 
         // Convert BevySceneData to JSON
         let serialized = serde_json::to_string(&data).unwrap();
 
         // Convert JSON back to BevySceneData
-        let deserialized: ObservableKVTree<f32, SimpleUpdateTracker> = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ObservableKVTree<ExampleValueType, SimpleUpdateTracker> = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap(), 123.4);
+        assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
     }
 }

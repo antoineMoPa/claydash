@@ -3,7 +3,8 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use egui::containers::Frame;
 use egui::Color32;
 use epaint::{Stroke, Pos2};
-use bevy_command_central_egui::*;
+use claydash_data::{ClaydashValue, ClaydashData};
+use observable_key_value_tree::{ObservableKVTree, SimpleUpdateTracker};
 
 pub struct ClaydashUIPlugin;
 
@@ -25,7 +26,6 @@ impl Plugin for ClaydashUIPlugin {
         app.init_resource::<ClaydashUIState>()
             .add_plugins((
                 EguiPlugin,
-                BevyCommandCentralEguiPlugin
             ))
             .add_systems(Update, left_panel_ui)
             .add_systems(Startup, color_picker_ui);
@@ -43,8 +43,12 @@ const CIRCLE_USEFUL_RADIUS: f32 = 65.0 - CIRCLE_BORDER_APPROX;
 
 fn color_picker_ui(
     mut commands: Commands,
+    mut data_resource: ResMut<ClaydashData>,
     asset_server: Res<AssetServer>,
 ) {
+    // Set initial color
+    let tree = &mut data_resource.as_mut().tree;
+    tree.set_path("editor.colorpicker.color", ClaydashValue::Vec4(Vec4::new(0.8, 0.0, 0.3, 1.0)));
     commands.spawn(ImageBundle {
         style: Style {
             width: Val::Px(IMAGE_WIDTH),
@@ -66,8 +70,9 @@ fn left_panel_ui(
     mut contexts: EguiContexts,
     asset_server: Res<AssetServer>,
     assets: Res<Assets<Image>>,
-    claydash_ui_state: ResMut<ClaydashUIState>,
+    mut data_resource: ResMut<ClaydashData>,
 ) {
+    let tree = &mut data_resource.as_mut().tree;
     let ctx = contexts.ctx_mut();
 
     egui::SidePanel::left("left_panel")
@@ -95,8 +100,8 @@ fn left_panel_ui(
                         ui,
                         pointer_position,
                         asset_server,
-                        claydash_ui_state,
-                        assets
+                        assets,
+                        tree
                     )
                 }
                 _ => {}
@@ -109,8 +114,8 @@ fn draw_color_picker(
     ui: &mut egui::Ui,
     pointer_position: Pos2,
     asset_server: Res<AssetServer>,
-    mut claydash_ui_state: ResMut<ClaydashUIState>,
     assets: Res<Assets<Image>>,
+    tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
 ) {
     let distance_from_wheel_center =
         ((pointer_position.x - CIRCLE_CENTER_X).powi(2) +
@@ -137,12 +142,13 @@ fn draw_color_picker(
         let g = image.data[index_in_image as usize + 1];
         let b = image.data[index_in_image as usize + 2];
         let a = image.data[index_in_image as usize + 3];
-
-        claydash_ui_state.color.x = r as f32 / 255.0;
-        claydash_ui_state.color.y = g as f32 / 255.0;
-        claydash_ui_state.color.z = b as f32 / 255.0;
-        claydash_ui_state.color.w = a as f32 / 255.0;
-
+        let color = Vec4::new(
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            a as f32 / 255.0,
+        );
+        tree.set_path("editor.colorpicker.color", ClaydashValue::Vec4(color));
         ui.painter()
             .circle(
                 Pos2 {

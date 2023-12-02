@@ -2,317 +2,180 @@ use bevy::{
     prelude::*,
     input::{keyboard::KeyCode, Input}
 };
-use bevy_command_central_plugin::CommandCentralState;
 use bevy_mod_picking::{backend::HitData, prelude::*};
 use bevy_sdf_object::SDFObject;
 use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
-use command_central::CommandBuilder;
-use observable_key_value_tree::{
-    ObservableKVTree,
-    SimpleUpdateTracker
-};
+
+mod interaction_commands_and_shortcuts;
 
 pub struct ClaydashInteractionPlugin;
 
 impl Plugin for ClaydashInteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClaydashData>()
-            .add_systems(Startup, register_interaction_commands)
-            .add_systems(Update, run_shortcut_commands)
+            .add_systems(Startup, interaction_commands_and_shortcuts::register_interaction_commands)
+            .add_systems(Update, interaction_commands_and_shortcuts::run_shortcut_commands)
+            .add_systems(Update, update_selection_color)
             .add_systems(Update, update_transformations);
     }
 }
 
-pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
-    let commands = &mut bevy_command_central.commands;
-    CommandBuilder::new()
-        .title("Grab")
-        .system_name("grab")
-        .docs("Start moving selection.")
-        .shortcut("G")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(start_grab)))
-        .write(commands);
-
-    CommandBuilder::new()
-        .title("Constrain editing to X axis")
-        .system_name("constrain_x")
-        .docs("Add a X constraint to current editing mode.")
-        .shortcut("X")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_x)))
-        .write(commands);
-
-
-    CommandBuilder::new()
-        .title("Constrain editing to Y axis")
-        .system_name("constrain_y")
-        .docs("Add a Y constraint to current editing mode.")
-        .shortcut("Y")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_y)))
-        .write(commands);
-
-    CommandBuilder::new()
-        .title("Constrain editing to Z axis")
-        .system_name("constrain_z")
-        .docs("Add a Z constraint to current editing mode.")
-        .shortcut("Z")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_z)))
-        .write(commands);
-
-
-    CommandBuilder::new()
-        .title("Scale")
-        .system_name("scale")
-        .docs("Start scaling selection.")
-        .shortcut("S")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(start_scale)))
-        .write(commands);
-
-    CommandBuilder::new()
-        .title("Quit")
-        .system_name("quit")
-        .docs("Quit and cancel current editing state.")
-        .shortcut("Escape")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(escape)))
-        .write(commands);
-
-    CommandBuilder::new()
-        .title("Finish")
-        .system_name("finish")
-        .docs("Finish and apply current editing state.")
-        .shortcut("Return")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(finish)))
-        .write(commands);
-
-    CommandBuilder::new()
-        .title("Delete")
-        .system_name("delete")
-        .docs("Delete/Remove selection.")
-        .shortcut("Back")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(delete)))
-        .write(commands);
-
-}
-
-fn reset_constraints(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    tree.set_path("editor.constrain_x", ClaydashValue::Bool(false));
-    tree.set_path("editor.constrain_y", ClaydashValue::Bool(false));
-    tree.set_path("editor.constrain_z", ClaydashValue::Bool(false));
-}
-
-fn start_grab(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    reset_constraints(tree);
-    tree.set_path("editor.state", ClaydashValue::EditorState(Grabbing));
-}
-
-fn toggle_path(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, path: String) {
-    let current_value = match tree.get_path("editor.constrain_x").unwrap() {
-        ClaydashValue::Bool(value) => value,
-        _ => false
-    };
-    tree.set_path(&path, ClaydashValue::Bool(!current_value));
-}
-
-fn constrain_x(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    toggle_path(tree, "editor.constrain_x".to_string());
-}
-
-fn constrain_y(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    toggle_path(tree, "editor.constrain_y".to_string());
-}
-
-fn constrain_z(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    toggle_path(tree, "editor.constrain_z".to_string());
-}
-
-fn start_scale(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    reset_constraints(tree);
-    tree.set_path("editor.state", ClaydashValue::EditorState(Scaling));
-}
-
-fn escape(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    tree.set_path("editor.state", ClaydashValue::EditorState(Start));
-    println!("TODO: cancel edit and go back to initial position.");
-}
-
-fn finish(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    tree.set_path("editor.state", ClaydashValue::EditorState(Start));
-}
-
-fn delete(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
-    // Find selected objects
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-        ClaydashValue::UUIDList(uuids) => uuids,
-        _ => { return default(); }
-    };
-
-    let filtered_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
-        ClaydashValue::VecSDFObject(objects) => {
-            objects.iter().filter(|object| {
-                !selected_object_uuids.contains(&object.uuid)
-            }).cloned().collect()
-        },
-        _ => { return; }
-    };
-
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(filtered_objects));
-}
-
-fn str_to_key(key_str: &String) -> KeyCode {
-    return match key_str.as_str() {
-        "X" => KeyCode::X,
-        "Y" => KeyCode::Y,
-        "Z" => KeyCode::Z,
-        "G" => KeyCode::G,
-        "S" => KeyCode::S,
-        "Escape" => KeyCode::Escape,
-        "Return" => KeyCode::Return,
-        "Back" => KeyCode::Back,
-        _ => {
-            panic!("str not mapped to a keycode {}", key_str)
-        }
-    };
-}
-
-pub fn run_shortcut_commands(
-    mut bevy_command_central: ResMut<CommandCentralState>,
+fn update_selection_color(
     mut data_resource: ResMut<ClaydashData>,
-    windows: Query<&Window>,
-    keys: Res<Input<KeyCode>>
-){
-    let commands = &mut bevy_command_central.commands.commands;
-    let tree = &mut data_resource.as_mut().tree;
-
-    for (_key, command) in commands.iter() {
-        if command.shortcut.is_empty() {
-            continue;
-        }
-        if keys.just_released(str_to_key(&command.shortcut)) {
-            let window = windows.single();
-            tree.set_path(
-                "editor.initial_mouse_position",
-                ClaydashValue::Vec2(window.cursor_position().unwrap_or(Vec2::ZERO))
-            );
-            set_objects_initial_position(tree);
-            match command.parameters["callback"].value.clone().unwrap() {
-                ClaydashValue::Fn(callback) => callback(tree),
-                _ => {}
-            };
-        }
-    }
-}
-
-fn set_objects_initial_position(
-    tree: &mut  ObservableKVTree<ClaydashValue, SimpleUpdateTracker>
 ) {
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+    let tree = &mut data_resource.as_mut().tree;
+    if !tree.was_path_updated("editor.colorpicker.color") {
+        return;
+    }
+    let color: Vec4 = tree.get_path("editor.colorpicker.color").unwrap_vec4_or(Vec4::ZERO);
+
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
         _ => { return; }
     };
 
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-        ClaydashValue::UUIDList(uuids) => uuids,
-        _ => { return default(); }
-    };
+    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
-            tree.set_path(&format!("editor.initial_position.{}", object.uuid), ClaydashValue::Vec3(object.position));
-            tree.set_path(&format!("editor.initial_scale.{}", object.uuid), ClaydashValue::Vec3(object.scale));
+            object.color = color;
         }
     }
+
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
 }
 
 fn update_transformations(
     mut data_resource: ResMut<ClaydashData>,
     windows: Query<&Window>,
-    camera_transforms: Query<&mut Transform, With<Camera>>,
+    camera_global_transforms: Query<&mut GlobalTransform, With<Camera>>,
+    camera: Query<&Camera>,
 ) {
     // Based on camera rotation, find what direction mouse moves corresponds to in
     // 3D space.
-    let camera_transform: &Transform = camera_transforms.single();
-    let x_vec = camera_transform.right();
-    let y_vec = camera_transform.up();
+    let camera = camera.single();
+    let camera_global_transform = camera_global_transforms.single();
 
     let tree = &mut data_resource.as_mut().tree;
 
-    let state = tree.get_path("editor.state").unwrap_or(ClaydashValue::EditorState(Start)).into();
+    let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
 
     // Return early if not editing
     match state {
-        ClaydashValue::EditorState(Start) => { return; },
+        Start => { return; },
         _ => {}
     }
 
     // Find cursor info
     let window = windows.single();
     let cursor_position = window.cursor_position().unwrap_or(Vec2::ZERO);
-    let initial_cursor_position: Vec2 = match tree.get_path("editor.initial_mouse_position") {
-        Some(ClaydashValue::Vec2(vec)) => vec,
-        _ => Vec2::ZERO
-    };
-    let delta_cursor_position = cursor_position - initial_cursor_position;
 
-    // Find selected objects
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects").unwrap() {
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
         _ => { return; }
     };
 
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids").unwrap_or(ClaydashValue::None) {
-        ClaydashValue::UUIDList(uuids) => uuids,
+    let selected_object_uuids = match tree.get_path("scene.selected_uuids") {
+        ClaydashValue::VecUuid(uuids) => uuids,
         _ => { return default(); }
     };
 
-    let constrain_x = match tree.get_path("editor.constrain_x").unwrap() {
+    let constrain_x = match tree.get_path("editor.constrain_x") {
         ClaydashValue::Bool(value) => value,
         _ => false
     };
-    let constrain_y = match tree.get_path("editor.constrain_y").unwrap() {
+    let constrain_y = match tree.get_path("editor.constrain_y") {
         ClaydashValue::Bool(value) => value,
         _ => false
     };
-    let constrain_z = match tree.get_path("editor.constrain_z").unwrap() {
+    let constrain_z = match tree.get_path("editor.constrain_z") {
         ClaydashValue::Bool(value) => value,
         _ => false
     };
+
+    let has_constraints = constrain_x || constrain_y || constrain_z;
+    let constraints = if has_constraints { Vec3::new(
+        if constrain_x { 1.0 } else { 0.0 },
+        if constrain_y { 1.0 } else { 0.0 },
+        if constrain_z { 1.0 } else { 0.0 },
+    )} else { Vec3::ONE };
+
+    let initial_selection_transform = tree.get_path("editor.initial_selection_transform")
+        .unwrap_transform_or(Transform::IDENTITY);
+
+    let selection_translation: Vec3 = match camera.viewport_to_world(camera_global_transform, cursor_position) {
+         Some(ray) => {
+             let selection_to_viewport_dist = (initial_selection_transform.translation - ray.origin).length();
+             ray.origin + ray.direction * selection_to_viewport_dist
+         },
+         _ => { return; }
+     };
 
     match state {
-        ClaydashValue::EditorState(Grabbing) => {
+        Grabbing => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
-                    let initial_position = match tree.get_path(&format!("editor.initial_position.{}", object.uuid)).unwrap_or(ClaydashValue::Vec3(Vec3::ZERO)) {
-                        ClaydashValue::Vec3(position) => position,
-                        _ => Vec3::ZERO
-                    };
+                    let initial_transform = tree
+                        .get_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid))
+                        .unwrap_transform_or(Transform::IDENTITY);
 
-                    object.position = initial_position +
-                        MOUSE_SENSIBILITY * (
-                            delta_cursor_position.x * x_vec +
-                                -delta_cursor_position.y * y_vec
-                        );
+                    object.transform.translation = initial_transform.translation + selection_translation * constraints;
                 }
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
         },
-        ClaydashValue::EditorState(Scaling) => {
+        Scaling => {
             for object in objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
-                    let initial_scale = match tree.get_path(&format!("editor.initial_scale.{}", object.uuid)).unwrap_or(ClaydashValue::Vec3(Vec3::ONE)) {
-                        ClaydashValue::Vec3(scale) => scale,
-                        _ => Vec3::ONE
-                    };
+                    let cursor_position_near_object = get_cursor_position_at_selection_dist(
+                        camera,
+                        camera_global_transform,
+                        cursor_position,
+                        selection_translation
+                    ).unwrap_or(Vec3::ZERO);
 
-                    let has_constrains = constrain_x || constrain_y || constrain_z;
-                    let constraints = if has_constrains { Vec3::new(
-                        if constrain_x { 1.0 } else { 0.0 },
-                        if constrain_y { 1.0 } else { 0.0 },
-                        if constrain_z { 1.0 } else { 0.0 },
-                    )} else { Vec3::ONE };
+                    let initial_radius = tree.get_path("editor.initial_radius").unwrap_f32();
+                    let current_radius = (cursor_position_near_object - initial_selection_transform.translation).length();
+                    let scale = current_radius / initial_radius - 1.0;
 
-                    object.scale = initial_scale +
-                        (delta_cursor_position.x + delta_cursor_position.y) *
-                        SCALE_MOUSE_SENSIBILITY * Vec3::ONE * constraints;
+                    let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
+                        .unwrap_transform_or(Transform::IDENTITY);
+                    let initial_transform_relative_to_selection = tree
+                        .get_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid))
+                        .unwrap_transform_or(Transform::IDENTITY);
+
+                    object.transform = initial_transform;
+                    object.transform.scale += scale * constraints;
+                    object.transform.translation += scale * constraints * initial_transform_relative_to_selection.translation;
                 }
+            }
+            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+        },
+        Rotating => {
+            for object in objects.iter_mut() {
+                if !selected_object_uuids.contains(&object.uuid) {
+                    continue;
+                }
+                match get_object_angle_relative_to_camera_ray(
+                    camera,
+                    camera_global_transform,
+                    cursor_position,
+                    &initial_selection_transform,
+                ) {
+                    Some((axis, angle)) => {
+                        let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
+                            .unwrap_transform_or(Transform::IDENTITY);
+
+                        let selection_center = initial_selection_transform.translation;
+
+                        let axis = if has_constraints { constraints  } else { axis };
+                        let rotation = Quat::from_axis_angle(axis, -angle);
+
+                        object.transform = initial_transform;
+                        object.transform.rotate_around(selection_center, rotation);
+                    }
+                    _ => {}
+                };
             }
             tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
         },
@@ -320,22 +183,70 @@ fn update_transformations(
     };
 }
 
-// How much objects move in space when mouse moves by 1px.
-const MOUSE_SENSIBILITY: f32 = 1.0 / 100.0;
-const SCALE_MOUSE_SENSIBILITY: f32 = 1.0 / 300.0;
+fn get_cursor_position_at_selection_dist(
+    camera: &Camera,
+    camera_global_transform: &GlobalTransform,
+    cursor_position: Vec2,
+    selection_translation: Vec3
+) -> Option<Vec3> {
+    match camera.viewport_to_world(camera_global_transform, cursor_position) {
+        Some(ray) => {
+            let object_to_viewport_dist = (selection_translation - ray.origin).length();
+            return Some(ray.origin + ray.direction * object_to_viewport_dist);
+        },
+        _ => {
+            return None;
+        }
+    };
+}
+
+fn get_object_angle_relative_to_camera_ray(
+    camera: &Camera,
+    camera_global_transform: &GlobalTransform,
+    cursor_position: Vec2,
+    object_transform: &Transform
+) -> Option<(Vec3, f32)> {
+    let camera_right = camera_global_transform.right();
+    let camera_up = camera_global_transform.up();
+
+    let cursor_position_near_object = get_cursor_position_at_selection_dist(
+        camera,
+        camera_global_transform,
+        cursor_position,
+        object_transform.translation
+    );
+
+    match cursor_position_near_object {
+        Some(cursor_position_near_object) => {
+            let object_position_relative_to_camera = object_transform.translation - camera_global_transform.translation();
+            let object_position_relative_to_camera_up = object_position_relative_to_camera.dot(camera_up);
+            let object_position_relative_to_camera_right = object_position_relative_to_camera.dot(camera_right);
+
+
+            let cursor_relative_to_up_vector = cursor_position_near_object.dot(camera_up) - object_position_relative_to_camera_up;
+            let cursor_relative_to_right_vector = cursor_position_near_object.dot(camera_right) - object_position_relative_to_camera_right;
+
+            return Some((camera_global_transform.forward(), cursor_relative_to_up_vector.atan2(cursor_relative_to_right_vector)));
+        },
+        _ => {
+            return None;
+        }
+    };
+}
 
 /// Handle selection
 /// Also, handle reseting state on click after transforming objects.
 pub fn on_mouse_down(
     event: Listener<Pointer<Down>>,
+    keys: Res<Input<KeyCode>>,
     mut data_resource: ResMut<ClaydashData>,
     camera_transforms: Query<&mut Transform, With<Camera>>,
 ) {
     let tree = &mut data_resource.as_mut().tree;
-    let state = tree.get_path("editor.state").unwrap_or(ClaydashValue::EditorState(Start)).into();
+    let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
 
     match state {
-        ClaydashValue::EditorState(Start) => { },
+        Start => { },
         _ => {
             // Exit grab/scale on click
             tree.set_path("editor.state", ClaydashValue::EditorState(Start));
@@ -344,7 +255,7 @@ pub fn on_mouse_down(
     }
 
     let tree = &mut data_resource.as_mut().tree;
-    match tree.get_path("scene.sdf_objects").unwrap() {
+    match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(objects) => {
             let hit: &HitData = &event.hit;
             let position = match hit.position {
@@ -358,25 +269,54 @@ pub fn on_mouse_down(
 
             match maybe_hit_uuid {
                 Some(hit) => {
-                    let mut selected_uuids: Vec<uuid::Uuid> = match tree.get_path("scene.selected_uuids").unwrap_or_default() {
-                        ClaydashValue::UUIDList(list) => list,
-                        _ => vec!()
-                    };
+                    let mut selected_uuids: Vec<uuid::Uuid> = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
                     let is_selected = selected_uuids.contains(&hit);
+                    let has_shift = keys.pressed(KeyCode::ShiftLeft);
 
                     if is_selected {
+                        // Remove object from selection
+                        match has_shift {
+                            true => {
+                                // Shift is pressed: remove from selection
+                                selected_uuids = selected_uuids
+                                    .into_iter()
+                                    .filter(|item| *item != hit).collect();
+                            }
+                            false => {
+                                // Shift not pressed.
+                                if selected_uuids.len() == 1 {
+                                    // Last object in selection: un-select
+                                    selected_uuids = selected_uuids
+                                        .into_iter()
+                                        .filter(|item| *item != hit).collect();
+                                } else {
+                                    // Replace entire selection with only this object
+                                    selected_uuids = vec!(hit);
+                                }
+                            }
+                        };
+
                         // un-select object
                         tree.set_path(
                             "scene.selected_uuids",
-                            ClaydashValue::UUIDList(selected_uuids
-                                                    .into_iter()
-                                                    .filter(|item| *item != hit).collect())
+                            ClaydashValue::VecUuid(selected_uuids)
                         );
                     } else {
-                        selected_uuids.push(hit);
+                        // Add object to selection
+                        match has_shift {
+                            true => {
+                                // Shift is pressed: Additive selection
+                                selected_uuids.push(hit);
+                            }
+                            false => {
+                                // Shift is not pressed: Replace selection with new hit
+                                selected_uuids = vec!(hit);
+                            }
+                        };
+
                         tree.set_path(
                             "scene.selected_uuids",
-                            ClaydashValue::UUIDList(selected_uuids)
+                            ClaydashValue::VecUuid(selected_uuids)
                         );
                     }
                 },

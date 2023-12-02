@@ -22,23 +22,34 @@ impl Plugin for BevySDFObjectPlugin {
     }
 }
 
-const MAX_SDFS_PER_ENTITY: i32 = 512;
+const MAX_SDFS_PER_ENTITY: i32 = 256;
 
 #[derive(Clone)]
 pub struct SDFObject {
     pub uuid: uuid::Uuid,
-    pub position: Vec3,
-    pub scale: Vec3,
+    pub transform: Transform,
     pub color: Vec4,
     pub object_type: i32,
+}
+
+impl SDFObject {
+    /// Create a new individually-addressable object (with different uuid)
+    pub fn duplicate(&self) -> Self {
+        let mut clone = self.clone();
+        clone.uuid = uuid::Uuid::new_v4();
+        return clone;
+    }
+
+    pub fn inverse_transform_matrix(&self) -> Mat4 {
+        return self.transform.compute_matrix().inverse();
+    }
 }
 
 impl Default for SDFObject {
     fn default() -> Self {
         Self {
             uuid: uuid::Uuid::new_v4(),
-            position: Vec3::default(),
-            scale: Vec3::ONE,
+            transform: Transform::IDENTITY,
             color: Vec4::default(),
             object_type: TYPE_END,
         }
@@ -59,11 +70,9 @@ pub struct SDFObjectMaterial {
     #[uniform(1)]
     pub sdf_meta: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
     #[uniform(2)]
-    pub sdf_positions: [Vec4; MAX_SDFS_PER_ENTITY as usize],
-    #[uniform(3)]
-    pub sdf_scales: [Vec4; MAX_SDFS_PER_ENTITY as usize],
-    #[uniform(4)]
     pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
+    #[uniform(3)]
+    pub sdf_inverse_transforms: [Mat4; MAX_SDFS_PER_ENTITY as usize],
 }
 
 fn sphere_sdf(p: Vec3, r: f32) -> f32 {
@@ -85,6 +94,24 @@ fn sdf_union(d1: f32, d2: f32) -> f32 {
     return d1.min(d2);
 }
 
+fn object_distance(p: Vec3, object: &SDFObject) -> f32 {
+    let sphere_r = 0.2;
+    let box_parameters = Vec3::new(0.3, 0.3, 0.3);
+    let transformed_position = (object.inverse_transform_matrix() * Vec4::from((p, 1.0))).xyz();
+    let d_current_object = match object.object_type {
+        TYPE_SPHERE => {
+            sphere_sdf(transformed_position, sphere_r)
+        },
+        TYPE_BOX => {
+            box_sdf(transformed_position, box_parameters)
+        },
+        _ => { panic!("Not implemented!") }
+    };
+
+    // Correct the returned distance to account for the scale
+    return d_current_object * object.transform.scale.length() / Vec3::ONE.length();
+}
+
 const RUST_RAYMARCH_ITERATIONS: i32 = 64;
 
 /// Raymarch/Raycast, e.g.: To find which object was clicked
@@ -95,23 +122,12 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
     let mut position = start_position - ray.normalize();
     let direction = ray.normalize();
     // TODO un-hardcode
-    let sphere_r = 0.2;
-    let box_parameters = Vec3::new(0.3, 0.3, 0.3);
     let mut d = 10000.0;
-    let mut d_current_object: f32 = 0.0;
     let selection_distance_threshold = 0.01;
 
     for _i in 1..RUST_RAYMARCH_ITERATIONS {
         for obj in objects.iter() {
-            let t = obj.object_type;
-            let scaled_position = (position - obj.position) / obj.scale;
-
-            if t == TYPE_SPHERE {
-                d_current_object = sphere_sdf(scaled_position, sphere_r);
-            }
-            else if t == TYPE_CUBE {
-                d_current_object = box_sdf(scaled_position, box_parameters);
-            }
+            let d_current_object = object_distance(position, obj);
 
             d = sdf_union(d_current_object, d);
 
@@ -120,7 +136,7 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
             }
         }
 
-        position += direction * d;
+        position += direction * d * 0.3;
     }
 
     return None
@@ -131,9 +147,8 @@ impl Default for SDFObjectMaterial {
         Self {
             camera: Vec4::ZERO,
             sdf_meta: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
-            sdf_positions: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
-            sdf_scales: [Vec4::ONE; MAX_SDFS_PER_ENTITY as usize],
             sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
+            sdf_inverse_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
         }
     }
 }
@@ -161,7 +176,7 @@ impl Material for SDFObjectMaterial {
 
         defs.push(ShaderDefVal::Int("TYPE_END".into(), TYPE_END));
         defs.push(ShaderDefVal::Int("TYPE_SPHERE".into(), TYPE_SPHERE));
-        defs.push(ShaderDefVal::Int("TYPE_CUBE".into(), TYPE_CUBE));
+        defs.push(ShaderDefVal::Int("TYPE_BOX".into(), TYPE_BOX));
 
         Ok(())
     }
