@@ -213,33 +213,12 @@ pub struct ClaydashDataPlugin;
 impl Plugin for ClaydashDataPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClaydashData>()
-            .add_systems(Startup, init_sdf_objects)
             .add_systems(Update, sync_to_bevy);
     }
 }
 
 lazy_static! {
     static ref LAST_SYNCED_SDF_OBJECTS_VERSION: Arc<Mutex<i32>> = Arc::new(Mutex::new(-1));
-}
-
-fn init_sdf_objects(mut data_resource: ResMut<ClaydashData>) {
-    let data = data_resource.as_mut();
-
-    let mut sdf_objects: Vec<SDFObject> = Vec::new();
-    sdf_objects.push(SDFObject {
-        object_type: TYPE_SPHERE,
-        color: Vec4::new(0.3, 0.0, 0.6, 1.0),
-        ..default()
-    });
-
-    sdf_objects.push(SDFObject {
-        object_type: TYPE_BOX,
-        transform: Transform::from_translation(Vec3::new(-0.2, 0.3, 0.0)),
-        color: Vec4::new(0.8, 0.0, 0.6, 1.0),
-        ..default()
-    });
-
-    data.tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
 }
 
 // Sync tree to bevy
@@ -261,9 +240,6 @@ fn sync_to_bevy(
         Ok(version) => { version  }
         _ => { return }
     };
-
-    println!("last ver: {}", last_updated_version);
-    println!("ver: {}", version);
 
     if version > *last_updated_version  {
         // Potentially: move this block to bevy_sdf_object

@@ -28,7 +28,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::interactions::ClaydashInteractionPlugin;
 
-use claydash_data::{ClaydashDataPlugin, ClaydashValue};
+use claydash_data::{ClaydashDataPlugin, ClaydashValue, ClaydashData};
 
 mod interactions;
 mod claydash_ui;
@@ -60,10 +60,19 @@ fn main() {
                                setup_camera,
                                setup_window_size,
                                build_projection_surface,
-                               register_debug_commands))
+                               register_debug_commands,
+                               default_duck))
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, update_camera)
         .run();
+}
+
+mod duck;
+
+pub fn default_duck(mut data_resource: ResMut<ClaydashData>) {
+    let tree = &mut data_resource.as_mut().tree;
+    let scene: Result<ObservableKVTree<ClaydashValue, SimpleUpdateTracker>, serde_json::Error> = serde_json::from_str(duck::DEFAULT_DUCK);
+    tree.set_tree("scene", scene.unwrap());
 }
 
 pub fn register_debug_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
