@@ -83,6 +83,7 @@ pub fn register_debug_commands(mut bevy_command_central: ResMut<CommandCentralSt
         .docs("Dump internal data tree to shell. This is a troubleshooting command for developers.")
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(dump_tree)))
         .write(commands);
+
 }
 
 pub fn dump_tree(tree: &mut ObservableKVTree<ClaydashValue, SimpleUpdateTracker>) {
@@ -145,7 +146,7 @@ fn setup_camera(
     ).insert(
         OrbitCameraBundle::new(
             OrbitCameraController::default(),
-            Vec3::new(0.0, 0.0, 5.0),
+            Vec3::new(-3.3, 0.8, 1.7),
             Vec3::ZERO,
             Vec3::Y,
         )
