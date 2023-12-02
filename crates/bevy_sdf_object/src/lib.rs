@@ -158,6 +158,10 @@ impl Material for SDFObjectMaterial {
         return "shaders/all.wgsl".into();
     }
 
+    fn alpha_mode(&self) -> AlphaMode {
+	AlphaMode::Blend
+    }
+
     fn specialize(
         _pipeline: &MaterialPipeline<Self>,
         descriptor: &mut RenderPipelineDescriptor,

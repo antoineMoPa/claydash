@@ -17,7 +17,7 @@ use bevy_command_central_plugin::{BevyCommandCentralPlugin, CommandCentralState}
 use bevy::{
     input::{keyboard::KeyCode, Input},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    prelude::*,
+    prelude::*, render::render_resource::{AsBindGroup, ShaderRef},
 };
 
 use bevy_sdf_object::*;
@@ -53,14 +53,15 @@ fn main() {
             BevySDFObjectPlugin,
             claydash_ui::ClaydashUIPlugin,
             ClaydashInteractionPlugin,
+            MaterialPlugin::<GridMaterial>::default()
         ))
-
         .add_systems(Startup, (remove_picking_logs,
                                setup_frame_limit,
                                setup_camera,
                                setup_window_size,
                                build_projection_surface,
                                register_debug_commands,
+                               setup_grid,
                                default_duck))
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, update_camera)
@@ -153,27 +154,51 @@ fn setup_camera(
     );
 }
 
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub struct GridMaterial { }
+
+impl Material for GridMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/grid_material.wgsl".into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+	AlphaMode::Opaque
+    }
+}
+
+
+fn setup_grid(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<GridMaterial>>,
+) {
+    commands.spawn(MaterialMeshBundle {
+        mesh: meshes.add(Mesh::from(shape::Plane { size: 10.0, subdivisions: 0 })),
+        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        material: materials.add(GridMaterial { }),
+        ..default()
+    });
+}
+
 /// Build an object with our SDF material.
 fn build_projection_surface(
-    mut windows: Query<&mut Window>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
 ) {
-    let window = windows.single_mut();
-    let window_aspect_ratio = (window.resolution.physical_width() as f32) / (window.resolution.physical_height() as f32);
-
     // cube
     commands.spawn((
         MaterialMeshBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.5 })),
+            mesh: meshes.add(Mesh::from(shape::Cube { size: 2.0 })),
             transform: Transform {
                 translation: Vec3::ZERO,
-                rotation: Quat::from_xyzw(0.5, 0.5, 0.5, 0.5), // Face the camera
-                scale: Vec3::new(1.0, 1.0, window_aspect_ratio),
+                scale: Vec3::ONE,
                 ..default()
             },
-            material: materials.add(SDFObjectMaterial { ..default() }),
+            material: materials.add(SDFObjectMaterial {
+                ..default()
+            }),
             ..default()
         },
         PickableBundle::default(),      // Makes the entity pickable

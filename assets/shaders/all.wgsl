@@ -152,11 +152,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             // We are probably past the object.
             // Note that this will not always be true: ex.: for big landscape ground objects.
             // But for now it's a valuable optimization.
-            break;
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
         }
     }
 
-    var col = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    var col = vec4<f32>(0.0, 0.0, 0.0, 0.0);
 
     if (found) {
         // Ambiant occlusion light
@@ -184,6 +184,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
         let ambiant_light = 0.3;
         col += ambiant_light * vec4(object_color.rgb, 1.0);// - ao_light * vec4(0.01);
+        col.a = 1.0;
     }
 
     return col;
