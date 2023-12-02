@@ -208,8 +208,6 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>,
 
                 return;
             }
-
-            //leaf.update_tracker.notify_update();
         }
         else {
             if !self.subtree.contains_key(parts[0]) {
