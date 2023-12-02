@@ -1,26 +1,5 @@
-// The time since startup data is in the globals binding which is part of the mesh_view_bindings import
+#import bevy_pbr::forward_io::VertexOutput;
 #import bevy_pbr::mesh_view_bindings globals
-
-// TODO: see if using AssetLoader fixes import
-struct VertexOutput {
-    // This is `clip position` when the struct is used as a vertex stage output
-    // and `frag coord` when used as a fragment stage input
-    @builtin(position) position: vec4<f32>,
-    @location(0) world_position: vec4<f32>,
-    @location(1) world_normal: vec3<f32>,
-#ifdef VERTEX_UVS
-    @location(2) uv: vec2<f32>,
-#endif
-#ifdef VERTEX_TANGENTS
-    @location(3) world_tangent: vec4<f32>,
-#endif
-#ifdef VERTEX_COLORS
-    @location(4) color: vec4<f32>,
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    @location(5) @interpolate(flat) instance_index: u32,
-#endif
-}
 
 @group(1) @binding(0)
 var<uniform> camera: vec4<f32>;
@@ -104,8 +83,8 @@ fn object_normal(p: vec3<f32>, sdf_index: i32) -> vec3<f32> {
 }
 
 @fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    var p = in.world_position.xyz;
+fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
+    var p = mesh.world_position.xyz;
     var camera_ray = normalize(p - camera.xyz);
     // Make objects out of the domain visible for a certain range
     // (mostly to have a nicer default view)
