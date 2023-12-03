@@ -6,7 +6,6 @@ use claydash_data::{ClaydashValue, ClaydashData};
 use bevy_command_central_plugin::CommandCentralState;
 use observable_key_value_tree::{
     ObservableKVTree,
-    UpdateTracker
 };
 use bevy_sdf_object::SDFObject;
 use command_central::CommandBuilder;
