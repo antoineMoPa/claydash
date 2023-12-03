@@ -1,22 +1,20 @@
 //! ObservableKVTree is a a nested map data structure designed for applications
 //! with update cycles (example: every frame, every network sync).
 //!
-//! A note about the "Observable" word, that usually comes with callback expectations:
-//!  - It's **not** observable in the sense that a callback will be run on updates.
+//! You can efficiently determine which part was changed as part of your application's main loop or using mspc channels.
 //!
-//!  - It's obsevable in the sense that you can efficiently determine which part was changed as part of your application's main loop.
-//!  - Although, potentially, with a custom update tracker, it could be possible to work with callbacks.
-//!
-//! The intended use is roughly as follows:
+//! When using was_updated, the intended use is roughly as follows:
 //!  - Update some properties in the tree. The node and it's parent will be marked as updated.
 //!  - A the next frame, your code can parse the tree structure, skipping subtrees that have not
 //!    been updated.
+//! For async processing, it becomes useful to use channels instead.
 //!
 //! Here are the important parts of the API:
 //!  - `data.set_path("scene.some.property", 1234)`
 //!  - `data.get_path("scene.some.property")`
 //!  - `data.update_tracker.was_updated()`
 //!  - `data.was_path_updated("scene.some.property")`
+//!  - `data.create_update_channel()`
 //!
 //! # Examples
 //!
@@ -31,7 +29,7 @@
 //! let value = data.get_path("scene.some.property").unwrap_i32();
 //! ```
 //!
-//! Detecting changes:
+//! Detecting changes with was_updated:
 //! ```
 //! use observable_key_value_tree::{ObservableKVTree,ExampleValueType};
 //! // Creating an observable tree
@@ -46,6 +44,18 @@
 //! data.reset_update_cycle();
 //! assert_eq!(data.was_updated(), false);
 //! ```
+//! Detecting changes with mspc channel:
+//! ```
+//! use observable_key_value_tree::{ObservableKVTree,ExampleValueType};
+//! // Creating an observable tree
+//! let mut data = ObservableKVTree::<ExampleValueType>::default();
+//! let receiver = data.create_update_channel();
+//! // Setting values
+//! data.set_path("scene.some.property", ExampleValueType::from(1234));
+//! // Detecting updates
+//! let update = receiver.recv();
+//! println!("{}", update.unwrap().path);
+//! ```
 //!
 //! ## Notes
 //!  - We consider a value updated even if it was set to the same value again.
@@ -57,30 +67,24 @@ use std::collections::BTreeMap;
 use serde::{Serialize, Deserialize};
 use std::sync::mpsc::{channel, Sender, Receiver};
 
-pub trait NotifyUpdate {
-    fn notify_update(&mut self);
-    fn reset_update_cycle(&mut self);
+#[derive(Default,Clone)]
+pub struct Update<ValueType> {
+    pub path: String,
+    pub value: ValueType,
+    pub old_value: ValueType,
 }
 
 #[derive(Default,Clone,Debug)]
-pub struct UpdateTracker<ValueType> {
+pub struct LeafVersionTracker {
     updated: bool,
     version: i32,
-    update_listeners: Vec<Sender<ValueType>>,
 }
 
-impl<ValueType> UpdateTracker<ValueType> {
+/// Provides the leaf version numbering and 'was_updated' flag.
+impl LeafVersionTracker {
     pub fn was_updated(&self) -> bool { self.updated }
     pub fn version(&self) -> i32 { self.version }
 
-    fn create_update_listener(&mut self) -> Receiver<ValueType> {
-        let (sender, receiver) = channel();
-        self.update_listeners.push(sender);
-        return receiver;
-    }
-}
-
-impl<ValueType> NotifyUpdate for UpdateTracker<ValueType> {
     fn notify_update(&mut self) {
         self.updated = true;
         self.version += 1;
@@ -97,7 +101,9 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
     subtree: BTreeMap<String, ObservableKVTree<ValueType>>,
     value: ValueType,
     #[serde(skip)]
-    pub update_tracker: UpdateTracker<ValueType>,
+    pub update_tracker: LeafVersionTracker,
+    #[serde(skip)]
+    update_listeners: Vec<Sender<Update<ValueType>>>,
 }
 
 /// Shortcut to verify if a path was modified.
@@ -139,19 +145,32 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 {
     pub fn set_path(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
+        let old_value = self.get_path(path);
+
         self.set_path_with_parts(parts.collect(), ObservableKVTree {
-            value,
+            value: value.clone(),
             ..ObservableKVTree::default()
         }, false);
+
+        for listener in self.update_listeners.iter() {
+            _ = listener.send(Update{
+                path: path.to_string(),
+                value: value.clone(),
+                old_value: old_value.clone(),
+            });
+        }
     }
 
-    /// Set the value and subtree at given path
+    /// Set the whole subtree at given path
+    /// This is useful to deserialize the tree.
     pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType>) {
         let parts = path.split(".");
         self.set_path_with_parts(parts.collect(), value, true);
         self.notify_change();
     }
 
+    /// Get the whole subtree at given path
+    /// This is useful to serialize the tree.
     pub fn get_path(&self, path: &str) -> ValueType {
         match self.get_path_with_parts(&path.split(".").collect()) {
             Some(data) => data.value,
@@ -224,6 +243,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
             node.reset_update_cycle();
         }
     }
+
     fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableKVTree<ValueType>> {
         if parts.len() == 1 {
             return self.subtree.get(parts[0]).cloned();
@@ -243,6 +263,12 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 
     fn notify_change(&mut self) {
         self.update_tracker.notify_update();
+    }
+
+    pub fn create_update_channel(&mut self) -> Receiver<Update<ValueType>> {
+        let (sender, receiver) = channel();
+        self.update_listeners.push(sender);
+        return receiver;
     }
 }
 
@@ -378,6 +404,26 @@ mod tests {
         assert_eq!(data2.path_version("scene.some.very"), 2);
         assert_eq!(data2.path_version("scene.some"), 2);
         assert_eq!(data2.path_version("scene"), 2);
+    }
+
+    #[test]
+    fn it_sends_updates() {
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+
+        let receiver = data.create_update_channel();
+
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(2345));
+        let update = receiver.recv().unwrap();
+        assert_eq!(update.path, "scene.some.very.deep.property".to_string());
+        assert_eq!(update.old_value.unwrap_i32(), 1234);
+        assert_eq!(update.value.unwrap_i32(), 2345);
+
+        data.set_path("scene.some.very.deep.property", ExampleValueType::from(3456));
+        let update = receiver.recv().unwrap();
+        assert_eq!(update.path, "scene.some.very.deep.property".to_string());
+        assert_eq!(update.old_value.unwrap_i32(), 2345);
+        assert_eq!(update.value.unwrap_i32(), 3456);
     }
 
     #[test]
