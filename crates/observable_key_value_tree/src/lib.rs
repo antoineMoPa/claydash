@@ -93,6 +93,11 @@ impl LeafVersionTracker {
     fn reset_update_cycle(&mut self) {
         self.updated = false;
     }
+
+    fn clear(&mut self) {
+        self.updated = bool::default();
+        self.version = i32::default();
+    }
 }
 
 #[derive(Default,Serialize,Deserialize,Debug,Clone)]
@@ -104,6 +109,12 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
     pub update_tracker: LeafVersionTracker,
     #[serde(skip)]
     update_listeners: Vec<Sender<Update<ValueType>>>,
+    /// Maps snapshot version names to (old_value, new_value)
+    #[serde(skip)]
+    pub snapshots: Vec<(String, BTreeMap<String, (ValueType, ValueType)>)>,
+    /// Map path to (old_value, new_value)
+    #[serde(skip)]
+    pub snapshot_change_accumulator: BTreeMap<String, (ValueType, ValueType)>
 }
 
 /// Shortcut to verify if a path was modified.
@@ -144,13 +155,9 @@ impl<T> CanBeNone<Option<T>> for Option<T> {
 impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType>
 {
     pub fn set_path(&mut self, path: &str, value: ValueType) {
-        let parts = path.split(".");
         let old_value = self.get_path(path);
 
-        self.set_path_with_parts(parts.collect(), ObservableKVTree {
-            value: value.clone(),
-            ..ObservableKVTree::default()
-        }, false);
+        self.set_path_without_notifying(path, value.clone());
 
         for listener in self.update_listeners.iter() {
             _ = listener.send(Update{
@@ -159,6 +166,64 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
                 old_value: old_value.clone(),
             });
         }
+    }
+
+    // After setting a path, this method updates
+    // the accumulator to set the old_value and the new_value
+    pub fn update_snapshot_accumulator(&mut self, path: &str, value: ValueType) {
+        let old_value: ValueType = match self.snapshot_change_accumulator.get(path) {
+            Some((old_value, _new_value)) => { old_value.clone() },
+            None => { self.get_path(path)}
+        };
+        self.snapshot_change_accumulator.insert(path.to_owned(), (old_value, value));
+    }
+
+    /// This method is like set path, but it will not notify mspc channels.
+    /// was_updated is still set, changes are still accumulated as part of snapshots.
+    /// version numbers are still incremented.
+    pub fn set_path_without_notifying(&mut self, path: &str, value: ValueType) {
+        let parts = path.split(".");
+        self.update_snapshot_accumulator(path, value.clone());
+        self.set_path_with_parts(parts.collect(), ObservableKVTree {
+            value: value,
+            ..ObservableKVTree::default()
+        }, false);
+    }
+
+    pub fn make_snapshot(&mut self, name: String) {
+        // TODO: find old values
+        self.snapshots.push((name, self.snapshot_change_accumulator.clone()));
+        self.snapshot_change_accumulator.clear();
+    }
+
+    pub fn revert_snapshot(&mut self, name: &str) {
+        let mut snapshot: Option<BTreeMap<String, (ValueType, ValueType)>> = None;
+        for name_and_snapshot in self.snapshots.iter() {
+            if name_and_snapshot.0 == name {
+                snapshot = Some(name_and_snapshot.1.clone());
+                break;
+            }
+        }
+
+        match snapshot {
+            Some(snapshot) => {
+                for (path, (old_value, _new_value)) in snapshot.iter() {
+                    self.set_path(path.as_str(), old_value.to_owned())
+                }
+            },
+            None => {
+                panic!("snapshot with this name does not exist");
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.subtree.clear();
+        self.value = ValueType::none();
+        self.update_tracker.clear();
+        self.update_listeners.clear();
+        self.snapshot_change_accumulator.clear();
+        self.snapshots.clear();
     }
 
     /// Set the whole subtree at given path
@@ -271,7 +336,6 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         return receiver;
     }
 }
-
 
 // This is a simple value type for docs and testing.
 // In real applications, we expect that a more complex value type will be used
@@ -489,5 +553,19 @@ mod tests {
         let deserialized: ObservableKVTree<ExampleValueType> = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+    }
+
+    #[test]
+    fn it_makes_and_reverts_snapshots() {
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
+
+        data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
+        data.make_snapshot("v0".into());
+        data.set_path("scene.some.deep.property", ExampleValueType::from(100.0));
+        data.make_snapshot("v1".into());
+
+        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 100.0);
+        data.revert_snapshot("v1");
+        data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
     }
 }
