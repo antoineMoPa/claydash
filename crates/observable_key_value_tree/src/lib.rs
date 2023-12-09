@@ -109,9 +109,9 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
     pub update_tracker: LeafVersionTracker,
     #[serde(skip)]
     update_listeners: Vec<Sender<Update<ValueType>>>,
-    /// Maps snapshot version names to (old_value, new_value)
+    /// Maps snapshot versions to (old_value, new_value)
     #[serde(skip)]
-    pub snapshots: Vec<(String, BTreeMap<String, (ValueType, ValueType)>)>,
+    pub snapshots: Vec<(i32, BTreeMap<String, (ValueType, ValueType)>)>,
     /// Map path to (old_value, new_value)
     #[serde(skip)]
     pub snapshot_change_accumulator: BTreeMap<String, (ValueType, ValueType)>
@@ -190,16 +190,24 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         }, false);
     }
 
-    pub fn make_snapshot(&mut self, name: String) {
-        // TODO: find old values
-        self.snapshots.push((name, self.snapshot_change_accumulator.clone()));
+    pub fn make_snapshot(&mut self) -> i32 {
+        let version = self.update_tracker.version;
+        self.snapshots.push((version, self.snapshot_change_accumulator.clone()));
         self.snapshot_change_accumulator.clear();
+        return version;
     }
 
-    pub fn revert_snapshot(&mut self, name: &str) {
+    pub fn last_snapshot_version(&mut self) -> Option<i32> {
+        return match self.snapshots.last() {
+            Some(snapshot) => { Some(snapshot.0) },
+            _ => { None }
+        };
+    }
+
+    pub fn revert_snapshot(&mut self, version: i32) {
         let mut snapshot: Option<BTreeMap<String, (ValueType, ValueType)>> = None;
         for name_and_snapshot in self.snapshots.iter() {
-            if name_and_snapshot.0 == name {
+            if name_and_snapshot.0 == version {
                 snapshot = Some(name_and_snapshot.1.clone());
                 break;
             }
@@ -560,12 +568,12 @@ mod tests {
         let mut data = ObservableKVTree::<ExampleValueType>::default();
 
         data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
-        data.make_snapshot("v0".into());
+        data.make_snapshot();
         data.set_path("scene.some.deep.property", ExampleValueType::from(100.0));
-        data.make_snapshot("v1".into());
+        let v1 = data.make_snapshot();
 
         assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 100.0);
-        data.revert_snapshot("v1");
+        data.revert_snapshot(v1);
         data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
     }
 }
