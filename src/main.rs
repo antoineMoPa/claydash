@@ -23,6 +23,7 @@ use bevy::{
 use bevy_sdf_object::*;
 use bevy_mod_picking::prelude::*;
 
+use undo_redo::ClaydashUndoRedoPlugin;
 #[allow(unused_imports)]
 use wasm_bindgen::prelude::*;
 
@@ -32,6 +33,7 @@ use claydash_data::{ClaydashDataPlugin, ClaydashValue, ClaydashData};
 
 mod interactions;
 mod claydash_ui;
+mod undo_redo;
 
 fn main() {
     App::new()
@@ -53,7 +55,8 @@ fn main() {
             BevySDFObjectPlugin,
             claydash_ui::ClaydashUIPlugin,
             ClaydashInteractionPlugin,
-            MaterialPlugin::<GridMaterial>::default()
+            MaterialPlugin::<GridMaterial>::default(),
+            ClaydashUndoRedoPlugin
         ))
         .add_systems(Startup, (remove_picking_logs,
                                setup_frame_limit,

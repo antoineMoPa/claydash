@@ -20,11 +20,11 @@ impl Plugin for ClaydashUIPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin)
             .init_resource::<CommandCentralUiState>()
+            .add_systems(Startup, (setup_messages, color_picker_ui))
             .add_systems(Update, (
                 claydash_ui,
                 handle_tasks
-            ))
-            .add_systems(Startup, (setup_messages, color_picker_ui));
+            ));
     }
 }
 

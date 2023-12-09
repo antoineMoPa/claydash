@@ -4,7 +4,7 @@ use sdf_consts::*;
 
 use observable_key_value_tree::{
     ObservableKVTree,
-    CanBeNone,
+    CanBeNone, Update,
 };
 
 use bevy_sdf_object::*;
@@ -23,6 +23,7 @@ pub enum EditorState {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ClaydashValue {
     VecUuid(Vec<uuid::Uuid>),
+    VecI32(Vec<i32>),
     I32(i32),
     F32(f32),
     Vec2(Vec2),
@@ -33,6 +34,8 @@ pub enum ClaydashValue {
     VecSDFObject(Vec<SDFObject>),
     #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
+    #[serde(skip)]
+    VecUpdate(Vec<Update<ClaydashValue>>),
     EditorState(EditorState),
     Bool(bool),
     None,
@@ -193,6 +196,13 @@ impl ClaydashValue {
         unwrap_vec_sdf_object_or,
         VecSDFObject,
         Vec<SDFObject>
+    );
+
+    define_unwrap_methods_for_vec!(
+        unwrap_vec_update,
+        unwrap_vec_update_or,
+        VecUpdate,
+        Vec<Update<ClaydashValue>>
     );
 
     pub fn is_none(&self) -> bool {

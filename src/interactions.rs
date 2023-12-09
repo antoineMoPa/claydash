@@ -5,7 +5,6 @@ use bevy::{
 use bevy_mod_picking::{backend::HitData, prelude::*};
 use bevy_sdf_object::SDFObject;
 use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
-
 mod interaction_commands_and_shortcuts;
 
 pub struct ClaydashInteractionPlugin;
@@ -13,10 +12,12 @@ pub struct ClaydashInteractionPlugin;
 impl Plugin for ClaydashInteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClaydashData>()
-            .add_systems(Startup, interaction_commands_and_shortcuts::register_interaction_commands)
-            .add_systems(Update, interaction_commands_and_shortcuts::run_shortcut_commands)
-            .add_systems(Update, update_selection_color)
-            .add_systems(Update, update_transformations);
+            .add_systems(Startup, (
+                interaction_commands_and_shortcuts::register_interaction_commands,
+            ))
+            .add_systems(Update, ((interaction_commands_and_shortcuts::run_shortcut_commands),
+                                  update_selection_color,
+                                  update_transformations));
     }
 }
 
@@ -122,7 +123,7 @@ fn update_transformations(
                     object.transform.translation = initial_transform.translation + selection_translation * constraints;
                 }
             }
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+            tree.set_path_without_notifying("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
         },
         Scaling => {
             for object in objects.iter_mut() {
@@ -250,6 +251,7 @@ pub fn on_mouse_down(
         _ => {
             // Exit grab/scale on click
             tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+            crate::undo_redo::make_undo_redo_snapshot(tree);
             return;
         }
     }

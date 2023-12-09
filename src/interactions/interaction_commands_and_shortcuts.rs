@@ -1,6 +1,6 @@
 use bevy::{
     prelude::*,
-    input::keyboard::KeyCode
+    input::keyboard::KeyCode, ecs::system::SystemState
 };
 use claydash_data::{ClaydashValue, ClaydashData};
 use bevy_command_central_plugin::CommandCentralState;
@@ -155,11 +155,21 @@ fn set_objects_initial_properties(
 }
 
 pub fn run_shortcut_commands(
-    mut bevy_command_central: ResMut<CommandCentralState>,
-    mut data_resource: ResMut<ClaydashData>,
-    windows: Query<&Window>,
-    keys: Res<Input<KeyCode>>
+    world: &mut World,
 ){
+    let mut system_state: SystemState<(
+        ResMut<CommandCentralState>,
+        ResMut<ClaydashData>,
+        Query<&Window>,
+        Res<Input<KeyCode>>
+    )> = SystemState::new(world);
+
+    let (mut bevy_command_central,
+         mut data_resource,
+         windows,
+         keys) = system_state.get_mut(world);
+
+
     let commands = &mut bevy_command_central.commands.commands;
     let tree = &mut data_resource.as_mut().tree;
     let mut shortcut_sequence: String = String::new();
