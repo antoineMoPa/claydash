@@ -74,6 +74,22 @@ pub struct Update<ValueType> {
     pub old_value: ValueType,
 }
 
+#[derive(Default,Debug,Clone)]
+pub struct Snapshot<ValueType> {
+    new_values: BTreeMap<String, ValueType>,
+    old_values: BTreeMap<String, ValueType>,
+    version: i32,
+}
+
+impl<ValueType> Snapshot<ValueType> {
+    fn clear(&mut self) {
+        self.new_values.clear();
+        self.old_values.clear();
+        self.version = i32::default();
+    }
+}
+
+
 #[derive(Default,Clone,Debug)]
 pub struct LeafVersionTracker {
     updated: bool,
@@ -111,10 +127,10 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
     update_listeners: Vec<Sender<Update<ValueType>>>,
     /// Maps snapshot versions to (old_value, new_value)
     #[serde(skip)]
-    pub snapshots: Vec<(i32, BTreeMap<String, (ValueType, ValueType)>)>,
+    pub snapshots: Vec<Snapshot<ValueType>>,
     /// Map path to (old_value, new_value)
     #[serde(skip)]
-    pub snapshot_change_accumulator: BTreeMap<String, (ValueType, ValueType)>
+    pub snapshot_change_accumulator: Snapshot<ValueType>
 }
 
 /// Shortcut to verify if a path was modified.
@@ -171,11 +187,9 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     // After setting a path, this method updates
     // the accumulator to set the old_value and the new_value
     pub fn update_snapshot_accumulator(&mut self, path: &str, value: ValueType) {
-        let old_value: ValueType = match self.snapshot_change_accumulator.get(path) {
-            Some((old_value, _new_value)) => { old_value.clone() },
-            None => { self.get_path(path)}
-        };
-        self.snapshot_change_accumulator.insert(path.to_owned(), (old_value, value));
+        let old_value: ValueType = self.snapshot_change_accumulator.old_values.get(path).unwrap_or(&self.get_path(path)).clone();
+        self.snapshot_change_accumulator.old_values.insert(path.to_owned(), old_value);
+        self.snapshot_change_accumulator.new_values.insert(path.to_owned(), value);
     }
 
     /// This method is like set path, but it will not notify mspc channels.
@@ -185,43 +199,96 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         let parts = path.split(".");
         self.update_snapshot_accumulator(path, value.clone());
         self.set_path_with_parts(parts.collect(), ObservableKVTree {
-            value: value,
+            value,
             ..ObservableKVTree::default()
         }, false);
     }
 
     pub fn make_snapshot(&mut self) -> i32 {
         let version = self.update_tracker.version;
-        self.snapshots.push((version, self.snapshot_change_accumulator.clone()));
+        self.snapshots.push(Snapshot {
+            version,
+            old_values: self.snapshot_change_accumulator.old_values.clone(),
+            new_values: self.snapshot_change_accumulator.new_values.clone()
+        });
         self.snapshot_change_accumulator.clear();
         return version;
     }
 
     pub fn last_snapshot_version(&mut self) -> Option<i32> {
         return match self.snapshots.last() {
-            Some(snapshot) => { Some(snapshot.0) },
+            Some(snapshot) => { Some(snapshot.version) },
             _ => { None }
         };
     }
 
-    pub fn revert_snapshot(&mut self, version: i32) {
-        let mut snapshot: Option<BTreeMap<String, (ValueType, ValueType)>> = None;
-        for name_and_snapshot in self.snapshots.iter() {
-            if name_and_snapshot.0 == version {
-                snapshot = Some(name_and_snapshot.1.clone());
-                break;
-            }
-        }
+    pub fn revert_snapshot_version(&mut self, version: i32) {
+        let snapshot: Option<Snapshot<ValueType>> = self.snapshots.iter().find(|snapshot| snapshot.version == version).cloned();
 
         match snapshot {
             Some(snapshot) => {
-                for (path, (old_value, _new_value)) in snapshot.iter() {
+                for (path, old_value) in snapshot.old_values.iter() {
                     self.set_path(path.as_str(), old_value.to_owned())
                 }
             },
             None => {
                 panic!("snapshot with this name does not exist");
             }
+        }
+    }
+
+    pub fn go_to_snapshot_with_version(&mut self, version: i32) {
+        let snapshot: Option<Snapshot<ValueType>> = self.snapshots.iter().find(|snapshot| snapshot.version == version).cloned();
+
+        match snapshot {
+            Some(snapshot) => {
+                if snapshot.version < self.update_tracker.version {
+                    self.rewind_to_version(snapshot.version);
+                }
+                if snapshot.version > self.update_tracker.version {
+                    self.fast_forward_to_version(snapshot.version);
+                }
+                self.snapshot_change_accumulator.clear();
+                self.update_tracker.version = snapshot.version;
+            },
+            None => {
+                panic!("snapshot with this name does not exist");
+            }
+        }
+    }
+
+    pub fn rewind_to_version(&mut self, version: i32) {
+        let current_position = self.snapshots.iter().position(|snapshot| snapshot.version == self.update_tracker.version).unwrap();
+        let snapshot_position = self.snapshots.iter().position(|snapshot| snapshot.version == version).unwrap();
+        let mut i = current_position;
+
+        while i > snapshot_position {
+            self.revert_snapshot(&self.snapshots[i].clone());
+            i -= 1;
+        }
+    }
+
+    pub fn fast_forward_to_version(&mut self, version: i32) {
+        let current_position = self.snapshots.iter().position(|snapshot| snapshot.version == self.update_tracker.version).unwrap();
+        let snapshot_position = self.snapshots.iter().position(|snapshot| snapshot.version == version).unwrap();
+        let mut i = current_position;
+
+        while i <= snapshot_position {
+            self.apply_snapshot(&self.snapshots[i].clone());
+            i += 1;
+        }
+    }
+
+    // Reverts a snapshot version and returns the reverted snapshot (if found)
+    pub fn apply_snapshot(&mut self, snapshot: &Snapshot<ValueType>) {
+        for (path, new_value) in snapshot.new_values.iter() {
+            self.set_path(path.as_str(), new_value.to_owned())
+        }
+    }
+
+    pub fn revert_snapshot(&mut self, snapshot: &Snapshot<ValueType>) {
+        for (path, old_value) in snapshot.old_values.iter() {
+            self.set_path(path.as_str(), old_value.to_owned())
         }
     }
 
@@ -256,7 +323,6 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     }
 
     fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType>, override_subtree: bool) {
-
         if parts.len() == 1 {
             if !self.subtree.contains_key(parts[0]) {
                 self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
@@ -573,7 +639,27 @@ mod tests {
         let v1 = data.make_snapshot();
 
         assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 100.0);
-        data.revert_snapshot(v1);
+        data.revert_snapshot_version(v1);
         data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
+    }
+
+    #[test]
+    fn goes_to_snapshot_with_verstion() {
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
+
+        data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
+        let v1 = data.make_snapshot();
+        data.set_path("scene.some.deep.property", ExampleValueType::from(100.0));
+        data.make_snapshot();
+        data.set_path("scene.some.deep.property", ExampleValueType::from(101.0));
+        data.make_snapshot();
+        data.set_path("scene.some.deep.property", ExampleValueType::from(102.0));
+        let v2 = data.make_snapshot();
+
+
+        data.go_to_snapshot_with_version(v1);
+        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+        data.go_to_snapshot_with_version(v2);
+        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 102.0);
     }
 }
