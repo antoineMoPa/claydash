@@ -13,6 +13,9 @@ impl Plugin for ClaydashUndoRedoPlugin {
     }
 }
 
+pub const UNDO_SHORTCUT: &str = "Shift+Z";
+pub const REDO_SHORTCUT: &str = "Shift+Y";
+
 fn setup_undo_redo_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
     let commands = &mut bevy_command_central.commands;
 
@@ -20,7 +23,7 @@ fn setup_undo_redo_commands(mut bevy_command_central: ResMut<CommandCentralState
         .title("Undo")
         .system_name("undo")
         .docs("Undo last action.")
-        .shortcut("Shift+Z")
+        .shortcut(&UNDO_SHORTCUT)
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(undo)))
         .write(commands);
 
@@ -28,7 +31,7 @@ fn setup_undo_redo_commands(mut bevy_command_central: ResMut<CommandCentralState
         .title("Redo")
         .system_name("redo")
         .docs("Redo last action.")
-        .shortcut("Shift+Y")
+        .shortcut(&REDO_SHORTCUT)
         .insert_param("callback", "system callback", Some(ClaydashValue::Fn(redo)))
         .write(commands);
 }
