@@ -251,7 +251,7 @@ pub fn on_mouse_down(
         _ => {
             // Exit grab/scale on click
             tree.set_path("editor.state", ClaydashValue::EditorState(Start));
-            crate::undo_redo::make_undo_redo_snapshot(tree);
+            tree.make_undo_redo_snapshot();
             return;
         }
     }
