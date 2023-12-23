@@ -170,7 +170,9 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
     pub snapshot_change_accumulator: Snapshot<ValueType>,
     #[serde(skip)]
     pub last_snapshot_version: i32,
+    #[serde(skip)]
     pub versions: Vec<i32>,
+    #[serde(skip)]
     pub current_version_index: Option<i32>,
 }
 
@@ -485,8 +487,6 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 
         let len = self.versions.len();
         self.current_version_index = Some(len as i32 - 1);
-
-        self.dump_undo_state();
     }
 
     pub fn undo(&mut self) {
@@ -509,8 +509,6 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         self.go_to_snapshot_with_version(version);
 
         self.current_version_index = Some(current_version_index);
-
-        self.dump_undo_state();
     }
 
     pub fn redo(&mut self) {
@@ -534,8 +532,6 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 
         // Make sure we keep same versions array after moving to a snapshot
         self.current_version_index = Some(current_version_index);
-
-        self.dump_undo_state();
     }
 
 
@@ -544,7 +540,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         let current_version_index = self.current_version_index;
 
         for (index, version) in versions.iter().enumerate() {
-            let arrow =  if index == current_version_index.unwrap_or(-1) as usize { " <-" }  else { ";" };
+            let arrow =  if index == current_version_index.unwrap_or(-1) as usize { " <-" }  else { "" };
             println!("{} {}", version, arrow);
         }
     }

@@ -23,7 +23,7 @@ use bevy::{
 use bevy_sdf_object::*;
 use bevy_mod_picking::prelude::*;
 
-use undo_redo::{ClaydashUndoRedoPlugin, make_undo_redo_snapshot};
+use undo_redo::ClaydashUndoRedoPlugin;
 #[allow(unused_imports)]
 use wasm_bindgen::prelude::*;
 
@@ -79,7 +79,7 @@ pub fn default_duck(mut data_resource: ResMut<ClaydashData>) {
     tree.set_tree("scene", scene.unwrap());
 
     // Add snapshot for initial state
-    make_undo_redo_snapshot(tree);
+    tree.make_undo_redo_snapshot();
 }
 
 pub fn register_debug_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
