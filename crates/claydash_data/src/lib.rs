@@ -218,6 +218,13 @@ impl ClaydashValue {
         Vec<Snapshot<ClaydashValue>>
     );
 
+    define_unwrap_methods_for_vec!(
+        unwrap_vec_i32,
+        unwrap_vec_i32_or,
+        VecI32,
+        Vec<i32>
+    );
+
     pub fn is_none(&self) -> bool {
         match &self {
             Self::None => true,
