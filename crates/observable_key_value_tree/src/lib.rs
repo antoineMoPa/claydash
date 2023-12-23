@@ -1,11 +1,14 @@
 //! ObservableKVTree is a a nested map data structure designed for applications
-//! with update cycles (example: every frame, every network sync).
+//! with update cycles (example: every frame, every network sync) It supports making snapshots and
+//! basic undo/redo.
+//!
+//! It's basically built to be an application's fundamental data storage.
 //!
 //! You can efficiently determine which part was changed as part of your application's main loop or using mspc channels.
 //!
 //! When using was_updated, the intended use is roughly as follows:
 //!  - Update some properties in the tree. The node and it's parent will be marked as updated.
-//!  - A the next frame, your code can parse the tree structure, skipping subtrees that have not
+//!  - At the next frame, your code can parse the tree structure, skipping subtrees that have not
 //!    been updated.
 //! For async processing, it becomes useful to use channels instead.
 //!
@@ -15,10 +18,14 @@
 //!  - `data.update_tracker.was_updated()`
 //!  - `data.was_path_updated("scene.some.property")`
 //!  - `data.create_update_channel()`
+//!  - `data.make_undo_redo_snapshot()`
+//!  - `data.undo()`
+//!  - `data.redo()`
 //!
 //! # Examples
 //!
-//! Setting and reading values:
+//! ## Setting and reading values:
+//!
 //! ```
 //! use observable_key_value_tree::{ObservableKVTree,ExampleValueType};
 //! // Creating an observable tree
@@ -29,7 +36,8 @@
 //! let value = data.get_path("scene.some.property").unwrap_i32();
 //! ```
 //!
-//! Detecting changes with was_updated:
+//! ## Detecting changes with was_updated:
+//!
 //! ```
 //! use observable_key_value_tree::{ObservableKVTree,ExampleValueType};
 //! // Creating an observable tree
@@ -44,7 +52,9 @@
 //! data.reset_update_cycle();
 //! assert_eq!(data.was_updated(), false);
 //! ```
-//! Detecting changes with mspc channel:
+//!
+//! ## Detecting changes with mspc channel:
+//!
 //! ```
 //! use observable_key_value_tree::{ObservableKVTree,ExampleValueType};
 //! // Creating an observable tree
@@ -57,11 +67,37 @@
 //! println!("{}", update.unwrap().path);
 //! ```
 //!
-//! ## Notes
+//! ## Undo/Redo
+//!
+//! ```
+//! use observable_key_value_tree::{ObservableKVTree,ExampleValueType};
+//! let mut data = ObservableKVTree::<ExampleValueType>::default();
+//!
+//! data.set_path("some.property", ExampleValueType::from(123.4));
+//! data.make_undo_redo_snapshot();
+//! data.set_path("some.property", ExampleValueType::from(100.0));
+//! data.set_path("some.property", ExampleValueType::from(101.0));
+//! data.set_path("some.property", ExampleValueType::from(102.0));
+//! data.make_undo_redo_snapshot();
+//!
+//! data.undo();
+//! assert_eq!(data.get_path("some.property").unwrap_f32(), 123.4);
+//! data.redo();
+//! assert_eq!(data.get_path("some.property").unwrap_f32(), 102.0);
+//! ```
+//!
+//! # Notes
 //!  - We consider a value updated even if it was set to the same value again.
 //!  - We consider the parent nodes as updated if a child value was updated.
 //!  - Nodes can contain a value and a sub tree at the same time.
 //!
+//! # Current drawbacks:
+//!  - Network sync not implemented/tested
+//!  - It's not clear if undo/redo will work well if other sources of updates appear,
+//!    such as  network sync. Currently, it works well locally for one user.
+//!  - Not so appropriate for graph structure
+//!  - No granular updates for arrays
+
 
 use std::collections::BTreeMap;
 use serde::{Serialize, Deserialize};
@@ -135,7 +171,7 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
     #[serde(skip)]
     pub last_snapshot_version: i32,
     pub versions: Vec<i32>,
-    pub current_version_index: Vec<i32>,
+    pub current_version_index: Option<i32>,
 }
 
 /// Shortcut to verify if a path was modified.
@@ -437,6 +473,81 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 
     ///  --------------------- UNDO/REDO ---------------------
 
+    pub fn make_undo_redo_snapshot(&mut self) {
+        let version = self.make_snapshot();
+
+        // Slice, since after an action, we can't redo.
+        let current_version_index = self.current_version_index.unwrap_or(self.versions.len() as i32 - 1);
+
+        let new_len: i32 = current_version_index + 1;
+        self.versions = self.versions[0..new_len as usize].to_vec();
+        self.versions.push(version);
+
+        let len = self.versions.len();
+        self.current_version_index = Some(len as i32 - 1);
+
+        self.dump_undo_state();
+    }
+
+    pub fn undo(&mut self) {
+        let mut current_version_index = self.current_version_index.unwrap_or(0);
+
+        if current_version_index == 0 {
+            // nothing to undo
+            return;
+        }
+
+        if self.versions.len() == 0 {
+            // nothing to undo
+            return;
+        }
+
+        current_version_index -= 1;
+
+        let version = self.versions[current_version_index as usize];
+
+        self.go_to_snapshot_with_version(version);
+
+        self.current_version_index = Some(current_version_index);
+
+        self.dump_undo_state();
+    }
+
+    pub fn redo(&mut self) {
+        let mut current_version_index = self.current_version_index.unwrap_or(0);
+
+        if current_version_index == self.versions.len() as i32 - 1 {
+            // nothing to redo
+            return;
+        }
+
+        if self.versions.len() == 0 {
+            // nothing to redo
+            return;
+        }
+
+        current_version_index += 1;
+
+        let version = self.versions[current_version_index as usize];
+
+        self.go_to_snapshot_with_version(version);
+
+        // Make sure we keep same versions array after moving to a snapshot
+        self.current_version_index = Some(current_version_index);
+
+        self.dump_undo_state();
+    }
+
+
+    pub fn dump_undo_state(&mut self) {
+        let versions = &self.versions;
+        let current_version_index = self.current_version_index;
+
+        for (index, version) in versions.iter().enumerate() {
+            let arrow =  if index == current_version_index.unwrap_or(-1) as usize { " <-" }  else { ";" };
+            println!("{} {}", version, arrow);
+        }
+    }
 
     ///  --------------------- UPDATE NOTIFICATION MANAGEMENT ---------------------
 
@@ -708,5 +819,35 @@ mod tests {
         assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
         data.go_to_snapshot_with_version(v2);
         assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 102.0);
+    }
+
+    ///  --------------------- UNDO/REDO ---------------------
+
+    #[test]
+    fn performs_undo_redo() {
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
+
+        data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
+        data.make_undo_redo_snapshot();
+        data.set_path("scene.some.deep.property", ExampleValueType::from(100.0));
+        data.set_path("scene.some.deep.property", ExampleValueType::from(101.0));
+        data.set_path("scene.some.deep.property", ExampleValueType::from(102.0));
+        data.make_undo_redo_snapshot();
+
+        data.undo();
+        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+        data.redo();
+        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 102.0);
+
+        // After this point, nothing is available for redo
+        data.redo();
+        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 102.0);
+
+        data.undo();
+        data.undo();
+        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+        data.undo();
+        // Before this point, nothing is available for undo
+        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
     }
 }
