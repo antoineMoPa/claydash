@@ -134,6 +134,8 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
     pub snapshot_change_accumulator: Snapshot<ValueType>,
     #[serde(skip)]
     pub last_snapshot_version: i32,
+    pub versions: Vec<i32>,
+    pub current_version_index: Vec<i32>,
 }
 
 /// Shortcut to verify if a path was modified.
@@ -173,6 +175,8 @@ impl<T> CanBeNone<Option<T>> for Option<T> {
 
 impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType>
 {
+    ///  ---------------------  GETTING/SETTING VALUES  ---------------------
+
     pub fn set_path(&mut self, path: &str, value: ValueType) {
         let old_value = self.get_path(path);
 
@@ -187,14 +191,6 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         }
     }
 
-    // After setting a path, this method updates
-    // the accumulator to set the old_value and the new_value
-    pub fn update_snapshot_accumulator(&mut self, path: &str, value: ValueType) {
-        let old_value: ValueType = self.snapshot_change_accumulator.old_values.get(path).unwrap_or(&self.get_path(path)).clone();
-        self.snapshot_change_accumulator.old_values.insert(path.to_owned(), old_value);
-        self.snapshot_change_accumulator.new_values.insert(path.to_owned(), value);
-    }
-
     /// This method is like set path, but it will not notify mspc channels.
     /// was_updated is still set, changes are still accumulated as part of snapshots.
     /// version numbers are still incremented.
@@ -206,6 +202,111 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
             ..ObservableKVTree::default()
         }, false);
     }
+
+
+
+    /// Set the whole subtree at given path
+    /// This is useful to deserialize the tree.
+    pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType>) {
+        let parts = path.split(".");
+        self.set_path_with_parts(parts.collect(), value, true);
+        self.notify_change();
+    }
+
+    /// Get the whole subtree at given path
+    /// This is useful to serialize the tree.
+    pub fn get_path(&self, path: &str) -> ValueType {
+        match self.get_path_with_parts(&path.split(".").collect()) {
+            Some(data) => data.value,
+            _ => ValueType::none()
+        }
+    }
+
+    pub fn get_tree(& self, path: &str) -> Option<ObservableKVTree<ValueType>> {
+        return self.get_path_with_parts(&path.split(".").collect());
+    }
+
+    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType>, override_subtree: bool) {
+        if parts.len() == 1 {
+            if !self.subtree.contains_key(parts[0]) {
+                self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
+            }
+
+            let mut notified_update = false;
+
+            let leaf = &mut self.subtree.get_mut(parts[0]).unwrap();
+            leaf.value = value.value;
+            leaf.update_tracker.notify_update();
+
+            if override_subtree {
+                let mut keys_to_remove: Vec<String> = Vec::new();
+                for (key, _subvalue) in leaf.subtree.iter() {
+                    if !value.subtree.contains_key(key) {
+                        // Value does not exist in new subtree. remove.
+                        keys_to_remove.push(key.clone());
+                    }
+                }
+
+                for key in keys_to_remove {
+                    leaf.subtree.remove(&key);
+                }
+
+                for (key, subvalue) in value.subtree.iter() {
+                    if !value.subtree.contains_key(key) {
+                        leaf.subtree.insert(key.clone(), subvalue.clone());
+                    } else {
+                        let parts: Vec<&str> = vec!(key);
+                        leaf.set_path_with_parts(parts, subvalue.clone(), override_subtree);
+                        // Prevent a double update
+                        notified_update = true;
+                    }
+                }
+
+                if !notified_update {
+                    leaf.update_tracker.notify_update();
+                }
+
+                return;
+            }
+        }
+        else {
+            if !self.subtree.contains_key(parts[0]) {
+                self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
+            }
+            let subtree = &mut self.subtree.get_mut(parts[0]).unwrap();
+            subtree.set_path_with_parts(parts[1..].to_vec(), value, override_subtree);
+        }
+
+        self.notify_change();
+    }
+
+    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableKVTree<ValueType>> {
+        if parts.len() == 1 {
+            return self.subtree.get(parts[0]).cloned();
+        }
+        else {
+            if !self.subtree.contains_key(parts[0]) {
+                return None;
+            }
+            let subtree = &self.subtree.get(parts[0]).unwrap();
+            let value = match subtree.get_path_with_parts(&parts[1..].to_vec()) {
+                Some(value) => value,
+                _ => { return None },
+            };
+            return Some(value);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.subtree.clear();
+        self.value = ValueType::none();
+        self.update_tracker.clear();
+        self.update_listeners.clear();
+        self.snapshot_change_accumulator.clear();
+        self.snapshots.clear();
+    }
+
+    ///  ---------------------  SNAPSHOT MANAGEMENT  ---------------------
 
     pub fn make_snapshot(&mut self) -> i32 {
         let version = self.update_tracker.version;
@@ -326,113 +427,18 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         }
     }
 
-    pub fn clear(&mut self) {
-        self.subtree.clear();
-        self.value = ValueType::none();
-        self.update_tracker.clear();
-        self.update_listeners.clear();
-        self.snapshot_change_accumulator.clear();
-        self.snapshots.clear();
+    // After setting a path, this method updates
+    // the accumulator to set the old_value and the new_value
+    fn update_snapshot_accumulator(&mut self, path: &str, value: ValueType) {
+        let old_value: ValueType = self.snapshot_change_accumulator.old_values.get(path).unwrap_or(&self.get_path(path)).clone();
+        self.snapshot_change_accumulator.old_values.insert(path.to_owned(), old_value);
+        self.snapshot_change_accumulator.new_values.insert(path.to_owned(), value);
     }
 
-    /// Set the whole subtree at given path
-    /// This is useful to deserialize the tree.
-    pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType>) {
-        let parts = path.split(".");
-        self.set_path_with_parts(parts.collect(), value, true);
-        self.notify_change();
-    }
+    ///  --------------------- UNDO/REDO ---------------------
 
-    /// Get the whole subtree at given path
-    /// This is useful to serialize the tree.
-    pub fn get_path(&self, path: &str) -> ValueType {
-        match self.get_path_with_parts(&path.split(".").collect()) {
-            Some(data) => data.value,
-            _ => ValueType::none()
-        }
-    }
 
-    pub fn get_tree(& self, path: &str) -> Option<ObservableKVTree<ValueType>> {
-        return self.get_path_with_parts(&path.split(".").collect());
-    }
-
-    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType>, override_subtree: bool) {
-        if parts.len() == 1 {
-            if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
-            }
-
-            let mut notified_update = false;
-
-            let leaf = &mut self.subtree.get_mut(parts[0]).unwrap();
-            leaf.value = value.value;
-            leaf.update_tracker.notify_update();
-
-            if override_subtree {
-                let mut keys_to_remove: Vec<String> = Vec::new();
-                for (key, _subvalue) in leaf.subtree.iter() {
-                    if !value.subtree.contains_key(key) {
-                        // Value does not exist in new subtree. remove.
-                        keys_to_remove.push(key.clone());
-                    }
-                }
-
-                for key in keys_to_remove {
-                    leaf.subtree.remove(&key);
-                }
-
-                for (key, subvalue) in value.subtree.iter() {
-                    if !value.subtree.contains_key(key) {
-                        leaf.subtree.insert(key.clone(), subvalue.clone());
-                    } else {
-                        let parts: Vec<&str> = vec!(key);
-                        leaf.set_path_with_parts(parts, subvalue.clone(), override_subtree);
-                        // Prevent a double update
-                        notified_update = true;
-                    }
-                }
-
-                if !notified_update {
-                    leaf.update_tracker.notify_update();
-                }
-
-                return;
-            }
-        }
-        else {
-            if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
-            }
-            let subtree = &mut self.subtree.get_mut(parts[0]).unwrap();
-            subtree.set_path_with_parts(parts[1..].to_vec(), value, override_subtree);
-        }
-
-        self.notify_change();
-    }
-
-    pub fn reset_update_cycle(&mut self) {
-        self.update_tracker.reset_update_cycle();
-        for (_, node) in self.subtree.iter_mut() {
-            node.reset_update_cycle();
-        }
-    }
-
-    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableKVTree<ValueType>> {
-        if parts.len() == 1 {
-            return self.subtree.get(parts[0]).cloned();
-        }
-        else {
-            if !self.subtree.contains_key(parts[0]) {
-                return None;
-            }
-            let subtree = &self.subtree.get(parts[0]).unwrap();
-            let value = match subtree.get_path_with_parts(&parts[1..].to_vec()) {
-                Some(value) => value,
-                _ => { return None },
-            };
-            return Some(value);
-        }
-    }
+    ///  --------------------- UPDATE NOTIFICATION MANAGEMENT ---------------------
 
     fn notify_change(&mut self) {
         self.update_tracker.notify_update();
@@ -442,6 +448,13 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         let (sender, receiver) = channel();
         self.update_listeners.push(sender);
         return receiver;
+    }
+
+    pub fn reset_update_cycle(&mut self) {
+        self.update_tracker.reset_update_cycle();
+        for (_, node) in self.subtree.iter_mut() {
+            node.reset_update_cycle();
+        }
     }
 }
 
