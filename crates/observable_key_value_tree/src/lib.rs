@@ -94,6 +94,7 @@ impl<ValueType> Snapshot<ValueType> {
 pub struct LeafVersionTracker {
     updated: bool,
     version: i32,
+    pub corresponding_previous_version: Option<i32>,
 }
 
 /// Provides the leaf version numbering and 'was_updated' flag.
@@ -130,7 +131,9 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
     pub snapshots: Vec<Snapshot<ValueType>>,
     /// Map path to (old_value, new_value)
     #[serde(skip)]
-    pub snapshot_change_accumulator: Snapshot<ValueType>
+    pub snapshot_change_accumulator: Snapshot<ValueType>,
+    #[serde(skip)]
+    pub last_snapshot_version: i32,
 }
 
 /// Shortcut to verify if a path was modified.
@@ -212,6 +215,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
             new_values: self.snapshot_change_accumulator.new_values.clone()
         });
         self.snapshot_change_accumulator.clear();
+        self.last_snapshot_version = version;
         return version;
     }
 
@@ -228,7 +232,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         match snapshot {
             Some(snapshot) => {
                 for (path, old_value) in snapshot.old_values.iter() {
-                    self.set_path(path.as_str(), old_value.to_owned())
+                    self.set_path(path.as_str(), old_value.to_owned());
                 }
             },
             None => {
@@ -242,14 +246,18 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 
         match snapshot {
             Some(snapshot) => {
-                if snapshot.version < self.update_tracker.version {
+                let current_version = match self.update_tracker.corresponding_previous_version {
+                    Some(version) => version,
+                    None => self.update_tracker.version
+                };
+
+                if snapshot.version < current_version {
                     self.rewind_to_version(snapshot.version);
                 }
-                if snapshot.version > self.update_tracker.version {
+                if snapshot.version > current_version {
                     self.fast_forward_to_version(snapshot.version);
                 }
                 self.snapshot_change_accumulator.clear();
-                self.update_tracker.version = snapshot.version;
             },
             None => {
                 panic!("snapshot with this name does not exist");
@@ -258,7 +266,18 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     }
 
     pub fn rewind_to_version(&mut self, version: i32) {
-        let current_position = self.snapshots.iter().position(|snapshot| snapshot.version == self.update_tracker.version).unwrap();
+        let current_version = match self.update_tracker.corresponding_previous_version {
+            Some(version) => version,
+            None => self.update_tracker.version
+        };
+        let current_position = match self.snapshots.iter().position(|snapshot| snapshot.version == current_version) {
+            Some(position) => { position },
+            None => {
+                self.make_snapshot();
+                self.snapshots.len() - 1
+            }
+        };
+
         let snapshot_position = self.snapshots.iter().position(|snapshot| snapshot.version == version).unwrap();
         let mut i = current_position;
 
@@ -266,10 +285,23 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
             self.revert_snapshot(&self.snapshots[i].clone());
             i -= 1;
         }
+
+        self.update_tracker.corresponding_previous_version = Some(version);
     }
 
     pub fn fast_forward_to_version(&mut self, version: i32) {
-        let current_position = self.snapshots.iter().position(|snapshot| snapshot.version == self.update_tracker.version).unwrap();
+        let current_version = match self.update_tracker.corresponding_previous_version {
+            Some(version) => version,
+            None => self.update_tracker.version
+        };
+        let current_position = match self.snapshots.iter().position(|snapshot| snapshot.version == current_version) {
+            Some(position) => position,
+            None => {
+                //self.make_snapshot();
+                self.snapshots.len() - 1
+            }
+        };
+
         let snapshot_position = self.snapshots.iter().position(|snapshot| snapshot.version == version).unwrap();
         let mut i = current_position;
 
@@ -277,6 +309,8 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
             self.apply_snapshot(&self.snapshots[i].clone());
             i += 1;
         }
+
+        self.update_tracker.corresponding_previous_version = Some(version);
     }
 
     // Reverts a snapshot version and returns the reverted snapshot (if found)
@@ -644,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn goes_to_snapshot_with_verstion() {
+    fn goes_to_snapshot_with_version() {
         let mut data = ObservableKVTree::<ExampleValueType>::default();
 
         data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));

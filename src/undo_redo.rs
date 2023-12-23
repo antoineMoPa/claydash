@@ -36,54 +36,95 @@ fn setup_undo_redo_commands(mut bevy_command_central: ResMut<CommandCentralState
 fn undo(
     tree: &mut ObservableKVTree<ClaydashValue>
 ) {
-    let operations = tree.get_path("scene.operations");
-    // This is a number where:
-    //  - 0 = we are at the last edit
-    //  - -1 = we just did undo
-    //  - -2 = we did 2 undos
-    let mut undo_redo_pointer = tree.get_path("scene.undo_pointer").unwrap_i32_or(0);
-    match operations {
-        ClaydashValue::VecI32(versions) => {
-            undo_redo_pointer -= 1;
-            let end = versions.len() as i32 - 1;
-            tree.revert_snapshot_version(end - undo_redo_pointer);
-            tree.set_path("scene.undo_pointer", ClaydashValue::I32(undo_redo_pointer));
-        }
-        _ => { }
+    let versions = tree.get_path("editor.versions").unwrap_vec_i32_or(vec!());
+    let mut current_version_index = tree.get_path("editor.current_version_index").unwrap_i32_or(0);
+
+    if current_version_index == 0 {
+        // nothing to undo
+        return;
     }
+
+    if versions.len() == 0 {
+        // nothing to undo
+        return;
+    }
+
+    current_version_index -= 1;
+
+    let version = versions[current_version_index as usize];
+
+    tree.go_to_snapshot_with_version(version);
+
+    // Make sure we keep same versions array after moving to a snapshot
+    tree.set_path_without_notifying("editor.versions", ClaydashValue::VecI32(versions));
+    tree.set_path_without_notifying("editor.current_version_index", ClaydashValue::I32(current_version_index));
+
+
+    dump_undo_state(tree);
 }
 
 fn redo(
     tree: &mut ObservableKVTree<ClaydashValue>
 ) {
-    let mut undo_redo_pointer = tree.get_path("scene.undo_pointer").unwrap_i32_or(0);
-    let operations = tree.get_path("scene.operations");
+    let versions = tree.get_path("editor.versions").unwrap_vec_i32_or(vec!());
+    let mut current_version_index = tree.get_path("editor.current_version_index").unwrap_i32_or(0);
 
-    match operations {
-        ClaydashValue::VecI32(versions) => {
-            undo_redo_pointer -= 1;
-            let end = versions.len() as i32 - 1;
-            tree.revert_snapshot_version(end - undo_redo_pointer);
-            tree.set_path("scene.undo_pointer", ClaydashValue::I32(undo_redo_pointer));
-        }
-        _ => { }
+    if current_version_index == versions.len() as i32 - 1 {
+        // nothing to redo
+        return;
+    }
+
+    if versions.len() == 0 {
+        // nothing to redo
+        return;
+    }
+
+    current_version_index += 1;
+
+    let version = versions[current_version_index as usize];
+
+    tree.go_to_snapshot_with_version(version);
+
+    // Make sure we keep same versions array after moving to a snapshot
+    tree.set_path_without_notifying("editor.versions", ClaydashValue::VecI32(versions));
+    tree.set_path_without_notifying("editor.current_version_index", ClaydashValue::I32(current_version_index));
+
+    dump_undo_state(tree);
+}
+
+pub fn dump_undo_state(tree: &mut ObservableKVTree<ClaydashValue>) {
+    let versions = tree.get_path("editor.versions").unwrap_vec_i32_or(vec!());
+    let current_version_index = tree.get_path("editor.current_version_index").unwrap_i32_or(0);
+
+    for (index, version) in versions.iter().enumerate() {
+        let arrow =  if index == current_version_index as usize  { " <-" }  else { "" };
+        println!("{} {}", version, arrow);
     }
 }
 
 pub fn make_undo_redo_snapshot(tree: &mut ObservableKVTree<ClaydashValue>) {
-    let previous_operations = tree.get_path("scene.operations");
+    let previous_versions = tree.get_path("editor.versions");
     let version = tree.make_snapshot();
 
-    let versions: Vec<i32> = match previous_operations {
-        ClaydashValue::VecI32(versions) => {
-            let mut versions: Vec<i32> = versions.clone();
-            versions.push(version);
-            versions
-        },
+    let versions: Vec<i32> = match previous_versions {
+        ClaydashValue::VecI32(versions) => { versions },
         _ => {
             vec!(version)
         }
     };
 
-    tree.set_path_without_notifying("scene.operations", ClaydashValue::VecI32(versions));
+    // Slice, since after an action, we can't redo.
+    let current_version_index = tree.get_path("editor.current_version_index").unwrap_i32_or(versions.len() as i32 - 1);
+
+    let mut new_versions = versions[0..(current_version_index as usize + 1)].to_vec();
+
+    new_versions.push(version);
+
+    tree.set_path_without_notifying("editor.versions", ClaydashValue::VecI32(
+        new_versions.clone()
+    ));
+
+    tree.set_path_without_notifying("editor.current_version_index", ClaydashValue::I32(new_versions.len() as i32 - 1));
+
+    dump_undo_state(tree);
 }
