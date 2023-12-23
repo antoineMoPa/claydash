@@ -14,6 +14,8 @@ use bevy_command_central_egui::{CommandCentralUiState, command_ui};
 use rfd::FileHandle;
 use std::sync::mpsc::{channel, Sender, Receiver};
 
+use crate::undo_redo::{UNDO_SHORTCUT, REDO_SHORTCUT};
+
 pub struct ClaydashUIPlugin;
 
 impl Plugin for ClaydashUIPlugin {
@@ -134,6 +136,25 @@ fn claydash_ui(
                             _ = tx.send(UiMessage::OpenFileHandle(file.unwrap()));
                         });
                         _task.detach();
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new("Undo")
+                                .shortcut_text(UNDO_SHORTCUT),
+                        )
+                        .clicked() {
+                        tree.undo();
+                    }
+
+                    if ui
+                        .add(
+                            egui::Button::new("Redo")
+                                .shortcut_text(REDO_SHORTCUT),
+                        )
+                        .clicked() {
+                        tree.redo();
                     }
                 });
             });
