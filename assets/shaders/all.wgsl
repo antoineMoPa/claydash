@@ -3,15 +3,26 @@
 
 @group(1) @binding(0)
 var<uniform> camera: vec4<f32>;
-
 @group(1) @binding(1)
-var<uniform> sdf_meta: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
-
+var<uniform> camera_right: vec4<f32>;
 @group(1) @binding(2)
-var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
+var<uniform> camera_up: vec4<f32>;
+
 
 @group(1) @binding(3)
+var<uniform> sdf_meta: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
+
+@group(1) @binding(4)
+var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
+
+@group(1) @binding(5)
 var<uniform> sdf_inverse_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
+
+@group(1) @binding(6)
+var<uniform> control_point_positions: array<vec4<f32>, #{MAX_CONTROL_POINTS}>;
+
+@group(1) @binding(7)
+var<uniform> num_control_points: i32;
 
 const MAX_ITERATIONS = 32;
 
@@ -81,6 +92,36 @@ fn object_normal(p: vec3<f32>, sdf_index: i32) -> vec3<f32> {
                           od(vec3(p.x, p.y + e, p.z), i) - od(vec3(p.x, p.y - e, p.z), i),
                           od(vec3(p.x, p.y, p.z  + e), i) - od(vec3(p.x, p.y, p.z - e), i)));
 }
+
+fn render_control_points(mesh: VertexOutput) -> vec4<f32> {
+    var world_position = mesh.world_position.xyz;
+    var col: vec4<f32> = vec4(0.0);
+    var camera_ray = normalize(world_position - camera.xyz);
+
+    for (var i: i32 = 0; i < num_control_points; i++) {
+        var control_point_position = control_point_positions[i].xyz;
+        var camera_to_control_point_dist = length(control_point_position - camera.xyz);
+        var position_near_control_point = camera.xyz + camera_ray * camera_to_control_point_dist;
+        var l = length(position_near_control_point - control_point_position);
+
+        if (l < 0.018) {
+            // Red fill
+            col.r += 1.0;
+            col.g += 0.0;
+            col.b += 0.0;
+            col.a += 1.0;
+        } else if (l < 0.01) {
+            // White border
+            col.r += 1.0;
+            col.g += 1.0;
+            col.b += 1.0;
+            col.a += 1.0;
+        }
+    }
+
+    return clamp(col, vec4(0.0), vec4(1.0));
+}
+
 
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
@@ -165,6 +206,10 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         col += ambiant_light * vec4(object_color.rgb, 1.0);// - ao_light * vec4(0.01);
         col.a = 1.0;
     }
+
+    let control_points = render_control_points(mesh);
+
+    col = control_points.a * control_points + (1.0 - control_points.a) * col;
 
     return col;
 }

@@ -225,4 +225,14 @@ fn update_camera(
     material.camera.x = camera_transform.translation.x; // Uniform is a Vec4
     material.camera.y = camera_transform.translation.y; // due to bit alignement.
     material.camera.z = camera_transform.translation.z; // ...so we can't directly assign.
+
+    let camera_right = camera_transform.right();
+    material.camera_right.x = camera_right.x;
+    material.camera_right.y = camera_right.y;
+    material.camera_right.z = camera_right.z;
+
+    let camera_up = camera_transform.up();
+    material.camera_up.x = camera_up.x;
+    material.camera_up.y = camera_up.y;
+    material.camera_up.z = camera_up.z;
 }
