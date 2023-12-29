@@ -24,6 +24,11 @@ impl Plugin for BevySDFObjectPlugin {
 }
 
 const MAX_SDFS_PER_ENTITY: i32 = 256;
+const MAX_CONTROL_POINTS: i32 = 32;
+
+pub struct ControlPoint {
+    pub position: Vec3,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SDFObject {
@@ -43,6 +48,18 @@ impl SDFObject {
 
     pub fn inverse_transform_matrix(&self) -> Mat4 {
         return self.transform.compute_matrix().inverse();
+    }
+
+    pub fn get_control_points(&self) -> Vec<ControlPoint> {
+        match self.object_type {
+            TYPE_SPHERE => {
+                let radius_control_point = ControlPoint {
+                    position: Vec3::new(0.4, 0.4, 0.4)
+                };
+                vec!(radius_control_point)
+            },
+            _ => vec!()
+        }
     }
 }
 
@@ -66,14 +83,22 @@ impl Default for SDFObject {
 pub struct SDFObjectMaterial {
     #[uniform(0)]
     pub camera: Vec4,
+    #[uniform(1)]
+    pub camera_right: Vec4,
+    #[uniform(2)]
+    pub camera_up: Vec4,
     // w: object type
     // x: 0: not-selected. 1: selected
-    #[uniform(1)]
-    pub sdf_meta: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
-    #[uniform(2)]
-    pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(3)]
+    pub sdf_meta: [IVec4; MAX_SDFS_PER_ENTITY as usize], // using vec4 instead of i32 solves webgpu align issues
+    #[uniform(4)]
+    pub sdf_colors: [Vec4; MAX_SDFS_PER_ENTITY as usize],
+    #[uniform(5)]
     pub sdf_inverse_transforms: [Mat4; MAX_SDFS_PER_ENTITY as usize],
+    #[uniform(6)]
+    pub control_point_positions: [Vec4; MAX_CONTROL_POINTS as usize],
+    #[uniform(7)]
+    pub num_control_points: i32,
 }
 
 fn sphere_sdf(p: Vec3, r: f32) -> f32 {
@@ -146,9 +171,13 @@ impl Default for SDFObjectMaterial {
     fn default() -> Self {
         Self {
             camera: Vec4::ZERO,
+            camera_up: Vec4::ZERO,
+            camera_right: Vec4::ZERO,
             sdf_meta: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
             sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             sdf_inverse_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
+            control_point_positions: [Vec4::ZERO; MAX_CONTROL_POINTS as usize],
+            num_control_points: 0,
         }
     }
 }
@@ -176,6 +205,10 @@ impl Material for SDFObjectMaterial {
         defs.push(ShaderDefVal::Int(
             "MAX_SDFS_PER_ENTITY".into(),
             MAX_SDFS_PER_ENTITY)
+        );
+        defs.push(ShaderDefVal::Int(
+            "MAX_CONTROL_POINTS".into(),
+            MAX_CONTROL_POINTS)
         );
 
         defs.push(ShaderDefVal::Int("TYPE_END".into(), TYPE_END));

@@ -6,6 +6,7 @@ use bevy_mod_picking::{backend::HitData, prelude::*};
 use bevy_sdf_object::SDFObject;
 use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
 mod interaction_commands_and_shortcuts;
+mod control_points;
 
 pub struct ClaydashInteractionPlugin;
 
@@ -14,10 +15,12 @@ impl Plugin for ClaydashInteractionPlugin {
         app.init_resource::<ClaydashData>()
             .add_systems(Startup, (
                 interaction_commands_and_shortcuts::register_interaction_commands,
+                control_points::init_control_points
             ))
             .add_systems(Update, ((interaction_commands_and_shortcuts::run_shortcut_commands),
                                   update_selection_color,
-                                  update_transformations));
+                                  update_transformations,
+                                  control_points::update_control_points));
     }
 }
 
