@@ -3,8 +3,9 @@ use bevy::{
     input::{keyboard::KeyCode, Input}
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
-use bevy_sdf_object::{SDFObject, control_points_hit};
+use bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint};
 use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
+use observable_key_value_tree::ObservableKVTree;
 mod interaction_commands_and_shortcuts;
 
 pub struct ClaydashInteractionPlugin;
@@ -46,6 +47,71 @@ fn update_selection_color(
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
 }
 
+fn get_cursor_position_at_selection_dist(
+    camera: &Camera,
+    camera_global_transform: &GlobalTransform,
+    cursor_position: Vec2,
+    selection_translation: Vec3
+) -> Option<Vec3> {
+    match camera.viewport_to_world(camera_global_transform, cursor_position) {
+        Some(ray) => {
+            let object_to_viewport_dist = (selection_translation - ray.origin).length();
+            return Some(ray.origin + ray.direction * object_to_viewport_dist);
+        },
+        _ => {
+            return None;
+        }
+    };
+}
+
+
+fn update_control_points(
+    tree: &mut ObservableKVTree<ClaydashValue>,
+    cursor_position: Vec2,
+    camera: &Camera,
+    camera_global_transform: &GlobalTransform,
+) {
+    let uuid = tree.get_path("editor.current_control_point_object_uuid").unwrap_uuid_or_default();
+    let control_point_type = tree.get_path("editor.current_control_point_type").unwrap_control_point_type_or_default();
+
+
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
+        ClaydashValue::VecSDFObject(data) => data,
+        _ => { return; }
+    };
+
+    let mut selected_object: Option<&mut SDFObject> = None;
+
+    for object in objects.iter_mut() {
+        if object.uuid == uuid {
+            selected_object = Some(object);
+        }
+    }
+
+    let selected_object = selected_object.unwrap();
+
+    let control_points = selected_object.get_control_points();
+
+    let mut control_point: Option<ControlPoint> = None;
+
+    for point in control_points.iter() {
+        if point.control_point_type == control_point_type {
+            control_point = Some(point.clone());
+        }
+    }
+
+    let control_point = control_point.unwrap();
+
+    let cursor_position_near_control_point = get_cursor_position_at_selection_dist(
+        camera,
+        camera_global_transform,
+        cursor_position,
+        control_point.position
+    );
+
+
+}
+
 fn update_transformations(
     mut data_resource: ResMut<ClaydashData>,
     windows: Query<&Window>,
@@ -61,15 +127,19 @@ fn update_transformations(
 
     let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
 
-    // Return early if not editing
-    match state {
-        Start => { return; },
-        _ => {}
-    }
-
     // Find cursor info
     let window = windows.single();
     let cursor_position = window.cursor_position().unwrap_or(Vec2::ZERO);
+
+    // Return early if not editing
+    match state {
+        Start => { return; },
+        GrabbingControlPoint => {
+            update_control_points(tree, cursor_position, camera, camera_global_transform);
+            return;
+        }
+        _ => {}
+    }
 
     let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
@@ -184,23 +254,6 @@ fn update_transformations(
     };
 }
 
-fn get_cursor_position_at_selection_dist(
-    camera: &Camera,
-    camera_global_transform: &GlobalTransform,
-    cursor_position: Vec2,
-    selection_translation: Vec3
-) -> Option<Vec3> {
-    match camera.viewport_to_world(camera_global_transform, cursor_position) {
-        Some(ray) => {
-            let object_to_viewport_dist = (selection_translation - ray.origin).length();
-            return Some(ray.origin + ray.direction * object_to_viewport_dist);
-        },
-        _ => {
-            return None;
-        }
-    };
-}
-
 fn get_object_angle_relative_to_camera_ray(
     camera: &Camera,
     camera_global_transform: &GlobalTransform,
@@ -277,8 +330,16 @@ pub fn on_mouse_down(
             );
 
             match control_point_hit {
-                Some(uuid) => {
-                    println!("HIT");
+                Some(control_point) => {
+                    tree.set_path("editor.state", ClaydashValue::EditorState(GrabbingControlPoint));
+                    tree.set_path(
+                        "editor.current_control_point_object_uuid",
+                        ClaydashValue::Uuid(control_point.object_uuid)
+                    );
+                    tree.set_path(
+                        "editor.current_control_point_type",
+                        ClaydashValue::ControlPointType(control_point.control_point_type)
+                    );
                 }
                 None => {}
             }

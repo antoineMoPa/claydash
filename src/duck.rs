@@ -30,6 +30,11 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.0,
               1.0
             ],
+            "params": {
+              "SphereParams": {
+                "radius": 0.2
+              }
+            },
             "object_type": 1
           },
           {
@@ -58,6 +63,11 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.0,
               1.0
             ],
+            "params": {
+              "SphereParams": {
+                "radius": 0.2
+              }
+            },
             "object_type": 1
           },
           {
@@ -86,6 +96,11 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.003921569,
               1.0
             ],
+            "params": {
+              "SphereParams": {
+                "radius": 0.2
+              }
+            },
             "object_type": 1
           },
           {
@@ -114,6 +129,11 @@ pub const DEFAULT_DUCK: &str = r#"{
               1.0,
               1.0
             ],
+            "params": {
+              "SphereParams": {
+                "radius": 0.2
+              }
+            },
             "object_type": 1
           },
           {
@@ -142,6 +162,11 @@ pub const DEFAULT_DUCK: &str = r#"{
               1.0,
               1.0
             ],
+            "params": {
+              "SphereParams": {
+                "radius": 0.2
+              }
+            },
             "object_type": 1
           },
           {
@@ -170,6 +195,11 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.9882353,
               1.0
             ],
+            "params": {
+              "SphereParams": {
+                "radius": 0.2
+              }
+            },
             "object_type": 1
           },
           {
@@ -198,6 +228,11 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.9882353,
               1.0
             ],
+            "params": {
+              "SphereParams": {
+                "radius": 0.2
+              }
+            },
             "object_type": 1
           }
         ]

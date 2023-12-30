@@ -10,6 +10,7 @@ use observable_key_value_tree::{
 use bevy_sdf_object::SDFObject;
 use command_central::CommandBuilder;
 use claydash_data::EditorState::*;
+use sdf_consts::TYPE_BOX;
 
 pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
     let commands = &mut bevy_command_central.commands;
@@ -411,11 +412,8 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
         _ => { vec!() }
     };
 
-    let new_object = SDFObject {
-        object_type: sdf_consts::TYPE_SPHERE,
-        color,
-        ..default()
-    };
+    let mut new_object = SDFObject::create(sdf_consts::TYPE_SPHERE);
+    new_object.color = color;
     let uuid = new_object.uuid;
 
     sdf_objects.push(new_object);
@@ -438,11 +436,9 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue>) {
 
     let mut sdf_objects: Vec<SDFObject> = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
 
-    let new_object = SDFObject {
-        object_type: sdf_consts::TYPE_BOX,
-        color,
-        ..default()
-    };
+    let mut new_object = SDFObject::create(TYPE_BOX);
+    new_object.color = color;
+
     let uuid = new_object.uuid;
 
     sdf_objects.push(new_object);

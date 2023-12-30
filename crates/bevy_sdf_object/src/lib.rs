@@ -26,8 +26,17 @@ impl Plugin for BevySDFObjectPlugin {
 const MAX_SDFS_PER_ENTITY: i32 = 256;
 const MAX_CONTROL_POINTS: i32 = 32;
 
+#[derive(PartialEq,Copy,Clone,Serialize,Deserialize)]
+pub enum ControlPointType {
+    SphereRadius,
+    None,
+}
+
+#[derive(Clone,Serialize,Deserialize)]
 pub struct ControlPoint {
     pub position: Vec3,
+    pub control_point_type: ControlPointType,
+    pub object_uuid: uuid::Uuid,
 }
 
 impl ControlPoint {
@@ -39,12 +48,72 @@ impl ControlPoint {
     }
 }
 
+const CONTROL_POINT_CLICK_DISTANCE: f32 = 0.03;
+
+/// Given a list of control points, find whether a ray starting at `position`
+/// will hit any of the object's control points and returns the first hit control point.
+pub fn control_points_hit(
+    camera_position: Vec3,
+    ray: Vec3,
+    objects: &Vec<SDFObject>
+) -> Option<ControlPoint> {
+
+    for obj in objects.iter() {
+        for control_point in obj.get_control_points().iter() {
+            let hit_distance = control_point.get_hit_distance(camera_position, ray);
+            if hit_distance < CONTROL_POINT_CLICK_DISTANCE {
+                return Some(control_point.clone());
+            }
+        }
+    }
+
+    return None
+}
+
+#[derive(Clone,Serialize,Deserialize)]
+pub struct BoxParams {
+    pub box_q: Vec3,
+}
+
+impl Default for BoxParams {
+    fn default() -> Self {
+        Self {
+            box_q: Vec3::new(0.3, 0.3, 0.3)
+        }
+    }
+}
+
+#[derive(Clone,Serialize,Deserialize)]
+pub struct SphereParams {
+    pub radius: f32,
+}
+
+impl Default for SphereParams {
+    fn default() -> Self {
+        Self { radius: 0.2 }
+    }
+}
+
+#[derive(Clone,Serialize,Deserialize)]
+pub enum SDFObjectParams {
+    BoxParams(BoxParams),
+    SphereParams(SphereParams),
+    None
+}
+
+impl Default for SDFObjectParams {
+    fn default() -> Self {
+        SDFObjectParams::None
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SDFObject {
     pub uuid: uuid::Uuid,
     pub transform: Transform,
     pub color: Vec4,
     pub object_type: i32,
+    pub params: SDFObjectParams,
 }
 
 impl SDFObject {
@@ -63,11 +132,29 @@ impl SDFObject {
         match self.object_type {
             TYPE_SPHERE => {
                 let radius_control_point = ControlPoint {
-                    position: Vec3::new(0.4, 0.4, 0.4)
+                    position: Vec3::new(0.4, 0.4, 0.4),
+                    control_point_type: ControlPointType::SphereRadius,
+                    object_uuid: self.uuid,
                 };
                 vec!(radius_control_point)
             },
             _ => vec!()
+        }
+    }
+
+    pub fn create(object_type: i32) -> SDFObject {
+        match object_type {
+            sdf_consts::TYPE_SPHERE => SDFObject {
+                object_type: sdf_consts::TYPE_SPHERE,
+                params: SDFObjectParams::SphereParams(SphereParams::default()),
+                ..SDFObject::default()
+            },
+            sdf_consts::TYPE_BOX => SDFObject {
+                object_type: sdf_consts::TYPE_BOX,
+                params: SDFObjectParams::BoxParams(BoxParams::default()),
+                ..SDFObject::default()
+            },
+            _ => panic!("create() not implemented for {}", object_type)
         }
     }
 }
@@ -79,6 +166,7 @@ impl Default for SDFObject {
             transform: Transform::IDENTITY,
             color: Vec4::default(),
             object_type: TYPE_END,
+            params: SDFObjectParams::default(),
         }
     }
 }
@@ -146,30 +234,6 @@ fn object_distance(p: Vec3, object: &SDFObject) -> f32 {
     // Correct the returned distance to account for the scale
     return d_current_object * object.transform.scale.length() / Vec3::ONE.length();
 }
-
-const CONTROL_POINT_CLICK_DISTANCE: f32 = 0.03;
-
-
-/// Given a list of control points, find whether a ray starting at `position`
-/// will hit any of the object's control points and returns the first hit control point.
-pub fn control_points_hit(
-    camera_position: Vec3,
-    ray: Vec3,
-    objects: &Vec<SDFObject>
-) -> Option<uuid::Uuid> {
-
-    for obj in objects.iter() {
-        for control_point in obj.get_control_points().iter() {
-            let hit_distance = control_point.get_hit_distance(camera_position, ray);
-            if hit_distance < CONTROL_POINT_CLICK_DISTANCE {
-                return Some(obj.uuid);
-            }
-        }
-    }
-
-    return None
-}
-
 
 const RUST_RAYMARCH_ITERATIONS: i32 = 64;
 
