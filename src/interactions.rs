@@ -6,7 +6,6 @@ use bevy_mod_picking::{backend::HitData, prelude::*};
 use bevy_sdf_object::SDFObject;
 use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
 mod interaction_commands_and_shortcuts;
-mod control_points;
 
 pub struct ClaydashInteractionPlugin;
 
@@ -15,12 +14,10 @@ impl Plugin for ClaydashInteractionPlugin {
         app.init_resource::<ClaydashData>()
             .add_systems(Startup, (
                 interaction_commands_and_shortcuts::register_interaction_commands,
-                control_points::init_control_points
             ))
             .add_systems(Update, ((interaction_commands_and_shortcuts::run_shortcut_commands),
                                   update_selection_color,
-                                  update_transformations,
-                                  control_points::update_control_points));
+                                  update_transformations));
     }
 }
 
@@ -238,6 +235,7 @@ fn get_object_angle_relative_to_camera_ray(
     };
 }
 
+
 /// Handle selection
 /// Also, handle reseting state on click after transforming objects.
 pub fn on_mouse_down(
@@ -270,6 +268,7 @@ pub fn on_mouse_down(
             let camera_transform: &Transform = camera_transforms.single();
             let camera_position = camera_transform.translation;
             let ray = position - camera_position;
+
             let maybe_hit_uuid = bevy_sdf_object::raymarch(position, ray, objects);
 
             match maybe_hit_uuid {
