@@ -18,12 +18,14 @@ use lazy_static::lazy_static;
 pub enum EditorState {
     Start,
     Grabbing,
+    GrabbingControlPoint,
     Scaling,
     Rotating,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ClaydashValue {
+    Uuid(uuid::Uuid),
     VecUuid(Vec<uuid::Uuid>),
     VecI32(Vec<i32>),
     I32(i32),
@@ -44,6 +46,7 @@ pub enum ClaydashValue {
     Bool(bool),
     #[serde(skip)]
     Snapshot(Snapshot<ClaydashValue>),
+    ControlPointType(ControlPointType),
     None,
 }
 
@@ -111,6 +114,15 @@ macro_rules! define_unwrap_methods_for_vec {
 
 impl ClaydashValue {
     // Add a few methods to help with unwrapping.
+    define_unwrap_methods!(
+        unwrap_uuid,
+        unwrap_uuid_or_default,
+        unwrap_uuid_or,
+        Uuid,
+        uuid::Uuid,
+        uuid::Uuid::default()
+    );
+
     define_unwrap_methods!(
         unwrap_i32,
         unwrap_i32_or_default,
@@ -181,6 +193,15 @@ impl ClaydashValue {
         Bool,
         bool,
         false
+    );
+
+    define_unwrap_methods!(
+        unwrap_control_point_type,
+        unwrap_control_point_type_or_default,
+        unwrap_control_point_type_or,
+        ControlPointType,
+        ControlPointType,
+        ControlPointType::None
     );
 
     define_unwrap_methods_for_vec!(
