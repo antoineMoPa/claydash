@@ -3,7 +3,7 @@ use bevy::{
     input::{keyboard::KeyCode, Input}
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
-use bevy_sdf_object::SDFObject;
+use bevy_sdf_object::{SDFObject, control_points_hit};
 use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
 mod interaction_commands_and_shortcuts;
 
@@ -260,14 +260,28 @@ pub fn on_mouse_down(
     let tree = &mut data_resource.as_mut().tree;
     match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(objects) => {
+            let camera_transform: &Transform = camera_transforms.single();
+            let camera_position = camera_transform.translation;
+
             let hit: &HitData = &event.hit;
             let position = match hit.position {
                 Some(position) => position,
                 _ => { return; }
             };
-            let camera_transform: &Transform = camera_transforms.single();
-            let camera_position = camera_transform.translation;
             let ray = position - camera_position;
+
+            let control_point_hit = control_points_hit(
+                camera_position,
+                ray.normalize(),
+                &objects
+            );
+
+            match control_point_hit {
+                Some(uuid) => {
+                    println!("HIT");
+                }
+                None => {}
+            }
 
             let maybe_hit_uuid = bevy_sdf_object::raymarch(position, ray, objects);
 

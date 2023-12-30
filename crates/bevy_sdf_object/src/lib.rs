@@ -30,6 +30,15 @@ pub struct ControlPoint {
     pub position: Vec3,
 }
 
+impl ControlPoint {
+    pub fn get_hit_distance(&self, camera_position: Vec3, ray: Vec3) -> f32 {
+        let control_point_position = self.position;
+        let camera_to_control_point_dist = control_point_position.distance(camera_position);
+        let position_near_control_point = camera_position + ray * camera_to_control_point_dist;
+        return (position_near_control_point - control_point_position).length();
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SDFObject {
     pub uuid: uuid::Uuid,
@@ -137,6 +146,30 @@ fn object_distance(p: Vec3, object: &SDFObject) -> f32 {
     // Correct the returned distance to account for the scale
     return d_current_object * object.transform.scale.length() / Vec3::ONE.length();
 }
+
+const CONTROL_POINT_CLICK_DISTANCE: f32 = 0.03;
+
+
+/// Given a list of control points, find whether a ray starting at `position`
+/// will hit any of the object's control points and returns the first hit control point.
+pub fn control_points_hit(
+    camera_position: Vec3,
+    ray: Vec3,
+    objects: &Vec<SDFObject>
+) -> Option<uuid::Uuid> {
+
+    for obj in objects.iter() {
+        for control_point in obj.get_control_points().iter() {
+            let hit_distance = control_point.get_hit_distance(camera_position, ray);
+            if hit_distance < CONTROL_POINT_CLICK_DISTANCE {
+                return Some(obj.uuid);
+            }
+        }
+    }
+
+    return None
+}
+
 
 const RUST_RAYMARCH_ITERATIONS: i32 = 64;
 
