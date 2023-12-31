@@ -3,7 +3,7 @@ use bevy::{
     input::{keyboard::KeyCode, Input}
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
-use bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint};
+use bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, BoxParams, SphereParams, SDFObjectParams};
 use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
 use observable_key_value_tree::ObservableKVTree;
 mod interaction_commands_and_shortcuts;
@@ -74,7 +74,6 @@ fn update_control_points(
     let uuid = tree.get_path("editor.current_control_point_object_uuid").unwrap_uuid_or_default();
     let control_point_type = tree.get_path("editor.current_control_point_type").unwrap_control_point_type_or_default();
 
-
     let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
         _ => { return; }
@@ -84,7 +83,7 @@ fn update_control_points(
 
     for object in objects.iter_mut() {
         if object.uuid == uuid {
-            selected_object = Some(object);
+            selected_object = Some(object)
         }
     }
 
@@ -109,7 +108,16 @@ fn update_control_points(
         control_point.position
     );
 
+    match &mut selected_object.params {
+        SDFObjectParams::BoxParams(params) => {
 
+        },
+        SDFObjectParams::SphereParams(params) => {
+            params.radius = 0.5;
+        },
+    };
+
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
 }
 
 fn update_transformations(
@@ -404,4 +412,11 @@ pub fn on_mouse_down(
         },
         _ => {}
     }
+}
+
+pub fn on_mouse_up(
+    mut data_resource: ResMut<ClaydashData>,
+) {
+    let tree = &mut data_resource.as_mut().tree;
+    tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 }

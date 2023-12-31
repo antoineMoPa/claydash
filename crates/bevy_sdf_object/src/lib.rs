@@ -97,13 +97,37 @@ impl Default for SphereParams {
 #[derive(Clone,Serialize,Deserialize)]
 pub enum SDFObjectParams {
     BoxParams(BoxParams),
-    SphereParams(SphereParams),
-    None
+    SphereParams(SphereParams)
 }
 
-impl Default for SDFObjectParams {
-    fn default() -> Self {
-        SDFObjectParams::None
+impl BoxParams {
+    pub fn update_material(&self, index: usize, material: &mut SDFObjectMaterial) {
+        material.sdf_params[index] = Mat4::from_cols_array(&[
+            self.box_q.x, self.box_q.y, self.box_q.z, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0
+        ]);
+    }
+}
+
+impl SphereParams {
+    pub fn update_material(&self, index: usize, material: &mut SDFObjectMaterial) {
+        material.sdf_params[index] = Mat4::from_cols_array(&[
+            self.radius, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0
+        ]);
+    }
+}
+
+impl SDFObjectParams {
+    pub fn update_material(&self, index: usize, material: &mut SDFObjectMaterial) {
+        match self {
+            SDFObjectParams::BoxParams(box_params) => box_params.update_material(index, material),
+            SDFObjectParams::SphereParams(sphere_params) => sphere_params.update_material(index, material),
+        }
     }
 }
 
@@ -166,7 +190,7 @@ impl Default for SDFObject {
             transform: Transform::IDENTITY,
             color: Vec4::default(),
             object_type: TYPE_END,
-            params: SDFObjectParams::default(),
+            params: SDFObjectParams::SphereParams(SphereParams::default()),
         }
     }
 }
@@ -193,8 +217,10 @@ pub struct SDFObjectMaterial {
     #[uniform(5)]
     pub sdf_inverse_transforms: [Mat4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(6)]
-    pub control_point_positions: [Vec4; MAX_CONTROL_POINTS as usize],
+    pub sdf_params: [Mat4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(7)]
+    pub control_point_positions: [Vec4; MAX_CONTROL_POINTS as usize],
+    #[uniform(8)]
     pub num_control_points: i32,
 }
 
@@ -273,6 +299,7 @@ impl Default for SDFObjectMaterial {
             sdf_meta: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
             sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             sdf_inverse_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
+            sdf_params: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
             control_point_positions: [Vec4::ZERO; MAX_CONTROL_POINTS as usize],
             num_control_points: 0,
         }

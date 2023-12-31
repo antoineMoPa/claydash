@@ -19,9 +19,12 @@ var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 var<uniform> sdf_inverse_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 @group(1) @binding(6)
-var<uniform> control_point_positions: array<vec4<f32>, #{MAX_CONTROL_POINTS}>;
+var<uniform> sdf_params: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 @group(1) @binding(7)
+var<uniform> control_point_positions: array<vec4<f32>, #{MAX_CONTROL_POINTS}>;
+
+@group(1) @binding(8)
 var<uniform> num_control_points: i32;
 
 const MAX_ITERATIONS = 32;
@@ -56,8 +59,8 @@ fn box_sdf(p: vec3<f32>, b: vec3<f32>) -> f32 {
 
 fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
     // TODO un-hardcode
-    let sphere_r = 0.2;
-    let box_parameters = vec3(0.3, 0.3, 0.3);
+    let sphere_r = sdf_params[sdf_index][0].x;
+    let box_parameters = sdf_params[sdf_index][0].xyz;
     var d_current_object: f32 = FAR_DIST;
     let t = sdf_meta[sdf_index].w;
     let inverse_transform = sdf_inverse_transforms[sdf_index];
