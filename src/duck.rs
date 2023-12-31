@@ -30,12 +30,12 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.0,
               1.0
             ],
+            "object_type": 1,
             "params": {
               "SphereParams": {
                 "radius": 0.2
               }
-            },
-            "object_type": 1
+            }
           },
           {
             "uuid": "fcd905e5-3692-42fd-b36d-1106dc39428e",
@@ -63,12 +63,12 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.0,
               1.0
             ],
+            "object_type": 1,
             "params": {
               "SphereParams": {
                 "radius": 0.2
               }
-            },
-            "object_type": 1
+            }
           },
           {
             "uuid": "25fe69fd-4e67-498f-9ff0-9ebfcdeca716",
@@ -96,12 +96,12 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.003921569,
               1.0
             ],
+            "object_type": 1,
             "params": {
               "SphereParams": {
                 "radius": 0.2
               }
-            },
-            "object_type": 1
+            }
           },
           {
             "uuid": "83cb6349-a194-4c94-ad87-1b6ad1942a87",
@@ -129,12 +129,12 @@ pub const DEFAULT_DUCK: &str = r#"{
               1.0,
               1.0
             ],
+            "object_type": 1,
             "params": {
               "SphereParams": {
                 "radius": 0.2
               }
-            },
-            "object_type": 1
+            }
           },
           {
             "uuid": "c424bca1-18f1-4929-bf4b-ac66c2d24e3c",
@@ -162,12 +162,12 @@ pub const DEFAULT_DUCK: &str = r#"{
               1.0,
               1.0
             ],
+            "object_type": 1,
             "params": {
               "SphereParams": {
                 "radius": 0.2
               }
-            },
-            "object_type": 1
+            }
           },
           {
             "uuid": "0bc162ca-1ca7-4306-9caf-fce36617241c",
@@ -195,12 +195,12 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.9882353,
               1.0
             ],
+            "object_type": 1,
             "params": {
               "SphereParams": {
                 "radius": 0.2
               }
-            },
-            "object_type": 1
+            }
           },
           {
             "uuid": "24ef5e99-59aa-46ff-afe8-197a16bf2aa1",
@@ -228,12 +228,123 @@ pub const DEFAULT_DUCK: &str = r#"{
               0.9882353,
               1.0
             ],
+            "object_type": 1,
             "params": {
               "SphereParams": {
                 "radius": 0.2
               }
+            }
+          },
+          {
+            "uuid": "90a0fada-f805-4518-b15b-326888e4cd9c",
+            "transform": {
+              "translation": [
+                -0.53114486,
+                0.13603073,
+                -0.51351607
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                0.655612,
+                0.655612,
+                0.655612
+              ]
             },
-            "object_type": 1
+            "color": [
+              0.8,
+              0.0,
+              0.3,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.3,
+                  0.3,
+                  0.3
+                ]
+              }
+            }
+          },
+          {
+            "uuid": "a9bb0c17-36bd-4ccf-8ee7-1136aedc224c",
+            "transform": {
+              "translation": [
+                0.4031095,
+                0.30512357,
+                -0.37686935
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.04097,
+                1.04097,
+                1.04097
+              ]
+            },
+            "color": [
+              0.8,
+              0.0,
+              0.3,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.3,
+                  0.3,
+                  0.3
+                ]
+              }
+            }
+          },
+          {
+            "uuid": "ff68a9c9-e797-4067-bdc2-1e6227cd3a2f",
+            "transform": {
+              "translation": [
+                0.56811357,
+                0.0916934,
+                0.38035285
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                0.5556836,
+                0.5556836,
+                0.5556836
+              ]
+            },
+            "color": [
+              0.8,
+              0.0,
+              0.3,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.3,
+                  0.3,
+                  0.3
+                ]
+              }
+            }
           }
         ]
       }
@@ -241,7 +352,9 @@ pub const DEFAULT_DUCK: &str = r#"{
     "selected_uuids": {
       "subtree": {},
       "value": {
-        "VecUuid": []
+        "VecUuid": [
+          "90a0fada-f805-4518-b15b-326888e4cd9c"
+        ]
       }
     }
   },
