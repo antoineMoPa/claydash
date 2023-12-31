@@ -58,7 +58,6 @@ fn box_sdf(p: vec3<f32>, b: vec3<f32>) -> f32 {
 }
 
 fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
-    // TODO un-hardcode
     let sphere_r = sdf_params[sdf_index][0].x;
     let box_parameters = sdf_params[sdf_index][0].xyz;
     var d_current_object: f32 = FAR_DIST;
