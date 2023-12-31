@@ -24,7 +24,7 @@ impl Plugin for BevySDFObjectPlugin {
 }
 
 const MAX_SDFS_PER_ENTITY: i32 = 256;
-const MAX_CONTROL_POINTS: i32 = 32;
+const MAX_CONTROL_POINTS: i32 = 16;
 
 #[derive(PartialEq,Copy,Clone,Serialize,Deserialize)]
 pub enum ControlPointType {
@@ -281,7 +281,7 @@ pub struct SDFObjectMaterial {
     #[uniform(7)]
     pub control_point_positions: [Vec4; MAX_CONTROL_POINTS as usize],
     #[uniform(8)]
-    pub num_control_points: i32,
+    pub num_control_points: IVec4, // Padded to respect alignment constraints. Only first value is used.
 }
 
 /// Compute the union of 2 distance fields.
@@ -338,7 +338,7 @@ impl Default for SDFObjectMaterial {
             sdf_inverse_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
             sdf_params: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
             control_point_positions: [Vec4::ZERO; MAX_CONTROL_POINTS as usize],
-            num_control_points: 0,
+            num_control_points: IVec4::ZERO,
         }
     }
 }

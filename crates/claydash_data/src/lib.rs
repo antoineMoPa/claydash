@@ -339,7 +339,7 @@ fn sync_to_bevy(
         // Reset in case no material is selected
         let handle = material_handle.single();
         let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
-        material.num_control_points = 0;
+        material.num_control_points[0] = 0;
 
         for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate() {
             if uuids.contains(&object.uuid) {
@@ -377,5 +377,5 @@ fn show_control_points(material: &mut SDFObjectMaterial, index: usize, object: &
         num_control_points += 1;
     }
 
-    material.num_control_points = num_control_points;
+    material.num_control_points[0] = num_control_points;
 }

@@ -25,7 +25,7 @@ var<uniform> sdf_params: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 var<uniform> control_point_positions: array<vec4<f32>, #{MAX_CONTROL_POINTS}>;
 
 @group(1) @binding(8)
-var<uniform> num_control_points: i32;
+var<uniform> num_control_points: vec4<i32>; // padded for alignment. number is stored in first position.
 
 const MAX_ITERATIONS = 32;
 
@@ -101,7 +101,7 @@ fn render_control_points(mesh: VertexOutput) -> vec4<f32> {
     var col: vec4<f32> = vec4(0.0);
     var camera_ray = normalize(world_position - camera.xyz);
 
-    for (var i: i32 = 0; i < num_control_points; i++) {
+    for (var i: i32 = 0; i < num_control_points.x; i++) {
         var control_point_position = control_point_positions[i].xyz;
         var camera_to_control_point_dist = length(control_point_position - camera.xyz);
         var position_near_control_point = camera.xyz + camera_ray * camera_to_control_point_dist;
