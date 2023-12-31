@@ -208,7 +208,8 @@ fn build_projection_surface(
             ..default()
         },
         PickableBundle::default(),      // Makes the entity pickable
-        On::<Pointer<Down>>::run(interactions::on_mouse_down)
+        On::<Pointer<Down>>::run(interactions::on_mouse_down),
+        On::<Pointer<Up>>::run(interactions::on_mouse_up)
     ));
 }
 

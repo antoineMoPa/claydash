@@ -303,13 +303,14 @@ fn sync_to_bevy(
             let value = data.tree.get_path("scene.sdf_objects");
             let mut num_control_points: i32 = 0;
             for (index, object) in value.unwrap_vec_sdf_object().iter().enumerate() {
+                object.params.update_material(index, material);
+
                 material.sdf_meta[index].w = object.object_type;
                 material.sdf_colors[index] = object.color;
                 material.sdf_inverse_transforms[index] = object.inverse_transform_matrix();
                 material.sdf_meta[index + 1].w = TYPE_END;
 
                 for point in object.get_control_points().iter() {
-                    println!("adding control point {}", point.position);
                     material.control_point_positions[num_control_points as usize].x = point.position.x;
                     material.control_point_positions[num_control_points as usize].y = point.position.y;
                     material.control_point_positions[num_control_points as usize].z = point.position.z;
