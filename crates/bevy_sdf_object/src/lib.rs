@@ -29,6 +29,9 @@ const MAX_CONTROL_POINTS: i32 = 32;
 #[derive(PartialEq,Copy,Clone,Serialize,Deserialize)]
 pub enum ControlPointType {
     SphereRadius,
+    BoxX,
+    BoxY,
+    BoxZ,
     None,
 }
 
@@ -189,6 +192,35 @@ impl SDFObject {
                     object_uuid: self.uuid,
                 };
                 vec!(radius_control_point)
+            },
+            TYPE_BOX => {
+                let box_q: Vec3 = match &self.params {
+                    SDFObjectParams::BoxParams(params) => { params.box_q },
+                    _ => { panic!("No sphere params.") }
+                };
+
+                let s = self.transform.scale;
+                let r = self.transform.rotation;
+                let x_control_point = ControlPoint {
+                    position: self.transform.translation + r * Vec3::new(box_q.x, 0.0, 0.0) * s,
+                    control_point_type: ControlPointType::BoxX,
+                    object_uuid: self.uuid,
+                };
+
+                let y_control_point = ControlPoint {
+                    position: self.transform.translation + r * Vec3::new(0.0, box_q.y, 0.0) * s,
+                    control_point_type: ControlPointType::BoxY,
+                    object_uuid: self.uuid,
+                };
+
+                let z_control_point = ControlPoint {
+                    position: self.transform.translation + r * Vec3::new(0.0, 0.0, box_q.z) * s,
+                    control_point_type: ControlPointType::BoxZ,
+                    object_uuid: self.uuid,
+                };
+
+
+                vec!(x_control_point, y_control_point, z_control_point)
             },
             _ => vec!()
         }
