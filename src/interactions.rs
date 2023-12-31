@@ -3,7 +3,7 @@ use bevy::{
     input::{keyboard::KeyCode, Input}
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
-use bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, BoxParams, SphereParams, SDFObjectParams};
+use bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, BoxParams, SphereParams, SDFObjectParams, ControlPointType};
 use claydash_data::{ClaydashData, ClaydashValue, EditorState::*, get_active_object_index};
 use observable_key_value_tree::ObservableKVTree;
 mod interaction_commands_and_shortcuts;
@@ -103,13 +103,31 @@ fn update_control_points(
             );
 
             let cursor_position_near_control_point = cursor_position_near_control_point.unwrap();
+            let scale = active_object.transform.scale;
+            let r = active_object.transform.rotation.inverse();
 
             match &mut active_object.params {
                 SDFObjectParams::BoxParams(params) => {
+                    let new_position = cursor_position_near_control_point - active_object.transform.translation;
+                    let new_position = r * new_position;
 
+                    match control_point.control_point_type {
+                        ControlPointType::BoxX => {
+                            params.box_q.x = new_position.x / scale.x;
+                        },
+                        ControlPointType::BoxY => {
+                            params.box_q.y = new_position.y / scale.y;
+                        }
+                        ControlPointType::BoxZ => {
+                            params.box_q.z = new_position.z / scale.z;
+                        },
+                        _ => {
+                            panic!("unhandled control point type.");
+                        }
+                    }
                 },
                 SDFObjectParams::SphereParams(params) => {
-                    params.radius = ((cursor_position_near_control_point - active_object.transform.translation) / active_object.transform.scale).length();
+                    params.radius = ((cursor_position_near_control_point - active_object.transform.translation) / scale).length();
                 },
             };
 
