@@ -272,6 +272,21 @@ lazy_static! {
     static ref LAST_SYNCED_SDF_OBJECTS_VERSION: Arc<Mutex<i32>> = Arc::new(Mutex::new(-1));
 }
 
+pub fn get_active_object_index(tree: &ObservableKVTree<ClaydashValue>) -> Option<usize> {
+    let objects = tree.get_path("scene.sdf_objects");
+    let uuids = tree.get_path("scene.selected_uuids");
+    let uuids = uuids.unwrap_vec_uuid();
+
+    // Last selected object is the active object
+    for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate().rev() {
+        if uuids.contains(&object.uuid) {
+            return Some(index);
+        }
+    }
+
+    return None;
+}
+
 // Sync tree to bevy
 // Once the tree supports different update flags, we can split this in separate systems again.
 // Q: Why is this not in bevy_sdf_object?
@@ -324,29 +339,52 @@ fn sync_to_bevy(
         *last_updated_version = version;
     }
 
-    if data.tree.was_path_updated("scene.selected_uuids") {
-        // Potentially: move this block to interactions.
-        // Update selection state
-        {
-            let handle = material_handle.single();
-            let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+    if data.tree.was_path_updated("scene.selected_uuids") || data.tree.was_path_updated("scene.sdf_objects"){
+        let active_object_index = get_active_object_index(&data.tree);
+        let objects = data.tree.get_path("scene.sdf_objects");
+        let uuids = data.tree.get_path("scene.selected_uuids");
+        let uuids = uuids.unwrap_vec_uuid();
 
-            let objects = data.tree.get_path("scene.sdf_objects");
+        // Reset in case no material is selected
+        let handle = material_handle.single();
+        let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+        material.num_control_points = 0;
 
-            let uuids = data.tree.get_path("scene.selected_uuids");
-            let uuids = uuids.unwrap_vec_uuid();
-
-            for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate() {
-                if uuids.contains(&object.uuid) {
-                    // Mark as selected
-                    material.sdf_meta[index].x = 1;
-                } else {
-                    // Mark as not-selected
-                    material.sdf_meta[index].x = 0;
-                }
+        for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate() {
+            if uuids.contains(&object.uuid) {
+                // Mark as selected
+                material.sdf_meta[index].x = 1;
+            } else {
+                // Mark as not-selected
+                material.sdf_meta[index].x = 0;
             }
+        }
+
+        match active_object_index  {
+            Some(index) => {
+                // Show control points
+                let object = &objects.unwrap_vec_sdf_object()[index];
+                show_control_points(material, index, object);
+            },
+            _ => {}
         }
     }
 
+
     data.tree.reset_update_cycle();
+}
+
+fn show_control_points(material: &mut SDFObjectMaterial, index: usize, object: &SDFObject) {
+    let mut num_control_points: i32 = 0;
+
+    object.params.update_material(index, material);
+
+    for point in object.get_control_points().iter() {
+        material.control_point_positions[num_control_points as usize].x = point.position.x;
+        material.control_point_positions[num_control_points as usize].y = point.position.y;
+        material.control_point_positions[num_control_points as usize].z = point.position.z;
+        num_control_points += 1;
+    }
+
+    material.num_control_points = num_control_points;
 }

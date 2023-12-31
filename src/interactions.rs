@@ -4,7 +4,7 @@ use bevy::{
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
 use bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, BoxParams, SphereParams, SDFObjectParams};
-use claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
+use claydash_data::{ClaydashData, ClaydashValue, EditorState::*, get_active_object_index};
 use observable_key_value_tree::ObservableKVTree;
 mod interaction_commands_and_shortcuts;
 
@@ -79,45 +79,46 @@ fn update_control_points(
         _ => { return; }
     };
 
-    let mut selected_object: Option<&mut SDFObject> = None;
+    let active_object = objects.iter_mut().find(|obj| { obj.uuid == uuid });
 
-    for object in objects.iter_mut() {
-        if object.uuid == uuid {
-            selected_object = Some(object)
+    match active_object {
+        Some(active_object) => {
+            let control_points = active_object.get_control_points();
+
+            let mut control_point: Option<ControlPoint> = None;
+
+            for point in control_points.iter() {
+                if point.control_point_type == control_point_type {
+                    control_point = Some(point.clone());
+                }
+            }
+
+            let control_point = control_point.unwrap();
+
+            let cursor_position_near_control_point = get_cursor_position_at_selection_dist(
+                camera,
+                camera_global_transform,
+                cursor_position,
+                control_point.position
+            );
+
+            let cursor_position_near_control_point = cursor_position_near_control_point.unwrap();
+
+            match &mut active_object.params {
+                SDFObjectParams::BoxParams(params) => {
+
+                },
+                SDFObjectParams::SphereParams(params) => {
+                    params.radius = ((cursor_position_near_control_point - active_object.transform.translation) / active_object.transform.scale).length();
+                },
+            };
+
+            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+        }
+        _ => {
+            return;
         }
     }
-
-    let selected_object = selected_object.unwrap();
-
-    let control_points = selected_object.get_control_points();
-
-    let mut control_point: Option<ControlPoint> = None;
-
-    for point in control_points.iter() {
-        if point.control_point_type == control_point_type {
-            control_point = Some(point.clone());
-        }
-    }
-
-    let control_point = control_point.unwrap();
-
-    let cursor_position_near_control_point = get_cursor_position_at_selection_dist(
-        camera,
-        camera_global_transform,
-        cursor_position,
-        control_point.position
-    );
-
-    match &mut selected_object.params {
-        SDFObjectParams::BoxParams(params) => {
-
-        },
-        SDFObjectParams::SphereParams(params) => {
-            params.radius = 0.5;
-        },
-    };
-
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
 }
 
 fn update_transformations(
@@ -348,6 +349,8 @@ pub fn on_mouse_down(
                         "editor.current_control_point_type",
                         ClaydashValue::ControlPointType(control_point.control_point_type)
                     );
+
+                    return;
                 }
                 None => {}
             }
@@ -419,4 +422,5 @@ pub fn on_mouse_up(
 ) {
     let tree = &mut data_resource.as_mut().tree;
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
+    tree.make_undo_redo_snapshot();
 }
