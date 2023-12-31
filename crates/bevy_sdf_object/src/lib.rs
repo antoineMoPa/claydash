@@ -109,6 +109,16 @@ impl BoxParams {
             0.0, 0.0, 0.0, 0.0
         ]);
     }
+
+    fn sdf(&self, p: Vec3) -> f32 {
+        let box_q = p.abs() - self.box_q;
+        let max_box_q = Vec3::new(
+            box_q.x.max(0.0),
+            box_q.y.max(0.0),
+            box_q.z.max(0.0)
+        );
+        return (max_box_q + box_q.x.max(box_q.y.max(box_q.z)).min(0.0)).length();
+    }
 }
 
 impl SphereParams {
@@ -120,6 +130,10 @@ impl SphereParams {
             0.0, 0.0, 0.0, 0.0
         ]);
     }
+
+    fn sdf(&self, p: Vec3) -> f32 {
+        return p.length() - self.radius;
+    }
 }
 
 impl SDFObjectParams {
@@ -127,6 +141,13 @@ impl SDFObjectParams {
         match self {
             SDFObjectParams::BoxParams(box_params) => box_params.update_material(index, material),
             SDFObjectParams::SphereParams(sphere_params) => sphere_params.update_material(index, material),
+        }
+    }
+
+    pub fn sdf(&self, p: Vec3) -> f32 {
+        match self {
+            SDFObjectParams::BoxParams(box_params) => box_params.sdf(p),
+            SDFObjectParams::SphereParams(sphere_params) => sphere_params.sdf(p),
         }
     }
 }
@@ -155,8 +176,15 @@ impl SDFObject {
     pub fn get_control_points(&self) -> Vec<ControlPoint> {
         match self.object_type {
             TYPE_SPHERE => {
+                let r: f32 = match &self.params {
+                    SDFObjectParams::SphereParams(params) => { params.radius },
+                    _ => { panic!("No sphere params.") }
+                };
+
+                let s = self.transform.scale;
+
                 let radius_control_point = ControlPoint {
-                    position: Vec3::new(0.4, 0.4, 0.4),
+                    position: self.transform.translation + Vec3::new(r, 0.0, 0.0) * s,
                     control_point_type: ControlPointType::SphereRadius,
                     object_uuid: self.uuid,
                 };
@@ -224,38 +252,15 @@ pub struct SDFObjectMaterial {
     pub num_control_points: i32,
 }
 
-fn sphere_sdf(p: Vec3, r: f32) -> f32 {
-    return p.length() - r;
-}
-
-fn box_sdf(p: Vec3, box_parameters: Vec3) -> f32 {
-    let box_q = p.abs() - box_parameters;
-    let max_box_q = Vec3::new(
-        box_q.x.max(0.0),
-        box_q.y.max(0.0),
-        box_q.z.max(0.0)
-    );
-    return (max_box_q + box_q.x.max(box_q.y.max(box_q.z)).min(0.0)).length();
-}
-
 /// Compute the union of 2 distance fields.
 fn sdf_union(d1: f32, d2: f32) -> f32 {
     return d1.min(d2);
 }
 
 fn object_distance(p: Vec3, object: &SDFObject) -> f32 {
-    let sphere_r = 0.2;
-    let box_parameters = Vec3::new(0.3, 0.3, 0.3);
     let transformed_position = (object.inverse_transform_matrix() * Vec4::from((p, 1.0))).xyz();
-    let d_current_object = match object.object_type {
-        TYPE_SPHERE => {
-            sphere_sdf(transformed_position, sphere_r)
-        },
-        TYPE_BOX => {
-            box_sdf(transformed_position, box_parameters)
-        },
-        _ => { panic!("Not implemented!") }
-    };
+
+    let d_current_object = object.params.sdf(transformed_position);
 
     // Correct the returned distance to account for the scale
     return d_current_object * object.transform.scale.length() / Vec3::ONE.length();
