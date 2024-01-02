@@ -3,8 +3,8 @@ use bevy::{
     input::{keyboard::KeyCode, Input}
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
-use crate::bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, BoxParams, SphereParams, SDFObjectParams, ControlPointType};
-use crate::claydash_data::{ClaydashData, ClaydashValue, EditorState::*, get_active_object_index};
+use crate::bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, SDFObjectParams, ControlPointType};
+use crate::claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
 use observable_key_value_tree::ObservableKVTree;
 mod interaction_commands_and_shortcuts;
 
