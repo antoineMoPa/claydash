@@ -22,12 +22,12 @@ https://app.claydash.com/ - note: live version does not always point to main bra
 - **scaling objects** ✅
 - **multiple select** ✅
 - **rotating objects** ✅
+- **file menu** ✅
 - boolean operations
 - repetition ui
 - object settings
 - domain warping
 - top bar buttons
 - real time engine
-- file menu
 - tree view
 - perspective/ortho selection
