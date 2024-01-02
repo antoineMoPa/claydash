@@ -1,8 +1,8 @@
 use bevy::prelude::*;
-use claydash_data::{ClaydashData, ClaydashValue};
+use crate::claydash_data::{ClaydashData, ClaydashValue};
 use observable_key_value_tree::ObservableKVTree;
 use command_central::CommandBuilder;
-use bevy_command_central_plugin::CommandCentralState;
+use crate::command_central_plugin::CommandCentralState;
 
 pub struct ClaydashUndoRedoPlugin;
 

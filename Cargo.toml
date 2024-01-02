@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "crates/claydash_data",
     "crates/sdf_consts"
 ]
 
@@ -13,11 +12,7 @@ bevy_egui = "0.23.0"
 uuid = "1.5.0"
 bevy_app = "0.12"
 sdf_consts = { path = "crates/sdf_consts"}
-bevy_sdf_object = { path = "crates/bevy_sdf_object" }
 command_central = { path = "crates/command_central"}
-bevy_command_central_plugin = { path = "crates/bevy_command_central_plugin"}
-bevy_command_central_egui = { path = "crates/bevy_command_central_egui"}
-claydash_data = { path = "crates/claydash_data"}
 observable_key_value_tree = { path = "crates/observable_key_value_tree" }
 lazy_static = "1.4.0"
 
@@ -32,11 +27,7 @@ bevy = { workspace = true, features = [ "serialize" ] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 bevy_egui = { workspace = true }
-bevy_sdf_object = { workspace = true }
-claydash_data = { workspace = true }
 command_central = { workspace = true }
-bevy_command_central_plugin = { workspace = true }
-bevy_command_central_egui = { workspace = true }
 bevy_reflect = { workspace = true }
 uuid = { workspace = true }
 observable_key_value_tree = { workspace = true }

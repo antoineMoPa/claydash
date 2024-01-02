@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use command_central::CommandMap;
 
-use claydash_data::ClaydashValue;
+use crate::claydash_data::ClaydashValue;
 
 pub struct BevyCommandCentralPlugin;
 

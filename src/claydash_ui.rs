@@ -3,14 +3,14 @@ use bevy::{
     winit::WinitWindows,
     tasks::AsyncComputeTaskPool,
 };
-use bevy_command_central_plugin::CommandCentralState;
+use crate::command_central_plugin::CommandCentralState;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use egui::containers::Frame;
 use egui::Color32;
 use epaint::{Stroke, Pos2};
-use claydash_data::{ClaydashValue, ClaydashData};
+use crate::claydash_data::{ClaydashValue, ClaydashData};
 use observable_key_value_tree::{ObservableKVTree};
-use bevy_command_central_egui::{CommandCentralUiState, command_ui};
+use crate::command_central_egui::{CommandCentralUiState, command_ui};
 use rfd::FileHandle;
 use std::sync::mpsc::{channel, Sender, Receiver};
 

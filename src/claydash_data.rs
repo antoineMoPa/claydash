@@ -9,10 +9,10 @@ use observable_key_value_tree::{
     Snapshot
 };
 
-use bevy_sdf_object::*;
-
 use std::sync::{Arc, Mutex};
 use lazy_static::lazy_static;
+
+use crate::bevy_sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum EditorState {
@@ -289,8 +289,6 @@ pub fn get_active_object_index(tree: &ObservableKVTree<ClaydashValue>) -> Option
 
 // Sync tree to bevy
 // Once the tree supports different update flags, we can split this in separate systems again.
-// Q: Why is this not in bevy_sdf_object?
-// R: Because bevy_sdf_object should not depend on the tree
 fn sync_to_bevy(
     mut data_resource: ResMut<ClaydashData>,
     material_handle: Query<&Handle<SDFObjectMaterial>>,

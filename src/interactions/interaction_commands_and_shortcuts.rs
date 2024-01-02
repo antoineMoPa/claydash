@@ -2,14 +2,14 @@ use bevy::{
     prelude::*,
     input::keyboard::KeyCode, ecs::system::SystemState
 };
-use claydash_data::{ClaydashValue, ClaydashData};
-use bevy_command_central_plugin::CommandCentralState;
+use crate::claydash_data::{ClaydashValue, ClaydashData};
+use crate::command_central_plugin::CommandCentralState;
 use observable_key_value_tree::{
     ObservableKVTree,
 };
-use bevy_sdf_object::SDFObject;
+use crate::bevy_sdf_object::SDFObject;
 use command_central::CommandBuilder;
-use claydash_data::EditorState::*;
+use crate::claydash_data::EditorState::*;
 use sdf_consts::TYPE_BOX;
 
 pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCentralState>) {

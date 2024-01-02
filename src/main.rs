@@ -1,3 +1,11 @@
+mod bevy_sdf_object;
+mod command_central_egui;
+mod command_central_plugin;
+mod claydash_data;
+mod interactions;
+mod claydash_ui;
+mod undo_redo;
+
 // This is only for native builds
 #[allow(unused_imports)]
 use std::fs::read_to_string;
@@ -12,7 +20,7 @@ use smooth_bevy_cameras::{
     }
 };
 
-use bevy_command_central_plugin::{BevyCommandCentralPlugin, CommandCentralState};
+use command_central_plugin::{BevyCommandCentralPlugin, CommandCentralState};
 
 use bevy::{
     input::{keyboard::KeyCode, Input},
@@ -31,9 +39,6 @@ use crate::interactions::ClaydashInteractionPlugin;
 
 use claydash_data::{ClaydashDataPlugin, ClaydashValue, ClaydashData};
 
-mod interactions;
-mod claydash_ui;
-mod undo_redo;
 
 fn main() {
     App::new()

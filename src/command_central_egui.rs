@@ -10,8 +10,8 @@ use epaint::{
     Stroke,
     Rounding
 };
-use bevy_command_central_plugin::*;
-use claydash_data::{ClaydashData, ClaydashValue};
+use crate::command_central_plugin::*;
+use crate::claydash_data::{ClaydashData, ClaydashValue};
 use observable_key_value_tree::ObservableKVTree;
 
 #[derive(Resource)]

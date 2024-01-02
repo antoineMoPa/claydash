@@ -480,29 +480,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_command_central_egui"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_command_central_plugin",
- "bevy_egui",
- "claydash_data",
- "command_central",
- "epaint",
- "observable_key_value_tree",
-]
-
-[[package]]
-name = "bevy_command_central_plugin"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_app",
- "claydash_data",
- "command_central",
-]
-
-[[package]]
 name = "bevy_core"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1156,17 +1133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_sdf_object"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_reflect",
- "sdf_consts",
- "serde",
- "uuid",
-]
-
-[[package]]
 name = "bevy_sprite"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1575,15 +1541,11 @@ version = "0.0.0"
 dependencies = [
  "bevy",
  "bevy_asset",
- "bevy_command_central_egui",
- "bevy_command_central_plugin",
  "bevy_egui",
  "bevy_framepace",
  "bevy_mod_picking",
  "bevy_pbr",
  "bevy_reflect",
- "bevy_sdf_object",
- "claydash_data",
  "command_central",
  "epaint",
  "futures",
@@ -1600,19 +1562,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "claydash_data"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_sdf_object",
- "lazy_static",
- "observable_key_value_tree",
- "sdf_consts",
- "serde",
- "uuid",
 ]
 
 [[package]]
