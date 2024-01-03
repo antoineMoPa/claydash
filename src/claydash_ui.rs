@@ -3,13 +3,14 @@ use bevy::{
     winit::WinitWindows,
     tasks::AsyncComputeTaskPool,
 };
+use crate::bevy_sdf_object::SDFObject;
 use crate::command_central_plugin::CommandCentralState;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use egui::containers::Frame;
 use egui::Color32;
 use epaint::{Stroke, Pos2};
 use crate::claydash_data::{ClaydashValue, ClaydashData};
-use observable_key_value_tree::{ObservableKVTree};
+use observable_key_value_tree::ObservableKVTree;
 use crate::command_central_egui::{CommandCentralUiState, command_ui};
 use rfd::FileHandle;
 use std::sync::mpsc::{channel, Sender, Receiver};
@@ -270,6 +271,7 @@ fn draw_color_picker(
             a as f32 / 255.0,
         );
         tree.set_path("editor.colorpicker.color", ClaydashValue::Vec4(color));
+        update_selection_color(tree, color);
         ui.painter()
             .circle(
                 Pos2 {
@@ -284,4 +286,24 @@ fn draw_color_picker(
                 }
             );
     }
+}
+
+fn update_selection_color(
+    tree: &mut ObservableKVTree<ClaydashValue>,
+    color: Vec4,
+) {
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
+        ClaydashValue::VecSDFObject(data) => data,
+        _ => { return; }
+    };
+
+    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+
+    for object in objects.iter_mut() {
+        if selected_object_uuids.contains(&object.uuid) {
+            object.color = color;
+        }
+    }
+
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
 }

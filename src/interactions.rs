@@ -1,6 +1,6 @@
 use bevy::{
     prelude::*,
-    input::{keyboard::KeyCode, Input}
+    input::{keyboard::KeyCode, Input},
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
 use crate::bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, SDFObjectParams, ControlPointType};
@@ -14,37 +14,49 @@ impl Plugin for ClaydashInteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClaydashData>()
             .add_systems(Startup, (
+                setup_text,
                 interaction_commands_and_shortcuts::register_interaction_commands,
             ))
             .add_systems(Update, ((interaction_commands_and_shortcuts::run_shortcut_commands),
-                                  update_selection_color,
-                                  update_transformations));
+                                  update_transformations,
+                                  update_text));
     }
 }
 
-fn update_selection_color(
-    mut data_resource: ResMut<ClaydashData>,
+#[derive(Component)]
+struct ControlPointText;
+
+fn setup_text(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn((
+        // Create a TextBundle that has a Text with a single section.
+        TextBundle::from_section(
+            // Accepts a `String` or any type that converts into a `String`, such as `&str`
+            "hello\nbevy!",
+            TextStyle {
+                // This font is loaded and will be used instead of the default font.
+                font: asset_server.load("fonts/FiraMono-Medium.ttf"),
+                font_size: 30.0,
+                color: Color::WHITE,
+            },
+        ) // Set the alignment of the Text
+        .with_text_alignment(TextAlignment::Center)
+        // Set the style of the TextBundle itself.
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            top: Val::Vh(4.0),
+            left: Val::Vw(4.0),
+            ..default()
+        }),
+        ControlPointText,
+    ));
+}
+
+fn update_text(
+    mut query: Query<&mut Text, With<ControlPointText>>,
 ) {
-    let tree = &mut data_resource.as_mut().tree;
-    if !tree.was_path_updated("editor.colorpicker.color") {
-        return;
+    for mut text in &mut query {
+        text.sections[0].value = "HELLO".to_owned();
     }
-    let color: Vec4 = tree.get_path("editor.colorpicker.color").unwrap_vec4_or(Vec4::ZERO);
-
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(data) => data,
-        _ => { return; }
-    };
-
-    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
-
-    for object in objects.iter_mut() {
-        if selected_object_uuids.contains(&object.uuid) {
-            object.color = color;
-        }
-    }
-
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
 }
 
 fn get_cursor_position_at_selection_dist(
