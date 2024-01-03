@@ -40,6 +40,7 @@ pub struct ControlPoint {
     pub position: Vec3,
     pub control_point_type: ControlPointType,
     pub object_uuid: uuid::Uuid,
+    pub label: String,
 }
 
 impl ControlPoint {
@@ -190,6 +191,7 @@ impl SDFObject {
                     position: self.transform.translation + Vec3::new(r, 0.0, 0.0) * s,
                     control_point_type: ControlPointType::SphereRadius,
                     object_uuid: self.uuid,
+                    label: "radius".to_owned(),
                 };
                 vec!(radius_control_point)
             },
@@ -205,18 +207,21 @@ impl SDFObject {
                     position: self.transform.translation + r * Vec3::new(box_q.x, 0.0, 0.0) * s,
                     control_point_type: ControlPointType::BoxX,
                     object_uuid: self.uuid,
+                    label: "x size".to_owned(),
                 };
 
                 let y_control_point = ControlPoint {
                     position: self.transform.translation + r * Vec3::new(0.0, box_q.y, 0.0) * s,
                     control_point_type: ControlPointType::BoxY,
                     object_uuid: self.uuid,
+                    label: "y size".to_owned(),
                 };
 
                 let z_control_point = ControlPoint {
                     position: self.transform.translation + r * Vec3::new(0.0, 0.0, box_q.z) * s,
                     control_point_type: ControlPointType::BoxZ,
                     object_uuid: self.uuid,
+                    label: "z size".to_owned(),
                 };
 
 
