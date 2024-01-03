@@ -3,10 +3,13 @@ use bevy::{
     input::{keyboard::KeyCode, Input},
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
+use crate::claydash_data::get_active_object_index;
 use crate::bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, SDFObjectParams, ControlPointType};
 use crate::claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
 use observable_key_value_tree::ObservableKVTree;
 mod interaction_commands_and_shortcuts;
+use lazy_static::lazy_static;
+use std::sync::{Arc, Mutex};
 
 pub struct ClaydashInteractionPlugin;
 
@@ -14,48 +17,93 @@ impl Plugin for ClaydashInteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClaydashData>()
             .add_systems(Startup, (
-                setup_text,
                 interaction_commands_and_shortcuts::register_interaction_commands,
             ))
             .add_systems(Update, ((interaction_commands_and_shortcuts::run_shortcut_commands),
                                   update_transformations,
-                                  update_text));
+                                  update_control_points_text));
     }
 }
 
 #[derive(Component)]
 struct ControlPointText;
 
-fn setup_text(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.spawn((
-        // Create a TextBundle that has a Text with a single section.
-        TextBundle::from_section(
-            // Accepts a `String` or any type that converts into a `String`, such as `&str`
-            "hello\nbevy!",
-            TextStyle {
-                // This font is loaded and will be used instead of the default font.
-                font: asset_server.load("fonts/FiraMono-Medium.ttf"),
-                font_size: 30.0,
-                color: Color::WHITE,
-            },
-        ) // Set the alignment of the Text
-        .with_text_alignment(TextAlignment::Center)
-        // Set the style of the TextBundle itself.
-        .with_style(Style {
-            position_type: PositionType::Absolute,
-            top: Val::Vh(4.0),
-            left: Val::Vw(4.0),
-            ..default()
-        }),
-        ControlPointText,
-    ));
+lazy_static! {
+    static ref LAST_SYNCED_TEXT_VERSION: Arc<Mutex<i32>> = Arc::new(Mutex::new(-1));
 }
 
-fn update_text(
-    mut query: Query<&mut Text, With<ControlPointText>>,
+fn update_control_points_text(
+    mut data_resource: ResMut<ClaydashData>,
+    mut commands: Commands,
+    query: Query<Entity, With<ControlPointText>>,
+    asset_server: Res<AssetServer>,
+    camera_global_transforms: Query<&mut GlobalTransform, With<Camera>>,
+    camera: Query<&Camera>,
 ) {
-    for mut text in &mut query {
-        text.sections[0].value = "HELLO".to_owned();
+    let camera = camera.single();
+    let camera_global_transform = camera_global_transforms.single();
+
+    let data = data_resource.as_mut();
+
+    let last_updated_version = LAST_SYNCED_TEXT_VERSION.try_lock();
+
+    let version = data.tree.path_version("scene");
+
+    let mut last_updated_version = match last_updated_version {
+        Ok(version) => { version  }
+        _ => { return }
+    };
+
+    if version > *last_updated_version  {
+        // Remove previous text
+        for text in &query {
+            commands.entity(text).despawn();
+        }
+
+        let active_object_index = get_active_object_index(&data.tree);
+        let objects = data.tree.get_path("scene.sdf_objects");
+
+        match active_object_index  {
+            Some(index) => {
+                // Show control points
+                let object: &SDFObject = &objects.unwrap_vec_sdf_object()[index];
+
+                for point in object.get_control_points().iter() {
+                    let position = camera.world_to_viewport(camera_global_transform, point.position);
+                    let position = match position {
+                        Some(position) => position,
+                        _ => { continue }
+                    };
+
+                    let x = position.x + 5.0;
+                    let y = position.y + 5.0;
+                    let label = &point.label;
+
+                    commands.spawn((
+                        TextBundle::from_section(
+                            label.to_owned(),
+                            TextStyle {
+                                font: asset_server.load("fonts/FiraMono-Medium.ttf"),
+                                font_size: 14.0,
+                                color: Color::WHITE,
+                            },
+                        )
+                            .with_text_alignment(TextAlignment::Center)
+                            .with_style(Style {
+                                position_type: PositionType::Absolute,
+                                top: Val::Px(y),
+                                left: Val::Px(x),
+                                ..default()
+                            }),
+                        ControlPointText,
+                    ));
+                }
+
+            },
+            _ => {}
+        }
+
+        *last_updated_version = version;
     }
 }
 
