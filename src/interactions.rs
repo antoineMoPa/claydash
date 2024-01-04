@@ -74,13 +74,21 @@ fn update_control_points_text(
                             label.to_owned(),
                             TextStyle {
                                 font: asset_server.load("fonts/FiraMono-Medium.ttf"),
-                                font_size: 14.0,
-                                color: Color::WHITE,
+                                font_size: 12.0,
+                                color: Color::rgb(0.8, 0.8, 0.8),
                             },
                         )
                             .with_text_alignment(TextAlignment::Center)
+                            .with_background_color(Color::rgba(0.3, 0.3, 0.3, 0.5))
                             .with_style(Style {
                                 position_type: PositionType::Absolute,
+                                padding: UiRect { // Padding does not seem to really work
+                                    top: Val::Px(10.0),
+                                    bottom: Val::Px(4.0),
+                                    left: Val::Px(5.0),
+                                    right: Val::Px(5.0),
+                                    ..Default::default()
+                                },
                                 ..default()
                             }),
                         ControlPointText { position: point.position },
@@ -110,8 +118,8 @@ fn update_control_points_text_position(
             _ => { continue }
         };
 
-        let x = position.x + 5.0;
-        let y = position.y + 5.0;
+        let x = position.x + 3.0;
+        let y = position.y + 3.0;
 
         style.left = Val::Px(x);
         style.top = Val::Px(y);
