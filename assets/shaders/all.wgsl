@@ -38,7 +38,6 @@ const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
 const TYPE_BOX: i32 = #{TYPE_BOX};
 const FAR_DIST = 100.0;
 const CLOSE_DIST = 0.003;
-const BLEND_DIST = 0.03;
 
 fn sphere_sdf(p: vec3<f32>, r: f32) -> f32 {
     return length(p) - r;
@@ -58,8 +57,9 @@ fn box_sdf(p: vec3<f32>, b: vec3<f32>) -> f32 {
 }
 
 fn object_distance(p: vec3<f32>, sdf_index: i32) -> f32 {
-    let sphere_r = sdf_params[sdf_index][0].x;
-    let box_parameters = sdf_params[sdf_index][0].xyz;
+    let params = sdf_params[sdf_index];
+    let sphere_r = params[0].x;
+    let box_parameters = params[0].xyz;
     var d_current_object: f32 = FAR_DIST;
     let t = sdf_meta[sdf_index].w;
     let inverse_transform = sdf_inverse_transforms[sdf_index];
@@ -154,7 +154,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             d = sdf_union(d_current_object, d);
-            object_color = mix(object_color, sdf_colors[sdf_index], clamp(1.0 - pow(abs(d_current_object) / BLEND_DIST, 4.0), 0.0, 1.0));
+            object_color = sdf_colors[sdf_index];
 
             if (d < 0.0) {
                 found = true;
@@ -168,7 +168,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
 
-        p += camera_ray * d * 0.9;
+        p += camera_ray * d * 0.95;
 
         if (abs(d) > FAR_DIST) {
             // We are probably past the object.
