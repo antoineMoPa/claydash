@@ -21,12 +21,15 @@ impl Plugin for ClaydashInteractionPlugin {
             ))
             .add_systems(Update, ((interaction_commands_and_shortcuts::run_shortcut_commands),
                                   update_transformations,
-                                  update_control_points_text));
+                                  update_control_points_text,
+                                  update_control_points_text_position));
     }
 }
 
 #[derive(Component)]
-struct ControlPointText;
+struct ControlPointText {
+    position: Vec3,
+}
 
 lazy_static! {
     static ref LAST_SYNCED_TEXT_VERSION: Arc<Mutex<i32>> = Arc::new(Mutex::new(-1));
@@ -37,12 +40,7 @@ fn update_control_points_text(
     mut commands: Commands,
     query: Query<Entity, With<ControlPointText>>,
     asset_server: Res<AssetServer>,
-    camera_global_transforms: Query<&mut GlobalTransform, With<Camera>>,
-    camera: Query<&Camera>,
 ) {
-    let camera = camera.single();
-    let camera_global_transform = camera_global_transforms.single();
-
     let data = data_resource.as_mut();
 
     let last_updated_version = LAST_SYNCED_TEXT_VERSION.try_lock();
@@ -69,14 +67,6 @@ fn update_control_points_text(
                 let object: &SDFObject = &objects.unwrap_vec_sdf_object()[index];
 
                 for point in object.get_control_points().iter() {
-                    let position = camera.world_to_viewport(camera_global_transform, point.position);
-                    let position = match position {
-                        Some(position) => position,
-                        _ => { continue }
-                    };
-
-                    let x = position.x + 5.0;
-                    let y = position.y + 5.0;
                     let label = &point.label;
 
                     commands.spawn((
@@ -91,11 +81,9 @@ fn update_control_points_text(
                             .with_text_alignment(TextAlignment::Center)
                             .with_style(Style {
                                 position_type: PositionType::Absolute,
-                                top: Val::Px(y),
-                                left: Val::Px(x),
                                 ..default()
                             }),
-                        ControlPointText,
+                        ControlPointText { position: point.position },
                     ));
                 }
 
@@ -106,6 +94,30 @@ fn update_control_points_text(
         *last_updated_version = version;
     }
 }
+
+fn update_control_points_text_position(
+    mut query: Query<(&mut Style, &ControlPointText)>,
+    camera_global_transforms: Query<&mut GlobalTransform, With<Camera>>,
+    camera: Query<&Camera>,
+) {
+    let camera = camera.single();
+    let camera_global_transform = camera_global_transforms.single();
+
+    for (mut style, control_point_text) in query.iter_mut() {
+        let position = camera.world_to_viewport(camera_global_transform, control_point_text.position);
+        let position = match position {
+            Some(position) => position,
+            _ => { continue }
+        };
+
+        let x = position.x + 5.0;
+        let y = position.y + 5.0;
+
+        style.left = Val::Px(x);
+        style.top = Val::Px(y);
+    }
+}
+
 
 fn get_cursor_position_at_selection_dist(
     camera: &Camera,
