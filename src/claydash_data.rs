@@ -12,7 +12,7 @@ use observable_key_value_tree::{
 use std::sync::{Arc, Mutex};
 use lazy_static::lazy_static;
 
-use crate::bevy_sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType};
+use crate::sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum EditorState {
@@ -306,7 +306,7 @@ fn sync_to_bevy(
     };
 
     if version > *last_updated_version  {
-        // Potentially: move this block to bevy_sdf_object
+        // Potentially: move this block to sdf_object
         // Update sdf objects
         {
             let handle = material_handle.single();

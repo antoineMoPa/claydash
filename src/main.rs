@@ -1,4 +1,4 @@
-mod bevy_sdf_object;
+mod sdf_object;
 mod command_central_egui;
 mod command_central_plugin;
 mod claydash_data;
@@ -28,7 +28,7 @@ use bevy::{
     prelude::*, render::render_resource::{AsBindGroup, ShaderRef},
 };
 
-use bevy_sdf_object::*;
+use sdf_object::*;
 use bevy_mod_picking::prelude::*;
 
 use undo_redo::ClaydashUndoRedoPlugin;

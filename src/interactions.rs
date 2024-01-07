@@ -4,7 +4,7 @@ use bevy::{
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
 use crate::claydash_data::get_active_object_index;
-use crate::bevy_sdf_object::{SDFObject, control_points_hit, ControlPoint, SDFObjectParams, ControlPointType};
+use crate::sdf_object::{SDFObject, control_points_hit, ControlPoint, SDFObjectParams, ControlPointType};
 use crate::claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
 use observable_key_value_tree::ObservableKVTree;
 mod interaction_commands_and_shortcuts;
@@ -453,7 +453,7 @@ pub fn on_mouse_down(
                 None => {}
             }
 
-            let maybe_hit_uuid = crate::bevy_sdf_object::raymarch(position, ray, objects);
+            let maybe_hit_uuid = crate::sdf_object::raymarch(position, ray, objects);
 
             match maybe_hit_uuid {
                 Some(hit) => {

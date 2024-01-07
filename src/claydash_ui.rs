@@ -3,7 +3,7 @@ use bevy::{
     winit::WinitWindows,
     tasks::AsyncComputeTaskPool,
 };
-use crate::bevy_sdf_object::SDFObject;
+use crate::sdf_object::SDFObject;
 use crate::command_central_plugin::CommandCentralState;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use egui::containers::Frame;

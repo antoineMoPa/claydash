@@ -7,7 +7,7 @@ use crate::command_central_plugin::CommandCentralState;
 use observable_key_value_tree::{
     ObservableKVTree,
 };
-use crate::bevy_sdf_object::SDFObject;
+use crate::sdf_object::SDFObject;
 use command_central::CommandBuilder;
 use crate::claydash_data::EditorState::*;
 use sdf_consts::TYPE_BOX;
