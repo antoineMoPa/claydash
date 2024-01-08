@@ -12,7 +12,7 @@ use observable_key_value_tree::{
 use std::sync::{Arc, Mutex};
 use lazy_static::lazy_static;
 
-use crate::sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType};
+use crate::sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType, SDFObjectTree};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum EditorState {
@@ -36,6 +36,7 @@ pub enum ClaydashValue {
     String(String),
     Transform(Transform),
     VecSDFObject(Vec<SDFObject>),
+    SDFObjectTree(SDFObjectTree),
     #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
     #[serde(skip)]
@@ -97,6 +98,34 @@ macro_rules! define_unwrap_methods_for_vec {
                 _ => {
                     panic!("No {} value stored.", stringify!($type));
                 }
+            }
+        }
+
+        /// Warning: this method creates a new value.
+        pub fn $unwrap_or_method_name(&self, default_value: $type) -> $type {
+            match &self {
+                Self::$variant(value) => value.clone(),
+                _ => default_value
+            }
+        }
+    };
+}
+
+macro_rules! define_unwrap_methods_for_object_with_boxes {
+    ($unwrap_method_name:ident, $unwrap_or_method_name:ident, $unwrap_or_default_method_name:ident, $variant:ident, $type:ty, $default: expr) => {
+        pub fn $unwrap_method_name(&self) -> &$type {
+            match &self {
+                Self::$variant(value) => value,
+                _ => {
+                    panic!("No {} value stored.", stringify!($type));
+                }
+            }
+        }
+
+        pub fn $unwrap_or_default_method_name(&self) -> $type {
+            match &self {
+                Self::$variant(value) => (*value).clone(),
+                _ => $default
             }
         }
 
@@ -202,6 +231,15 @@ impl ClaydashValue {
         ControlPointType,
         ControlPointType,
         ControlPointType::None
+    );
+
+    define_unwrap_methods_for_object_with_boxes!(
+        sdf_object_tree,
+        unwrap_sdf_object_tree_or_default,
+        unwrap_sdf_object_tree_or,
+        SDFObjectTree,
+        SDFObjectTree,
+        SDFObjectTree::default()
     );
 
     define_unwrap_methods_for_vec!(

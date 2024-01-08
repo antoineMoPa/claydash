@@ -165,6 +165,21 @@ pub struct SDFObject {
     pub params: SDFObjectParams,
 }
 
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub enum SdfOperation{
+    #[default]
+    Union,
+    Intersection,
+    Exclusion,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct SDFObjectTree {
+    lhs: Box<SDFObjectTree>,
+    rhs: Box<SDFObjectTree>,
+    operation: SdfOperation,
+}
+
 impl SDFObject {
     /// Create a new individually-addressable object (with different uuid)
     pub fn duplicate(&self) -> Self {
