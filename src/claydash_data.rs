@@ -112,7 +112,7 @@ macro_rules! define_unwrap_methods_for_vec {
 }
 
 macro_rules! define_unwrap_methods_for_object_with_boxes {
-    ($unwrap_method_name:ident, $unwrap_or_method_name:ident, $unwrap_or_default_method_name:ident, $variant:ident, $type:ty, $default: expr) => {
+    ($unwrap_method_name:ident, $unwrap_or_default_method_name:ident, $unwrap_or_method_name:ident, $variant:ident, $type:ty, $default: expr) => {
         pub fn $unwrap_method_name(&self) -> &$type {
             match &self {
                 Self::$variant(value) => value,
@@ -311,12 +311,13 @@ lazy_static! {
 }
 
 pub fn get_active_object_index(tree: &ObservableKVTree<ClaydashValue>) -> Option<usize> {
-    let objects = tree.get_path("scene.sdf_objects");
+    let objects = tree.get_path("scene.sdf_object_tree");
     let uuids = tree.get_path("scene.selected_uuids");
     let uuids = uuids.unwrap_vec_uuid();
 
     // Last selected object is the active object
-    for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate().rev() {
+    let sdf_object_tree = objects.unwrap_sdf_object_tree_or_default();
+    for (index, object) in sdf_object_tree.get_vec_sdf_object().iter().enumerate().rev() {
         if uuids.contains(&object.uuid) {
             return Some(index);
         }
@@ -334,7 +335,7 @@ fn sync_to_bevy(
 ) {
     let data = data_resource.as_mut();
 
-    let version = data.tree.path_version("scene.sdf_objects");
+    let version = data.tree.path_version("scene.sdf_object_tree");
 
     let last_updated_version = LAST_SYNCED_SDF_OBJECTS_VERSION.try_lock();
 
@@ -351,16 +352,24 @@ fn sync_to_bevy(
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
             material.sdf_meta[0].w = TYPE_END;
 
-            let value = data.tree.get_path("scene.sdf_objects");
 
-            for (index, object) in value.unwrap_vec_sdf_object().iter().enumerate() {
+            let mut sdf_objects: Vec<SDFObject> = Vec::new();
+
+            let value = data.tree.get_path("scene.sdf_object_tree");
+            let object_tree = value.unwrap_sdf_object_tree_or_default().clone();
+            for (index, object) in object_tree.get_vec_sdf_object().iter_mut().enumerate() {
                 object.params.update_material(index, material);
-
                 material.sdf_meta[index].w = object.object_type;
                 material.sdf_colors[index] = object.color;
                 material.sdf_inverse_transforms[index] = object.inverse_transform_matrix();
                 material.sdf_meta[index + 1].w = TYPE_END;
+
+                object.index = index as u32;
+
+                sdf_objects.push(object.clone());
             }
+
+            // TODO: add mix operations
         }
 
         *last_updated_version = version;
@@ -368,7 +377,7 @@ fn sync_to_bevy(
 
     if data.tree.was_path_updated("scene.selected_uuids") || data.tree.was_path_updated("scene.sdf_objects"){
         let active_object_index = get_active_object_index(&data.tree);
-        let objects = data.tree.get_path("scene.sdf_objects");
+        let objects = data.tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
         let uuids = data.tree.get_path("scene.selected_uuids");
         let uuids = uuids.unwrap_vec_uuid();
 
@@ -377,7 +386,7 @@ fn sync_to_bevy(
         let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
         material.num_control_points[0] = 0;
 
-        for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate() {
+        for (index, object) in objects.get_vec_sdf_object().iter().enumerate() {
             if uuids.contains(&object.uuid) {
                 // Mark as selected
                 material.sdf_meta[index].x = 1;
@@ -390,7 +399,7 @@ fn sync_to_bevy(
         match active_object_index  {
             Some(index) => {
                 // Show control points
-                let object = &objects.unwrap_vec_sdf_object()[index];
+                let object = &objects.get_vec_sdf_object()[index];
                 show_control_points(material, index, object);
             },
             _ => {}

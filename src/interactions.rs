@@ -3,7 +3,7 @@ use bevy::{
     input::{keyboard::KeyCode, Input},
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
-use crate::claydash_data::get_active_object_index;
+use crate::{claydash_data::get_active_object_index, sdf_object::SDFObjectTree};
 use crate::sdf_object::{SDFObject, control_points_hit, ControlPoint, SDFObjectParams, ControlPointType};
 use crate::claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
 use observable_key_value_tree::ObservableKVTree;
@@ -41,6 +41,9 @@ fn update_control_points_text(
     query: Query<Entity, With<ControlPointText>>,
     asset_server: Res<AssetServer>,
 ) {
+    // Skip for now since it's not adapted to object tree
+    return;
+
     let data = data_resource.as_mut();
 
     let last_updated_version = LAST_SYNCED_TEXT_VERSION.try_lock();
@@ -248,8 +251,8 @@ fn update_transformations(
         _ => {}
     }
 
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(data) => data,
+    let mut sdf_object_tree: SDFObjectTree = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(data) => data,
         _ => { return; }
     };
 
@@ -291,7 +294,7 @@ fn update_transformations(
 
     match state {
         Grabbing => {
-            for object in objects.iter_mut() {
+            for object in sdf_object_tree.get_vec_sdf_object_mut().iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
                     let initial_transform = tree
                         .get_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid))
@@ -300,10 +303,10 @@ fn update_transformations(
                     object.transform.translation = initial_transform.translation + selection_translation * constraints;
                 }
             }
-            tree.set_path_without_notifying("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+            tree.set_path_without_notifying("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
         },
         Scaling => {
-            for object in objects.iter_mut() {
+            for object in sdf_object_tree.get_vec_sdf_object_mut().iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
                     let cursor_position_near_object = get_cursor_position_at_selection_dist(
                         camera,
@@ -327,10 +330,10 @@ fn update_transformations(
                     object.transform.translation += scale * constraints * initial_transform_relative_to_selection.translation;
                 }
             }
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+            tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
         },
         Rotating => {
-            for object in objects.iter_mut() {
+            for object in sdf_object_tree.get_vec_sdf_object_mut().iter_mut() {
                 if !selected_object_uuids.contains(&object.uuid) {
                     continue;
                 }
@@ -355,7 +358,7 @@ fn update_transformations(
                     _ => {}
                 };
             }
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+            tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
         },
         _ => {}
     };

@@ -163,21 +163,228 @@ pub struct SDFObject {
     pub color: Vec4,
     pub object_type: i32,
     pub params: SDFObjectParams,
+    /// Index of the sdf object in the sdf_params uniform array
+    pub index: u32,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub enum SdfOperation{
+pub enum SdfOperation {
     #[default]
     Union,
     Intersection,
     Exclusion,
+    UseLhsAsIs,
+    UseRhsAsIs,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub enum SDFTreeNode {
+    SDFObjectTree(Box<SDFObjectTree>),
+    SDFObject(SDFObject),
+    #[default]
+    None,
+}
+
+pub type SDFOperationList = Vec<SDFOperationListEntry>;
+
+
+pub fn sdf_operation_list_to_ivec4_list(list: SDFOperationList) -> Vec<IVec4> {
+    let mut vec: Vec<IVec4> = Vec::new();
+
+    for entry in list.iter() {
+        let entry = entry.clone();
+        vec.push(IVec4 {
+            w: entry.operation as i32,
+            x: entry.lhs.index as i32,
+            y: entry.rhs.index as i32,
+            z: 0, // unused
+        });
+    }
+
+    return vec;
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct SDFOperationListEntry {
+    lhs: SDFObject,
+    rhs: SDFObject,
+    operation: SdfOperation,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SDFObjectTree {
-    lhs: Box<SDFObjectTree>,
-    rhs: Box<SDFObjectTree>,
+    lhs: SDFTreeNode,
+    rhs: SDFTreeNode,
     operation: SdfOperation,
+}
+
+
+impl SDFObjectTree {
+    pub fn get_vec_sdf_object(&self) -> Vec<SDFObject> {
+        let mut lhs: Vec<SDFObject> = match &self.lhs {
+            SDFTreeNode::SDFObject(object) => {
+                vec!(object.clone())
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.get_vec_sdf_object()
+            },
+            _ => {
+                panic!("uninitialized tree node");
+            }
+        };
+
+        let mut rhs: Vec<SDFObject> = match &self.rhs {
+            SDFTreeNode::SDFObject(object) => {
+                let object = object.clone();
+                vec!(object)
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.get_vec_sdf_object()
+            },
+            _ => {
+                vec!()
+            }
+        };
+
+        lhs.append(&mut rhs);
+
+        // TODO: Add mix operation
+
+        return lhs;
+    }
+
+    pub fn get_vec_sdf_object_mut(&mut self) -> Vec<&mut SDFObject> {
+        let mut lhs: Vec<&mut SDFObject> = match &mut self.lhs {
+            SDFTreeNode::SDFObject(object) => {
+                vec!(object)
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.get_vec_sdf_object_mut()
+            },
+            _ => {
+                panic!("uninitialized tree node");
+            }
+        };
+
+        let mut rhs: Vec<&mut SDFObject> = match &mut self.rhs {
+            SDFTreeNode::SDFObject(object) => {
+                vec!(object)
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.get_vec_sdf_object_mut()
+            },
+            _ => {
+                vec!()
+            }
+        };
+
+        lhs.append(&mut rhs);
+
+        return lhs;
+    }
+
+
+    /// Explore the SDF Object Tree and create an array of objects.
+    ///
+    /// The right hand node will define the mix operation (how to mix the object with
+    /// previous object).
+    ///
+    /// Here is an example tree:
+    ///
+    ///
+    ///                 union
+    ///                /      \
+    ///               /        \
+    ///              /          \
+    ///          intersection  object 3
+    ///            /   \
+    ///           /     \
+    ///      object 1   object 2
+    ///
+    /// Here is the result we expect:
+    ///
+    /// | object   | mix operations                                 |
+    /// |          |                                                |
+    /// | object 1 | none (first object no mix operation necessary) |
+    /// | object 2 | intersection                                   |
+    /// | object 3 | union                                          |
+    ///
+    ///
+    pub fn get_vec_sdf_operation(&self) -> Vec<SDFOperationListEntry> {
+        let mut lhs: Vec<SDFOperationListEntry> = match &self.lhs {
+            SDFTreeNode::SDFObject(object) => {
+                vec!(SDFOperationListEntry{
+                    lhs: object.clone(),
+                    rhs: SDFObject::default(),
+                    operation: SdfOperation::UseLhsAsIs,
+                })
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.get_vec_sdf_operation()
+            },
+            _ => {
+                panic!("uninitialized tree node");
+            }
+        };
+
+        let mut rhs: Vec<SDFOperationListEntry> = match &self.rhs {
+            SDFTreeNode::SDFObject(object) => {
+                vec!(SDFOperationListEntry{
+                    lhs: object.clone(),
+                    rhs: SDFObject::default(),
+                    operation: SdfOperation::UseRhsAsIs,
+                })
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.get_vec_sdf_operation()
+            },
+            _ => {
+                panic!("uninitialized tree node");
+            }
+        };
+
+        rhs[0].operation = self.operation.clone();
+
+        lhs.append(&mut rhs);
+
+        return lhs;
+    }
+
+    /// Add an object to the tree
+    pub fn add_object(&mut self, object: SDFObject) {
+        match &mut self.lhs {
+            SDFTreeNode::None => {
+                self.lhs = SDFTreeNode::SDFObject(object);
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.add_object(object);
+            },
+            _ => {
+                match &mut self.rhs {
+                    SDFTreeNode::None => {
+                        self.rhs = SDFTreeNode::SDFObject(object);
+                    },
+                    SDFTreeNode::SDFObjectTree(tree) => {
+                        tree.add_object(object);
+                    },
+                    _ => {
+                        panic!("Both left and right hand nodes are already initialized.");
+                    }
+                }
+            }
+        }
+    }
+
+}
+
+/// Create iterator that allows mutating the sdf objects in the tree
+impl Iterator for SDFObjectTree {
+    type Item = SDFObject;
+
+    fn next(&mut self) -> Option<SDFObject> {
+        //let mut vec = self.get_vec_sdf_object();
+        return None;
+    }
 }
 
 impl SDFObject {
@@ -266,6 +473,7 @@ impl SDFObject {
 impl Default for SDFObject {
     fn default() -> Self {
         Self {
+            index: 0,
             uuid: uuid::Uuid::new_v4(),
             transform: Transform::IDENTITY,
             color: Vec4::default(),
@@ -298,9 +506,15 @@ pub struct SDFObjectMaterial {
     pub sdf_inverse_transforms: [Mat4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(6)]
     pub sdf_params: [Mat4; MAX_SDFS_PER_ENTITY as usize],
+    /// w: operation type
+    /// x: lhs index
+    /// y: rhs index
+    /// z: unused
     #[uniform(7)]
-    pub control_point_positions: [Vec4; MAX_CONTROL_POINTS as usize],
+    pub sdf_operations: [IVec4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(8)]
+    pub control_point_positions: [Vec4; MAX_CONTROL_POINTS as usize],
+    #[uniform(9)]
     pub num_control_points: IVec4, // Padded to respect alignment constraints. Only first value is used.
 }
 
@@ -357,6 +571,7 @@ impl Default for SDFObjectMaterial {
             sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             sdf_inverse_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
             sdf_params: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
+            sdf_operations: [IVec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             control_point_positions: [Vec4::ZERO; MAX_CONTROL_POINTS as usize],
             num_control_points: IVec4::ZERO,
         }

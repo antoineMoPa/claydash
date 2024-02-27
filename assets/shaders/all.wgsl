@@ -21,10 +21,17 @@ var<uniform> sdf_inverse_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 @group(1) @binding(6)
 var<uniform> sdf_params: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
+/// w: operation type
+/// x: lhs index
+/// y: rhs index
+/// z: unused
 @group(1) @binding(7)
-var<uniform> control_point_positions: array<vec4<f32>, #{MAX_CONTROL_POINTS}>;
+var<uniform> sdf_operations: array<vec4<i32>, #{MAX_CONTROL_POINTS}>;
 
 @group(1) @binding(8)
+var<uniform> control_point_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
+
+@group(1) @binding(9)
 var<uniform> num_control_points: vec4<i32>; // padded for alignment. number is stored in first position.
 
 const MAX_ITERATIONS = 32;

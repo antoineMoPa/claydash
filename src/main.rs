@@ -80,8 +80,8 @@ mod duck;
 
 pub fn default_duck(mut data_resource: ResMut<ClaydashData>) {
     let tree = &mut data_resource.as_mut().tree;
-    let scene: Result<ObservableKVTree<ClaydashValue>, serde_json::Error> = serde_json::from_str(duck::DEFAULT_DUCK);
-    tree.set_tree("scene", scene.unwrap());
+    // let scene: Result<ObservableKVTree<ClaydashValue>, serde_json::Error> = serde_json::from_str(duck::DEFAULT_DUCK);
+    //tree.set_tree("scene", scene.unwrap());
 
     // Add snapshot for initial state
     tree.make_undo_redo_snapshot();

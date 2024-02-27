@@ -7,7 +7,7 @@ use crate::command_central_plugin::CommandCentralState;
 use observable_key_value_tree::{
     ObservableKVTree,
 };
-use crate::sdf_object::SDFObject;
+use crate::sdf_object::{SDFObject, SDFObjectTree};
 use command_central::CommandBuilder;
 use crate::claydash_data::EditorState::*;
 use sdf_consts::TYPE_BOX;
@@ -120,8 +120,8 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
 fn set_objects_initial_properties(
     tree: &mut  ObservableKVTree<ClaydashValue>
 ) {
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(data) => data,
+    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(t) => { t.get_vec_sdf_object() },
         _ => { return; }
     };
 
@@ -407,19 +407,19 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
     };
 
-    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(objects) => { objects },
-        _ => { vec!() }
+    let mut sdf_object_tree: SDFObjectTree = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(t) => { t },
+        _ => { SDFObjectTree::default() }
     };
 
     let mut new_object = SDFObject::create(sdf_consts::TYPE_SPHERE);
     new_object.color = color;
     let uuid = new_object.uuid;
 
-    sdf_objects.push(new_object);
+    sdf_object_tree.add_object(new_object);
 
-    // Update the tree with duplicated objects
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    // Update the tree
+    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 
     tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(vec!(uuid)));
@@ -434,17 +434,19 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue>) {
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
     };
 
-    let mut sdf_objects: Vec<SDFObject> = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
+    let mut sdf_object_tree: SDFObjectTree = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(t) => { t },
+        _ => { SDFObjectTree::default() }
+    };
 
-    let mut new_object = SDFObject::create(TYPE_BOX);
+    let mut new_object = SDFObject::create(sdf_consts::TYPE_BOX);
     new_object.color = color;
-
     let uuid = new_object.uuid;
 
-    sdf_objects.push(new_object);
+    sdf_object_tree.add_object(new_object);
 
-    // Update the tree with duplicated objects
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    // Update the tree
+    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 
     tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(vec!(uuid)));
