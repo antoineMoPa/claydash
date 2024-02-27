@@ -3,7 +3,7 @@ use bevy::{
     winit::WinitWindows,
     tasks::AsyncComputeTaskPool,
 };
-use crate::sdf_object::SDFObject;
+use crate::sdf_object::{SDFObject, SDFObjectTree};
 use crate::command_central_plugin::CommandCentralState;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use egui::containers::Frame;
@@ -292,18 +292,18 @@ fn update_selection_color(
     tree: &mut ObservableKVTree<ClaydashValue>,
     color: Vec4,
 ) {
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(data) => data,
+    let mut sdf_object_tree: SDFObjectTree = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(tree) => tree,
         _ => { return; }
     };
 
     let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
-    for object in objects.iter_mut() {
+    for object in sdf_object_tree.get_vec_sdf_object_mut().iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
             object.color = color;
         }
     }
 
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
 }

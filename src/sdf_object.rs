@@ -368,7 +368,13 @@ impl SDFObjectTree {
                         tree.add_object(object);
                     },
                     _ => {
-                        panic!("Both left and right hand nodes are already initialized.");
+                        // Convert rhs to a tree and add the object to the tree
+                        let tree = SDFObjectTree {
+                            lhs: self.rhs.clone(),
+                            rhs: SDFTreeNode::SDFObject(object),
+                            operation: SdfOperation::Union,
+                        };
+                        self.rhs = SDFTreeNode::SDFObjectTree(Box::new(tree));
                     }
                 }
             }

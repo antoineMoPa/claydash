@@ -318,8 +318,11 @@ fn escape(tree: &mut ObservableKVTree<ClaydashValue>) {
 
     let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
-
-    let mut sdf_objects: Vec<SDFObject> = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
+    let mut sdf_object_tree = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(t) => { t },
+        _ => { return; }
+    };
+    let mut sdf_objects = sdf_object_tree.get_vec_sdf_object_mut();
 
     for object in sdf_objects.iter_mut() {
         if !selected_object_uuids.contains(&object.uuid) {
@@ -331,7 +334,7 @@ fn escape(tree: &mut ObservableKVTree<ClaydashValue>) {
         object.transform = initial_transform;
     }
 
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
 }
 
 fn finish(tree: &mut ObservableKVTree<ClaydashValue>) {
@@ -342,25 +345,23 @@ fn duplicate(tree: &mut ObservableKVTree<ClaydashValue>) {
     // Find selected objects
     let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
-    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(objects) => { objects },
-        _ => { return; }
+    let mut sdf_object_tree: SDFObjectTree = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(t) => { t },
+        _ => { SDFObjectTree::default() }
     };
 
-    let mut duplicated_objects: Vec<SDFObject> = sdf_objects.iter().filter(| sdf_object | {
-        selected_object_uuids.contains(&sdf_object.uuid)
-    }).map(|object| {
-        object.duplicate()
-    }).collect();
-
-    // List duplicated objects uuids
-    let duplicated_uuids: Vec<uuid::Uuid> = duplicated_objects.iter().map(|object| {
-        object.uuid
-    }).collect();
+    let mut duplicated_uuids: Vec<uuid::Uuid> = Vec::new();
+    for object in sdf_object_tree.get_vec_sdf_object().iter() {
+        if selected_object_uuids.contains(&object.uuid) {
+            let new_object = object.duplicate();
+            let uuid = new_object.uuid;
+            sdf_object_tree.add_object(new_object);
+            duplicated_uuids.push(uuid);
+        }
+    }
 
     // Update the tree with duplicated objects
-    sdf_objects.append(&mut duplicated_objects);
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
     tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(duplicated_uuids));
 
     // Move these new objects
