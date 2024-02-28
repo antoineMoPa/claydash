@@ -78,10 +78,23 @@ fn main() {
 
 mod duck;
 
+pub fn migrate_scene_from_vec_sdf_object_to_sdf_object_tree(tree: &mut ObservableKVTree<ClaydashValue>) {
+    let sdf_objects = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(vec!());
+
+    let mut sdf_object_tree = tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
+
+    for sdf_object in sdf_objects {
+        sdf_object_tree.add_object(sdf_object);
+    }
+
+    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
+}
+
 pub fn default_duck(mut data_resource: ResMut<ClaydashData>) {
     let tree = &mut data_resource.as_mut().tree;
-    let scene: Result<ObservableKVTree<ClaydashValue>, serde_json::Error> = serde_json::from_str(duck::DEFAULT_DUCK2);
-    tree.set_tree("scene", scene.unwrap());
+    let duck_scene: Result<ObservableKVTree<ClaydashValue>, serde_json::Error> = serde_json::from_str(duck::DEFAULT_DUCK);
+    tree.set_tree("scene", duck_scene.unwrap());
+    migrate_scene_from_vec_sdf_object_to_sdf_object_tree(tree);
 
     // Add snapshot for initial state
     tree.make_undo_redo_snapshot();

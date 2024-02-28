@@ -164,6 +164,7 @@ pub struct SDFObject {
     pub object_type: i32,
     pub params: SDFObjectParams,
     /// Index of the sdf object in the sdf_params uniform array
+    #[serde(skip)]
     pub index: u32,
 }
 
