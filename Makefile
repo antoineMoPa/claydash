@@ -6,6 +6,9 @@ build:
 	  --out-dir www/target \
 	  --target web target/wasm32-unknown-unknown/release/main.wasm
 
+test:
+	cargo test --workspace
+
 deploy:
 	du -h target/wasm32-unknown-unknown/release/main.wasm
 	cp -r www/* claydash-ship/

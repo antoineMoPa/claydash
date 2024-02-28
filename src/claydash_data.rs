@@ -358,7 +358,6 @@ fn sync_to_bevy(
             let value = data.tree.get_path("scene.sdf_object_tree");
             let object_tree = value.unwrap_sdf_object_tree_or_default().clone();
             for (index, object) in object_tree.get_vec_sdf_object().iter_mut().enumerate() {
-                println!("Updating object {}", index);
                 object.params.update_material(index, material);
                 material.sdf_meta[index].w = object.object_type;
                 material.sdf_colors[index] = object.color;
