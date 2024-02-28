@@ -41,11 +41,9 @@ fn update_control_points_text(
     query: Query<Entity, With<ControlPointText>>,
     asset_server: Res<AssetServer>,
 ) {
-    // Skip for now since it's not adapted to object tree
-    return;
-
     let data = data_resource.as_mut();
 
+    let sdf_object_tree = data.tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
     let last_updated_version = LAST_SYNCED_TEXT_VERSION.try_lock();
 
     let version = data.tree.path_version("scene");
@@ -62,12 +60,12 @@ fn update_control_points_text(
         }
 
         let active_object_index = get_active_object_index(&data.tree);
-        let objects = data.tree.get_path("scene.sdf_objects");
+        let objects = sdf_object_tree.get_vec_sdf_object();
 
         match active_object_index  {
             Some(index) => {
                 // Show control points
-                let object: &SDFObject = &objects.unwrap_vec_sdf_object()[index];
+                let object: &SDFObject = &objects[index];
 
                 for point in object.get_control_points().iter() {
                     let label = &point.label;
@@ -157,10 +155,8 @@ fn update_control_points(
     let uuid = tree.get_path("editor.current_control_point_object_uuid").unwrap_uuid_or_default();
     let control_point_type = tree.get_path("editor.current_control_point_type").unwrap_control_point_type_or_default();
 
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(data) => data,
-        _ => { return; }
-    };
+    let mut sdf_object_tree = tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
+    let mut objects = sdf_object_tree.get_vec_sdf_object_mut();
 
     let active_object = objects.iter_mut().find(|obj| { obj.uuid == uuid });
 
@@ -214,7 +210,7 @@ fn update_control_points(
                 },
             };
 
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+            tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
         }
         _ => {
             return;
@@ -421,100 +417,98 @@ pub fn on_mouse_down(
     }
 
     let tree = &mut data_resource.as_mut().tree;
-    match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(objects) => {
-            let camera_transform: &Transform = camera_transforms.single();
-            let camera_position = camera_transform.translation;
+    let sdf_object_tree = tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
+    let objects = sdf_object_tree.get_vec_sdf_object();
 
-            let hit: &HitData = &event.hit;
-            let position = match hit.position {
-                Some(position) => position,
-                _ => { return; }
-            };
-            let ray = position - camera_position;
+    let camera_transform: &Transform = camera_transforms.single();
+    let camera_position = camera_transform.translation;
 
-            let control_point_hit = control_points_hit(
-                camera_position,
-                ray.normalize(),
-                &objects
+    let hit: &HitData = &event.hit;
+    let position = match hit.position {
+        Some(position) => position,
+        _ => { return; }
+    };
+    let ray = position - camera_position;
+
+    let control_point_hit = control_points_hit(
+        camera_position,
+        ray.normalize(),
+        &objects
+    );
+
+    match control_point_hit {
+        Some(control_point) => {
+            tree.set_path("editor.state", ClaydashValue::EditorState(GrabbingControlPoint));
+            tree.set_path(
+                "editor.current_control_point_object_uuid",
+                ClaydashValue::Uuid(control_point.object_uuid)
+            );
+            tree.set_path(
+                "editor.current_control_point_type",
+                ClaydashValue::ControlPointType(control_point.control_point_type)
             );
 
-            match control_point_hit {
-                Some(control_point) => {
-                    tree.set_path("editor.state", ClaydashValue::EditorState(GrabbingControlPoint));
-                    tree.set_path(
-                        "editor.current_control_point_object_uuid",
-                        ClaydashValue::Uuid(control_point.object_uuid)
-                    );
-                    tree.set_path(
-                        "editor.current_control_point_type",
-                        ClaydashValue::ControlPointType(control_point.control_point_type)
-                    );
+            return;
+        }
+        None => {}
+    }
 
-                    return;
-                }
-                None => {}
-            }
+    let maybe_hit_uuid = crate::sdf_object::raymarch(position, ray, objects);
 
-            let maybe_hit_uuid = crate::sdf_object::raymarch(position, ray, objects);
+    match maybe_hit_uuid {
+        Some(hit) => {
+            let mut selected_uuids: Vec<uuid::Uuid> = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+            let is_selected = selected_uuids.contains(&hit);
+            let has_shift = keys.pressed(KeyCode::ShiftLeft);
 
-            match maybe_hit_uuid {
-                Some(hit) => {
-                    let mut selected_uuids: Vec<uuid::Uuid> = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
-                    let is_selected = selected_uuids.contains(&hit);
-                    let has_shift = keys.pressed(KeyCode::ShiftLeft);
-
-                    if is_selected {
-                        // Remove object from selection
-                        match has_shift {
-                            true => {
-                                // Shift is pressed: remove from selection
-                                selected_uuids = selected_uuids
-                                    .into_iter()
-                                    .filter(|item| *item != hit).collect();
-                            }
-                            false => {
-                                // Shift not pressed.
-                                if selected_uuids.len() == 1 {
-                                    // Last object in selection: un-select
-                                    selected_uuids = selected_uuids
-                                        .into_iter()
-                                        .filter(|item| *item != hit).collect();
-                                } else {
-                                    // Replace entire selection with only this object
-                                    selected_uuids = vec!(hit);
-                                }
-                            }
-                        };
-
-                        // un-select object
-                        tree.set_path(
-                            "scene.selected_uuids",
-                            ClaydashValue::VecUuid(selected_uuids)
-                        );
-                    } else {
-                        // Add object to selection
-                        match has_shift {
-                            true => {
-                                // Shift is pressed: Additive selection
-                                selected_uuids.push(hit);
-                            }
-                            false => {
-                                // Shift is not pressed: Replace selection with new hit
-                                selected_uuids = vec!(hit);
-                            }
-                        };
-
-                        tree.set_path(
-                            "scene.selected_uuids",
-                            ClaydashValue::VecUuid(selected_uuids)
-                        );
+            if is_selected {
+                // Remove object from selection
+                match has_shift {
+                    true => {
+                        // Shift is pressed: remove from selection
+                        selected_uuids = selected_uuids
+                            .into_iter()
+                            .filter(|item| *item != hit).collect();
                     }
-                },
-                _ => { return; }
+                    false => {
+                        // Shift not pressed.
+                        if selected_uuids.len() == 1 {
+                            // Last object in selection: un-select
+                            selected_uuids = selected_uuids
+                                .into_iter()
+                                .filter(|item| *item != hit).collect();
+                        } else {
+                            // Replace entire selection with only this object
+                            selected_uuids = vec!(hit);
+                        }
+                    }
+                };
+
+                // un-select object
+                tree.set_path(
+                    "scene.selected_uuids",
+                    ClaydashValue::VecUuid(selected_uuids)
+                );
+            } else {
+                // Add object to selection
+                match has_shift {
+                    true => {
+                        // Shift is pressed: Additive selection
+                        selected_uuids.push(hit);
+                    }
+                    false => {
+                        // Shift is not pressed: Replace selection with new hit
+                        selected_uuids = vec!(hit);
+                    }
+                };
+
+                tree.set_path(
+                    "scene.selected_uuids",
+                    ClaydashValue::VecUuid(selected_uuids)
+                );
             }
         },
-        _ => {}
+        _ => { return; }
     }
 }
 

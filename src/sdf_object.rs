@@ -229,7 +229,7 @@ impl SDFObjectTree {
                 tree.get_vec_sdf_object()
             },
             _ => {
-                panic!("uninitialized tree node");
+                vec!()
             }
         };
 
@@ -262,7 +262,7 @@ impl SDFObjectTree {
                 tree.get_vec_sdf_object_mut()
             },
             _ => {
-                panic!("uninitialized tree node");
+                vec!()
             }
         };
 
@@ -283,6 +283,31 @@ impl SDFObjectTree {
         return lhs;
     }
 
+    pub fn remove_object_with_uuid(&mut self, uuid: uuid::Uuid) {
+        match &mut self.lhs {
+            SDFTreeNode::SDFObject(object) => {
+                if object.uuid == uuid {
+                    self.lhs = SDFTreeNode::None;
+                }
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.remove_object_with_uuid(uuid);
+            },
+            _ => {}
+        }
+
+        match &mut self.rhs {
+            SDFTreeNode::SDFObject(object) => {
+                if object.uuid == uuid {
+                    self.rhs = SDFTreeNode::None;
+                }
+            },
+            SDFTreeNode::SDFObjectTree(tree) => {
+                tree.remove_object_with_uuid(uuid);
+            },
+            _ => {}
+        }
+    }
 
     /// Explore the SDF Object Tree and create an array of objects.
     ///

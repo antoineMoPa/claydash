@@ -360,3 +360,489 @@ pub const DEFAULT_DUCK: &str = r#"{
   },
   "value": "None"
 }"#;
+
+pub const DEFAULT_DUCK2: &str = r#"{
+  "subtree": {
+    "editor": {
+      "subtree": {
+        "colorpicker": {
+          "subtree": {
+            "color": {
+              "subtree": {},
+              "value": {
+                "Vec4": [
+                  0.8,
+                  0.0,
+                  0.3,
+                  1.0
+                ]
+              }
+            }
+          },
+          "value": "None"
+        },
+        "constrain_x": {
+          "subtree": {},
+          "value": {
+            "Bool": false
+          }
+        },
+        "constrain_y": {
+          "subtree": {},
+          "value": {
+            "Bool": false
+          }
+        },
+        "constrain_z": {
+          "subtree": {},
+          "value": {
+            "Bool": false
+          }
+        },
+        "initial_mouse_position": {
+          "subtree": {},
+          "value": {
+            "Vec2": [
+              1001.66406,
+              62.351562
+            ]
+          }
+        },
+        "initial_radius": {
+          "subtree": {},
+          "value": {
+            "F32": 0.3
+          }
+        },
+        "initial_selection_transform": {
+          "subtree": {},
+          "value": {
+            "Transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "initial_transform": {
+          "subtree": {
+            "722c9b62-1eec-4615-b881-aa974894f6fb": {
+              "subtree": {},
+              "value": {
+                "Transform": {
+                  "translation": [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "rotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                  ]
+                }
+              }
+            }
+          },
+          "value": "None"
+        },
+        "initial_transform_relative_to_selection": {
+          "subtree": {
+            "722c9b62-1eec-4615-b881-aa974894f6fb": {
+              "subtree": {},
+              "value": {
+                "Transform": {
+                  "translation": [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "rotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                  ]
+                }
+              }
+            }
+          },
+          "value": "None"
+        },
+        "state": {
+          "subtree": {},
+          "value": {
+            "EditorState": "Start"
+          }
+        }
+      },
+      "value": "None"
+    },
+    "scene": {
+      "subtree": {
+        "editor": {
+          "subtree": {
+            "colorpicker": {
+              "subtree": {
+                "color": {
+                  "subtree": {},
+                  "value": {
+                    "Vec4": [
+                      0.8,
+                      0.0,
+                      0.3,
+                      1.0
+                    ]
+                  }
+                }
+              },
+              "value": "None"
+            },
+            "constrain_x": {
+              "subtree": {},
+              "value": {
+                "Bool": false
+              }
+            },
+            "constrain_y": {
+              "subtree": {},
+              "value": {
+                "Bool": false
+              }
+            },
+            "constrain_z": {
+              "subtree": {},
+              "value": {
+                "Bool": false
+              }
+            },
+            "initial_mouse_position": {
+              "subtree": {},
+              "value": {
+                "Vec2": [
+                  753.4258,
+                  340.59766
+                ]
+              }
+            },
+            "initial_radius": {
+              "subtree": {},
+              "value": {
+                "F32": 0.3
+              }
+            },
+            "initial_selection_transform": {
+              "subtree": {},
+              "value": {
+                "Transform": {
+                  "translation": [
+                    -0.07610607,
+                    0.21096152,
+                    -0.21890831
+                  ],
+                  "rotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                  ]
+                }
+              }
+            },
+            "initial_transform": {
+              "subtree": {
+                "51e49097-5ffa-4517-92d1-0431d42ffa56": {
+                  "subtree": {},
+                  "value": {
+                    "Transform": {
+                      "translation": [
+                        -0.07610607,
+                        0.21096152,
+                        -0.21890831
+                      ],
+                      "rotation": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ],
+                      "scale": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    }
+                  }
+                },
+                "922f6522-8686-4e20-ad49-44939b2f2f93": {
+                  "subtree": {},
+                  "value": {
+                    "Transform": {
+                      "translation": [
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "rotation": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ],
+                      "scale": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    }
+                  }
+                }
+              },
+              "value": "None"
+            },
+            "initial_transform_relative_to_selection": {
+              "subtree": {
+                "51e49097-5ffa-4517-92d1-0431d42ffa56": {
+                  "subtree": {},
+                  "value": {
+                    "Transform": {
+                      "translation": [
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "rotation": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ],
+                      "scale": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    }
+                  }
+                },
+                "922f6522-8686-4e20-ad49-44939b2f2f93": {
+                  "subtree": {},
+                  "value": {
+                    "Transform": {
+                      "translation": [
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "rotation": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ],
+                      "scale": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    }
+                  }
+                }
+              },
+              "value": "None"
+            },
+            "state": {
+              "subtree": {},
+              "value": {
+                "EditorState": "Start"
+              }
+            }
+          },
+          "value": "None"
+        },
+        "scene": {
+          "subtree": {
+            "sdf_object_tree": {
+              "subtree": {},
+              "value": {
+                "SDFObjectTree": {
+                  "lhs": {
+                    "SDFObject": {
+                      "uuid": "922f6522-8686-4e20-ad49-44939b2f2f93",
+                      "transform": {
+                        "translation": [
+                          0.24497724,
+                          0.35293654,
+                          0.41045046
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "color": [
+                        0.8,
+                        0.0,
+                        0.3,
+                        1.0
+                      ],
+                      "object_type": 1,
+                      "params": {
+                        "SphereParams": {
+                          "radius": 0.2
+                        }
+                      },
+                      "index": 0
+                    }
+                  },
+                  "rhs": {
+                    "SDFObject": {
+                      "uuid": "51e49097-5ffa-4517-92d1-0431d42ffa56",
+                      "transform": {
+                        "translation": [
+                          -0.07610607,
+                          0.21096152,
+                          -0.21890831
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "scale": [
+                          0.6045433,
+                          0.6045433,
+                          0.6045433
+                        ]
+                      },
+                      "color": [
+                        0.8,
+                        0.0,
+                        0.3,
+                        1.0
+                      ],
+                      "object_type": 2,
+                      "params": {
+                        "BoxParams": {
+                          "box_q": [
+                            0.3,
+                            0.3,
+                            0.3
+                          ]
+                        }
+                      },
+                      "index": 0
+                    }
+                  },
+                  "operation": "Union"
+                }
+              }
+            },
+            "selected_uuids": {
+              "subtree": {},
+              "value": {
+                "VecUuid": [
+                  "51e49097-5ffa-4517-92d1-0431d42ffa56"
+                ]
+              }
+            }
+          },
+          "value": "None"
+        },
+        "sdf_object_tree": {
+          "subtree": {},
+          "value": {
+            "SDFObjectTree": {
+              "lhs": {
+                "SDFObject": {
+                  "uuid": "722c9b62-1eec-4615-b881-aa974894f6fb",
+                  "transform": {
+                    "translation": [
+                      0.33670735,
+                      0.44179934,
+                      0.65758777
+                    ],
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "scale": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ]
+                  },
+                  "color": [
+                    0.8,
+                    0.0,
+                    0.3,
+                    1.0
+                  ],
+                  "object_type": 1,
+                  "params": {
+                    "SphereParams": {
+                      "radius": 0.2
+                    }
+                  },
+                  "index": 0
+                }
+              },
+              "rhs": "None",
+              "operation": "Union"
+            }
+          }
+        },
+        "selected_uuids": {
+          "subtree": {},
+          "value": {
+            "VecUuid": [
+              "722c9b62-1eec-4615-b881-aa974894f6fb"
+            ]
+          }
+        }
+      },
+      "value": "None"
+    }
+  },
+  "value": "None"
+}
+"#;

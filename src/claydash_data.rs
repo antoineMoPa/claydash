@@ -313,7 +313,7 @@ lazy_static! {
 pub fn get_active_object_index(tree: &ObservableKVTree<ClaydashValue>) -> Option<usize> {
     let objects = tree.get_path("scene.sdf_object_tree");
     let uuids = tree.get_path("scene.selected_uuids");
-    let uuids = uuids.unwrap_vec_uuid();
+    let uuids = uuids.unwrap_vec_uuid_or(vec!());
 
     // Last selected object is the active object
     let sdf_object_tree = objects.unwrap_sdf_object_tree_or_default();
@@ -358,6 +358,7 @@ fn sync_to_bevy(
             let value = data.tree.get_path("scene.sdf_object_tree");
             let object_tree = value.unwrap_sdf_object_tree_or_default().clone();
             for (index, object) in object_tree.get_vec_sdf_object().iter_mut().enumerate() {
+                println!("Updating object {}", index);
                 object.params.update_material(index, material);
                 material.sdf_meta[index].w = object.object_type;
                 material.sdf_colors[index] = object.color;
@@ -375,7 +376,7 @@ fn sync_to_bevy(
         *last_updated_version = version;
     }
 
-    if data.tree.was_path_updated("scene.selected_uuids") || data.tree.was_path_updated("scene.sdf_objects"){
+    if data.tree.was_path_updated("scene.selected_uuids") || data.tree.was_path_updated("scene.sdf_object_tree") {
         let active_object_index = get_active_object_index(&data.tree);
         let objects = data.tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
         let uuids = data.tree.get_path("scene.selected_uuids");

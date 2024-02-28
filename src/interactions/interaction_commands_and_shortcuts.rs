@@ -370,8 +370,11 @@ fn duplicate(tree: &mut ObservableKVTree<ClaydashValue>) {
 
 fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue>) {
     let selected_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
-    let sdf_objects = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
-
+    let sdf_object_tree = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(t) => { t },
+        _ => { return; }
+    };
+    let sdf_objects = sdf_object_tree.get_vec_sdf_object();
 
     if selected_uuids.len() == sdf_objects.len() {
         // Everything is selected: now select none
@@ -389,17 +392,18 @@ fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue>) {
 fn delete(tree: &mut ObservableKVTree<ClaydashValue>) {
     // Find selected objects
     let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
-
-    let filtered_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(objects) => {
-            objects.iter().filter(|object| {
-                !selected_object_uuids.contains(&object.uuid)
-            }).cloned().collect()
-        },
+    let mut sdf_object_tree = match tree.get_path("scene.sdf_object_tree") {
+        ClaydashValue::SDFObjectTree(t) => { t },
         _ => { return; }
     };
 
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(filtered_objects));
+    for uuid in selected_object_uuids.iter() {
+        sdf_object_tree.remove_object_with_uuid(*uuid);
+        println!("Deleted object with uuid: {}", uuid);
+    }
+
+    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(Vec::new()));
+    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(SDFObjectTree::default()));
 }
 
 fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
