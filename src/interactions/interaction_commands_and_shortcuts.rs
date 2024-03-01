@@ -4,13 +4,10 @@ use bevy::{
 };
 use crate::claydash_data::{ClaydashValue, ClaydashData};
 use crate::command_central_plugin::CommandCentralState;
-use observable_key_value_tree::{
-    ObservableKVTree,
-};
-use crate::sdf_object::{SDFObject, SDFObjectTree};
+use observable_key_value_tree::ObservableKVTree;
+use crate::sdf_object::{SDFObject, SDFObjectTree, SDFOperation};
 use command_central::CommandBuilder;
 use crate::claydash_data::EditorState::*;
-use sdf_consts::TYPE_BOX;
 
 pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
     let commands = &mut bevy_command_central.commands;
@@ -355,7 +352,7 @@ fn duplicate(tree: &mut ObservableKVTree<ClaydashValue>) {
         if selected_object_uuids.contains(&object.uuid) {
             let new_object = object.duplicate();
             let uuid = new_object.uuid;
-            sdf_object_tree.add_object(new_object);
+            sdf_object_tree.add_object(new_object, SDFOperation::Union);
             duplicated_uuids.push(uuid);
         }
     }
@@ -421,7 +418,7 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
     new_object.color = color;
     let uuid = new_object.uuid;
 
-    sdf_object_tree.add_object(new_object);
+    sdf_object_tree.add_object(new_object, SDFOperation::Exclusion);
 
     // Update the tree
     tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
@@ -448,7 +445,7 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue>) {
     new_object.color = color;
     let uuid = new_object.uuid;
 
-    sdf_object_tree.add_object(new_object);
+    sdf_object_tree.add_object(new_object, SDFOperation::Exclusion);
 
     // Update the tree
     tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));

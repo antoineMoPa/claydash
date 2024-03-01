@@ -169,7 +169,7 @@ pub struct SDFObject {
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub enum SdfOperation {
+pub enum SDFOperation {
     #[default]
     Union,
     Intersection,
@@ -207,16 +207,16 @@ pub fn sdf_operation_list_to_ivec4_list(list: SDFOperationList) -> Vec<IVec4> {
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SDFOperationListEntry {
-    lhs: SDFObject,
-    rhs: SDFObject,
-    operation: SdfOperation,
+    pub lhs: SDFObject, // or index?
+    pub rhs: SDFObject,
+    pub operation: SDFOperation,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SDFObjectTree {
     lhs: SDFTreeNode,
     rhs: SDFTreeNode,
-    operation: SdfOperation,
+    operation: SDFOperation,
 }
 
 
@@ -248,8 +248,6 @@ impl SDFObjectTree {
         };
 
         lhs.append(&mut rhs);
-
-        // TODO: Add mix operation
 
         return lhs;
     }
@@ -339,66 +337,67 @@ impl SDFObjectTree {
     pub fn get_vec_sdf_operation(&self) -> Vec<SDFOperationListEntry> {
         let mut lhs: Vec<SDFOperationListEntry> = match &self.lhs {
             SDFTreeNode::SDFObject(object) => {
-                vec!(SDFOperationListEntry{
+                vec!(SDFOperationListEntry {
                     lhs: object.clone(),
                     rhs: SDFObject::default(),
-                    operation: SdfOperation::UseLhsAsIs,
+                    operation: SDFOperation::UseLhsAsIs,
                 })
             },
             SDFTreeNode::SDFObjectTree(tree) => {
                 tree.get_vec_sdf_operation()
             },
             _ => {
-                panic!("uninitialized tree node");
+                vec!()
             }
         };
 
         let mut rhs: Vec<SDFOperationListEntry> = match &self.rhs {
             SDFTreeNode::SDFObject(object) => {
-                vec!(SDFOperationListEntry{
+                vec!(SDFOperationListEntry {
                     lhs: object.clone(),
                     rhs: SDFObject::default(),
-                    operation: SdfOperation::UseRhsAsIs,
+                    operation: SDFOperation::UseRhsAsIs,
                 })
             },
             SDFTreeNode::SDFObjectTree(tree) => {
                 tree.get_vec_sdf_operation()
             },
             _ => {
-                panic!("uninitialized tree node");
+                vec!()
             }
         };
 
-        rhs[0].operation = self.operation.clone();
+        let mut vec = lhs;
+        vec.append(&mut rhs);
 
-        lhs.append(&mut rhs);
-
-        return lhs;
+        return vec;
     }
 
     /// Add an object to the tree
-    pub fn add_object(&mut self, object: SDFObject) {
+    pub fn add_object(&mut self, object: SDFObject, operation: SDFOperation) {
         match &mut self.lhs {
             SDFTreeNode::None => {
                 self.lhs = SDFTreeNode::SDFObject(object);
+                self.operation = operation;
             },
             SDFTreeNode::SDFObjectTree(tree) => {
-                tree.add_object(object);
+                tree.add_object(object, operation);
             },
             _ => {
                 match &mut self.rhs {
                     SDFTreeNode::None => {
                         self.rhs = SDFTreeNode::SDFObject(object);
+                        self.operation = operation;
                     },
                     SDFTreeNode::SDFObjectTree(tree) => {
-                        tree.add_object(object);
+                        tree.add_object(object, operation);
                     },
                     _ => {
                         // Convert rhs to a tree and add the object to the tree
                         let tree = SDFObjectTree {
                             lhs: self.rhs.clone(),
                             rhs: SDFTreeNode::SDFObject(object),
-                            operation: SdfOperation::Union,
+                            operation,
                         };
                         self.rhs = SDFTreeNode::SDFObjectTree(Box::new(tree));
                     }
@@ -509,7 +508,7 @@ impl Default for SDFObject {
             uuid: uuid::Uuid::new_v4(),
             transform: Transform::IDENTITY,
             color: Vec4::default(),
-            object_type: TYPE_END,
+            object_type: TYPE_SPHERE,
             params: SDFObjectParams::SphereParams(SphereParams::default()),
         }
     }
@@ -642,6 +641,11 @@ impl Material for SDFObjectMaterial {
         defs.push(ShaderDefVal::Int("TYPE_END".into(), TYPE_END));
         defs.push(ShaderDefVal::Int("TYPE_SPHERE".into(), TYPE_SPHERE));
         defs.push(ShaderDefVal::Int("TYPE_BOX".into(), TYPE_BOX));
+        defs.push(ShaderDefVal::Int("OPERATION_UNION".into(), OPERATION_UNION));
+        defs.push(ShaderDefVal::Int("OPERATION_EXCLUSION".into(), OPERATION_EXCLUSION));
+        defs.push(ShaderDefVal::Int("OPERATION_INTERSECTION".into(), OPERATION_INTERSECTION));
+        defs.push(ShaderDefVal::Int("OPERATION_USE_LHS_AS_IS".into(), OPERATION_USE_LHS_AS_IS));
+        defs.push(ShaderDefVal::Int("OPERATION_USE_RHS_AS_IS".into(), OPERATION_USE_RHS_AS_IS));
 
         Ok(())
     }

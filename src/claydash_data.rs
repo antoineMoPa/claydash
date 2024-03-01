@@ -12,7 +12,7 @@ use observable_key_value_tree::{
 use std::sync::{Arc, Mutex};
 use lazy_static::lazy_static;
 
-use crate::sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType, SDFObjectTree};
+use crate::sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType, SDFObjectTree, SDFOperation};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum EditorState {
@@ -352,24 +352,58 @@ fn sync_to_bevy(
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
             material.sdf_meta[0].w = TYPE_END;
 
+            let sdf_object_tree = data.tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
+            let sdf_operations = sdf_object_tree.get_vec_sdf_operation();
 
-            let mut sdf_objects: Vec<SDFObject> = Vec::new();
+            let mut counter = 0;
 
-            let value = data.tree.get_path("scene.sdf_object_tree");
-            let object_tree = value.unwrap_sdf_object_tree_or_default().clone();
-            for (index, object) in object_tree.get_vec_sdf_object().iter_mut().enumerate() {
-                object.params.update_material(index, material);
-                material.sdf_meta[index].w = object.object_type;
-                material.sdf_colors[index] = object.color;
-                material.sdf_inverse_transforms[index] = object.inverse_transform_matrix();
-                material.sdf_meta[index + 1].w = TYPE_END;
+            for operation in sdf_operations.iter() {
+                println!("Operation");
+                println!("rhs: {:?}", operation.rhs.uuid);
+                println!("lhs: {:?}", operation.lhs.uuid);
+                println!("rhs: {:?}", operation.rhs.object_type);
+                println!("lhs: {:?}", operation.lhs.object_type);
+                println!("counter: {:?}", counter);
 
-                object.index = index as u32;
+                let lhs = &operation.lhs;
+                let rhs = &operation.rhs;
 
-                sdf_objects.push(object.clone());
+                lhs.params.update_material(counter, material);
+                material.sdf_meta[counter].w = lhs.object_type;
+                material.sdf_colors[counter] = lhs.color;
+                material.sdf_inverse_transforms[counter] = lhs.inverse_transform_matrix();
+
+
+                rhs.params.update_material(counter + 1, material);
+                material.sdf_meta[counter + 1].w = rhs.object_type;
+                material.sdf_colors[counter + 1] = rhs.color;
+                material.sdf_inverse_transforms[counter + 1] = rhs.inverse_transform_matrix();
+
+
+                match operation.operation {
+                    SDFOperation::Union => {
+                        material.sdf_operations[counter].w = OPERATION_UNION;
+                    },
+                    SDFOperation::Exclusion => {
+                        material.sdf_operations[counter].w = OPERATION_EXCLUSION;
+                    },
+                    SDFOperation::Intersection => {
+                        material.sdf_operations[counter].w = OPERATION_INTERSECTION;
+                    },
+                    SDFOperation::UseLhsAsIs => {
+                        material.sdf_operations[counter].w = OPERATION_USE_LHS_AS_IS;
+                    },
+                    SDFOperation::UseRhsAsIs => {
+                        material.sdf_operations[counter].w = OPERATION_USE_RHS_AS_IS;
+                    },
+                }
+
+                // todo: update index
+
+                material.sdf_meta[counter + 2].w = TYPE_END;
+
+                counter += 2;
             }
-
-            // TODO: add mix operations
         }
 
         *last_updated_version = version;
