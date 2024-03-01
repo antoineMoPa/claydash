@@ -12,7 +12,7 @@ use observable_key_value_tree::{
 use std::sync::{Arc, Mutex};
 use lazy_static::lazy_static;
 
-use crate::sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType, SDFObjectTree, SDFOperation};
+use crate::sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType, SDFObjectTree, SDFOperation, SDFOperationEntryOperand};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum EditorState {
@@ -355,55 +355,69 @@ fn sync_to_bevy(
             let sdf_object_tree = data.tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
             let sdf_operations = sdf_object_tree.get_vec_sdf_operation();
 
-            let mut counter = 0;
+            let mut sdf_object_counter = 0;
+            let mut sdf_operation_counter = 0;
 
             for operation in sdf_operations.iter() {
-                println!("Operation");
-                println!("rhs: {:?}", operation.rhs.uuid);
-                println!("lhs: {:?}", operation.lhs.uuid);
-                println!("rhs: {:?}", operation.rhs.object_type);
-                println!("lhs: {:?}", operation.lhs.object_type);
-                println!("counter: {:?}", counter);
-
                 let lhs = &operation.lhs;
                 let rhs = &operation.rhs;
 
-                lhs.params.update_material(counter, material);
-                material.sdf_meta[counter].w = lhs.object_type;
-                material.sdf_colors[counter] = lhs.color;
-                material.sdf_inverse_transforms[counter] = lhs.inverse_transform_matrix();
+                match lhs {
+                    SDFOperationEntryOperand::SDFObject(object) => {
+                        object.params.update_material(sdf_object_counter, material);
+                        material.sdf_meta[sdf_object_counter].w = object.object_type;
+                        material.sdf_colors[sdf_object_counter] = object.color;
+                        material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
+                        material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
 
+                        sdf_object_counter += 1;
+                    },
+                    SDFOperationEntryOperand::RelativeIndex(index) => {
+                        material.sdf_meta[sdf_object_counter].w = index.clone();
+                    }
+                }
 
-                rhs.params.update_material(counter + 1, material);
-                material.sdf_meta[counter + 1].w = rhs.object_type;
-                material.sdf_colors[counter + 1] = rhs.color;
-                material.sdf_inverse_transforms[counter + 1] = rhs.inverse_transform_matrix();
+                // same for rhs now
+                match rhs {
+                    SDFOperationEntryOperand::SDFObject(object) => {
+                        object.params.update_material(sdf_object_counter, material);
+                        material.sdf_meta[sdf_object_counter].w = object.object_type;
+                        material.sdf_colors[sdf_object_counter] = object.color;
+                        material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
+                        material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
 
+                        sdf_object_counter += 1;
+                    },
+                    SDFOperationEntryOperand::RelativeIndex(index) => {
+                        material.sdf_meta[sdf_object_counter].w = index.clone();
+                    }
+                }
 
                 match operation.operation {
                     SDFOperation::Union => {
-                        material.sdf_operations[counter].w = OPERATION_UNION;
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_UNION;
                     },
                     SDFOperation::Exclusion => {
-                        material.sdf_operations[counter].w = OPERATION_EXCLUSION;
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_EXCLUSION;
                     },
                     SDFOperation::Intersection => {
-                        material.sdf_operations[counter].w = OPERATION_INTERSECTION;
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_INTERSECTION;
                     },
                     SDFOperation::UseLhsAsIs => {
-                        material.sdf_operations[counter].w = OPERATION_USE_LHS_AS_IS;
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_AS_IS;
                     },
                     SDFOperation::UseRhsAsIs => {
-                        material.sdf_operations[counter].w = OPERATION_USE_RHS_AS_IS;
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_AS_IS;
                     },
+                    _ => {
+                        panic!("Unhandled operation {}.", "operation");
+                    }
                 }
 
-                // todo: update index
-
-                material.sdf_meta[counter + 2].w = TYPE_END;
-
-                counter += 2;
+                sdf_operation_counter += 1;
             }
+
+            material.sdf_operations[sdf_operation_counter].w = OPERATION_END;
         }
 
         *last_updated_version = version;

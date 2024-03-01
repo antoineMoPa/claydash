@@ -176,6 +176,7 @@ pub enum SDFOperation {
     Exclusion,
     UseLhsAsIs,
     UseRhsAsIs,
+    End,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -186,29 +187,23 @@ pub enum SDFTreeNode {
     None,
 }
 
-pub type SDFOperationList = Vec<SDFOperationListEntry>;
+#[derive(Clone, Serialize, Deserialize)]
+pub enum SDFOperationEntryOperand {
+    SDFObject(SDFObject),
+    // Relative index to a previous object in the list
+    RelativeIndex(i32),
+}
 
-
-pub fn sdf_operation_list_to_ivec4_list(list: SDFOperationList) -> Vec<IVec4> {
-    let mut vec: Vec<IVec4> = Vec::new();
-
-    for entry in list.iter() {
-        let entry = entry.clone();
-        vec.push(IVec4 {
-            w: entry.operation as i32,
-            x: entry.lhs.index as i32,
-            y: entry.rhs.index as i32,
-            z: 0, // unused
-        });
+impl Default for SDFOperationEntryOperand {
+    fn default() -> Self {
+        Self::RelativeIndex(0)
     }
-
-    return vec;
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SDFOperationListEntry {
-    pub lhs: SDFObject, // or index?
-    pub rhs: SDFObject,
+    pub lhs: SDFOperationEntryOperand,
+    pub rhs: SDFOperationEntryOperand,
     pub operation: SDFOperation,
 }
 
@@ -338,8 +333,8 @@ impl SDFObjectTree {
         let mut lhs: Vec<SDFOperationListEntry> = match &self.lhs {
             SDFTreeNode::SDFObject(object) => {
                 vec!(SDFOperationListEntry {
-                    lhs: object.clone(),
-                    rhs: SDFObject::default(),
+                    lhs: SDFOperationEntryOperand::SDFObject(object.clone()),
+                    rhs: SDFOperationEntryOperand::SDFObject(SDFObject::default()),
                     operation: SDFOperation::UseLhsAsIs,
                 })
             },
@@ -354,8 +349,8 @@ impl SDFObjectTree {
         let mut rhs: Vec<SDFOperationListEntry> = match &self.rhs {
             SDFTreeNode::SDFObject(object) => {
                 vec!(SDFOperationListEntry {
-                    lhs: object.clone(),
-                    rhs: SDFObject::default(),
+                    lhs: SDFOperationEntryOperand::SDFObject(object.clone()),
+                    rhs: SDFOperationEntryOperand::SDFObject(SDFObject::default()),
                     operation: SDFOperation::UseRhsAsIs,
                 })
             },
@@ -367,10 +362,20 @@ impl SDFObjectTree {
             }
         };
 
-        let mut vec = lhs;
-        vec.append(&mut rhs);
+        let rhs_length = rhs.len() as i32;
 
-        return vec;
+        lhs.append(&mut rhs);
+
+        // Combine both parts of the tree.
+        // The lhs and rhs refer to the relative position
+        // of the last rhs and lhs values.
+        lhs.insert(0, SDFOperationListEntry {
+            lhs: SDFOperationEntryOperand::RelativeIndex(-rhs_length),
+            rhs: SDFOperationEntryOperand::RelativeIndex(-1),
+            operation: self.operation.clone(),
+        });
+
+        return lhs;
     }
 
     /// Add an object to the tree
@@ -646,6 +651,7 @@ impl Material for SDFObjectMaterial {
         defs.push(ShaderDefVal::Int("OPERATION_INTERSECTION".into(), OPERATION_INTERSECTION));
         defs.push(ShaderDefVal::Int("OPERATION_USE_LHS_AS_IS".into(), OPERATION_USE_LHS_AS_IS));
         defs.push(ShaderDefVal::Int("OPERATION_USE_RHS_AS_IS".into(), OPERATION_USE_RHS_AS_IS));
+        defs.push(ShaderDefVal::Int("OPERATION_END".into(), OPERATION_END));
 
         Ok(())
     }
