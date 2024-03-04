@@ -352,7 +352,7 @@ fn sync_to_bevy(
             let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
             material.sdf_meta[0].w = TYPE_END;
 
-            let sdf_object_tree = data.tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
+            let mut sdf_object_tree = data.tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
             let sdf_operations = sdf_object_tree.get_vec_sdf_operation();
 
             let mut sdf_object_counter = 0;
@@ -372,8 +372,7 @@ fn sync_to_bevy(
 
                         sdf_object_counter += 1;
                     },
-                    SDFOperationEntryOperand::RelativeIndex(index) => {
-                        material.sdf_meta[sdf_object_counter].w = index.clone();
+                    SDFOperationEntryOperand::RelativeIndex(_index) => {
                     }
                 }
 
@@ -413,6 +412,27 @@ fn sync_to_bevy(
                         panic!("Unhandled operation {}.", "operation");
                     }
                 }
+
+                // w: operation type
+                // x: lhs index
+                // y: rhs index
+                // z: unused
+                material.sdf_operations[sdf_operation_counter].x = match operation.lhs {
+                    SDFOperationEntryOperand::SDFObject(_) => {
+                        // This is a no-op
+                        0
+                    },
+                    SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
+                };
+                material.sdf_operations[sdf_operation_counter].y = match operation.rhs {
+                    SDFOperationEntryOperand::SDFObject(_) => {
+                        // This is a no-op
+                        0
+                    },
+                    SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
+                };
+
+                println!("index: {} ", material.sdf_operations[sdf_operation_counter].y);
 
                 sdf_operation_counter += 1;
             }

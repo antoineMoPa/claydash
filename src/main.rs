@@ -147,7 +147,9 @@ fn setup_window_size(mut windows: Query<&mut Window>) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn setup_window_size() {
+fn setup_window_size(mut windows: Query<&mut Window>) {
+    let mut window = windows.single_mut();
+    window.resolution.set(60.0, 60.0);
 }
 
 /// Keyboard input system
