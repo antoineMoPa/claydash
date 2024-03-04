@@ -432,8 +432,6 @@ fn sync_to_bevy(
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
                 };
 
-                println!("index: {} ", material.sdf_operations[sdf_operation_counter].y);
-
                 sdf_operation_counter += 1;
             }
 

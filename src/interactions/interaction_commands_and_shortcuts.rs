@@ -396,7 +396,6 @@ fn delete(tree: &mut ObservableKVTree<ClaydashValue>) {
 
     for uuid in selected_object_uuids.iter() {
         sdf_object_tree.remove_object_with_uuid(*uuid);
-        println!("Deleted object with uuid: {}", uuid);
     }
 
     tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(Vec::new()));
