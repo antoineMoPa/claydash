@@ -160,43 +160,34 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
     // Walk the camera_ray through the scene
     while (i < MAX_ITERATIONS) {
+        var op_index: i32 = 0;
 
         // Loop through all objects
-        for (var sdf_index: i32 = 0; sdf_index < #{MAX_SDFS_PER_ENTITY}; sdf_index++) {
-            if (sdf_meta[sdf_index].w == TYPE_END) {
+        for (;op_index < #{MAX_SDFS_PER_ENTITY}; op_index++) {
+            if (sdf_meta[op_index].w == TYPE_END) {
                 break;
             }
-            d_current_object = object_distance(p, sdf_index);
+            d_current_object = object_distance(p, op_index);
 
             if (abs(d_current_object) < abs(d)) {
-                closest = sdf_index;
+                closest = op_index;
+                object_color = sdf_colors[op_index];
             }
 
-            object_color = sdf_colors[sdf_index];
-
-            operations_results[sdf_index] = d_current_object;
+            operations_results[op_index] = d_current_object;
         }
 
         // Loop through all operations (starting at the last object index + 1)
+        var result = 10000.0;
+        var op_entry = sdf_operations[op_index];
+        var op = op_entry.w;
 
-        // Don't use for to prevent unrolling
-        var op_index: i32 = #{MAX_SDFS_PER_ENTITY};
-
-        while (op_index < #{MAX_OPERATION_RESULTS}) {
-            let op_entry = sdf_operations[op_index];
-            let op = op_entry.w;
-
-            if (op == OPERATION_END) {
-                break;
-            }
-
+        while (op_index < #{MAX_OPERATION_RESULTS} && op != OPERATION_END) {
             var lhs_relative_index = op_entry.x;
             var rhs_relative_index = op_entry.y;
 
-            var lhs_distance = operations_results[op_index - lhs_relative_index];
-            var rhs_distance = operations_results[op_index - rhs_relative_index];
-
-            var result = 100000.0;
+            var lhs_distance = operations_results[op_index + lhs_relative_index];
+            var rhs_distance = operations_results[op_index + rhs_relative_index];
 
             if (op == #{OPERATION_UNION}) {
                 result = min(lhs_distance, rhs_distance);
@@ -212,14 +203,19 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             }
             else if (op == #{OPERATION_USE_RHS_AS_IS}) {
                 result = rhs_distance;
+            } else {
+                // Something is wrong
+                return vec4<f32>(1.0, 0.0, 0.0, 1.0);
             }
 
             operations_results[op_index] = result;
 
             op_index += 1;
+            op_entry = sdf_operations[op_index];
+            op = op_entry.w;
         }
 
-        d = operations_results[op_index - 1];
+        d = result;
 
         p += camera_ray * d * 0.95;
 

@@ -356,39 +356,54 @@ fn sync_to_bevy(
             let sdf_operations = sdf_object_tree.get_vec_sdf_operation();
 
             let mut sdf_object_counter = 0;
-            let mut sdf_operation_counter = 0;
 
-            for operation in sdf_operations.iter() {
+            for (sdf_operation_counter, operation) in sdf_operations.iter().enumerate() {
                 let lhs = &operation.lhs;
                 let rhs = &operation.rhs;
 
+
                 match lhs {
                     SDFOperationEntryOperand::SDFObject(object) => {
-                        object.params.update_material(sdf_object_counter, material);
-                        material.sdf_meta[sdf_object_counter].w = object.object_type;
-                        material.sdf_colors[sdf_object_counter] = object.color;
-                        material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
-                        material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
+                        let is_lhs_as_is = match operation.operation {
+                            SDFOperation::UseLhsAsIs => true,
+                            _ => false
+                        };
 
-                        sdf_object_counter += 1;
+                        if is_lhs_as_is {
+                            object.params.update_material(sdf_object_counter, material);
+                            material.sdf_meta[sdf_object_counter].w = object.object_type;
+                            material.sdf_colors[sdf_object_counter] = object.color;
+                            material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
+
+                            println!("object: {} {}", sdf_object_counter, object.uuid);
+                            sdf_object_counter += 1;
+                        }
                     },
-                    SDFOperationEntryOperand::RelativeIndex(_index) => {
+                    SDFOperationEntryOperand::RelativeIndex(relative_index) => {
+                        println!("index: {}", relative_index);
                     }
                 }
 
                 // same for rhs now
                 match rhs {
                     SDFOperationEntryOperand::SDFObject(object) => {
-                        object.params.update_material(sdf_object_counter, material);
-                        material.sdf_meta[sdf_object_counter].w = object.object_type;
-                        material.sdf_colors[sdf_object_counter] = object.color;
-                        material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
-                        material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
+                        let is_rhs_as_is = match operation.operation {
+                            SDFOperation::UseRhsAsIs => true,
+                            _ => false
+                        };
 
-                        sdf_object_counter += 1;
+                        if is_rhs_as_is {
+                            object.params.update_material(sdf_object_counter, material);
+                            material.sdf_meta[sdf_object_counter].w = object.object_type;
+                            material.sdf_colors[sdf_object_counter] = object.color;
+                            material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
+
+                            println!("object: {} {}", sdf_object_counter, object.uuid);
+                            sdf_object_counter += 1;
+                        }
                     },
-                    SDFOperationEntryOperand::RelativeIndex(index) => {
-                        material.sdf_meta[sdf_object_counter].w = index.clone();
+                    SDFOperationEntryOperand::RelativeIndex(relative_index) => {
+                        println!("index: {}", relative_index);
                     }
                 }
 
@@ -417,25 +432,28 @@ fn sync_to_bevy(
                 // x: lhs index
                 // y: rhs index
                 // z: unused
-                material.sdf_operations[sdf_operation_counter].x = match operation.lhs {
+                let lhs_index = match operation.lhs {
                     SDFOperationEntryOperand::SDFObject(_) => {
                         // This is a no-op
                         0
                     },
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
                 };
-                material.sdf_operations[sdf_operation_counter].y = match operation.rhs {
+                material.sdf_operations[sdf_operation_counter].x = lhs_index;
+                let rhs_index = match operation.rhs {
                     SDFOperationEntryOperand::SDFObject(_) => {
                         // This is a no-op
                         0
                     },
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
                 };
-
-                sdf_operation_counter += 1;
+                material.sdf_operations[sdf_operation_counter].y = rhs_index;
+                material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
+                println!("operation: {} {} {} {}", sdf_operation_counter, operation.operation,  lhs_index, rhs_index);
             }
 
-            material.sdf_operations[sdf_operation_counter].w = OPERATION_END;
+            material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
+            println!("sdf_object_counter: {}", sdf_object_counter);
         }
 
         *last_updated_version = version;

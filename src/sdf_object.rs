@@ -771,7 +771,7 @@ mod tests {
 
         let vec = tree.get_vec_sdf_operation();
 
-        // We should have 5 operations in the vec + 3 objects
+        // We should have 3 objects + 5 operations in the vec.
         assert_eq!(vec.len(), 8);
 
         // First 3 operations should be sdf objects
