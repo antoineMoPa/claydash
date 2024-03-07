@@ -173,9 +173,11 @@ pub enum SDFOperation {
     #[default]
     Union,
     Intersection,
-    Exclusion,
+    Subtraction,
     UseLhsAsIs,
     UseRhsAsIs,
+    UseLhsRelativeIndex,
+    UseRhsRelativeIndex,
     End,
 }
 
@@ -184,9 +186,11 @@ impl std::fmt::Display for SDFOperation {
         match self {
             SDFOperation::Union => write!(f, "Union"),
             SDFOperation::Intersection => write!(f, "Intersection"),
-            SDFOperation::Exclusion => write!(f, "Exclusion"),
+            SDFOperation::Subtraction => write!(f, "Subtraction"),
             SDFOperation::UseLhsAsIs => write!(f, "UseLhsAsIs"),
             SDFOperation::UseRhsAsIs => write!(f, "UseRhsAsIs"),
+            SDFOperation::UseLhsRelativeIndex => write!(f, "UseLhsRelativeIndex"),
+            SDFOperation::UseRhsRelativeIndex => write!(f, "UseRhsRelativeIndex"),
             SDFOperation::End => write!(f, "End"),
         }
     }
@@ -205,6 +209,7 @@ pub enum SDFOperationEntryOperand {
     SDFObject(SDFObject),
     // Relative index to a previous object in the list
     RelativeIndex(i32),
+    None,
 }
 
 impl Default for SDFOperationEntryOperand {
@@ -317,19 +322,18 @@ impl SDFObjectTree {
     }
 
     pub fn get_vec_sdf_operation(&mut self) -> Vec<SDFOperationListEntry> {
-        let mut list = self.recur_get_vec_sdf_operation();
-
         let mut sdf_objects_operations: Vec<SDFOperationListEntry> = vec!();
 
         for object in self.get_vec_sdf_object_mut() {
             object.index = sdf_objects_operations.len() as i32;
             sdf_objects_operations.push(SDFOperationListEntry {
                 lhs: SDFOperationEntryOperand::SDFObject(object.clone()),
-                rhs: SDFOperationEntryOperand::SDFObject(SDFObject::default()),
+                rhs: SDFOperationEntryOperand::None,
                 operation: SDFOperation::UseLhsAsIs,
             });
         }
 
+        let mut list = self.recur_get_vec_sdf_operation();
         let mut list_with_sdf_objects_operations = sdf_objects_operations;
         list_with_sdf_objects_operations.append(&mut list);
 
@@ -344,7 +348,7 @@ impl SDFObjectTree {
             SDFTreeNode::SDFObject(object) => {
                 vec!(SDFOperationListEntry {
                     lhs: SDFOperationEntryOperand::SDFObject(object.clone()),
-                    rhs: SDFOperationEntryOperand::SDFObject(SDFObject::default()),
+                    rhs: SDFOperationEntryOperand::None,
                     operation: SDFOperation::UseLhsAsIs,
                 })
             },
@@ -358,9 +362,10 @@ impl SDFObjectTree {
 
         let mut rhs: Vec<SDFOperationListEntry> = match &self.rhs {
             SDFTreeNode::SDFObject(object) => {
+                println!("Adding object with index: {}", object.index);
                 vec!(SDFOperationListEntry {
-                    lhs: SDFOperationEntryOperand::SDFObject(object.clone()),
-                    rhs: SDFOperationEntryOperand::SDFObject(SDFObject::default()),
+                    lhs: SDFOperationEntryOperand::None,
+                    rhs: SDFOperationEntryOperand::SDFObject(object.clone()),
                     operation: SDFOperation::UseRhsAsIs,
                 })
             },
@@ -381,14 +386,16 @@ impl SDFObjectTree {
                     *index -= rhs_length;
                 },
                 SDFOperationEntryOperand::SDFObject(_object) => {
-                }
+                },
+                _ => {}
             }
             match &mut entry.rhs {
                 SDFOperationEntryOperand::RelativeIndex(index) => {
                     *index -= rhs_length;
                 },
                 SDFOperationEntryOperand::SDFObject(_object) => {
-                }
+                },
+                _ => {}
             }
         }
 
@@ -406,7 +413,46 @@ impl SDFObjectTree {
         return lhs;
     }
 
-    /// Add an object to the tree
+    /// Add an object with an operation at the top of the tree
+    pub fn add_object_top_of_tree(&mut self, object: SDFObject, operation: SDFOperation) {
+        match self.operation {
+            SDFOperation::End | SDFOperation::UseLhsAsIs | SDFOperation::UseRhsAsIs => {
+                self.add_object(object, operation);
+                return;
+            },
+            _ => {}
+        }
+
+        let original_lhs = &self.lhs;
+        let original_rhs = &self.rhs;
+        let original_operation = &self.operation;
+
+        let new_lhs: SDFTreeNode = match self.operation {
+            SDFOperation::Union | SDFOperation::Subtraction | SDFOperation::Intersection => {
+                let new_lhs_tree = SDFObjectTree {
+                    lhs: original_lhs.clone(),
+                    rhs: original_rhs.clone(),
+                    operation: original_operation.clone(),
+                };
+                SDFTreeNode::SDFObjectTree(Box::new(new_lhs_tree))
+            },
+            SDFOperation::UseLhsAsIs => {
+                original_lhs.clone()
+            },
+            SDFOperation::UseRhsAsIs => {
+                original_rhs.clone()
+            },
+            _ => {
+                panic!("Unexpected operation: {}", self.operation);
+            }
+        };
+
+        self.lhs = new_lhs;
+        self.rhs = SDFTreeNode::SDFObject(object);
+        self.operation = operation;
+    }
+
+    /// Add an object to the tree with to the first available spot
     pub fn add_object(&mut self, object: SDFObject, operation: SDFOperation) {
         match &mut self.lhs {
             SDFTreeNode::None => {
@@ -672,10 +718,12 @@ impl Material for SDFObjectMaterial {
         defs.push(ShaderDefVal::Int("TYPE_SPHERE".into(), TYPE_SPHERE));
         defs.push(ShaderDefVal::Int("TYPE_BOX".into(), TYPE_BOX));
         defs.push(ShaderDefVal::Int("OPERATION_UNION".into(), OPERATION_UNION));
-        defs.push(ShaderDefVal::Int("OPERATION_EXCLUSION".into(), OPERATION_EXCLUSION));
+        defs.push(ShaderDefVal::Int("OPERATION_SUBTRACTION".into(), OPERATION_SUBTRACTION));
         defs.push(ShaderDefVal::Int("OPERATION_INTERSECTION".into(), OPERATION_INTERSECTION));
         defs.push(ShaderDefVal::Int("OPERATION_USE_LHS_AS_IS".into(), OPERATION_USE_LHS_AS_IS));
         defs.push(ShaderDefVal::Int("OPERATION_USE_RHS_AS_IS".into(), OPERATION_USE_RHS_AS_IS));
+        defs.push(ShaderDefVal::Int("OPERATION_USE_LHS_RELATIVE_INDEX".into(), OPERATION_USE_LHS_RELATIVE_INDEX));
+        defs.push(ShaderDefVal::Int("OPERATION_USE_RHS_RELATIVE_INDEX".into(), OPERATION_USE_RHS_RELATIVE_INDEX));
         defs.push(ShaderDefVal::Int("OPERATION_END".into(), OPERATION_END));
 
         Ok(())
@@ -690,7 +738,7 @@ mod tests {
 
     fn get_pointed_object_uuid(sdf_operation_entry: &SDFOperationListEntry) -> uuid::Uuid {
         match sdf_operation_entry.operation {
-            SDFOperation::UseLhsAsIs => {
+            SDFOperation::UseLhsRelativeIndex | SDFOperation::UseLhsAsIs => {
                 match &sdf_operation_entry.lhs {
                     SDFOperationEntryOperand::SDFObject(object) => {
                         return object.uuid;
@@ -698,7 +746,7 @@ mod tests {
                     _ => panic!("Expected SDFObject")
                 }
             },
-            SDFOperation::UseRhsAsIs => {
+            SDFOperation::UseRhsRelativeIndex | SDFOperation::UseRhsAsIs => {
                 match &sdf_operation_entry.rhs {
                     SDFOperationEntryOperand::SDFObject(object) => {
                         return object.uuid;
@@ -719,7 +767,8 @@ mod tests {
             },
             SDFOperationEntryOperand::SDFObject(object) => {
                 assert_eq!(object.uuid, uuid);
-            }
+            },
+            _ => {}
         }
     }
 
@@ -733,6 +782,7 @@ mod tests {
             SDFOperationEntryOperand::SDFObject(object) => {
                 assert_eq!(object.uuid, uuid);
             }
+            _ => {}
         }
     }
 

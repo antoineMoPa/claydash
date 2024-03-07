@@ -417,7 +417,7 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
     new_object.color = color;
     let uuid = new_object.uuid;
 
-    sdf_object_tree.add_object(new_object, SDFOperation::Exclusion);
+    sdf_object_tree.add_object_top_of_tree(new_object, SDFOperation::Subtraction);
 
     // Update the tree
     tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
@@ -444,7 +444,7 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue>) {
     new_object.color = color;
     let uuid = new_object.uuid;
 
-    sdf_object_tree.add_object(new_object, SDFOperation::Exclusion);
+    sdf_object_tree.add_object_top_of_tree(new_object, SDFOperation::Subtraction);
 
     // Update the tree
     tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));

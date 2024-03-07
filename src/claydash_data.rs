@@ -353,6 +353,7 @@ fn sync_to_bevy(
             material.sdf_meta[0].w = TYPE_END;
 
             let mut sdf_object_tree = data.tree.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
+
             let sdf_operations = sdf_object_tree.get_vec_sdf_operation();
 
             let mut sdf_object_counter = 0;
@@ -361,6 +362,32 @@ fn sync_to_bevy(
                 let lhs = &operation.lhs;
                 let rhs = &operation.rhs;
 
+                match operation.operation {
+                    SDFOperation::Union => {
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_UNION;
+                    },
+                    SDFOperation::Subtraction => {
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_SUBTRACTION;
+                    },
+                    SDFOperation::Intersection => {
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_INTERSECTION;
+                    },
+                    SDFOperation::UseLhsAsIs => {
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_AS_IS;
+                    },
+                    SDFOperation::UseRhsAsIs => {
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_AS_IS;
+                    },
+                    SDFOperation::UseLhsRelativeIndex => {
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_RELATIVE_INDEX;
+                    },
+                    SDFOperation::UseRhsRelativeIndex => {
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_RELATIVE_INDEX;
+                    },
+                    _ => {
+                        panic!("Unhandled operation {}.", "operation");
+                    }
+                }
 
                 match lhs {
                     SDFOperationEntryOperand::SDFObject(object) => {
@@ -375,13 +402,18 @@ fn sync_to_bevy(
                             material.sdf_colors[sdf_object_counter] = object.color;
                             material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
 
-                            println!("object: {} {}", sdf_object_counter, object.uuid);
+                            println!("sdf object: {} {} {} {}", sdf_operation_counter, operation.operation, 0, object.uuid);
+                            material.sdf_operations[sdf_operation_counter].x = 0;
+                            material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
                             sdf_object_counter += 1;
+
+                            continue;
                         }
                     },
                     SDFOperationEntryOperand::RelativeIndex(relative_index) => {
                         println!("index: {}", relative_index);
-                    }
+                    },
+                    _ => {}
                 }
 
                 // same for rhs now
@@ -398,62 +430,44 @@ fn sync_to_bevy(
                             material.sdf_colors[sdf_object_counter] = object.color;
                             material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
 
-                            println!("object: {} {}", sdf_object_counter, object.uuid);
+                            println!("sdf object: {} {} {} {}", sdf_operation_counter, operation.operation, 0, object.uuid);
+                            material.sdf_operations[sdf_operation_counter].y = 0;
+                            material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
                             sdf_object_counter += 1;
+                            continue;
                         }
                     },
                     SDFOperationEntryOperand::RelativeIndex(relative_index) => {
                         println!("index: {}", relative_index);
-                    }
-                }
-
-                match operation.operation {
-                    SDFOperation::Union => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_UNION;
                     },
-                    SDFOperation::Exclusion => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_EXCLUSION;
-                    },
-                    SDFOperation::Intersection => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_INTERSECTION;
-                    },
-                    SDFOperation::UseLhsAsIs => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_AS_IS;
-                    },
-                    SDFOperation::UseRhsAsIs => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_AS_IS;
-                    },
-                    _ => {
-                        panic!("Unhandled operation {}.", "operation");
-                    }
+                    _ => {}
                 }
 
                 // w: operation type
                 // x: lhs index
                 // y: rhs index
                 // z: unused
-                let lhs_index = match operation.lhs {
-                    SDFOperationEntryOperand::SDFObject(_) => {
-                        // This is a no-op
-                        0
+                let lhs_relative_index = match &operation.lhs {
+                    SDFOperationEntryOperand::SDFObject(object) => {
+                        println!("object index {}", operation.operation);
+                        object.index
                     },
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
+                    _ => -1000
                 };
-                material.sdf_operations[sdf_operation_counter].x = lhs_index;
-                let rhs_index = match operation.rhs {
-                    SDFOperationEntryOperand::SDFObject(_) => {
-                        // This is a no-op
-                        0
+                material.sdf_operations[sdf_operation_counter].x = lhs_relative_index;
+                let rhs_relative_index = match &operation.rhs {
+                    SDFOperationEntryOperand::SDFObject(object) => {
+                        println!("object index {}", operation.operation);
+                        object.index
                     },
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
+                    _ => -1000
                 };
-                material.sdf_operations[sdf_operation_counter].y = rhs_index;
+                material.sdf_operations[sdf_operation_counter].y = rhs_relative_index;
+                println!("operation: {} {} {} {}", sdf_operation_counter, operation.operation,  lhs_relative_index, rhs_relative_index);
                 material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
-                println!("operation: {} {} {} {}", sdf_operation_counter, operation.operation,  lhs_index, rhs_index);
             }
-
-            material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
-            println!("sdf_object_counter: {}", sdf_object_counter);
         }
 
         *last_updated_version = version;

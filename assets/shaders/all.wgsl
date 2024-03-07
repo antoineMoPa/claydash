@@ -45,10 +45,12 @@ const TYPE_SPHERE: i32 = #{TYPE_SPHERE};
 const TYPE_BOX: i32 = #{TYPE_BOX};
 
 const OPERATION_UNION: i32 = #{OPERATION_UNION};
-const OPERATION_EXCLUSION: i32 = #{OPERATION_EXCLUSION};
+const OPERATION_SUBTRACTION: i32 = #{OPERATION_SUBTRACTION};
 const OPERATION_INTERSECTION: i32 = #{OPERATION_INTERSECTION};
 const OPERATION_USE_LHS_AS_IS: i32 = #{OPERATION_USE_LHS_AS_IS};
 const OPERATION_USE_RHS_AS_IS: i32 = #{OPERATION_USE_LHS_AS_IS};
+const OPERATION_USE_LHS_RELATIVE_INDEX: i32 = #{OPERATION_USE_LHS_RELATIVE_INDEX};
+const OPERATION_USE_RHS_RELATIVE_INDEX: i32 = #{OPERATION_USE_RHS_RELATIVE_INDEX};
 const OPERATION_END: i32 = #{OPERATION_END};
 
 const FAR_DIST = 100.0;
@@ -154,6 +156,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     var object_color = vec4(0.0, 0.0, 0.0, 1.0);
     var found = false;
     var closest = 0;
+    var ghost = false;
 
     // Array of previous distances
     var operations_results = array<f32, #{MAX_OPERATION_RESULTS}>();
@@ -175,6 +178,10 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             operations_results[op_index] = d_current_object;
+
+            if (d_current_object < CLOSE_DIST) {
+                ghost = true;
+            }
         }
 
         // Loop through all operations (starting at the last object index + 1)
@@ -183,6 +190,25 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         var op = op_entry.w;
 
         while (op_index < #{MAX_OPERATION_RESULTS} && op != OPERATION_END) {
+            if (op == #{OPERATION_USE_LHS_AS_IS}) {
+                result = operations_results[op_entry.x];
+                operations_results[op_index] = result;
+                op_index += 1;
+                op_entry = sdf_operations[op_index];
+                op = op_entry.w;
+
+                continue;
+            }
+            if (op == #{OPERATION_USE_RHS_AS_IS}) {
+                result = operations_results[op_entry.y];
+                operations_results[op_index] = result;
+                op_index += 1;
+                op_entry = sdf_operations[op_index];
+                op = op_entry.w;
+
+                continue;
+            }
+
             var lhs_relative_index = op_entry.x;
             var rhs_relative_index = op_entry.y;
 
@@ -192,20 +218,20 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             if (op == #{OPERATION_UNION}) {
                 result = min(lhs_distance, rhs_distance);
             }
-            else if (op == #{OPERATION_EXCLUSION}) {
-                result = max(lhs_distance, -rhs_distance);
+            else if (op == #{OPERATION_SUBTRACTION}) {
+                result = max(-lhs_distance, rhs_distance);
             }
             else if (op == #{OPERATION_INTERSECTION}) {
                 result= max(lhs_distance, rhs_distance);
             }
-            else if (op == #{OPERATION_USE_LHS_AS_IS}) {
+            else if (op == #{OPERATION_USE_LHS_RELATIVE_INDEX}) {
                 result = lhs_distance;
             }
-            else if (op == #{OPERATION_USE_RHS_AS_IS}) {
+            else if (op == #{OPERATION_USE_RHS_RELATIVE_INDEX}) {
                 result = rhs_distance;
             } else {
                 // Something is wrong
-                return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+                return vec4<f32>(1.0, 0.6, 0.0, 1.0);
             }
 
             operations_results[op_index] = result;
@@ -223,7 +249,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             // We are probably past the object.
             // Note that this will not always be true: ex.: for big landscape ground objects.
             // But for now it's a valuable optimization.
-            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            //return vec4<f32>(0.0, 0.0, 0.0, 0.0);
         }
 
         if (d < CLOSE_DIST) {
@@ -263,6 +289,10 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         let ambiant_light = 0.3;
         col += ambiant_light * vec4(object_color.rgb, 1.0);// - ao_light * vec4(0.01);
         col.a = 1.0;
+    }
+
+    if (ghost) {
+        col += vec4(1.0) * 0.2;
     }
 
     let control_points = render_control_points(mesh);
