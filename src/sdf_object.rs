@@ -204,6 +204,55 @@ pub enum SDFTreeNode {
     None,
 }
 
+impl SDFTreeNode {
+    pub fn is_none(&self) -> bool {
+        match self {
+            SDFTreeNode::None => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_uuid_a_direct_child_of_node(&self, uuid: uuid::Uuid) -> bool {
+        match &self {
+            SDFTreeNode::SDFObject(object) => {
+                if object.uuid == uuid {
+                    return true;
+                }
+            },
+            _ => { }
+        }
+        return false;
+    }
+
+    pub fn get_first_child(&self) -> &SDFObject {
+        match self {
+            SDFTreeNode::SDFObjectTree(tree) => {
+                return tree.get_first_child();
+            },
+            SDFTreeNode::SDFObject(object) => {
+                return object;
+            },
+            _ => {
+                panic!("No children in the tree");
+            }
+        }
+    }
+
+    pub fn len(&self) -> i32 {
+        match self {
+            SDFTreeNode::SDFObjectTree(tree) => {
+                return tree.len();
+            },
+            SDFTreeNode::SDFObject(_) => {
+                return 1;
+            },
+            _ => {
+                return 0;
+            }
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum SDFOperationEntryOperand {
     SDFObject(SDFObject),
@@ -232,8 +281,49 @@ pub struct SDFObjectTree {
     operation: SDFOperation,
 }
 
-
 impl SDFObjectTree {
+    pub fn is_empty(&self) -> bool {
+        self.lhs.is_none() && self.rhs.is_none()
+    }
+
+    pub fn len(&self) -> i32 {
+        let mut len = 0;
+
+        match &self.lhs {
+            SDFTreeNode::SDFObjectTree(tree) => {
+                len += tree.len();
+            },
+            SDFTreeNode::SDFObject(_) => {
+                len += 1;
+            },
+            _ => {}
+        }
+
+        match &self.rhs {
+            SDFTreeNode::SDFObjectTree(tree) => {
+                len += tree.len();
+            },
+            SDFTreeNode::SDFObject(_) => {
+                len += 1;
+            },
+            _ => {}
+        }
+
+        return len;
+    }
+
+    pub fn get_first_child(&self) -> &SDFObject {
+        if !self.lhs.is_none() {
+            return &self.lhs.get_first_child();
+        }
+
+        if !self.rhs.is_none() {
+            return &self.rhs.get_first_child();
+        }
+
+        panic!("No children in the tree");
+    }
+
     pub fn get_vec_sdf_object(&self) -> Vec<SDFObject> {
         let mut lhs: Vec<SDFObject> = match &self.lhs {
             SDFTreeNode::SDFObject(object) => {
@@ -296,28 +386,45 @@ impl SDFObjectTree {
     }
 
     pub fn remove_object_with_uuid(&mut self, uuid: uuid::Uuid) {
+        if self.lhs.is_uuid_a_direct_child_of_node(uuid) {
+            self.lhs = SDFTreeNode::None;
+            self.operation = SDFOperation::UseRhsAsIs;
+        }
+
+        if self.rhs.is_uuid_a_direct_child_of_node(uuid) {
+            self.rhs = SDFTreeNode::None;
+            self.operation = SDFOperation::UseLhsAsIs;
+        }
+
         match &mut self.lhs {
-            SDFTreeNode::SDFObject(object) => {
-                if object.uuid == uuid {
-                    self.lhs = SDFTreeNode::None;
-                }
-            },
             SDFTreeNode::SDFObjectTree(tree) => {
                 tree.remove_object_with_uuid(uuid);
+
+                if tree.is_empty() {
+                    self.operation = SDFOperation::UseRhsAsIs;
+                }
             },
             _ => {}
         }
 
         match &mut self.rhs {
-            SDFTreeNode::SDFObject(object) => {
-                if object.uuid == uuid {
-                    self.rhs = SDFTreeNode::None;
-                }
-            },
             SDFTreeNode::SDFObjectTree(tree) => {
                 tree.remove_object_with_uuid(uuid);
+
+                if tree.is_empty() {
+                    self.operation = SDFOperation::UseLhsAsIs;
+                }
             },
             _ => {}
+        }
+
+        if self.lhs.len() == 1 && self.rhs.len() == 1 {
+            self.lhs = SDFTreeNode::SDFObject(self.lhs.get_first_child().clone());
+            self.rhs = SDFTreeNode::SDFObject(self.rhs.get_first_child().clone());
+        }
+
+        if self.is_empty() {
+            self.operation = SDFOperation::End;
         }
     }
 

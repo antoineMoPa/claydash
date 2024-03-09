@@ -399,7 +399,7 @@ fn delete(tree: &mut ObservableKVTree<ClaydashValue>) {
     }
 
     tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(Vec::new()));
-    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(SDFObjectTree::default()));
+    tree.set_path("scene.sdf_object_tree", ClaydashValue::SDFObjectTree(sdf_object_tree));
 }
 
 fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {

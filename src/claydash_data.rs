@@ -373,10 +373,10 @@ fn sync_to_bevy(
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_INTERSECTION;
                     },
                     SDFOperation::UseLhsAsIs => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_AS_IS;
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_RELATIVE_INDEX;
                     },
                     SDFOperation::UseRhsAsIs => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_AS_IS;
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_RELATIVE_INDEX;
                     },
                     SDFOperation::UseLhsRelativeIndex => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_RELATIVE_INDEX;
@@ -384,9 +384,9 @@ fn sync_to_bevy(
                     SDFOperation::UseRhsRelativeIndex => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_RELATIVE_INDEX;
                     },
-                    _ => {
-                        panic!("Unhandled operation {}.", "operation");
-                    }
+                    SDFOperation::End => {
+                        material.sdf_operations[sdf_operation_counter].w = OPERATION_END;
+                    },
                 }
 
                 match lhs {
