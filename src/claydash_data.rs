@@ -402,16 +402,20 @@ fn sync_to_bevy(
                             material.sdf_colors[sdf_object_counter] = object.color;
                             material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
 
-                            println!("sdf object: {} {} {} {}", sdf_operation_counter, operation.operation, 0, object.uuid);
+                            println!("lhs sdf object: {} {} {} {} {}",
+                                     sdf_operation_counter,
+                                     operation.operation,
+                                     0,
+                                     object.uuid,
+                                     object.object_type
+                            );
                             material.sdf_operations[sdf_operation_counter].x = 0;
                             material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
+                            material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
                             sdf_object_counter += 1;
 
                             continue;
                         }
-                    },
-                    SDFOperationEntryOperand::RelativeIndex(relative_index) => {
-                        println!("index: {}", relative_index);
                     },
                     _ => {}
                 }
@@ -430,15 +434,19 @@ fn sync_to_bevy(
                             material.sdf_colors[sdf_object_counter] = object.color;
                             material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
 
-                            println!("sdf object: {} {} {} {}", sdf_operation_counter, operation.operation, 0, object.uuid);
+                            println!("rhs sdf object: {} {} {} {} {}",
+                                     sdf_operation_counter,
+                                     operation.operation,
+                                     0,
+                                     object.uuid,
+                                     object.object_type
+                            );
                             material.sdf_operations[sdf_operation_counter].y = 0;
                             material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
+                            material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
                             sdf_object_counter += 1;
                             continue;
                         }
-                    },
-                    SDFOperationEntryOperand::RelativeIndex(relative_index) => {
-                        println!("index: {}", relative_index);
                     },
                     _ => {}
                 }
@@ -447,25 +455,35 @@ fn sync_to_bevy(
                 // x: lhs index
                 // y: rhs index
                 // z: unused
+                let offset = sdf_operation_counter as i32;
                 let lhs_relative_index = match &operation.lhs {
                     SDFOperationEntryOperand::SDFObject(object) => {
-                        println!("object index {}", operation.operation);
-                        object.index
+                        object.index - offset
                     },
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
-                    _ => -1000
+                    _ => 0
                 };
                 material.sdf_operations[sdf_operation_counter].x = lhs_relative_index;
                 let rhs_relative_index = match &operation.rhs {
                     SDFOperationEntryOperand::SDFObject(object) => {
-                        println!("object index {}", operation.operation);
-                        object.index
+                        object.index - offset
                     },
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
-                    _ => -1000
+                    _ => 0
                 };
                 material.sdf_operations[sdf_operation_counter].y = rhs_relative_index;
-                println!("operation: {} {} {} {}", sdf_operation_counter, operation.operation,  lhs_relative_index, rhs_relative_index);
+                println!("operation: {} {} {} {} ({} {})",
+                         sdf_operation_counter,
+                         operation.operation,
+                         lhs_relative_index,
+                         rhs_relative_index,
+                         sdf_operations[
+                             ((sdf_operation_counter as i32) + lhs_relative_index) as usize
+                         ].operation,
+                         sdf_operations[
+                             ((sdf_operation_counter as i32) + rhs_relative_index) as usize
+                         ].operation
+                );
                 material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
             }
         }
@@ -521,4 +539,21 @@ fn show_control_points(material: &mut SDFObjectMaterial, index: usize, object: &
     }
 
     material.num_control_points[0] = num_control_points;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_duck() {
+        let duck: ObservableKVTree<ClaydashValue> =
+            serde_json::from_str(include_str!("../test_data/duck.json")).unwrap();
+
+        let sdf_operation = duck.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default().get_vec_sdf_operation();
+
+
+        // There should be 10 operations + 11 objects
+        assert_eq!(sdf_operation.len(), 10 + 11);
+    }
 }

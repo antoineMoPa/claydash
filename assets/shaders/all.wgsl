@@ -190,25 +190,6 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         var op = op_entry.w;
 
         while (op_index < #{MAX_OPERATION_RESULTS} && op != OPERATION_END) {
-            if (op == #{OPERATION_USE_LHS_AS_IS}) {
-                result = operations_results[op_entry.x];
-                operations_results[op_index] = result;
-                op_index += 1;
-                op_entry = sdf_operations[op_index];
-                op = op_entry.w;
-
-                continue;
-            }
-            if (op == #{OPERATION_USE_RHS_AS_IS}) {
-                result = operations_results[op_entry.y];
-                operations_results[op_index] = result;
-                op_index += 1;
-                op_entry = sdf_operations[op_index];
-                op = op_entry.w;
-
-                continue;
-            }
-
             var lhs_relative_index = op_entry.x;
             var rhs_relative_index = op_entry.y;
 
@@ -219,7 +200,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
                 result = min(lhs_distance, rhs_distance);
             }
             else if (op == #{OPERATION_SUBTRACTION}) {
-                result = max(-lhs_distance, rhs_distance);
+                result = max(lhs_distance, -rhs_distance);
             }
             else if (op == #{OPERATION_INTERSECTION}) {
                 result= max(lhs_distance, rhs_distance);
@@ -231,7 +212,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
                 result = rhs_distance;
             } else {
                 // Something is wrong
-                return vec4<f32>(1.0, 0.6, 0.0, 1.0);
+                return vec4<f32>(1.0, 0.0, 0.0, 1.0);
             }
 
             operations_results[op_index] = result;

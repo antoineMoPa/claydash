@@ -168,7 +168,7 @@ pub struct SDFObject {
     pub index: i32,
 }
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub enum SDFOperation {
     #[default]
     Union,
@@ -345,12 +345,8 @@ impl SDFObjectTree {
     pub fn recur_get_vec_sdf_operation(&self) -> Vec<SDFOperationListEntry> {
 
         let mut lhs: Vec<SDFOperationListEntry> = match &self.lhs {
-            SDFTreeNode::SDFObject(object) => {
-                vec!(SDFOperationListEntry {
-                    lhs: SDFOperationEntryOperand::SDFObject(object.clone()),
-                    rhs: SDFOperationEntryOperand::None,
-                    operation: SDFOperation::UseLhsAsIs,
-                })
+            SDFTreeNode::SDFObject(_object) => {
+                vec!()
             },
             SDFTreeNode::SDFObjectTree(tree) => {
                 tree.recur_get_vec_sdf_operation()
@@ -361,13 +357,8 @@ impl SDFObjectTree {
         };
 
         let mut rhs: Vec<SDFOperationListEntry> = match &self.rhs {
-            SDFTreeNode::SDFObject(object) => {
-                println!("Adding object with index: {}", object.index);
-                vec!(SDFOperationListEntry {
-                    lhs: SDFOperationEntryOperand::None,
-                    rhs: SDFOperationEntryOperand::SDFObject(object.clone()),
-                    operation: SDFOperation::UseRhsAsIs,
-                })
+            SDFTreeNode::SDFObject(_object) => {
+                vec!()
             },
             SDFTreeNode::SDFObjectTree(tree) => {
                 tree.recur_get_vec_sdf_operation()
@@ -375,7 +366,6 @@ impl SDFObjectTree {
             _ => {
                 vec!()
             }
-
         };
 
         // decrement the relative indices of lhs, since they will be behind the rhs
@@ -385,28 +375,39 @@ impl SDFObjectTree {
                 SDFOperationEntryOperand::RelativeIndex(index) => {
                     *index -= rhs_length;
                 },
-                SDFOperationEntryOperand::SDFObject(_object) => {
-                },
-                _ => {}
-            }
-            match &mut entry.rhs {
-                SDFOperationEntryOperand::RelativeIndex(index) => {
-                    *index -= rhs_length;
-                },
-                SDFOperationEntryOperand::SDFObject(_object) => {
-                },
                 _ => {}
             }
         }
 
         lhs.append(&mut rhs);
 
+
+        let new_lhs: SDFOperationEntryOperand = match &self.lhs {
+            SDFTreeNode::SDFObject(object) => {
+                SDFOperationEntryOperand::SDFObject(object.clone())
+            },
+            SDFTreeNode::SDFObjectTree(_tree) => {
+                SDFOperationEntryOperand::RelativeIndex(-rhs_length - 1)
+            },
+            _ => { SDFOperationEntryOperand::None }
+        };
+
+        let new_rhs: SDFOperationEntryOperand = match &self.rhs {
+            SDFTreeNode::SDFObject(object) => {
+                SDFOperationEntryOperand::SDFObject(object.clone())
+            },
+            SDFTreeNode::SDFObjectTree(_tree) => {
+                SDFOperationEntryOperand::RelativeIndex(-1)
+            },
+            _ => { SDFOperationEntryOperand::None }
+        };
+
         // Combine both parts of the tree.
         // The lhs and rhs refer to the relative position
         // of the last rhs and lhs values.
         lhs.push(SDFOperationListEntry {
-            lhs: SDFOperationEntryOperand::RelativeIndex(-rhs_length - 1),
-            rhs: SDFOperationEntryOperand::RelativeIndex(-1),
+            lhs: new_lhs,
+            rhs: new_rhs,
             operation: self.operation.clone(),
         });
 
@@ -821,65 +822,36 @@ mod tests {
 
         let vec = tree.get_vec_sdf_operation();
 
-        // We should have 3 objects + 5 operations in the vec.
-        assert_eq!(vec.len(), 8);
-
-        // First 3 operations should be sdf objects
-        match vec[0].lhs {
-            SDFOperationEntryOperand::SDFObject(_) => {},
-            _ => panic!("Expected SDFObject")
-        }
-        match vec[1].lhs {
-            SDFOperationEntryOperand::SDFObject(_) => {},
-            _ => panic!("Expected SDFObject")
-        }
-        match vec[2].lhs {
-            SDFOperationEntryOperand::SDFObject(_) => {},
-            _ => panic!("Expected SDFObject")
-        }
-
-        // After the list of objects begin the actual operations.
+        // 5 operations in the vec.
+        assert_eq!(vec.len(), 5);
 
         // object 1 as is
-        assert_lhs_operand_points_to_uuid(&vec, 3, object_1.uuid);
+        assert_lhs_operand_points_to_uuid(&vec, 0, object_1.uuid);
 
         // object 2 as is
-        assert_lhs_operand_points_to_uuid(&vec, 4, object_2.uuid);
-
-        // intersection of object 1 and object 2
-        match vec[5].operation {
-            SDFOperation::Intersection => {},
-            _ => panic!("Expected Intersection, received {}", vec[5].operation)
-        }
-        assert_lhs_operand_points_to_uuid(&vec, 5, object_1.uuid);
-        assert_rhs_operand_points_to_uuid(&vec, 5, object_2.uuid);
+        assert_lhs_operand_points_to_uuid(&vec, 1, object_2.uuid);
 
         // object 3 as is
-        assert_lhs_operand_points_to_uuid(&vec, 6, object_3.uuid);
+        assert_lhs_operand_points_to_uuid(&vec, 2, object_3.uuid);
+
+        // intersection of object 1 and object 2
+        match vec[3].operation {
+            SDFOperation::Intersection => {},
+            _ => panic!("Expected Intersection, received {}", vec[3].operation)
+        }
+        assert_lhs_operand_points_to_uuid(&vec, 3, object_1.uuid);
+        assert_rhs_operand_points_to_uuid(&vec, 3, object_2.uuid);
 
         // union of intersection and object 3
-        match vec[7].operation {
-            SDFOperation::Union => {},
-            _ => panic!("Expected Union, received {}", vec[7].operation)
-        }
+        assert_eq!(vec[4].operation, SDFOperation::Union);
+
         // Check lhs, should point to the intersection
-        match vec[7].lhs {
-            SDFOperationEntryOperand::RelativeIndex(relative_index) => {
-                let op = &vec[(7 + relative_index) as usize].operation;
-                match op {
-                    SDFOperation::Intersection => {},
-                    _ => panic!("Expected Intersection, received {}", op)
-                }
-                assert_eq!(relative_index, -2);
-            },
-            _ => panic!("Expected RelativeIndex")
+        match vec[4].lhs {
+             SDFOperationEntryOperand::RelativeIndex(relative_index) => {
+                 assert_eq!(relative_index, -1);
+             },
+             _ => panic!("Expected RelativeIndex")
         }
-        // Check rhs, should point to object 3
-        match vec[7].rhs {
-            SDFOperationEntryOperand::RelativeIndex(index) => {
-                assert_eq!(index, -1);
-            },
-            _ => panic!("Expected RelativeIndex")
-        }
+        assert_rhs_operand_points_to_uuid(&vec, 4, object_3.uuid);
     }
 }
