@@ -556,4 +556,23 @@ mod tests {
         // There should be 10 operations + 11 objects
         assert_eq!(sdf_operation.len(), 10 + 11);
     }
+
+    #[test]
+    fn test_delete_all_objects() {
+        let duck: ObservableKVTree<ClaydashValue> =
+            serde_json::from_str(include_str!("../test_data/duck.json")).unwrap();
+
+        let mut tree = duck.get_path("scene.sdf_object_tree").unwrap_sdf_object_tree_or_default();
+
+        let sdf_objects = tree.get_vec_sdf_object();
+
+        for sdf_object in sdf_objects {
+            tree.remove_object_with_uuid(sdf_object.uuid);
+        }
+
+        let sdf_objects = tree.get_vec_sdf_object();
+
+        // There should be 10 operations + 11 objects
+        assert_eq!(sdf_objects.len(), 0);
+    }
 }
