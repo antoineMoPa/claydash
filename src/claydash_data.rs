@@ -401,14 +401,6 @@ fn sync_to_bevy(
                             material.sdf_meta[sdf_object_counter].w = object.object_type;
                             material.sdf_colors[sdf_object_counter] = object.color;
                             material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
-
-                            println!("lhs sdf object: {} {} {} {} {}",
-                                     sdf_operation_counter,
-                                     operation.operation,
-                                     0,
-                                     object.uuid,
-                                     object.object_type
-                            );
                             material.sdf_operations[sdf_operation_counter].x = 0;
                             material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
                             material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
@@ -434,13 +426,6 @@ fn sync_to_bevy(
                             material.sdf_colors[sdf_object_counter] = object.color;
                             material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
 
-                            println!("rhs sdf object: {} {} {} {} {}",
-                                     sdf_operation_counter,
-                                     operation.operation,
-                                     0,
-                                     object.uuid,
-                                     object.object_type
-                            );
                             material.sdf_operations[sdf_operation_counter].y = 0;
                             material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
                             material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
@@ -472,18 +457,6 @@ fn sync_to_bevy(
                     _ => 0
                 };
                 material.sdf_operations[sdf_operation_counter].y = rhs_relative_index;
-                println!("operation: {} {} {} {} ({} {})",
-                         sdf_operation_counter,
-                         operation.operation,
-                         lhs_relative_index,
-                         rhs_relative_index,
-                         sdf_operations[
-                             ((sdf_operation_counter as i32) + lhs_relative_index) as usize
-                         ].operation,
-                         sdf_operations[
-                             ((sdf_operation_counter as i32) + rhs_relative_index) as usize
-                         ].operation
-                );
                 material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
             }
         }

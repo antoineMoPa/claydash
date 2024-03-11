@@ -196,24 +196,19 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             var lhs_distance = operations_results[op_index + lhs_relative_index];
             var rhs_distance = operations_results[op_index + rhs_relative_index];
 
-            if (op == #{OPERATION_UNION}) {
-                result = min(lhs_distance, rhs_distance);
-            }
-            else if (op == #{OPERATION_SUBTRACTION}) {
-                result = max(lhs_distance, -rhs_distance);
-            }
-            else if (op == #{OPERATION_INTERSECTION}) {
-                result= max(lhs_distance, rhs_distance);
-            }
-            else if (op == #{OPERATION_USE_LHS_RELATIVE_INDEX}) {
-                result = lhs_distance;
-            }
-            else if (op == #{OPERATION_USE_RHS_RELATIVE_INDEX}) {
-                result = rhs_distance;
-            } else {
-                // Something is wrong
-                return vec4<f32>(1.0, 0.0, 0.0, 1.0);
-            }
+            let op_union = min(lhs_distance, rhs_distance);
+            let op_subtraction = max(lhs_distance, -rhs_distance);
+            let op_intersection = max(lhs_distance, rhs_distance);
+            let op_use_lhs_relative_index = lhs_distance;
+            let op_use_rhs_relative_index = rhs_distance;
+
+            result *= 0.0;
+
+            result += op_union * f32(op == OPERATION_UNION);
+            result += op_subtraction * f32(op == OPERATION_SUBTRACTION);
+            result += op_intersection * f32(op == OPERATION_INTERSECTION);
+            result += op_use_lhs_relative_index * f32(op == OPERATION_USE_LHS_RELATIVE_INDEX);
+            result += op_use_rhs_relative_index * f32(op == OPERATION_USE_RHS_RELATIVE_INDEX);
 
             operations_results[op_index] = result;
 
@@ -224,7 +219,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
         d = result;
 
-        p += camera_ray * d * 0.95;
+        p += camera_ray * d * 0.99;
 
         if (abs(d) > FAR_DIST) {
             // We are probably past the object.
