@@ -1,6 +1,6 @@
 use bevy::{
     prelude::*,
-    input::{keyboard::KeyCode, Input},
+    input::{keyboard::KeyCode, ButtonInput},
 };
 use bevy_mod_picking::{backend::HitData, prelude::*};
 use crate::{claydash_data::get_active_object_index, sdf_object::SDFObjectTree};
@@ -79,7 +79,7 @@ fn update_control_points_text(
                                 color: Color::rgb(0.8, 0.8, 0.8),
                             },
                         )
-                            .with_text_alignment(TextAlignment::Center)
+                            .with_text_justify(JustifyText::Center)
                             .with_background_color(Color::rgba(0.3, 0.3, 0.3, 0.5))
                             .with_style(Style {
                                 position_type: PositionType::Absolute,
@@ -399,7 +399,7 @@ fn get_object_angle_relative_to_camera_ray(
 /// Also, handle reseting state on click after transforming objects.
 pub fn on_mouse_down(
     event: Listener<Pointer<Down>>,
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut data_resource: ResMut<ClaydashData>,
     camera_transforms: Query<&mut Transform, With<Camera>>,
 ) {

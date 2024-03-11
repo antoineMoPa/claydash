@@ -1,4 +1,4 @@
-use bevy_reflect::{TypePath,TypeUuid};
+use bevy_reflect::{TypePath};
 use bevy::{
     prelude::*,
     pbr::{
@@ -382,7 +382,7 @@ impl SDFObjectTree {
 
         lhs.append(&mut rhs);
 
-        return lhs;
+        return lhs
     }
 
     pub fn remove_object_with_uuid(&mut self, uuid: uuid::Uuid) {
@@ -694,8 +694,7 @@ impl Default for SDFObject {
 /// SDFObjectMaterial
 /// This material uses our raymarching shader to display SDF objects.
 // TODO: move to strorage buffers once chrome supports it.
-#[derive(Asset, TypeUuid, TypePath, AsBindGroup, Clone)]
-#[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
 #[repr(C,align(16))]
 pub struct SDFObjectMaterial {
     #[uniform(0)]

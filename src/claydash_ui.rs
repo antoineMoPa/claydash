@@ -282,7 +282,7 @@ fn draw_color_picker(
                 Color32::from_rgba_unmultiplied(r, g, b, a),
                 Stroke {
                     width: 2.0,
-                    color: Color32::BLACK,
+                    color: epaint::Color32::BLACK
                 }
             );
     }

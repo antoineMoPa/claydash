@@ -1,37 +1,37 @@
 #import bevy_pbr::forward_io::VertexOutput;
 #import bevy_pbr::mesh_view_bindings globals
 
-@group(1) @binding(0)
+@group(2) @binding(0)
 var<uniform> camera: vec4<f32>;
-@group(1) @binding(1)
+@group(2) @binding(1)
 var<uniform> camera_right: vec4<f32>;
-@group(1) @binding(2)
+@group(2) @binding(2)
 var<uniform> camera_up: vec4<f32>;
 
 
-@group(1) @binding(3)
+@group(2) @binding(3)
 var<uniform> sdf_meta: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(4)
+@group(2) @binding(4)
 var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(5)
+@group(2) @binding(5)
 var<uniform> sdf_inverse_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(6)
+@group(2) @binding(6)
 var<uniform> sdf_params: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
 /// w: operation type
 /// x: lhs index
 /// y: rhs index
 /// z: unused
-@group(1) @binding(7)
+@group(2) @binding(7)
 var<uniform> sdf_operations: array<vec4<i32>, #{MAX_OPERATION_RESULTS}>;
 
-@group(1) @binding(8)
+@group(2) @binding(8)
 var<uniform> control_point_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(9)
+@group(2) @binding(9)
 var<uniform> num_control_points: vec4<i32>; // padded for alignment. number is stored in first position.
 
 const MAX_ITERATIONS = 32;

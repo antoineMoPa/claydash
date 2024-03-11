@@ -10,7 +10,7 @@ mod undo_redo;
 #[allow(unused_imports)]
 use std::fs::read_to_string;
 use command_central::CommandBuilder;
-use observable_key_value_tree::{ObservableKVTree};
+use observable_key_value_tree::ObservableKVTree;
 use smooth_bevy_cameras::{
     LookTransformPlugin,
     controllers::orbit::{
@@ -23,7 +23,7 @@ use smooth_bevy_cameras::{
 use command_central_plugin::{BevyCommandCentralPlugin, CommandCentralState};
 
 use bevy::{
-    input::{keyboard::KeyCode, Input},
+    input::{keyboard::KeyCode, ButtonInput},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     prelude::*, render::render_resource::{AsBindGroup, ShaderRef},
 };
@@ -119,9 +119,9 @@ pub fn dump_tree(tree: &mut ObservableKVTree<ClaydashValue>) {
 
 /// By default, the object bevy_mod_picking is too verbose.
 fn remove_picking_logs (
-    mut logging_next_state: ResMut<NextState<debug::DebugPickingMode>>,
+    //mut logging_next_state: ResMut<NextState<debug::DebugPickingMode>>,
 ) {
-    logging_next_state.set(debug::DebugPickingMode::Disabled);
+    //logging_next_state.set(debug::DebugPickingMode::Disabled);
 }
 
 /// Prevent using too much CPU. 60 fps should be enough. 30fps feels not so smooth.
@@ -155,9 +155,9 @@ fn setup_window_size(mut windows: Query<&mut Window>) {
 /// Keyboard input system
 /// Lept for later, currently empty.
 fn keyboard_input_system(
-    keyboard_input: Res<Input<KeyCode>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
 ) {
-    if keyboard_input.pressed(KeyCode::W) {
+    if keyboard_input.pressed(KeyCode::KeyW) {
         // todo
     }
 }
@@ -201,7 +201,7 @@ fn setup_grid(
     mut materials: ResMut<Assets<GridMaterial>>,
 ) {
     commands.spawn(MaterialMeshBundle {
-        mesh: meshes.add(Mesh::from(shape::Plane { size: 10.0, subdivisions: 0 })),
+        mesh: meshes.add(Mesh::from(Plane3d::default().mesh().size(10.0, 10.0))),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         material: materials.add(GridMaterial { }),
         ..default()
@@ -217,7 +217,11 @@ fn build_projection_surface(
     // cube
     commands.spawn((
         MaterialMeshBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 2.0 })),
+            mesh: meshes.add(Mesh::from(Cuboid { half_size: Vec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0
+            }})),
             transform: Transform {
                 translation: Vec3::ZERO,
                 scale: Vec3::ONE,
