@@ -181,6 +181,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
             if (d_current_object < CLOSE_DIST) {
                 ghost = true;
+                break;
             }
         }
 
@@ -225,7 +226,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             // We are probably past the object.
             // Note that this will not always be true: ex.: for big landscape ground objects.
             // But for now it's a valuable optimization.
-            //return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
         }
 
         if (d < CLOSE_DIST) {
