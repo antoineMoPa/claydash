@@ -365,12 +365,15 @@ fn sync_to_bevy(
                 match operation.operation {
                     SDFOperation::Union => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_UNION;
+                        material.sdf_operations_1[sdf_operation_counter].w = 1.0;
                     },
                     SDFOperation::Subtraction => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_SUBTRACTION;
+                        material.sdf_operations_1[sdf_operation_counter].x = 1.0;
                     },
                     SDFOperation::Intersection => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_INTERSECTION;
+                        material.sdf_operations_1[sdf_operation_counter].y = 1.0;
                     },
                     SDFOperation::UseLhsAsIs => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_RELATIVE_INDEX;
@@ -380,9 +383,11 @@ fn sync_to_bevy(
                     },
                     SDFOperation::UseLhsRelativeIndex => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_RELATIVE_INDEX;
+                        material.sdf_operations_1[sdf_operation_counter].z = 1.0;
                     },
                     SDFOperation::UseRhsRelativeIndex => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_RELATIVE_INDEX;
+                        material.sdf_operations_2[sdf_operation_counter].w = 1.0;
                     },
                     SDFOperation::End => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_END;

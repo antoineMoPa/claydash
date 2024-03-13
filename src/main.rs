@@ -436,8 +436,8 @@ fn setup_window_size(mut windows: Query<&mut Window>) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn setup_window_size(mut _windows: Query<&mut Window>) {
-    // Can be useful when debugging slow shaders:
-    // window.resolution.set(60.0, 60.0);
+    //let mut window = windows.single_mut();
+    //window.resolution.set(60.0, 60.0);
 }
 
 /// Keyboard input system
@@ -460,7 +460,7 @@ fn setup_camera(
             ..default()
         },
         PostProcessSettings {
-            intensity: 0.02,
+            intensity: 0.002,
             ..default()
         },
     )).insert(

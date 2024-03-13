@@ -34,10 +34,24 @@ var<uniform> control_point_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 @group(2) @binding(9)
 var<uniform> num_control_points: vec4<i32>; // padded for alignment. number is stored in first position.
 
+/// w: union
+/// x: subtraction
+/// y: intersection
+/// z: use lhs as is
+@group(2) @binding(10)
+var<uniform> sdf_operations_1: array<vec4<f32>, #{MAX_OPERATION_RESULTS}>;
+/// w: use rhs as is
+/// x: unused
+/// y: unused
+/// z: unused
+@group(2) @binding(11)
+var<uniform> sdf_operations_2: array<vec4<f32>, #{MAX_OPERATION_RESULTS}>;
 const MAX_ITERATIONS = 32;
 
-fn sdf_union(d1: f32, d2: f32) -> f32 {
-    return min(d1, d2);
+fn smin(a: f32, b: f32, input_k: f32 ) -> f32 {
+    let k = input_k * 2.0;
+    let x = b - a;
+    return 0.5 * ( a + b - sqrt(x * x + k * k));
 }
 
 const TYPE_END: i32 = #{TYPE_END};
@@ -160,6 +174,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
     // Array of previous distances
     var operations_results = array<f32, #{MAX_OPERATION_RESULTS}>();
+    var ignore_operations = array<bool, #{MAX_OPERATION_RESULTS}>();
 
     // Walk the camera_ray through the scene
     while (i < MAX_ITERATIONS) {
@@ -169,6 +184,9 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         for (;op_index < #{MAX_SDFS_PER_ENTITY}; op_index++) {
             if (sdf_meta[op_index].w == TYPE_END) {
                 break;
+            }
+            if (ignore_operations[op_index]) {
+                continue;
             }
             d_current_object = object_distance(p, op_index);
 
@@ -181,12 +199,17 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
             if (d_current_object < CLOSE_DIST) {
                 ghost = true;
+                ignore_operations[op_index] = true;
                 break;
+            }
+
+            if (d_current_object > FAR_DIST) {
+                ignore_operations[op_index] = true;
             }
         }
 
         // Loop through all operations (starting at the last object index + 1)
-        var result = 10000.0;
+        var result = 1e10;
         var op_entry = sdf_operations[op_index];
         var op = op_entry.w;
 
@@ -197,19 +220,14 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             var lhs_distance = operations_results[op_index + lhs_relative_index];
             var rhs_distance = operations_results[op_index + rhs_relative_index];
 
-            let op_union = min(lhs_distance, rhs_distance);
-            let op_subtraction = max(lhs_distance, -rhs_distance);
-            let op_intersection = max(lhs_distance, rhs_distance);
-            let op_use_lhs_relative_index = lhs_distance;
-            let op_use_rhs_relative_index = rhs_distance;
+            let op_1 = sdf_operations_1[op_index];
+            let op_2 = sdf_operations_2[op_index];
 
-            result *= 0.0;
-
-            result += op_union * f32(op == OPERATION_UNION);
-            result += op_subtraction * f32(op == OPERATION_SUBTRACTION);
-            result += op_intersection * f32(op == OPERATION_INTERSECTION);
-            result += op_use_lhs_relative_index * f32(op == OPERATION_USE_LHS_RELATIVE_INDEX);
-            result += op_use_rhs_relative_index * f32(op == OPERATION_USE_RHS_RELATIVE_INDEX);
+            result = min(lhs_distance, rhs_distance) * op_1.w;
+            result += max(lhs_distance, -rhs_distance) * op_1.x;
+            result += max(lhs_distance, rhs_distance) * op_1.y;
+            result += lhs_distance * op_1.z;
+            result += rhs_distance * op_2.w;
 
             operations_results[op_index] = result;
 
