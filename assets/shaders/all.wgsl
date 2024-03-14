@@ -174,7 +174,6 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
     // Array of previous distances
     var operations_results = array<f32, #{MAX_OPERATION_RESULTS}>();
-    var ignore_operations = array<bool, #{MAX_OPERATION_RESULTS}>();
 
     // Walk the camera_ray through the scene
     while (i < MAX_ITERATIONS) {
@@ -184,9 +183,6 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         for (;op_index < #{MAX_SDFS_PER_ENTITY}; op_index++) {
             if (sdf_meta[op_index].w == TYPE_END) {
                 break;
-            }
-            if (ignore_operations[op_index]) {
-                continue;
             }
             d_current_object = object_distance(p, op_index);
 
@@ -199,12 +195,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
             if (d_current_object < CLOSE_DIST) {
                 ghost = true;
-                ignore_operations[op_index] = true;
                 break;
-            }
-
-            if (d_current_object > FAR_DIST) {
-                ignore_operations[op_index] = true;
             }
         }
 
