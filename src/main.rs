@@ -510,9 +510,9 @@ fn build_projection_surface(
     commands.spawn((
         MaterialMeshBundle {
             mesh: meshes.add(Mesh::from(Cuboid { half_size: Vec3 {
-                x: 1.0,
-                y: 1.0,
-                z: 1.0
+                x: 0.5,
+                y: 0.5,
+                z: 0.5
             }})),
             transform: Transform {
                 translation: Vec3::ZERO,
