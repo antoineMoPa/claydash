@@ -467,6 +467,9 @@ fn sync_to_bevy(
                 material.sdf_operations[sdf_operation_counter].y = rhs_relative_index;
                 material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
             }
+
+            material.info[0].w = sdf_object_counter as i32;
+            material.info[0].x = sdf_operations.len() as i32;
         }
 
         *last_updated_version = version;
@@ -481,7 +484,7 @@ fn sync_to_bevy(
         // Reset in case no material is selected
         let handle = material_handle.single();
         let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
-        material.num_control_points[0] = 0;
+        material.info[0].y = 0; // num_control_points
 
         for (index, object) in objects.get_vec_sdf_object().iter().enumerate() {
             if uuids.contains(&object.uuid) {
@@ -519,7 +522,7 @@ fn show_control_points(material: &mut SDFObjectMaterial, index: usize, object: &
         num_control_points += 1;
     }
 
-    material.num_control_points[0] = num_control_points;
+    material.info[0].y = num_control_points;
 }
 
 #[cfg(test)]

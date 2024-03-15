@@ -721,20 +721,23 @@ pub struct SDFObjectMaterial {
     pub sdf_operations: [IVec4; MAX_SDFS_PER_ENTITY as usize],
     #[uniform(8)]
     pub control_point_positions: [Vec4; MAX_CONTROL_POINTS as usize],
-    #[uniform(9)]
-    pub num_control_points: IVec4, // Padded to respect alignment constraints. Only first value is used.
     /// w: union
     /// x: subtraction
     /// y: intersection
     /// z: use lhs as is
-    #[uniform(10)]
+    #[uniform(9)]
     pub sdf_operations_1: [Vec4; MAX_SDFS_PER_ENTITY as usize],
     /// w: use rhs as is
     /// x: unused
     /// y: unused
     /// z: unused
-    #[uniform(11)]
+    #[uniform(10)]
     pub sdf_operations_2: [Vec4; MAX_SDFS_PER_ENTITY as usize],
+    // 0 - w -> num sdf objects
+    // 0 - x -> num sdf operations
+    // 0 - y -> num control points
+    #[uniform(11)]
+    pub info: [IVec4; 1],
 }
 
 /// Compute the union of 2 distance fields.
@@ -794,7 +797,7 @@ impl Default for SDFObjectMaterial {
             sdf_operations_1: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             sdf_operations_2: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             control_point_positions: [Vec4::ZERO; MAX_CONTROL_POINTS as usize],
-            num_control_points: IVec4::ZERO,
+            info: [IVec4::ZERO; 1],
         }
     }
 }

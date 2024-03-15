@@ -31,22 +31,22 @@ var<uniform> sdf_operations: array<vec4<i32>, #{MAX_OPERATION_RESULTS}>;
 @group(2) @binding(8)
 var<uniform> control_point_positions: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(2) @binding(9)
-var<uniform> num_control_points: vec4<i32>; // padded for alignment. number is stored in first position.
-
 /// w: union
 /// x: subtraction
 /// y: intersection
 /// z: use lhs as is
-@group(2) @binding(10)
+@group(2) @binding(9)
 var<uniform> sdf_operations_1: array<vec4<f32>, #{MAX_OPERATION_RESULTS}>;
 /// w: use rhs as is
 /// x: unused
 /// y: unused
 /// z: unused
-@group(2) @binding(11)
+@group(2) @binding(10)
 var<uniform> sdf_operations_2: array<vec4<f32>, #{MAX_OPERATION_RESULTS}>;
 const MAX_ITERATIONS = 32;
+
+@group(2) @binding(11)
+var<uniform> info: array<vec4<i32>, 1>;
 
 fn smin(a: f32, b: f32, input_k: f32 ) -> f32 {
     let k = input_k * 2.0;
@@ -127,11 +127,12 @@ fn object_normal(p: vec3<f32>, sdf_index: i32) -> vec3<f32> {
 }
 
 fn render_control_points(mesh: VertexOutput) -> vec4<f32> {
+    let num_control_points = info[0].y;
     var world_position = mesh.world_position.xyz;
     var col: vec4<f32> = vec4(0.0);
     var camera_ray = normalize(world_position - camera.xyz);
 
-    for (var i: i32 = 0; i < num_control_points.x; i++) {
+    for (var i: i32 = 0; i < num_control_points; i++) {
         var control_point_position = control_point_positions[i].xyz;
         var camera_to_control_point_dist = length(control_point_position - camera.xyz);
         var position_near_control_point = camera.xyz + camera_ray * camera_to_control_point_dist;
@@ -175,15 +176,15 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     // Array of previous distances
     var operations_results = array<f32, #{MAX_OPERATION_RESULTS}>();
 
+    let sdf_object_num: i32 = info[0].w;
+    let sdf_operation_num: i32 = info[0].x;
+
     // Walk the camera_ray through the scene
     while (i < MAX_ITERATIONS) {
         var op_index: i32 = 0;
 
         // Loop through all objects
-        for (;op_index < #{MAX_SDFS_PER_ENTITY}; op_index++) {
-            if (sdf_meta[op_index].w == TYPE_END) {
-                break;
-            }
+        for (;op_index < sdf_object_num; op_index++) {
             d_current_object = object_distance(p, op_index);
 
             if (abs(d_current_object) < abs(d)) {
@@ -201,10 +202,10 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
         // Loop through all operations (starting at the last object index + 1)
         var result = 1e10;
-        var op_entry = sdf_operations[op_index];
-        var op = op_entry.w;
 
-        while (op_index < #{MAX_OPERATION_RESULTS} && op != OPERATION_END) {
+        while (op_index < sdf_operation_num) {
+            let op_entry = sdf_operations[op_index];
+            let op = op_entry.w;
             var lhs_relative_index = op_entry.x;
             var rhs_relative_index = op_entry.y;
 
@@ -223,8 +224,6 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             operations_results[op_index] = result;
 
             op_index += 1;
-            op_entry = sdf_operations[op_index];
-            op = op_entry.w;
         }
 
         d = result;
