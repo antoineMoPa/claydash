@@ -88,7 +88,7 @@ fn main() {
         .add_systems(Startup, (remove_picking_logs,
                                setup_frame_limit,
                                setup_camera,
-                               setup_window_size,
+                               setup_window,
                                build_projection_surface,
                                register_debug_commands,
                                setup_grid,
@@ -359,7 +359,7 @@ struct PostProcessSettings {
 impl Default for PostProcessSettings {
     fn default() -> Self {
         Self {
-            intensity: 0.1,
+            intensity: 0.0,
         }
     }
 }
@@ -418,7 +418,7 @@ fn setup_frame_limit(mut settings: ResMut<bevy_framepace::FramepaceSettings>) {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn setup_window_size(mut windows: Query<&mut Window>) {
+fn setup_window(mut windows: Query<&mut Window>) {
     let wasm_window = match web_sys::window() {
         Some(wasm_window) => wasm_window,
         _ => {
@@ -435,9 +435,9 @@ fn setup_window_size(mut windows: Query<&mut Window>) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn setup_window_size(mut _windows: Query<&mut Window>) {
-    //let mut window = windows.single_mut();
-    //window.resolution.set(60.0, 60.0);
+fn setup_window(mut windows: Query<&mut Window>) {
+    let mut window = windows.single_mut();
+    window.title = "Claydash".to_string();
 }
 
 /// Keyboard input system
@@ -510,9 +510,9 @@ fn build_projection_surface(
     commands.spawn((
         MaterialMeshBundle {
             mesh: meshes.add(Mesh::from(Cuboid { half_size: Vec3 {
-                x: 0.5,
-                y: 0.5,
-                z: 0.5
+                x: 0.7,
+                y: 0.7,
+                z: 0.7
             }})),
             transform: Transform {
                 translation: Vec3::ZERO,
