@@ -359,6 +359,9 @@ fn sync_to_bevy(
             let mut sdf_object_counter = 0;
 
             for (sdf_operation_counter, operation) in sdf_operations.iter().enumerate() {
+                material.sdf_operations[sdf_operation_counter] = IVec4::ZERO;
+                material.sdf_operations_1[sdf_operation_counter] = Vec4::ZERO;
+                material.sdf_operations_2[sdf_operation_counter] = Vec4::ZERO;
                 let lhs = &operation.lhs;
                 let rhs = &operation.rhs;
 
