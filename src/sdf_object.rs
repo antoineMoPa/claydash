@@ -724,10 +724,10 @@ pub struct SDFObjectMaterial {
     /// w: union
     /// x: subtraction
     /// y: intersection
-    /// z: use lhs as is
+    /// z: use lhs relative index
     #[uniform(9)]
     pub sdf_operations_1: [Vec4; MAX_SDFS_PER_ENTITY as usize],
-    /// w: use rhs as is
+    /// w: use rhs relative index
     /// x: unused
     /// y: unused
     /// z: unused

@@ -379,10 +379,10 @@ fn sync_to_bevy(
                         material.sdf_operations_1[sdf_operation_counter].y = 1.0;
                     },
                     SDFOperation::UseLhsAsIs => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_RELATIVE_INDEX;
+                        // no-op
                     },
                     SDFOperation::UseRhsAsIs => {
-                        material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_RHS_RELATIVE_INDEX;
+                        // no-op
                     },
                     SDFOperation::UseLhsRelativeIndex => {
                         material.sdf_operations[sdf_operation_counter].w = OPERATION_USE_LHS_RELATIVE_INDEX;

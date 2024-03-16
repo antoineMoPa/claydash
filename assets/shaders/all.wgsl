@@ -196,7 +196,6 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
             if (d_current_object < CLOSE_DIST) {
                 ghost = true;
-                //break;
             }
         }
 
@@ -206,11 +205,11 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         while (op_index < sdf_operation_num) {
             let op_entry = sdf_operations[op_index];
             let op = op_entry.w;
-            var lhs_relative_index = op_entry.x;
-            var rhs_relative_index = op_entry.y;
+            let lhs_index = op_entry.x;
+            let rhs_index = op_entry.y;
 
-            var lhs_distance = operations_results[op_index + lhs_relative_index];
-            var rhs_distance = operations_results[op_index + rhs_relative_index];
+            let lhs_distance = operations_results[op_index + lhs_index];
+            let rhs_distance = operations_results[op_index + rhs_index];
 
             let op_1 = sdf_operations_1[op_index];
             let op_2 = sdf_operations_2[op_index];
