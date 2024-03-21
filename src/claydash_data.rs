@@ -435,13 +435,22 @@ fn sync_to_bevy(
                             material.sdf_inverse_transforms[sdf_object_counter] = object.inverse_transform_matrix();
 
                             material.sdf_operations[sdf_operation_counter].y = 0;
-                            material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
+                            material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END; // TODO: unneeded
                             material.sdf_meta[sdf_object_counter + 1].w = TYPE_END;
                             sdf_object_counter += 1;
                             continue;
                         }
                     },
-                    _ => {}
+                    _ => {
+                        match operation.operation {
+                            SDFOperation::UseRhsAsIs => {
+                                panic!("RHS is not an SDFObject {:?}", rhs);
+                            }
+                            _ => {
+
+                            }
+                        };
+                    }
                 }
 
                 // w: operation type
@@ -454,7 +463,7 @@ fn sync_to_bevy(
                         object.index - offset
                     },
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
-                    _ => 0
+                    _ => -1
                 };
                 material.sdf_operations[sdf_operation_counter].x = lhs_relative_index;
                 let rhs_relative_index = match &operation.rhs {
@@ -462,10 +471,13 @@ fn sync_to_bevy(
                         object.index - offset
                     },
                     SDFOperationEntryOperand::RelativeIndex(index) => index.clone(),
-                    _ => 0
+                    _ => -1
                 };
+
+                println!("operation, lhs, rhs = {:?}, {:?}, {:?}", operation.operation, lhs_relative_index, rhs_relative_index);
+
                 material.sdf_operations[sdf_operation_counter].y = rhs_relative_index;
-                material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END;
+                material.sdf_operations[sdf_operation_counter + 1].w = OPERATION_END; // TODO: unneeded
             }
 
             material.info[0].w = sdf_object_counter as i32;

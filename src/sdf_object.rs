@@ -74,7 +74,7 @@ pub fn control_points_hit(
     return None
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone,Serialize,Deserialize,Debug)]
 pub struct BoxParams {
     pub box_q: Vec3,
 }
@@ -87,7 +87,7 @@ impl Default for BoxParams {
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone,Serialize,Deserialize,Debug)]
 pub struct SphereParams {
     pub radius: f32,
 }
@@ -98,7 +98,7 @@ impl Default for SphereParams {
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone,Serialize,Deserialize, Debug)]
 pub enum SDFObjectParams {
     BoxParams(BoxParams),
     SphereParams(SphereParams)
@@ -156,7 +156,7 @@ impl SDFObjectParams {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SDFObject {
     pub uuid: uuid::Uuid,
     pub transform: Transform,
@@ -212,7 +212,7 @@ impl SDFTreeNode {
         }
     }
 
-    pub fn is_uuid_a_direct_child_of_node(&self, uuid: uuid::Uuid) -> bool {
+    pub fn is_uuid(&self, uuid: uuid::Uuid) -> bool {
         match &self {
             SDFTreeNode::SDFObject(object) => {
                 if object.uuid == uuid {
@@ -253,7 +253,7 @@ impl SDFTreeNode {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum SDFOperationEntryOperand {
     SDFObject(SDFObject),
     // Relative index to a previous object in the list
@@ -267,7 +267,7 @@ impl Default for SDFOperationEntryOperand {
     }
 }
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize, Debug)]
 pub struct SDFOperationListEntry {
     pub lhs: SDFOperationEntryOperand,
     pub rhs: SDFOperationEntryOperand,
@@ -386,12 +386,12 @@ impl SDFObjectTree {
     }
 
     pub fn remove_object_with_uuid(&mut self, uuid: uuid::Uuid) {
-        if self.lhs.is_uuid_a_direct_child_of_node(uuid) {
+        if self.lhs.is_uuid(uuid) {
             self.lhs = SDFTreeNode::None;
             self.operation = SDFOperation::UseRhsAsIs;
         }
 
-        if self.rhs.is_uuid_a_direct_child_of_node(uuid) {
+        if self.rhs.is_uuid(uuid) {
             self.rhs = SDFTreeNode::None;
             self.operation = SDFOperation::UseLhsAsIs;
         }
@@ -432,6 +432,7 @@ impl SDFObjectTree {
         let mut sdf_objects_operations: Vec<SDFOperationListEntry> = vec!();
 
         for object in self.get_vec_sdf_object_mut() {
+            println!("Adding object to sdf_objects_operations: {}", object.uuid);
             object.index = sdf_objects_operations.len() as i32;
             sdf_objects_operations.push(SDFOperationListEntry {
                 lhs: SDFOperationEntryOperand::SDFObject(object.clone()),

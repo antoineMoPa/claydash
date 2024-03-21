@@ -387,6 +387,14 @@ pub fn default_duck(mut data_resource: ResMut<ClaydashData>) {
 
     // Add snapshot for initial state
     tree.make_undo_redo_snapshot();
+
+
+    // temporary
+    let test_duck = include_str!("../default_duck.json");
+    let duck: ObservableKVTree<ClaydashValue> = serde_json::from_str(test_duck).unwrap();
+
+    tree.set_tree("scene", duck.get_tree("scene").unwrap());
+    tree.make_undo_redo_snapshot();
 }
 
 pub fn register_debug_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
