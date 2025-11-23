@@ -404,6 +404,8 @@ pub fn on_mouse_down(
     mut data_resource: ResMut<ClaydashData>,
     camera_transforms: Query<&mut Transform, With<Camera>>,
 ) {
+    eprintln!("🖱️  MOUSE DOWN event on entity: {:?}", event.target);
+
     let tree = &mut data_resource.as_mut().tree;
     let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
 

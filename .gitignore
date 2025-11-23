@@ -2,3 +2,6 @@
 pkg
 target
 claydash-ship
+.env
+assets/generated_models/
+.claude

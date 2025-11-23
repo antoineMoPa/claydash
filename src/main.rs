@@ -5,6 +5,7 @@ mod claydash_data;
 mod interactions;
 mod claydash_ui;
 mod undo_redo;
+mod object_generation;
 
 // This is only for native builds
 #[allow(unused_imports)]
@@ -36,11 +37,20 @@ use undo_redo::ClaydashUndoRedoPlugin;
 use wasm_bindgen::prelude::*;
 
 use crate::interactions::ClaydashInteractionPlugin;
+use crate::object_generation::ObjectGenerationPlugin;
 
 use claydash_data::{ClaydashDataPlugin, ClaydashValue, ClaydashData};
 
 
 fn main() {
+    // Load .env file for native builds
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Err(e) = dotenvy::dotenv() {
+            eprintln!("Warning: Could not load .env file: {}", e);
+            eprintln!("Make sure FAL_KEY is set in your .env file");
+        }
+    }
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .insert_resource(AmbientLight {
@@ -61,7 +71,8 @@ fn main() {
             claydash_ui::ClaydashUIPlugin,
             ClaydashInteractionPlugin,
             MaterialPlugin::<GridMaterial>::default(),
-            ClaydashUndoRedoPlugin
+            ClaydashUndoRedoPlugin,
+            ObjectGenerationPlugin
         ))
         .add_systems(Startup, (remove_picking_logs,
                                setup_frame_limit,
@@ -69,8 +80,7 @@ fn main() {
                                setup_window_size,
                                build_projection_surface,
                                register_debug_commands,
-                               setup_grid,
-                               default_duck))
+                               setup_grid))
         .add_systems(Update, keyboard_input_system)
         .add_systems(Update, update_camera)
         .run();
