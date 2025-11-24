@@ -17,14 +17,15 @@ use smooth_bevy_cameras::{
     controllers::orbit::{
         OrbitCameraPlugin,
         OrbitCameraBundle,
-        OrbitCameraController
+        OrbitCameraController,
+        ControlEvent
     }
 };
 
 use command_central_plugin::{BevyCommandCentralPlugin, CommandCentralState};
 
 use bevy::{
-    input::{keyboard::KeyCode, Input},
+    input::{keyboard::KeyCode, touchpad::TouchpadMagnify, Input},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     prelude::*, render::render_resource::{AsBindGroup, ShaderRef},
 };
@@ -80,13 +81,63 @@ fn main() {
                                setup_window_size,
                                build_projection_surface,
                                register_debug_commands,
-                               setup_grid))
+                               setup_grid,
+                               init_empty_scene))
         .add_systems(Update, keyboard_input_system)
+        .add_systems(Update, handle_touchpad_magnify)
         .add_systems(Update, update_camera)
         .run();
 }
 
 mod duck;
+
+/// Initialize scene on startup - loads scene.claydash if it exists, otherwise creates empty scene
+pub fn init_empty_scene(mut data_resource: ResMut<ClaydashData>) {
+    let tree = &mut data_resource.as_mut().tree;
+
+    // Try to load scene.claydash from current directory
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::path::Path;
+        let scene_path = Path::new("scene.claydash");
+
+        if scene_path.exists() {
+            eprintln!("📂 Found scene.claydash, loading...");
+            match std::fs::read(scene_path) {
+                Ok(data) => {
+                    match serde_json::from_slice::<ObservableKVTree<ClaydashValue>>(&data) {
+                        Ok(scene) => {
+                            tree.set_tree("scene", scene);
+                            tree.make_undo_redo_snapshot();
+                            eprintln!("✅ Loaded scene.claydash successfully");
+                            return;
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Failed to parse scene.claydash: {}", e);
+                            eprintln!("   Creating empty scene instead...");
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to read scene.claydash: {}", e);
+                    eprintln!("   Creating empty scene instead...");
+                }
+            }
+        }
+    }
+
+    // Create empty scene with minimal required structure
+    let mut empty_scene = ObservableKVTree::<ClaydashValue>::default();
+    empty_scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(Vec::new()));
+    empty_scene.set_path("selected_uuids", ClaydashValue::VecUuid(Vec::new()));
+
+    tree.set_tree("scene", empty_scene);
+
+    // Add snapshot for initial state
+    tree.make_undo_redo_snapshot();
+
+    eprintln!("✅ Initialized empty scene");
+}
 
 pub fn default_duck(mut data_resource: ResMut<ClaydashData>) {
     let tree = &mut data_resource.as_mut().tree;
@@ -156,6 +207,20 @@ fn keyboard_input_system(
     }
 }
 
+/// Handle touchpad pinch-to-zoom gestures (macOS)
+fn handle_touchpad_magnify(
+    mut touchpad_events: EventReader<TouchpadMagnify>,
+    mut control_events: EventWriter<ControlEvent>,
+) {
+    for event in touchpad_events.read() {
+        // TouchpadMagnify delta is the magnification amount
+        // Positive = zoom in, Negative = zoom out
+        // Convert to zoom scalar: smaller radius for zoom in, larger for zoom out
+        let zoom_scalar = 1.0 - event.0 * 0.5;
+        control_events.send(ControlEvent::Zoom(zoom_scalar));
+    }
+}
+
 /// Setup orbit camera controls.
 fn setup_camera(
     mut commands: Commands,
@@ -167,7 +232,11 @@ fn setup_camera(
         }
     ).insert(
         OrbitCameraBundle::new(
-            OrbitCameraController::default(),
+            OrbitCameraController {
+                mouse_wheel_zoom_sensitivity: 0.08,  // More sensitive for Mac-like zoom (default: 0.2)
+                pixels_per_line: 20.0,  // Smoother pixel-based scrolling (default: 53.0)
+                ..OrbitCameraController::default()
+            },
             Vec3::new(-3.3, 0.8, 1.7),
             Vec3::ZERO,
             Vec3::Y,
@@ -194,13 +263,24 @@ fn setup_grid(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<GridMaterial>>,
 ) {
-    commands.spawn(MaterialMeshBundle {
-        mesh: meshes.add(Mesh::from(shape::Plane { size: 10.0, subdivisions: 0 })),
-        transform: Transform::from_xyz(0.0, 0.0, 0.0),
-        material: materials.add(GridMaterial { }),
-        ..default()
-    });
+    use bevy_mod_picking::prelude::*;
+
+    commands.spawn((
+        MaterialMeshBundle {
+            mesh: meshes.add(Mesh::from(shape::Plane { size: 10.0, subdivisions: 0 })),
+            transform: Transform::from_xyz(0.0, 0.0, 0.0),
+            material: materials.add(GridMaterial { }),
+            ..default()
+        },
+        Pickable::default(),
+        On::<Pointer<Down>>::run(interactions::on_mouse_down),
+        On::<Pointer<Up>>::run(interactions::on_mouse_up),
+    ));
 }
+
+/// Component marker for the SDF projection cube
+#[derive(Component)]
+struct SDFProjectionCube;
 
 /// Build an object with our SDF material.
 fn build_projection_surface(
@@ -208,7 +288,10 @@ fn build_projection_surface(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
 ) {
-    // cube
+    use bevy_mod_picking::prelude::*;
+
+    // cube - Note: Explicitly set to IGNORE raycasts so it doesn't block clicking on models behind it
+    // Clicking on SDF objects works via raymarching, not mesh picking
     commands.spawn((
         MaterialMeshBundle {
             mesh: meshes.add(Mesh::from(shape::Cube { size: 2.0 })),
@@ -222,9 +305,8 @@ fn build_projection_surface(
             }),
             ..default()
         },
-        PickableBundle::default(),      // Makes the entity pickable
-        On::<Pointer<Down>>::run(interactions::on_mouse_down),
-        On::<Pointer<Up>>::run(interactions::on_mouse_up)
+        SDFProjectionCube,
+        Pickable::IGNORE, // Explicitly ignore raycasts - this prevents the cube from blocking clicks
     ));
 }
 

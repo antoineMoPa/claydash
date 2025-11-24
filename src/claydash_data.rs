@@ -23,6 +23,58 @@ pub enum EditorState {
     Rotating,
 }
 
+/// Represents different types of objects in the scene
+#[derive(Clone, Serialize, Deserialize)]
+pub enum SceneObject {
+    /// SDF-based procedural object
+    SDF(SDFObject),
+    /// Generated or imported 3D model
+    Model {
+        uuid: uuid::Uuid,
+        /// Asset path relative to assets/ directory (e.g., "generated_models/foo.glb")
+        asset_path: String,
+        transform: Transform,
+        /// Original prompt used to generate this (if applicable)
+        prompt: Option<String>,
+    },
+}
+
+impl SceneObject {
+    /// Get the UUID of this object
+    pub fn uuid(&self) -> uuid::Uuid {
+        match self {
+            SceneObject::SDF(obj) => obj.uuid,
+            SceneObject::Model { uuid, .. } => *uuid,
+        }
+    }
+
+    /// Get the transform of this object
+    pub fn transform(&self) -> &Transform {
+        match self {
+            SceneObject::SDF(obj) => &obj.transform,
+            SceneObject::Model { transform, .. } => transform,
+        }
+    }
+
+    /// Get a mutable reference to the transform
+    pub fn transform_mut(&mut self) -> &mut Transform {
+        match self {
+            SceneObject::SDF(obj) => &mut obj.transform,
+            SceneObject::Model { transform, .. } => transform,
+        }
+    }
+
+    /// Check if this is an SDF object
+    pub fn is_sdf(&self) -> bool {
+        matches!(self, SceneObject::SDF(_))
+    }
+
+    /// Check if this is a model
+    pub fn is_model(&self) -> bool {
+        matches!(self, SceneObject::Model { .. })
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ClaydashValue {
     Uuid(uuid::Uuid),
@@ -36,6 +88,7 @@ pub enum ClaydashValue {
     String(String),
     Transform(Transform),
     VecSDFObject(Vec<SDFObject>),
+    VecSceneObject(Vec<SceneObject>),
     #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
     #[serde(skip)]
@@ -226,6 +279,13 @@ impl ClaydashValue {
     );
 
     define_unwrap_methods_for_vec!(
+        unwrap_vec_scene_object,
+        unwrap_vec_scene_object_or,
+        VecSceneObject,
+        Vec<SceneObject>
+    );
+
+    define_unwrap_methods_for_vec!(
         unwrap_vec_update,
         unwrap_vec_update_or,
         VecUpdate,
@@ -277,8 +337,11 @@ pub fn get_active_object_index(tree: &ObservableKVTree<ClaydashValue>) -> Option
     let uuids = tree.get_path("scene.selected_uuids");
     let uuids = uuids.unwrap_vec_uuid();
 
+    // Use safe unwrap to avoid panic on empty scene
+    let objects_vec = objects.unwrap_vec_sdf_object_or(Vec::new());
+
     // Last selected object is the active object
-    for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate().rev() {
+    for (index, object) in objects_vec.iter().enumerate().rev() {
         if uuids.contains(&object.uuid) {
             return Some(index);
         }
@@ -314,8 +377,9 @@ fn sync_to_bevy(
             material.sdf_meta[0].w = TYPE_END;
 
             let value = data.tree.get_path("scene.sdf_objects");
+            let objects_vec = value.unwrap_vec_sdf_object_or(Vec::new());
 
-            for (index, object) in value.unwrap_vec_sdf_object().iter().enumerate() {
+            for (index, object) in objects_vec.iter().enumerate() {
                 object.params.update_material(index, material);
 
                 material.sdf_meta[index].w = object.object_type;
@@ -339,7 +403,8 @@ fn sync_to_bevy(
         let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
         material.num_control_points[0] = 0;
 
-        for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate() {
+        let objects_vec = objects.unwrap_vec_sdf_object_or(Vec::new());
+        for (index, object) in objects_vec.iter().enumerate() {
             if uuids.contains(&object.uuid) {
                 // Mark as selected
                 material.sdf_meta[index].x = 1;

@@ -122,15 +122,17 @@ fn set_objects_initial_properties(
 ) {
     let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
-        _ => { return; }
+        _ => Vec::new()
     };
+
+    let scene_objects = tree.get_path("scene.objects").unwrap_vec_scene_object_or(Vec::new());
 
     let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
     let mut selected_object_sum_position: Vec3 = Vec3::ZERO;
     let mut selected_object_count: i32 = 0;
 
-    // Find center of all selected objects
+    // Find center of all selected objects (SDF objects)
     // It will be the reference point when transforming objects.
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
@@ -138,19 +140,38 @@ fn set_objects_initial_properties(
             selected_object_count += 1;
         }
     }
+
+    // Also include generated models in the selection center calculation
+    for scene_object in scene_objects.iter() {
+        if selected_object_uuids.contains(&scene_object.uuid()) {
+            selected_object_sum_position += scene_object.transform().translation;
+            selected_object_count += 1;
+        }
+    }
+
     let mut initial_selection_transform = Transform::IDENTITY;
     initial_selection_transform.translation = selected_object_sum_position / (selected_object_count as f32);
     tree.set_path("editor.initial_selection_transform", ClaydashValue::Transform(initial_selection_transform));
 
     tree.set_path("editor.initial_radius", ClaydashValue::F32(0.3));
 
-    // Find position of all objects relative to that center
+    // Find position of all SDF objects relative to that center
     for object in objects.iter_mut() {
         if selected_object_uuids.contains(&object.uuid) {
             let mut transform_relative_to_center = object.transform;
             transform_relative_to_center.translation -= initial_selection_transform.translation;
             tree.set_path(&format!("editor.initial_transform.{}", object.uuid), ClaydashValue::Transform(object.transform));
             tree.set_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid), ClaydashValue::Transform(transform_relative_to_center));
+        }
+    }
+
+    // Find position of all generated models relative to that center
+    for scene_object in scene_objects.iter() {
+        if selected_object_uuids.contains(&scene_object.uuid()) {
+            let mut transform_relative_to_center = *scene_object.transform();
+            transform_relative_to_center.translation -= initial_selection_transform.translation;
+            tree.set_path(&format!("editor.initial_transform.{}", scene_object.uuid()), ClaydashValue::Transform(*scene_object.transform()));
+            tree.set_path(&format!("editor.initial_transform_relative_to_selection.{}", scene_object.uuid()), ClaydashValue::Transform(transform_relative_to_center));
         }
     }
 }
@@ -318,7 +339,7 @@ fn escape(tree: &mut ObservableKVTree<ClaydashValue>) {
 
     let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
 
-
+    // Restore SDF objects
     let mut sdf_objects: Vec<SDFObject> = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
 
     for object in sdf_objects.iter_mut() {
@@ -332,6 +353,21 @@ fn escape(tree: &mut ObservableKVTree<ClaydashValue>) {
     }
 
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+
+    // Restore generated models
+    let mut scene_objects = tree.get_path("scene.objects").unwrap_vec_scene_object_or(Vec::new());
+
+    for scene_object in scene_objects.iter_mut() {
+        if !selected_object_uuids.contains(&scene_object.uuid()) {
+            continue;
+        }
+        let initial_transform = tree
+            .get_path(&format!("editor.initial_transform.{}", scene_object.uuid()))
+            .unwrap_transform_or(Transform::IDENTITY);
+        *scene_object.transform_mut() = initial_transform;
+    }
+
+    tree.set_path("scene.objects", ClaydashValue::VecSceneObject(scene_objects));
 }
 
 fn finish(tree: &mut ObservableKVTree<ClaydashValue>) {

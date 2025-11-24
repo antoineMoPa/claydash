@@ -24,11 +24,13 @@ impl Plugin for ClaydashUIPlugin {
         app.add_plugins(EguiPlugin)
             .init_resource::<CommandCentralUiState>()
             .init_resource::<ObjectGenerationUiState>()
-            .add_systems(Startup, (setup_messages, color_picker_ui))
+            .init_resource::<SpawnedGeneratedModels>()
+            .add_systems(Startup, (setup_messages, color_picker_ui, register_ui_commands))
             .add_systems(Update, (
                 claydash_ui,
                 handle_tasks,
-                add_picking_to_generated_models
+                add_picking_to_generated_models,
+                spawn_loaded_generated_models
             ));
     }
 }
@@ -38,7 +40,7 @@ enum UiMessage {
     OpenFileHandle(FileHandle),
     VecU8(Vec<u8>),
     GenerationComplete(Result<crate::object_generation::GeneratedObject, String>),
-    SpawnModel(String), // Model path to spawn
+    SpawnModel { asset_path: String, prompt: Option<String> }, // Model path and optional prompt
 }
 
 #[derive(Resource, Default)]
@@ -52,6 +54,13 @@ struct ObjectGenerationUiState {
 /// Marker component for generated models
 #[derive(Component)]
 struct GeneratedModelMarker;
+
+/// Resource to track which generated models have been spawned from the scene tree
+#[derive(Resource, Default)]
+struct SpawnedGeneratedModels {
+    /// Set of UUIDs that have been spawned
+    spawned: std::collections::HashSet<uuid::Uuid>,
+}
 
 struct UiMessagesTxRxResource {
     tx: Sender<UiMessage>,
@@ -76,16 +85,63 @@ fn handle_tasks(
 
     match ui_messages.rx.try_recv() {
         Ok(UiMessage::SaveFileHandle(file)) => {
-            match serde_json::to_vec(&tree.get_tree("scene")) {
-                Ok(serialized_tree) => {
-                    let thread_pool = AsyncComputeTaskPool::get();
-                    let _task = thread_pool.spawn(async move {
-                        let _ = file.write(&serialized_tree).await;
-                        println!("Saved file {}", file.file_name());
-                    });
-                    _task.detach();
+            let scene_tree_opt = tree.get_tree("scene");
+
+            match scene_tree_opt {
+                Some(scene_tree) => {
+                    // Log what we're trying to serialize for debugging
+                    match serde_json::to_string_pretty(&scene_tree) {
+                        Ok(json_str) => {
+                            eprintln!("📝 Saving scene ({} chars):", json_str.len());
+                            if json_str.len() < 1000 {
+                                eprintln!("{}", json_str);
+                            } else {
+                                eprintln!("{}...", &json_str[..1000]);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("⚠️  Warning: Could not preview JSON: {}", e);
+                        }
+                    }
+
+                    match serde_json::to_vec(&scene_tree) {
+                        Ok(serialized_tree) => {
+                            eprintln!("✅ Serialized {} bytes", serialized_tree.len());
+                            let thread_pool = AsyncComputeTaskPool::get();
+                            let _task = thread_pool.spawn(async move {
+                                let _ = file.write(&serialized_tree).await;
+                                println!("💾 Saved file: {}", file.file_name());
+                            });
+                            _task.detach();
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Error serializing scene: {}", e);
+                            eprintln!("   This should not happen - scene tree exists but can't serialize");
+                        }
+                    }
                 }
-                _ => { panic!("Error serializing.") }
+                None => {
+                    eprintln!("⚠️  No scene tree found! Creating empty scene...");
+                    // Create a minimal scene
+                    let mut empty_scene = ObservableKVTree::<ClaydashValue>::default();
+                    empty_scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(Vec::new()));
+                    empty_scene.set_path("selected_uuids", ClaydashValue::VecUuid(Vec::new()));
+
+                    match serde_json::to_vec(&empty_scene) {
+                        Ok(serialized_tree) => {
+                            eprintln!("✅ Serialized empty scene: {} bytes", serialized_tree.len());
+                            let thread_pool = AsyncComputeTaskPool::get();
+                            let _task = thread_pool.spawn(async move {
+                                let _ = file.write(&serialized_tree).await;
+                                println!("💾 Saved empty scene: {}", file.file_name());
+                            });
+                            _task.detach();
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Error serializing empty scene: {}", e);
+                        }
+                    }
+                }
             }
         },
         Ok(UiMessage::OpenFileHandle(file)) => {
@@ -103,10 +159,15 @@ fn handle_tasks(
             match scene {
                 Ok(scene) => {
                     tree.set_tree("scene", scene);
-                    println!("Updated tree! {}", tree.path_version("scene"));
+                    println!("✅ Scene loaded successfully! Version: {}", tree.path_version("scene"));
+                    eprintln!("✅ Scene loaded successfully! Version: {}", tree.path_version("scene"));
                 },
-                _ => {
-                    panic!("could not load data.");
+                Err(e) => {
+                    error!("❌ Failed to load scene: {}", e);
+                    eprintln!("❌ Failed to load scene: {}", e);
+                    eprintln!("   This may be due to incompatible file format or corrupted data.");
+                    eprintln!("   Error details: {:?}", e);
+                    // Don't panic - just show error
                 }
             }
         },
@@ -140,7 +201,11 @@ fn handle_tasks(
 
                         // Send message to spawn the model
                         let asset_path = format!("generated_models/{}", obj.filename);
-                        let _ = ui_messages.tx.send(UiMessage::SpawnModel(asset_path));
+                        // TODO: Store and pass the actual prompt
+                        let _ = ui_messages.tx.send(UiMessage::SpawnModel {
+                            asset_path,
+                            prompt: None
+                        });
                     }
 
                     #[cfg(target_arch = "wasm32")]
@@ -162,21 +227,44 @@ fn handle_tasks(
                 }
             }
         },
-        Ok(UiMessage::SpawnModel(asset_path)) => {
+        Ok(UiMessage::SpawnModel { asset_path, prompt }) => {
+            use crate::claydash_data::SceneObject;
+            use crate::interactions::ModelEntity;
+
             eprintln!("🎮 Spawning model in scene: {}", asset_path);
+
+            let transform = Transform::from_xyz(0.0, 0.5, 0.0);
+            let uuid = uuid::Uuid::new_v4();
 
             // Load and spawn the GLB model - we'll add picking in a separate system
             commands.spawn((
                 SceneBundle {
-                    scene: asset_server.load(format!("{}#Scene0", asset_path)),
-                    transform: Transform::from_xyz(0.0, 0.5, 0.0),
+                    scene: asset_server.load(format!("{}#Scene0", &asset_path)),
+                    transform,
                     ..default()
                 },
                 GeneratedModelMarker, // Mark this as a generated model
+                ModelEntity { uuid }, // Track UUID for interactions
             ));
 
-            info!("✅ Model spawned in scene");
-            eprintln!("✅ Model spawned in scene");
+            // Add to scene tree
+            let scene_object = SceneObject::Model {
+                uuid,
+                asset_path: asset_path.clone(),
+                transform,
+                prompt,
+            };
+
+            // Get current scene objects or create empty list
+            let tree = &mut data_resource.as_mut().tree;
+            let mut objects = tree.get_path("scene.objects")
+                .unwrap_vec_scene_object_or(Vec::new());
+
+            objects.push(scene_object);
+            tree.set_path("scene.objects", ClaydashValue::VecSceneObject(objects));
+
+            info!("✅ Model spawned and added to scene tree");
+            eprintln!("✅ Model spawned and added to scene tree (UUID: {})", uuid);
         }
         _ => {}
     }
@@ -255,6 +343,12 @@ fn claydash_ui(
                 });
             });
         });
+
+    // Check if command requested to open the generation dialog
+    if let ClaydashValue::Bool(true) = tree.get_path("editor.show_generation_dialog") {
+        gen_ui_state.show_dialog = true;
+        tree.set_path("editor.show_generation_dialog", ClaydashValue::Bool(false));
+    }
 
     // Object generation dialog
     if gen_ui_state.show_dialog {
@@ -531,23 +625,51 @@ fn update_selection_color(
 /// System to add picking support to all meshes in generated models
 fn add_picking_to_generated_models(
     mut commands: Commands,
-    generated_models: Query<(Entity, &Children), With<GeneratedModelMarker>>,
+    generated_models: Query<(Entity, &crate::interactions::ModelEntity), With<GeneratedModelMarker>>,
     meshes_without_picking: Query<Entity, (With<Handle<Mesh>>, Without<bevy_mod_picking::prelude::Pickable>)>,
     all_children: Query<&Children>,
+    // Add query to verify picking was added
+    meshes_with_picking: Query<Entity, (With<Handle<Mesh>>, With<bevy_mod_picking::prelude::Pickable>)>,
+    mesh_query: Query<(&GlobalTransform, Option<&bevy::render::primitives::Aabb>), With<Handle<Mesh>>>,
 ) {
-    for (model_entity, children) in generated_models.iter() {
-        eprintln!("🔍 Processing generated model entity {:?} with {} direct children", model_entity, children.len());
+    // Early return if no models with marker
+    if generated_models.is_empty() {
+        return;
+    }
 
-        let mut mesh_count = 0;
-        // Find all mesh entities in the scene hierarchy
-        for &child in children.iter() {
-            mesh_count += add_picking_to_entity_recursive(&mut commands, child, &meshes_without_picking, &all_children, 0);
+    for (model_entity, model_component) in generated_models.iter() {
+        // Check if the scene has loaded (has children)
+        if let Ok(children) = all_children.get(model_entity) {
+            eprintln!("🔍 Adding picking to model {} (entity {:?}) with {} children", model_component.uuid, model_entity, children.len());
+
+            let mut mesh_count = 0;
+            // Find all mesh entities in the scene hierarchy and copy the ModelEntity component to them
+            for &child in children.iter() {
+                mesh_count += add_picking_to_entity_recursive(&mut commands, child, &meshes_without_picking, &all_children, model_component, 0);
+            }
+
+            // Remove the marker once we've processed it
+            commands.entity(model_entity).remove::<GeneratedModelMarker>();
+            if mesh_count > 0 {
+                eprintln!("✅ Added picking support to {} mesh(es)", mesh_count);
+
+                // Verify picking was added and log mesh bounds
+                eprintln!("🔍 Verifying: {} mesh(es) now have Pickable component", meshes_with_picking.iter().count());
+
+                // Log mesh bounds for debugging
+                for mesh_entity in meshes_with_picking.iter() {
+                    if let Ok((global_transform, aabb)) = mesh_query.get(mesh_entity) {
+                        eprintln!("  📦 Mesh {:?} - Position: {:?}", mesh_entity, global_transform.translation());
+                        if let Some(aabb) = aabb {
+                            eprintln!("       AABB center: {:?}, half_extents: {:?}", aabb.center, aabb.half_extents);
+                        } else {
+                            eprintln!("       ⚠️  No AABB!");
+                        }
+                    }
+                }
+            }
         }
-
-        // Remove the marker once we've processed it
-        commands.entity(model_entity).remove::<GeneratedModelMarker>();
-        info!("Added picking support to {} mesh(es)", mesh_count);
-        eprintln!("✅ Added picking support to {} mesh(es)", mesh_count);
+        // If scene not loaded yet (no children), keep the marker and try again next frame
     }
 }
 
@@ -557,31 +679,121 @@ fn add_picking_to_entity_recursive(
     entity: Entity,
     meshes_without_picking: &Query<Entity, (With<Handle<Mesh>>, Without<bevy_mod_picking::prelude::Pickable>)>,
     all_children: &Query<&Children>,
+    model_component: &crate::interactions::ModelEntity,
     depth: usize,
 ) -> usize {
     use bevy_mod_picking::prelude::*;
 
-    let indent = "  ".repeat(depth);
     let mut count = 0;
 
     // If this entity has a mesh and doesn't have picking, add it
     if meshes_without_picking.contains(entity) {
-        eprintln!("{}📍 Found mesh entity {:?} at depth {} - adding picking", indent, entity, depth);
+        eprintln!("  📌 Adding picking + ModelEntity to mesh entity {:?} (UUID: {})", entity, model_component.uuid);
+
         commands.entity(entity).insert((
-            PickableBundle::default(),
+            PickableBundle::default(), // Use bundle which includes RaycastPickable backend
             On::<Pointer<Down>>::run(crate::interactions::on_mouse_down),
             On::<Pointer<Up>>::run(crate::interactions::on_mouse_up),
+            model_component.clone(), // Add the ModelEntity component so clicks can find it
         ));
         count += 1;
     }
 
     // Recursively process children
     if let Ok(children) = all_children.get(entity) {
-        eprintln!("{}🌳 Entity {:?} has {} children", indent, entity, children.len());
+        eprintln!("  🔽 Entity {:?} has {} children", entity, children.len());
         for &child in children.iter() {
-            count += add_picking_to_entity_recursive(commands, child, meshes_without_picking, all_children, depth + 1);
+            count += add_picking_to_entity_recursive(commands, child, meshes_without_picking, all_children, model_component, depth + 1);
         }
     }
 
     count
+}
+
+/// Register UI commands
+fn register_ui_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
+    use command_central::CommandBuilder;
+
+    let commands = &mut bevy_command_central.commands;
+
+    CommandBuilder::new()
+        .title("Generate 3D Object")
+        .system_name("generate-object")
+        .docs("Open the object generation dialog to create a 3D model from a text prompt using AI.")
+        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(open_generation_dialog)))
+        .write(commands);
+}
+
+/// Command callback to open the generation dialog
+fn open_generation_dialog(tree: &mut ObservableKVTree<ClaydashValue>) {
+    eprintln!("🎨 Opening object generation dialog via command...");
+    // Set a flag that the UI will check
+    tree.set_path("editor.show_generation_dialog", ClaydashValue::Bool(true));
+}
+
+/// System to spawn generated models from loaded scene tree
+fn spawn_loaded_generated_models(
+    mut commands: Commands,
+    mut data_resource: ResMut<ClaydashData>,
+    mut spawned_tracker: ResMut<SpawnedGeneratedModels>,
+    asset_server: Res<AssetServer>,
+) {
+    use crate::claydash_data::SceneObject;
+    use crate::interactions::ModelEntity;
+
+    let tree = &mut data_resource.as_mut().tree;
+
+    // Get scene objects
+    let objects = tree.get_path("scene.objects").unwrap_vec_scene_object_or(Vec::new());
+
+    if objects.is_empty() {
+        return; // No objects to spawn
+    }
+
+    // Check if there are any unspawned models before logging
+    let mut has_unspawned = false;
+    for scene_object in objects.iter() {
+        if let SceneObject::Model { uuid, .. } = scene_object {
+            if !spawned_tracker.spawned.contains(uuid) {
+                has_unspawned = true;
+                break;
+            }
+        }
+    }
+
+    if !has_unspawned {
+        return; // All models already spawned
+    }
+
+    let mut spawned_count = 0;
+    for scene_object in objects.iter() {
+        // Only process Model objects
+        if let SceneObject::Model { uuid, asset_path, transform, .. } = scene_object {
+            // Skip if already spawned
+            if spawned_tracker.spawned.contains(uuid) {
+                continue;
+            }
+
+            eprintln!("🎮 Loading model from scene: {} (UUID: {})", asset_path, uuid);
+
+            // Spawn the model
+            commands.spawn((
+                SceneBundle {
+                    scene: asset_server.load(format!("{}#Scene0", asset_path)),
+                    transform: *transform,
+                    ..default()
+                },
+                GeneratedModelMarker,
+                ModelEntity { uuid: *uuid }, // Track UUID for interactions
+            ));
+
+            // Mark as spawned
+            spawned_tracker.spawned.insert(*uuid);
+            spawned_count += 1;
+        }
+    }
+
+    if spawned_count > 0 {
+        eprintln!("✅ Spawned {} model(s) from loaded scene", spawned_count);
+    }
 }

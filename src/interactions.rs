@@ -31,6 +31,12 @@ struct ControlPointText {
     position: Vec3,
 }
 
+/// Component to track model entities by their UUID
+#[derive(Component, Clone, Copy)]
+pub struct ModelEntity {
+    pub uuid: uuid::Uuid,
+}
+
 lazy_static! {
     static ref LAST_SYNCED_TEXT_VERSION: Arc<Mutex<i32>> = Arc::new(Mutex::new(-1));
 }
@@ -63,8 +69,14 @@ fn update_control_points_text(
 
         match active_object_index  {
             Some(index) => {
-                // Show control points
-                let object: &SDFObject = &objects.unwrap_vec_sdf_object()[index];
+                // Show control points - use safe unwrap to avoid panic on empty scene
+                let objects_vec = objects.unwrap_vec_sdf_object_or(Vec::new());
+                if index >= objects_vec.len() {
+                    // Index out of bounds, skip rendering control points
+                    *last_updated_version = version;
+                    return;
+                }
+                let object: &SDFObject = &objects_vec[index];
 
                 for point in object.get_control_points().iter() {
                     let label = &point.label;
@@ -224,6 +236,7 @@ fn update_transformations(
     windows: Query<&Window>,
     camera_global_transforms: Query<&mut GlobalTransform, With<Camera>>,
     camera: Query<&Camera>,
+    mut model_transforms: Query<(&mut Transform, &ModelEntity), Without<Camera>>,
 ) {
     // Based on camera rotation, find what direction mouse moves corresponds to in
     // 3D space.
@@ -248,10 +261,12 @@ fn update_transformations(
         _ => {}
     }
 
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
+    let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
-        _ => { return; }
+        _ => Vec::new()
     };
+
+    let mut scene_objects = tree.get_path("scene.objects").unwrap_vec_scene_object_or(Vec::new());
 
     let selected_object_uuids = match tree.get_path("scene.selected_uuids") {
         ClaydashValue::VecUuid(uuids) => uuids,
@@ -291,7 +306,8 @@ fn update_transformations(
 
     match state {
         Grabbing => {
-            for object in objects.iter_mut() {
+            // Update SDF objects
+            for object in sdf_objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
                     let initial_transform = tree
                         .get_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid))
@@ -300,10 +316,33 @@ fn update_transformations(
                     object.transform.translation = initial_transform.translation + selection_translation * constraints;
                 }
             }
-            tree.set_path_without_notifying("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+            tree.set_path_without_notifying("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+
+            // Update generated models in scene tree
+            for scene_object in scene_objects.iter_mut() {
+                if selected_object_uuids.contains(&scene_object.uuid()) {
+                    let initial_transform = tree
+                        .get_path(&format!("editor.initial_transform_relative_to_selection.{}", scene_object.uuid()))
+                        .unwrap_transform_or(Transform::IDENTITY);
+
+                    scene_object.transform_mut().translation = initial_transform.translation + selection_translation * constraints;
+                }
+            }
+            tree.set_path("scene.objects", ClaydashValue::VecSceneObject(scene_objects.clone()));
+
+            // Apply transforms to model entities
+            for (mut entity_transform, model_entity) in model_transforms.iter_mut() {
+                if selected_object_uuids.contains(&model_entity.uuid) {
+                    // Find the corresponding scene object to get its updated transform
+                    if let Some(scene_obj) = scene_objects.iter().find(|obj| obj.uuid() == model_entity.uuid) {
+                        *entity_transform = *scene_obj.transform();
+                    }
+                }
+            }
         },
         Scaling => {
-            for object in objects.iter_mut() {
+            // Update SDF objects
+            for object in sdf_objects.iter_mut() {
                 if selected_object_uuids.contains(&object.uuid) {
                     let cursor_position_near_object = get_cursor_position_at_selection_dist(
                         camera,
@@ -327,10 +366,47 @@ fn update_transformations(
                     object.transform.translation += scale * constraints * initial_transform_relative_to_selection.translation;
                 }
             }
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+
+            // Update models
+            for scene_object in scene_objects.iter_mut() {
+                if selected_object_uuids.contains(&scene_object.uuid()) {
+                    let cursor_position_near_object = get_cursor_position_at_selection_dist(
+                        camera,
+                        camera_global_transform,
+                        cursor_position,
+                        selection_translation
+                    ).unwrap_or(Vec3::ZERO);
+
+                    let initial_radius = tree.get_path("editor.initial_radius").unwrap_f32();
+                    let current_radius = (cursor_position_near_object - initial_selection_transform.translation).length();
+                    let scale = current_radius / initial_radius - 1.0;
+
+                    let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", scene_object.uuid()))
+                        .unwrap_transform_or(Transform::IDENTITY);
+                    let initial_transform_relative_to_selection = tree
+                        .get_path(&format!("editor.initial_transform_relative_to_selection.{}", scene_object.uuid()))
+                        .unwrap_transform_or(Transform::IDENTITY);
+
+                    *scene_object.transform_mut() = initial_transform;
+                    scene_object.transform_mut().scale += scale * constraints;
+                    scene_object.transform_mut().translation += scale * constraints * initial_transform_relative_to_selection.translation;
+                }
+            }
+            tree.set_path("scene.objects", ClaydashValue::VecSceneObject(scene_objects.clone()));
+
+            // Apply transforms to model entities
+            for (mut entity_transform, model_entity) in model_transforms.iter_mut() {
+                if selected_object_uuids.contains(&model_entity.uuid) {
+                    if let Some(scene_obj) = scene_objects.iter().find(|obj| obj.uuid() == model_entity.uuid) {
+                        *entity_transform = *scene_obj.transform();
+                    }
+                }
+            }
         },
         Rotating => {
-            for object in objects.iter_mut() {
+            // Update SDF objects
+            for object in sdf_objects.iter_mut() {
                 if !selected_object_uuids.contains(&object.uuid) {
                     continue;
                 }
@@ -355,7 +431,44 @@ fn update_transformations(
                     _ => {}
                 };
             }
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
+            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+
+            // Update models
+            for scene_object in scene_objects.iter_mut() {
+                if !selected_object_uuids.contains(&scene_object.uuid()) {
+                    continue;
+                }
+                match get_object_angle_relative_to_camera_ray(
+                    camera,
+                    camera_global_transform,
+                    cursor_position,
+                    &initial_selection_transform,
+                ) {
+                    Some((axis, angle)) => {
+                        let initial_transform = tree.get_path(&format!("editor.initial_transform.{}", scene_object.uuid()))
+                            .unwrap_transform_or(Transform::IDENTITY);
+
+                        let selection_center = initial_selection_transform.translation;
+
+                        let axis = if has_constraints { constraints  } else { axis };
+                        let rotation = Quat::from_axis_angle(axis, -angle);
+
+                        *scene_object.transform_mut() = initial_transform;
+                        scene_object.transform_mut().rotate_around(selection_center, rotation);
+                    }
+                    _ => {}
+                };
+            }
+            tree.set_path("scene.objects", ClaydashValue::VecSceneObject(scene_objects.clone()));
+
+            // Apply transforms to model entities
+            for (mut entity_transform, model_entity) in model_transforms.iter_mut() {
+                if selected_object_uuids.contains(&model_entity.uuid) {
+                    if let Some(scene_obj) = scene_objects.iter().find(|obj| obj.uuid() == model_entity.uuid) {
+                        *entity_transform = *scene_obj.transform();
+                    }
+                }
+            }
         },
         _ => {}
     };
@@ -403,8 +516,32 @@ pub fn on_mouse_down(
     keys: Res<Input<KeyCode>>,
     mut data_resource: ResMut<ClaydashData>,
     camera_transforms: Query<&mut Transform, With<Camera>>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    windows: Query<&Window>,
+    models: Query<&ModelEntity>,
+    parents: Query<&Parent>,
 ) {
     eprintln!("🖱️  MOUSE DOWN event on entity: {:?}", event.target);
+
+    // Log camera and mouse position for debugging
+    if let Ok((camera, camera_global_transform)) = camera_query.get_single() {
+        if let Ok(window) = windows.get_single() {
+            if let Some(cursor_pos) = window.cursor_position() {
+                eprintln!("  🖱️  Cursor position: {:?}", cursor_pos);
+                eprintln!("  📷 Camera position: {:?}", camera_global_transform.translation());
+
+                // Calculate and log the ray
+                if let Some(ray) = camera.viewport_to_world(camera_global_transform, cursor_pos) {
+                    eprintln!("  📍 Ray origin: {:?}", ray.origin);
+                    eprintln!("  ➡️  Ray direction: {:?}", ray.direction);
+                    eprintln!("  🎯 Ray at 5 units: {:?}", ray.origin + ray.direction * 5.0);
+                }
+            }
+        }
+    }
+
+    // Debug: Check if this entity has a mesh
+    eprintln!("  🔎 Checking if entity has ModelEntity component...");
 
     let tree = &mut data_resource.as_mut().tree;
     let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
@@ -417,6 +554,81 @@ pub fn on_mouse_down(
             tree.make_undo_redo_snapshot();
             return;
         }
+    }
+
+    // Check if we clicked on a model (or a child of a model)
+    // First check the clicked entity, then walk up the parent hierarchy
+    let mut current_entity = event.target;
+    let mut model_entity: Option<&ModelEntity> = None;
+
+    for depth in 0..10 { // Limit search depth to prevent infinite loops
+        eprintln!("  🔍 Checking entity {:?} (depth {})", current_entity, depth);
+
+        if let Ok(model) = models.get(current_entity) {
+            eprintln!("  ✅ Found ModelEntity at depth {}", depth);
+            model_entity = Some(model);
+            break;
+        }
+
+        // Try to get parent
+        if let Ok(parent) = parents.get(current_entity) {
+            current_entity = parent.get();
+            eprintln!("  ⬆️  Moving to parent: {:?}", current_entity);
+        } else {
+            eprintln!("  ⛔ No parent found, stopping search");
+            break; // No parent, stop searching
+        }
+    }
+
+    if let Some(model) = model_entity {
+        eprintln!("🎯 Clicked on model: {}", model.uuid);
+
+        let tree = &mut data_resource.as_mut().tree;
+        let mut selected_uuids: Vec<uuid::Uuid> = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+        let is_selected = selected_uuids.contains(&model.uuid);
+        let has_shift = keys.pressed(KeyCode::ShiftLeft);
+
+        if is_selected {
+            // Remove object from selection
+            match has_shift {
+                true => {
+                    // Shift is pressed: remove from selection
+                    selected_uuids = selected_uuids
+                        .into_iter()
+                        .filter(|item| *item != model.uuid).collect();
+                }
+                false => {
+                    // Shift not pressed.
+                    if selected_uuids.len() == 1 {
+                        // Last object in selection: un-select
+                        selected_uuids = selected_uuids
+                            .into_iter()
+                            .filter(|item| *item != model.uuid).collect();
+                    } else {
+                        // Replace entire selection with only this object
+                        selected_uuids = vec!(model.uuid);
+                    }
+                }
+            };
+        } else {
+            // Add object to selection
+            match has_shift {
+                true => {
+                    // Shift is pressed: Additive selection
+                    selected_uuids.push(model.uuid);
+                }
+                false => {
+                    // Shift is not pressed: Replace selection with new hit
+                    selected_uuids = vec!(model.uuid);
+                }
+            };
+        }
+
+        tree.set_path(
+            "scene.selected_uuids",
+            ClaydashValue::VecUuid(selected_uuids)
+        );
+        return;
     }
 
     let tree = &mut data_resource.as_mut().tree;

@@ -463,4 +463,192 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_generate_save_and_load_scene() {
+        use crate::claydash_data::ClaydashValue;
+        use crate::bevy_sdf_object::SDFObject;
+        use observable_key_value_tree::ObservableKVTree;
+
+        println!("\n🧪 Testing generate, save, and load scene workflow");
+
+        // Load .env file for test
+        let _ = dotenvy::dotenv();
+
+        let fal_key = std::env::var("FAL_KEY")
+            .expect("FAL_KEY must be set in .env file for this test");
+
+        let service = ObjectGenerationService::new(fal_key);
+
+        // Create a Tokio runtime for the test
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        // Step 1: Generate an object
+        println!("\n📝 Step 1: Generating 3D object...");
+        let generated_object = runtime.block_on(async {
+            service.generate_object("a small blue sphere").await
+        }).expect("Generation should succeed");
+
+        println!("✅ Generated: {}", generated_object.filename);
+
+        // Step 2: Save the model to disk
+        println!("\n💾 Step 2: Saving model to disk...");
+        let models_dir = std::path::Path::new("assets/generated_models");
+        std::fs::create_dir_all(models_dir).expect("Should create directory");
+        let model_path = models_dir.join(&generated_object.filename);
+        std::fs::write(&model_path, &generated_object.model_data)
+            .expect("Should write model file");
+        println!("✅ Saved to: {:?}", model_path);
+
+        // Step 3: Create a scene with some SDF objects
+        println!("\n🎨 Step 3: Creating scene with SDF objects...");
+        let mut tree = ObservableKVTree::<ClaydashValue>::default();
+
+        let mut sphere = SDFObject::create(1); // TYPE_SPHERE
+        sphere.transform.translation = Vec3::new(0.0, 0.0, 0.0);
+        sphere.color = Vec4::new(1.0, 0.0, 0.0, 1.0);
+
+        let mut box_obj = SDFObject::create(2); // TYPE_BOX
+        box_obj.transform.translation = Vec3::new(1.0, 0.0, 0.0);
+        box_obj.color = Vec4::new(0.0, 1.0, 0.0, 1.0);
+
+        let sdf_objects = vec![sphere, box_obj];
+
+        tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+        tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(Vec::new()));
+
+        println!("✅ Created scene with {} SDF objects", 2);
+
+        // Step 4: Serialize the scene
+        println!("\n📦 Step 4: Serializing scene...");
+        let scene_tree = tree.get_tree("scene");
+        let serialized = serde_json::to_vec(&scene_tree)
+            .expect("Should serialize scene");
+
+        println!("✅ Serialized to {} bytes", serialized.len());
+
+        // Print the JSON for debugging
+        let json_str = serde_json::to_string_pretty(&scene_tree)
+            .expect("Should convert to JSON string");
+        println!("\n📄 Serialized JSON:");
+        println!("{}", json_str);
+
+        // Step 5: Deserialize the scene
+        println!("\n📬 Step 5: Deserializing scene...");
+        let deserialized: ObservableKVTree<ClaydashValue> = serde_json::from_slice(&serialized)
+            .expect("Should deserialize scene");
+
+        println!("✅ Deserialized successfully");
+
+        // Step 6: Verify the deserialized data
+        println!("\n✔️  Step 6: Verifying deserialized data...");
+        let loaded_objects = deserialized.get_path("sdf_objects");
+        match loaded_objects {
+            ClaydashValue::VecSDFObject(objects) => {
+                assert_eq!(objects.len(), 2, "Should have 2 SDF objects");
+                println!("✅ Loaded {} SDF objects", objects.len());
+
+                // Verify first object
+                assert_eq!(objects[0].transform.translation, Vec3::new(0.0, 0.0, 0.0));
+                assert_eq!(objects[0].object_type, 1); // TYPE_SPHERE
+                println!("✅ Object 1 verified (sphere at origin)");
+
+                // Verify second object
+                assert_eq!(objects[1].transform.translation, Vec3::new(1.0, 0.0, 0.0));
+                assert_eq!(objects[1].object_type, 2); // TYPE_BOX
+                println!("✅ Object 2 verified (box at x=1)");
+            }
+            _ => panic!("Expected VecSDFObject, got something else"),
+        }
+
+        // Step 7: Clean up
+        println!("\n🧹 Step 7: Cleaning up...");
+        std::fs::remove_file(&model_path).ok();
+        println!("✅ Cleaned up test files");
+
+        println!("\n🎉 All steps completed successfully!");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_save_and_load_scene_with_generated_model() {
+        use crate::claydash_data::{ClaydashValue, SceneObject};
+        use observable_key_value_tree::ObservableKVTree;
+
+        println!("\n🧪 Testing save and load scene with generated model");
+
+        // Step 1: Create a scene tree with a generated model
+        println!("\n📝 Step 1: Creating scene with generated model...");
+        let mut tree = ObservableKVTree::<ClaydashValue>::default();
+
+        let generated_model = SceneObject::Model {
+            uuid: uuid::Uuid::new_v4(),
+            asset_path: "generated_models/test_model.glb".to_string(),
+            transform: Transform::from_xyz(1.0, 2.0, 3.0),
+            prompt: Some("a test cube".to_string()),
+        };
+
+        let mut empty_scene = ObservableKVTree::<ClaydashValue>::default();
+        empty_scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(Vec::new()));
+        empty_scene.set_path("selected_uuids", ClaydashValue::VecUuid(Vec::new()));
+        empty_scene.set_path("objects", ClaydashValue::VecSceneObject(vec![generated_model.clone()]));
+
+        tree.set_tree("scene", empty_scene);
+
+        println!("✅ Created scene with 1 generated model");
+
+        // Step 2: Serialize the scene
+        println!("\n📦 Step 2: Serializing scene...");
+        let scene_tree = tree.get_tree("scene").expect("Scene should exist");
+        let serialized = serde_json::to_vec(&scene_tree)
+            .expect("Should serialize scene");
+
+        println!("✅ Serialized to {} bytes", serialized.len());
+
+        // Print the JSON for debugging
+        let json_str = serde_json::to_string_pretty(&scene_tree)
+            .expect("Should convert to JSON string");
+        println!("\n📄 Serialized JSON:");
+        println!("{}", json_str);
+
+        // Step 3: Deserialize the scene
+        println!("\n📬 Step 3: Deserializing scene...");
+        let deserialized: ObservableKVTree<ClaydashValue> = serde_json::from_slice(&serialized)
+            .expect("Should deserialize scene");
+
+        println!("✅ Deserialized successfully");
+
+        // Step 4: Verify the loaded objects
+        println!("\n✔️  Step 4: Verifying loaded generated model...");
+        let loaded_objects = deserialized.get_path("objects");
+        match loaded_objects {
+            ClaydashValue::VecSceneObject(objects) => {
+                assert_eq!(objects.len(), 1, "Should have 1 scene object");
+                println!("✅ Loaded {} scene object(s)", objects.len());
+
+                // Verify it's a model
+                match &objects[0] {
+                    SceneObject::Model { uuid, asset_path, transform, prompt } => {
+                        println!("✅ Object is a Model");
+                        println!("   UUID: {}", uuid);
+                        println!("   Asset path: {}", asset_path);
+                        println!("   Transform: {:?}", transform);
+                        println!("   Prompt: {:?}", prompt);
+
+                        assert_eq!(asset_path, "generated_models/test_model.glb");
+                        assert_eq!(transform.translation, Vec3::new(1.0, 2.0, 3.0));
+                        assert_eq!(prompt.as_ref().map(|s| s.as_str()), Some("a test cube"));
+                        println!("✅ All fields verified");
+                    }
+                    SceneObject::SDF(_) => {
+                        panic!("Expected Model, got SDF");
+                    }
+                }
+            }
+            _ => panic!("Expected VecSceneObject, got something else"),
+        }
+
+        println!("\n🎉 Save/load test completed successfully!");
+    }
 }
