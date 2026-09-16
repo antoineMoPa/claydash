@@ -98,19 +98,18 @@
 //!  - Not so appropriate for graph structure
 //!  - No granular updates for arrays
 
-
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use serde::{Serialize, Deserialize};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 
-#[derive(Default,Clone)]
+#[derive(Default, Clone)]
 pub struct Update<ValueType> {
     pub path: String,
     pub value: ValueType,
     pub old_value: ValueType,
 }
 
-#[derive(Default,Debug,Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Snapshot<ValueType> {
     new_values: BTreeMap<String, ValueType>,
     old_values: BTreeMap<String, ValueType>,
@@ -125,8 +124,7 @@ impl<ValueType> Snapshot<ValueType> {
     }
 }
 
-
-#[derive(Default,Clone,Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct LeafVersionTracker {
     updated: bool,
     version: i32,
@@ -135,8 +133,12 @@ pub struct LeafVersionTracker {
 
 /// Provides the leaf version numbering and 'was_updated' flag.
 impl LeafVersionTracker {
-    pub fn was_updated(&self) -> bool { self.updated }
-    pub fn version(&self) -> i32 { self.version }
+    pub fn was_updated(&self) -> bool {
+        self.updated
+    }
+    pub fn version(&self) -> i32 {
+        self.version
+    }
 
     fn notify_update(&mut self) {
         self.updated = true;
@@ -153,9 +155,8 @@ impl LeafVersionTracker {
     }
 }
 
-#[derive(Default,Serialize,Deserialize,Debug,Clone)]
-pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
-{
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
+pub struct ObservableKVTree<ValueType: Default + Clone + CanBeNone<ValueType>> {
     subtree: BTreeMap<String, ObservableKVTree<ValueType>>,
     value: ValueType,
     #[serde(skip)]
@@ -177,7 +178,7 @@ pub struct ObservableKVTree <ValueType: Default + Clone + CanBeNone<ValueType>>
 }
 
 /// Shortcut to verify if a path was modified.
-impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType> {
+impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType> {
     pub fn was_updated(&self) -> bool {
         return self.update_tracker.was_updated();
     }
@@ -186,8 +187,10 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         match self.get_tree(&path) {
             Some(value) => {
                 return value.update_tracker.was_updated();
-            },
-            _ => { return false; }
+            }
+            _ => {
+                return false;
+            }
         };
     }
 
@@ -195,8 +198,10 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         match self.get_tree(&path) {
             Some(value) => {
                 return value.update_tracker.version();
-            },
-            _ => { return -1; }
+            }
+            _ => {
+                return -1;
+            }
         };
     }
 }
@@ -211,8 +216,7 @@ impl<T> CanBeNone<Option<T>> for Option<T> {
     }
 }
 
-impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType>
-{
+impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType> {
     ///  ---------------------  GETTING/SETTING VALUES  ---------------------
 
     pub fn set_path(&mut self, path: &str, value: ValueType) {
@@ -221,7 +225,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         self.set_path_without_notifying(path, value.clone());
 
         for listener in self.update_listeners.iter() {
-            _ = listener.send(Update{
+            _ = listener.send(Update {
                 path: path.to_string(),
                 value: value.clone(),
                 old_value: old_value.clone(),
@@ -235,13 +239,15 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     pub fn set_path_without_notifying(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
         self.update_snapshot_accumulator(path, value.clone());
-        self.set_path_with_parts(parts.collect(), ObservableKVTree {
-            value,
-            ..ObservableKVTree::default()
-        }, false);
+        self.set_path_with_parts(
+            parts.collect(),
+            ObservableKVTree {
+                value,
+                ..ObservableKVTree::default()
+            },
+            false,
+        );
     }
-
-
 
     /// Set the whole subtree at given path
     /// This is useful to deserialize the tree.
@@ -256,18 +262,24 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     pub fn get_path(&self, path: &str) -> ValueType {
         match self.get_path_with_parts(&path.split(".").collect()) {
             Some(data) => data.value,
-            _ => ValueType::none()
+            _ => ValueType::none(),
         }
     }
 
-    pub fn get_tree(& self, path: &str) -> Option<ObservableKVTree<ValueType>> {
+    pub fn get_tree(&self, path: &str) -> Option<ObservableKVTree<ValueType>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
 
-    fn set_path_with_parts(&mut self, parts: Vec<&str>, value: ObservableKVTree<ValueType>, override_subtree: bool) {
+    fn set_path_with_parts(
+        &mut self,
+        parts: Vec<&str>,
+        value: ObservableKVTree<ValueType>,
+        override_subtree: bool,
+    ) {
         if parts.len() == 1 {
             if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
+                self.subtree
+                    .insert(parts[0].to_string(), ObservableKVTree::default());
             }
 
             let mut notified_update = false;
@@ -293,7 +305,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
                     if !value.subtree.contains_key(key) {
                         leaf.subtree.insert(key.clone(), subvalue.clone());
                     } else {
-                        let parts: Vec<&str> = vec!(key);
+                        let parts: Vec<&str> = vec![key];
                         leaf.set_path_with_parts(parts, subvalue.clone(), override_subtree);
                         // Prevent a double update
                         notified_update = true;
@@ -306,10 +318,10 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 
                 return;
             }
-        }
-        else {
+        } else {
             if !self.subtree.contains_key(parts[0]) {
-                self.subtree.insert(parts[0].to_string(), ObservableKVTree::default());
+                self.subtree
+                    .insert(parts[0].to_string(), ObservableKVTree::default());
             }
             let subtree = &mut self.subtree.get_mut(parts[0]).unwrap();
             subtree.set_path_with_parts(parts[1..].to_vec(), value, override_subtree);
@@ -321,15 +333,14 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableKVTree<ValueType>> {
         if parts.len() == 1 {
             return self.subtree.get(parts[0]).cloned();
-        }
-        else {
+        } else {
             if !self.subtree.contains_key(parts[0]) {
                 return None;
             }
             let subtree = &self.subtree.get(parts[0]).unwrap();
             let value = match subtree.get_path_with_parts(&parts[1..].to_vec()) {
                 Some(value) => value,
-                _ => { return None },
+                _ => return None,
             };
             return Some(value);
         }
@@ -351,7 +362,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         self.snapshots.push(Snapshot {
             version,
             old_values: self.snapshot_change_accumulator.old_values.clone(),
-            new_values: self.snapshot_change_accumulator.new_values.clone()
+            new_values: self.snapshot_change_accumulator.new_values.clone(),
         });
         self.snapshot_change_accumulator.clear();
         self.last_snapshot_version = version;
@@ -360,20 +371,24 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 
     pub fn last_snapshot_version(&mut self) -> Option<i32> {
         return match self.snapshots.last() {
-            Some(snapshot) => { Some(snapshot.version) },
-            _ => { None }
+            Some(snapshot) => Some(snapshot.version),
+            _ => None,
         };
     }
 
     pub fn revert_snapshot_version(&mut self, version: i32) {
-        let snapshot: Option<Snapshot<ValueType>> = self.snapshots.iter().find(|snapshot| snapshot.version == version).cloned();
+        let snapshot: Option<Snapshot<ValueType>> = self
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.version == version)
+            .cloned();
 
         match snapshot {
             Some(snapshot) => {
                 for (path, old_value) in snapshot.old_values.iter() {
                     self.set_path(path.as_str(), old_value.to_owned());
                 }
-            },
+            }
             None => {
                 panic!("snapshot with this name does not exist");
             }
@@ -381,13 +396,17 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     }
 
     pub fn go_to_snapshot_with_version(&mut self, version: i32) {
-        let snapshot: Option<Snapshot<ValueType>> = self.snapshots.iter().find(|snapshot| snapshot.version == version).cloned();
+        let snapshot: Option<Snapshot<ValueType>> = self
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.version == version)
+            .cloned();
 
         match snapshot {
             Some(snapshot) => {
                 let current_version = match self.update_tracker.corresponding_previous_version {
                     Some(version) => version,
-                    None => self.update_tracker.version
+                    None => self.update_tracker.version,
                 };
 
                 if snapshot.version < current_version {
@@ -397,7 +416,7 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
                     self.fast_forward_to_version(snapshot.version);
                 }
                 self.snapshot_change_accumulator.clear();
-            },
+            }
             None => {
                 panic!("snapshot with this name does not exist");
             }
@@ -407,17 +426,25 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     pub fn rewind_to_version(&mut self, version: i32) {
         let current_version = match self.update_tracker.corresponding_previous_version {
             Some(version) => version,
-            None => self.update_tracker.version
+            None => self.update_tracker.version,
         };
-        let current_position = match self.snapshots.iter().position(|snapshot| snapshot.version == current_version) {
-            Some(position) => { position },
+        let current_position = match self
+            .snapshots
+            .iter()
+            .position(|snapshot| snapshot.version == current_version)
+        {
+            Some(position) => position,
             None => {
                 self.make_snapshot();
                 self.snapshots.len() - 1
             }
         };
 
-        let snapshot_position = self.snapshots.iter().position(|snapshot| snapshot.version == version).unwrap();
+        let snapshot_position = self
+            .snapshots
+            .iter()
+            .position(|snapshot| snapshot.version == version)
+            .unwrap();
         let mut i = current_position;
 
         while i > snapshot_position {
@@ -431,9 +458,13 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     pub fn fast_forward_to_version(&mut self, version: i32) {
         let current_version = match self.update_tracker.corresponding_previous_version {
             Some(version) => version,
-            None => self.update_tracker.version
+            None => self.update_tracker.version,
         };
-        let current_position = match self.snapshots.iter().position(|snapshot| snapshot.version == current_version) {
+        let current_position = match self
+            .snapshots
+            .iter()
+            .position(|snapshot| snapshot.version == current_version)
+        {
             Some(position) => position,
             None => {
                 //self.make_snapshot();
@@ -441,7 +472,11 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
             }
         };
 
-        let snapshot_position = self.snapshots.iter().position(|snapshot| snapshot.version == version).unwrap();
+        let snapshot_position = self
+            .snapshots
+            .iter()
+            .position(|snapshot| snapshot.version == version)
+            .unwrap();
         let mut i = current_position;
 
         while i <= snapshot_position {
@@ -468,9 +503,18 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
     // After setting a path, this method updates
     // the accumulator to set the old_value and the new_value
     fn update_snapshot_accumulator(&mut self, path: &str, value: ValueType) {
-        let old_value: ValueType = self.snapshot_change_accumulator.old_values.get(path).unwrap_or(&self.get_path(path)).clone();
-        self.snapshot_change_accumulator.old_values.insert(path.to_owned(), old_value);
-        self.snapshot_change_accumulator.new_values.insert(path.to_owned(), value);
+        let old_value: ValueType = self
+            .snapshot_change_accumulator
+            .old_values
+            .get(path)
+            .unwrap_or(&self.get_path(path))
+            .clone();
+        self.snapshot_change_accumulator
+            .old_values
+            .insert(path.to_owned(), old_value);
+        self.snapshot_change_accumulator
+            .new_values
+            .insert(path.to_owned(), value);
     }
 
     ///  --------------------- UNDO/REDO ---------------------
@@ -479,7 +523,9 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         let version = self.make_snapshot();
 
         // Slice, since after an action, we can't redo.
-        let current_version_index = self.current_version_index.unwrap_or(self.versions.len() as i32 - 1);
+        let current_version_index = self
+            .current_version_index
+            .unwrap_or(self.versions.len() as i32 - 1);
 
         let new_len: i32 = current_version_index + 1;
         self.versions = self.versions[0..new_len as usize].to_vec();
@@ -534,13 +580,16 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
         self.current_version_index = Some(current_version_index);
     }
 
-
     pub fn dump_undo_state(&mut self) {
         let versions = &self.versions;
         let current_version_index = self.current_version_index;
 
         for (index, version) in versions.iter().enumerate() {
-            let arrow =  if index == current_version_index.unwrap_or(-1) as usize { " <-" }  else { "" };
+            let arrow = if index == current_version_index.unwrap_or(-1) as usize {
+                " <-"
+            } else {
+                ""
+            };
             println!("{} {}", version, arrow);
         }
     }
@@ -568,21 +617,21 @@ impl <ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueT
 // This is a simple value type for docs and testing.
 // In real applications, we expect that a more complex value type will be used
 // to store whatever is needed depending on the context.
-#[derive(Debug,Clone,Serialize,Deserialize)]
-pub enum ExampleValueType{
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExampleValueType {
     I32(i32),
     F32(f32),
     None,
 }
 
 impl From<i32> for ExampleValueType {
-    fn from (value: i32) -> Self {
+    fn from(value: i32) -> Self {
         return Self::I32(value);
     }
 }
 
 impl From<f32> for ExampleValueType {
-    fn from (value: f32) -> Self {
+    fn from(value: f32) -> Self {
         return Self::F32(value);
     }
 }
@@ -603,14 +652,18 @@ impl ExampleValueType {
     pub fn unwrap_i32(&self) -> i32 {
         match &self {
             Self::I32(value) => *value,
-            _ => { panic!("No i32 value stored.") }
+            _ => {
+                panic!("No i32 value stored.")
+            }
         }
     }
 
     pub fn unwrap_f32(&self) -> f32 {
         match &self {
             Self::F32(value) => *value,
-            _ => { panic!("No f32 value stored.") }
+            _ => {
+                panic!("No f32 value stored.")
+            }
         }
     }
 
@@ -636,14 +689,23 @@ mod tests {
     #[test]
     fn it_gets_and_sets_deep_values() {
         let mut data = ObservableKVTree::<ExampleValueType>::default();
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
-        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(1234),
+        );
+        assert_eq!(
+            data.get_path("scene.some.very.deep.property").unwrap_i32(),
+            1234
+        );
     }
 
     #[test]
     fn it_gets_and_sets_subtree() {
         let mut data = ObservableKVTree::<ExampleValueType>::default();
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(1234),
+        );
 
         let scene = data.get_tree("scene").unwrap();
         let mut data2 = ObservableKVTree::<ExampleValueType>::default();
@@ -654,8 +716,14 @@ mod tests {
         data2.set_tree("scene", scene.clone());
 
         assert!(data2.path_version("scene") > initial_version);
-        assert_eq!(data2.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
-        assert_eq!(data2.was_path_updated("scene.some.very.deep.property"), true);
+        assert_eq!(
+            data2.get_path("scene.some.very.deep.property").unwrap_i32(),
+            1234
+        );
+        assert_eq!(
+            data2.was_path_updated("scene.some.very.deep.property"),
+            true
+        );
         assert_eq!(data2.was_path_updated("scene.some.very.deep"), true);
         assert_eq!(data2.was_path_updated("scene.some.very"), true);
         assert_eq!(data2.was_path_updated("scene.some"), true);
@@ -665,8 +733,14 @@ mod tests {
     #[test]
     fn it_increments_version() {
         let mut data = ObservableKVTree::<ExampleValueType>::default();
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
-        data.set_path("scene.some.very.deep.property2", ExampleValueType::from(1234));
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(1234),
+        );
+        data.set_path(
+            "scene.some.very.deep.property2",
+            ExampleValueType::from(1234),
+        );
 
         let scene = data.get_tree("scene").unwrap();
         let mut data2 = ObservableKVTree::<ExampleValueType>::default();
@@ -687,7 +761,10 @@ mod tests {
         assert_eq!(data2.path_version("scene.some"), 1);
         assert_eq!(data2.path_version("scene"), 1);
 
-        assert_eq!(data2.get_path("scene.some.very.deep.property").unwrap_i32(), 1234);
+        assert_eq!(
+            data2.get_path("scene.some.very.deep.property").unwrap_i32(),
+            1234
+        );
 
         data2.set_path("scene.some.very.deep", ExampleValueType::I32(5555));
 
@@ -701,17 +778,26 @@ mod tests {
     #[test]
     fn it_sends_updates() {
         let mut data = ObservableKVTree::<ExampleValueType>::default();
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(1234),
+        );
 
         let receiver = data.create_update_channel();
 
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(2345));
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(2345),
+        );
         let update = receiver.recv().unwrap();
         assert_eq!(update.path, "scene.some.very.deep.property".to_string());
         assert_eq!(update.old_value.unwrap_i32(), 1234);
         assert_eq!(update.value.unwrap_i32(), 2345);
 
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(3456));
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(3456),
+        );
         let update = receiver.recv().unwrap();
         assert_eq!(update.path, "scene.some.very.deep.property".to_string());
         assert_eq!(update.old_value.unwrap_i32(), 2345);
@@ -721,15 +807,28 @@ mod tests {
     #[test]
     fn it_gets_none_when_not_set() {
         let data = ObservableKVTree::<ExampleValueType>::default();
-        assert_eq!(data.get_path("scene.property.that.does.not.exist").is_none(), true);
+        assert_eq!(
+            data.get_path("scene.property.that.does.not.exist")
+                .is_none(),
+            true
+        );
     }
 
     #[test]
     fn it_changes_value() {
         let mut data = ObservableKVTree::<ExampleValueType>::default();
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(2345));
-        assert_eq!(data.get_path("scene.some.very.deep.property").unwrap_i32(), 2345);
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(1234),
+        );
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(2345),
+        );
+        assert_eq!(
+            data.get_path("scene.some.very.deep.property").unwrap_i32(),
+            2345
+        );
     }
 
     #[test]
@@ -740,7 +839,10 @@ mod tests {
         // Pre condition
 
         // Set value
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(1234));
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(1234),
+        );
         assert_eq!(data.was_path_updated("scene.some.very.deep.property"), true);
         assert_eq!(data.was_path_updated("scene.some.very.deep"), true);
         assert_eq!(data.was_path_updated("scene.some.very"), true);
@@ -750,7 +852,10 @@ mod tests {
 
         // Reset update cycle
         data.reset_update_cycle();
-        assert_eq!(data.was_path_updated("scene.some.very.deep.property"), false);
+        assert_eq!(
+            data.was_path_updated("scene.some.very.deep.property"),
+            false
+        );
         assert_eq!(data.was_path_updated("scene.some.very.deep"), false);
         assert_eq!(data.was_path_updated("scene.some.very"), false);
         assert_eq!(data.was_path_updated("scene.some"), false);
@@ -758,7 +863,10 @@ mod tests {
         assert_eq!(data.update_tracker.updated, false);
 
         // Set value (2nd time)
-        data.set_path("scene.some.very.deep.property", ExampleValueType::from(2345));
+        data.set_path(
+            "scene.some.very.deep.property",
+            ExampleValueType::from(2345),
+        );
 
         assert_eq!(data.was_path_updated("scene.some.very.deep.property"), true);
         assert_eq!(data.was_path_updated("scene.some.very.deep"), true);
@@ -778,9 +886,15 @@ mod tests {
         let serialized = serde_json::to_string(&data).unwrap();
 
         // Convert JSON back to BevySceneData
-        let deserialized: ObservableKVTree<ExampleValueType> = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ObservableKVTree<ExampleValueType> =
+            serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(deserialized.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+        assert_eq!(
+            deserialized
+                .get_path("scene.some.deep.property")
+                .unwrap_f32(),
+            123.4
+        );
     }
 
     #[test]
@@ -792,7 +906,10 @@ mod tests {
         data.set_path("scene.some.deep.property", ExampleValueType::from(100.0));
         let v1 = data.make_snapshot();
 
-        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 100.0);
+        assert_eq!(
+            data.get_path("scene.some.deep.property").unwrap_f32(),
+            100.0
+        );
         data.revert_snapshot_version(v1);
         data.set_path("scene.some.deep.property", ExampleValueType::from(123.4));
     }
@@ -810,11 +927,16 @@ mod tests {
         data.set_path("scene.some.deep.property", ExampleValueType::from(102.0));
         let v2 = data.make_snapshot();
 
-
         data.go_to_snapshot_with_version(v1);
-        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+        assert_eq!(
+            data.get_path("scene.some.deep.property").unwrap_f32(),
+            123.4
+        );
         data.go_to_snapshot_with_version(v2);
-        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 102.0);
+        assert_eq!(
+            data.get_path("scene.some.deep.property").unwrap_f32(),
+            102.0
+        );
     }
 
     ///  --------------------- UNDO/REDO ---------------------
@@ -831,19 +953,34 @@ mod tests {
         data.make_undo_redo_snapshot();
 
         data.undo();
-        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+        assert_eq!(
+            data.get_path("scene.some.deep.property").unwrap_f32(),
+            123.4
+        );
         data.redo();
-        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 102.0);
+        assert_eq!(
+            data.get_path("scene.some.deep.property").unwrap_f32(),
+            102.0
+        );
 
         // After this point, nothing is available for redo
         data.redo();
-        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 102.0);
+        assert_eq!(
+            data.get_path("scene.some.deep.property").unwrap_f32(),
+            102.0
+        );
 
         data.undo();
         data.undo();
-        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+        assert_eq!(
+            data.get_path("scene.some.deep.property").unwrap_f32(),
+            123.4
+        );
         data.undo();
         // Before this point, nothing is available for undo
-        assert_eq!(data.get_path("scene.some.deep.property").unwrap_f32(), 123.4);
+        assert_eq!(
+            data.get_path("scene.some.deep.property").unwrap_f32(),
+            123.4
+        );
     }
 }

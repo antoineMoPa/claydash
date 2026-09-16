@@ -1,17 +1,11 @@
+use crate::claydash_data::{ClaydashData, ClaydashValue};
+use crate::command_central_plugin::*;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use egui::containers::Frame;
-use egui::style::{
-    Widgets,
-    WidgetVisuals
-};
+use egui::style::{WidgetVisuals, Widgets};
 use egui::Color32;
-use epaint::{
-    Stroke,
-    Rounding
-};
-use crate::command_central_plugin::*;
-use crate::claydash_data::{ClaydashData, ClaydashValue};
+use egui::{CornerRadius, Stroke};
 use observable_key_value_tree::ObservableKVTree;
 
 #[derive(Resource)]
@@ -28,24 +22,30 @@ impl Default for CommandCentralUiState {
 }
 
 pub fn command_ui(
-    ctx: &egui::Context,
+    viewport_ui: &mut egui::Ui,
     claydash_ui_state: ResMut<CommandCentralUiState>,
     command_central_state: ResMut<CommandCentralState>,
     mut data_resource: ResMut<ClaydashData>,
 ) {
     let tree = &mut data_resource.as_mut().tree;
 
-    egui::SidePanel::right("right_panel")
+    egui::Panel::right("right_panel")
         .frame(Frame {
-            outer_margin: egui::style::Margin::symmetric(20.0, 0.0),
-            inner_margin: egui::style::Margin::same(0.0),
+            outer_margin: egui::Margin::symmetric(20, 0),
+            inner_margin: egui::Margin::ZERO,
             fill: Color32::TRANSPARENT,
             ..default()
         })
         .resizable(false)
-        .show(ctx, |ui| {
+        .show(viewport_ui, |ui| {
             ui.set_width(320.0);
-            command_search(ui, ctx.clone(), claydash_ui_state, command_central_state, tree);
+            command_search(
+                ui,
+                ui.ctx().clone(),
+                claydash_ui_state,
+                command_central_state,
+                tree,
+            );
         });
 }
 
@@ -56,13 +56,10 @@ fn command_search(
     command_central_state: ResMut<CommandCentralState>,
     tree: &mut ObservableKVTree<ClaydashValue>,
 ) {
-    let rounding: Rounding = Rounding::same(5.0);
+    let corner_radius = CornerRadius::same(5);
     let widget_offset = egui::vec2(10.0, 20.0);
     let widget_size = egui::vec2(300.0, 20.0);
-    let widget_rect = egui::Rect::from_min_size(
-        ui.min_rect().min + widget_offset,
-        widget_size
-    );
+    let widget_rect = egui::Rect::from_min_size(ui.min_rect().min + widget_offset, widget_size);
 
     let mut visuals = ui.visuals().clone();
     visuals.override_text_color = Some(Color32::from_rgb(170, 170, 170));
@@ -71,7 +68,7 @@ fn command_search(
         bg_fill: Color32::from_gray(27),
         bg_stroke: Stroke::new(1.0, Color32::TRANSPARENT), // separators, indentation lines
         fg_stroke: Stroke::new(1.0, Color32::TRANSPARENT),
-        rounding,
+        corner_radius,
         expansion: 10.0,
     };
     visuals.widgets = Widgets {
@@ -88,18 +85,18 @@ fn command_search(
     ui.put(
         widget_rect,
         egui::TextEdit::singleline(&mut claydash_ui_state.command_search_str)
-            .hint_text("Search Commands...")
+            .hint_text("Search Commands..."),
     );
     ui.end_row();
     ui.add_space(10.0);
 
     let command_search_str: &mut String = &mut claydash_ui_state.command_search_str;
     if command_search_str.len() > 0 {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(Color32::from_rgba_unmultiplied(200, 200, 200, 10))
-            .rounding(rounding)
-            .outer_margin(egui::style::Margin::symmetric(0.0, 10.0))
-            .inner_margin(egui::style::Margin::symmetric(10.0, 0.0))
+            .corner_radius(corner_radius)
+            .outer_margin(egui::Margin::symmetric(0, 10))
+            .inner_margin(egui::Margin::symmetric(10, 0))
             .show(ui, |ui| {
                 ui.set_width(280.0);
                 command_results_ui(ui, claydash_ui_state, command_central_state, tree);
@@ -111,27 +108,27 @@ fn command_results_ui(
     ui: &mut egui::Ui,
     mut claydash_ui_state: ResMut<CommandCentralUiState>,
     mut bevy_command_central: ResMut<CommandCentralState>,
-    tree: &mut ObservableKVTree<ClaydashValue>
+    tree: &mut ObservableKVTree<ClaydashValue>,
 ) {
-    let rounding = Rounding::same(5.0);
+    let corner_radius = CornerRadius::same(5);
     let command_search_str: &mut String = &mut claydash_ui_state.command_search_str;
     let commands = match command_search_str.len() {
-        0 => { return },
-        _ => { bevy_command_central.commands.search(command_search_str, 5) }
+        0 => return,
+        _ => bevy_command_central.commands.search(command_search_str, 5),
     };
 
     for (system_name, command) in commands.iter() {
         let bg_color = Color32::from_rgba_unmultiplied(217, 217, 217, 10);
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(bg_color)
-            .rounding(rounding)
-            .inner_margin(egui::style::Margin::symmetric(10.0, 10.0))
-            .outer_margin(egui::style::Margin::symmetric(0.0, 10.0))
+            .corner_radius(corner_radius)
+            .inner_margin(egui::Margin::symmetric(10, 10))
+            .outer_margin(egui::Margin::symmetric(0, 10))
             .show(ui, |ui| {
                 ui.set_width(280.0);
                 ui.heading(&command.title);
-                ui.label(system_name) ;
+                ui.label(system_name);
                 ui.separator();
                 ui.label(&command.docs);
                 ui.end_row();
@@ -166,7 +163,7 @@ fn command_results_ui(
                         match command.parameters["callback"].value.clone().unwrap() {
                             ClaydashValue::Fn(callback) => {
                                 callback(tree);
-                            },
+                            }
                             _ => {}
                         };
                     }

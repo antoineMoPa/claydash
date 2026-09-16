@@ -1,30 +1,28 @@
 #import bevy_pbr::forward_io::VertexOutput;
-#import bevy_pbr::mesh_view_bindings globals
-
-@group(1) @binding(0)
+@group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> camera: vec4<f32>;
-@group(1) @binding(1)
+@group(#{MATERIAL_BIND_GROUP}) @binding(1)
 var<uniform> camera_right: vec4<f32>;
-@group(1) @binding(2)
+@group(#{MATERIAL_BIND_GROUP}) @binding(2)
 var<uniform> camera_up: vec4<f32>;
 
 
-@group(1) @binding(3)
+@group(#{MATERIAL_BIND_GROUP}) @binding(3)
 var<uniform> sdf_meta: array<vec4<i32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(4)
+@group(#{MATERIAL_BIND_GROUP}) @binding(4)
 var<uniform> sdf_colors: array<vec4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(5)
+@group(#{MATERIAL_BIND_GROUP}) @binding(5)
 var<uniform> sdf_inverse_transforms: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(6)
+@group(#{MATERIAL_BIND_GROUP}) @binding(6)
 var<uniform> sdf_params: array<mat4x4<f32>, #{MAX_SDFS_PER_ENTITY}>;
 
-@group(1) @binding(7)
+@group(#{MATERIAL_BIND_GROUP}) @binding(7)
 var<uniform> control_point_positions: array<vec4<f32>, #{MAX_CONTROL_POINTS}>;
 
-@group(1) @binding(8)
+@group(#{MATERIAL_BIND_GROUP}) @binding(8)
 var<uniform> num_control_points: vec4<i32>; // padded for alignment. number is stored in first position.
 
 const MAX_ITERATIONS = 32;

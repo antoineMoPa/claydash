@@ -1,15 +1,10 @@
-use bevy::{
-    prelude::*,
-    input::keyboard::KeyCode, ecs::system::SystemState
-};
-use crate::claydash_data::{ClaydashValue, ClaydashData};
-use crate::command_central_plugin::CommandCentralState;
-use observable_key_value_tree::{
-    ObservableKVTree,
-};
 use crate::bevy_sdf_object::SDFObject;
-use command_central::CommandBuilder;
 use crate::claydash_data::EditorState::*;
+use crate::claydash_data::{ClaydashData, ClaydashValue};
+use crate::command_central_plugin::CommandCentralState;
+use bevy::{ecs::system::SystemState, input::keyboard::KeyCode, prelude::*};
+use command_central::CommandBuilder;
+use observable_key_value_tree::ObservableKVTree;
 use sdf_consts::TYPE_BOX;
 
 pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCentralState>) {
@@ -19,7 +14,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("grab")
         .docs("Start moving selection.")
         .shortcut("G")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(start_grab)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(start_grab)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -27,7 +26,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("constrain_x")
         .docs("Add a X constraint to current editing mode.")
         .shortcut("X")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_x)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(constrain_x)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -35,7 +38,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("constrain_y")
         .docs("Add a Y constraint to current editing mode.")
         .shortcut("Y")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_y)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(constrain_y)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -43,7 +50,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("constrain_z")
         .docs("Add a Z constraint to current editing mode.")
         .shortcut("Z")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(constrain_z)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(constrain_z)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -51,7 +62,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("scale")
         .docs("Start scaling selection.")
         .shortcut("S")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(start_scale)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(start_scale)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -59,7 +74,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("rotate")
         .docs("Start rotating selection.")
         .shortcut("R")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(start_rotate)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(start_rotate)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -67,7 +86,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("quit")
         .docs("Quit and cancel current editing state.")
         .shortcut("Escape")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(escape)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(escape)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -75,7 +98,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("finish")
         .docs("Finish and apply current editing state.")
         .shortcut("Return")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(finish)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(finish)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -83,7 +110,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("delete")
         .docs("Delete/Remove selection.")
         .shortcut("Back")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(delete)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(delete)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -91,7 +122,11 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("select_all_or_none")
         .docs("Toggle selecting all objects.")
         .shortcut("Shift+A")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(select_all_or_none)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(select_all_or_none)),
+        )
         .write(commands);
 
     CommandBuilder::new()
@@ -99,33 +134,47 @@ pub fn register_interaction_commands(mut bevy_command_central: ResMut<CommandCen
         .system_name("duplicate")
         .docs("Duplicate selection.")
         .shortcut("Shift+D")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(duplicate)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(duplicate)),
+        )
         .write(commands);
 
     CommandBuilder::new()
         .title("Spawn Sphere")
         .system_name("spawn-sphere")
         .docs("Add a sphere at the given position")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(spawn_sphere)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(spawn_sphere)),
+        )
         .write(commands);
 
     CommandBuilder::new()
         .title("Spawn Box")
         .system_name("spawn-box")
         .docs("Adds a cube at the given position")
-        .insert_param("callback", "system callback", Some(ClaydashValue::Fn(spawn_box)))
+        .insert_param(
+            "callback",
+            "system callback",
+            Some(ClaydashValue::Fn(spawn_box)),
+        )
         .write(commands);
 }
 
-fn set_objects_initial_properties(
-    tree: &mut  ObservableKVTree<ClaydashValue>
-) {
+fn set_objects_initial_properties(tree: &mut ObservableKVTree<ClaydashValue>) {
     let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(data) => data,
-        _ => { return; }
+        _ => {
+            return;
+        }
     };
 
-    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+    let selected_object_uuids = tree
+        .get_path("scene.selected_uuids")
+        .unwrap_vec_uuid_or(Vec::new());
 
     let mut selected_object_sum_position: Vec3 = Vec3::ZERO;
     let mut selected_object_count: i32 = 0;
@@ -139,8 +188,12 @@ fn set_objects_initial_properties(
         }
     }
     let mut initial_selection_transform = Transform::IDENTITY;
-    initial_selection_transform.translation = selected_object_sum_position / (selected_object_count as f32);
-    tree.set_path("editor.initial_selection_transform", ClaydashValue::Transform(initial_selection_transform));
+    initial_selection_transform.translation =
+        selected_object_sum_position / (selected_object_count as f32);
+    tree.set_path(
+        "editor.initial_selection_transform",
+        ClaydashValue::Transform(initial_selection_transform),
+    );
 
     tree.set_path("editor.initial_radius", ClaydashValue::F32(0.3));
 
@@ -149,27 +202,31 @@ fn set_objects_initial_properties(
         if selected_object_uuids.contains(&object.uuid) {
             let mut transform_relative_to_center = object.transform;
             transform_relative_to_center.translation -= initial_selection_transform.translation;
-            tree.set_path(&format!("editor.initial_transform.{}", object.uuid), ClaydashValue::Transform(object.transform));
-            tree.set_path(&format!("editor.initial_transform_relative_to_selection.{}", object.uuid), ClaydashValue::Transform(transform_relative_to_center));
+            tree.set_path(
+                &format!("editor.initial_transform.{}", object.uuid),
+                ClaydashValue::Transform(object.transform),
+            );
+            tree.set_path(
+                &format!(
+                    "editor.initial_transform_relative_to_selection.{}",
+                    object.uuid
+                ),
+                ClaydashValue::Transform(transform_relative_to_center),
+            );
         }
     }
 }
 
-pub fn run_shortcut_commands(
-    world: &mut World,
-){
+pub fn run_shortcut_commands(world: &mut World) {
     let mut system_state: SystemState<(
         ResMut<CommandCentralState>,
         ResMut<ClaydashData>,
         Query<&Window>,
-        Res<Input<KeyCode>>
+        Res<ButtonInput<KeyCode>>,
     )> = SystemState::new(world);
 
-    let (mut bevy_command_central,
-         mut data_resource,
-         windows,
-         keys) = system_state.get_mut(world);
-
+    let (mut bevy_command_central, mut data_resource, windows, keys) =
+        system_state.get_mut(world).unwrap();
 
     let commands = &mut bevy_command_central.commands.commands;
     let tree = &mut data_resource.as_mut().tree;
@@ -177,21 +234,21 @@ pub fn run_shortcut_commands(
     for key in keys.get_just_pressed() {
         // Modifiers are not part of sequence themselves
         match key {
-            KeyCode::ShiftLeft => { return }
-            KeyCode::SuperLeft => { return },
-            KeyCode::ControlLeft => { return },
+            KeyCode::ShiftLeft => return,
+            KeyCode::SuperLeft => return,
+            KeyCode::ControlLeft => return,
             _ => {}
         }
-        let keyname = key_to_name(key);
+        let keyname = key_to_name(&key);
         // Mac command button is equivalent to shift in our system.
-        let has_shift = keys.any_pressed(vec!(KeyCode::ShiftLeft, KeyCode::SuperLeft));
+        let has_shift = keys.any_pressed(vec![KeyCode::ShiftLeft, KeyCode::SuperLeft]);
         let has_control = keys.pressed(KeyCode::ControlLeft);
 
         let modifiers = match (has_control, has_shift) {
-            (true, true) => { "Ctrl+Shift+" },
-            (true, false) => { "Ctrl+" },
-            (false, true) => { "Shift+" },
-            _ => { "" }
+            (true, true) => "Ctrl+Shift+",
+            (true, false) => "Ctrl+",
+            (false, true) => "Shift+",
+            _ => "",
         };
 
         let combo_name = format!("{}{}", modifiers, keyname);
@@ -204,10 +261,10 @@ pub fn run_shortcut_commands(
             continue;
         }
         if shortcut_sequence == command.shortcut {
-            let window = windows.single();
+            let window = windows.single().unwrap();
             tree.set_path(
                 "editor.initial_mouse_position",
-                ClaydashValue::Vec2(window.cursor_position().unwrap_or(Vec2::ZERO))
+                ClaydashValue::Vec2(window.cursor_position().unwrap_or(Vec2::ZERO)),
             );
             match command.parameters["callback"].value.clone().unwrap() {
                 ClaydashValue::Fn(callback) => callback(tree),
@@ -219,35 +276,35 @@ pub fn run_shortcut_commands(
 
 fn key_to_name(key: &KeyCode) -> String {
     return match key {
-        KeyCode::A => "A",
-        KeyCode::B => "B",
-        KeyCode::C => "C",
-        KeyCode::D => "D",
-        KeyCode::E => "E",
-        KeyCode::F => "F",
-        KeyCode::G => "G",
-        KeyCode::H => "H",
-        KeyCode::I => "I",
-        KeyCode::J => "J",
-        KeyCode::K => "K",
-        KeyCode::L => "L",
-        KeyCode::M => "M",
-        KeyCode::N => "N",
-        KeyCode::O => "O",
-        KeyCode::P => "P",
-        KeyCode::Q => "Q",
-        KeyCode::R => "R",
-        KeyCode::S => "S",
-        KeyCode::T => "T",
-        KeyCode::U => "U",
-        KeyCode::V => "V",
-        KeyCode::W => "W",
-        KeyCode::X => "X",
-        KeyCode::Y => "Y",
-        KeyCode::Z => "Z",
+        KeyCode::KeyA => "A",
+        KeyCode::KeyB => "B",
+        KeyCode::KeyC => "C",
+        KeyCode::KeyD => "D",
+        KeyCode::KeyE => "E",
+        KeyCode::KeyF => "F",
+        KeyCode::KeyG => "G",
+        KeyCode::KeyH => "H",
+        KeyCode::KeyI => "I",
+        KeyCode::KeyJ => "J",
+        KeyCode::KeyK => "K",
+        KeyCode::KeyL => "L",
+        KeyCode::KeyM => "M",
+        KeyCode::KeyN => "N",
+        KeyCode::KeyO => "O",
+        KeyCode::KeyP => "P",
+        KeyCode::KeyQ => "Q",
+        KeyCode::KeyR => "R",
+        KeyCode::KeyS => "S",
+        KeyCode::KeyT => "T",
+        KeyCode::KeyU => "U",
+        KeyCode::KeyV => "V",
+        KeyCode::KeyW => "W",
+        KeyCode::KeyX => "X",
+        KeyCode::KeyY => "Y",
+        KeyCode::KeyZ => "Z",
         KeyCode::Escape => "Escape",
-        KeyCode::Return => "Return",
-        KeyCode::Back => "Back",
+        KeyCode::Enter => "Return",
+        KeyCode::Backspace => "Back",
         KeyCode::ShiftLeft => "Shift",
         // Mac command button is equivalent to shift in our system.
         // Shift+A == Command+A
@@ -257,9 +314,9 @@ fn key_to_name(key: &KeyCode) -> String {
             println!("note: last typed keycode not mapped to key.");
             ""
         }
-    }.to_string();
+    }
+    .to_string();
 }
-
 
 fn reset_constraints(tree: &mut ObservableKVTree<ClaydashValue>) {
     tree.set_path("editor.constrain_x", ClaydashValue::Bool(false));
@@ -307,19 +364,22 @@ fn escape(tree: &mut ObservableKVTree<ClaydashValue>) {
     let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
 
     match state {
-        Start  => {
+        Start => {
             // Not currently editing.
             return;
-        },
+        }
         _ => {}
     }
 
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 
-    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+    let selected_object_uuids = tree
+        .get_path("scene.selected_uuids")
+        .unwrap_vec_uuid_or(Vec::new());
 
-
-    let mut sdf_objects: Vec<SDFObject> = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
+    let mut sdf_objects: Vec<SDFObject> = tree
+        .get_path("scene.sdf_objects")
+        .unwrap_vec_sdf_object_or(Vec::new());
 
     for object in sdf_objects.iter_mut() {
         if !selected_object_uuids.contains(&object.uuid) {
@@ -331,7 +391,10 @@ fn escape(tree: &mut ObservableKVTree<ClaydashValue>) {
         object.transform = initial_transform;
     }
 
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    tree.set_path(
+        "scene.sdf_objects",
+        ClaydashValue::VecSDFObject(sdf_objects),
+    );
 }
 
 fn finish(tree: &mut ObservableKVTree<ClaydashValue>) {
@@ -340,37 +403,51 @@ fn finish(tree: &mut ObservableKVTree<ClaydashValue>) {
 
 fn duplicate(tree: &mut ObservableKVTree<ClaydashValue>) {
     // Find selected objects
-    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+    let selected_object_uuids = tree
+        .get_path("scene.selected_uuids")
+        .unwrap_vec_uuid_or(Vec::new());
 
     let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(objects) => { objects },
-        _ => { return; }
+        ClaydashValue::VecSDFObject(objects) => objects,
+        _ => {
+            return;
+        }
     };
 
-    let mut duplicated_objects: Vec<SDFObject> = sdf_objects.iter().filter(| sdf_object | {
-        selected_object_uuids.contains(&sdf_object.uuid)
-    }).map(|object| {
-        object.duplicate()
-    }).collect();
+    let mut duplicated_objects: Vec<SDFObject> = sdf_objects
+        .iter()
+        .filter(|sdf_object| selected_object_uuids.contains(&sdf_object.uuid))
+        .map(|object| object.duplicate())
+        .collect();
 
     // List duplicated objects uuids
-    let duplicated_uuids: Vec<uuid::Uuid> = duplicated_objects.iter().map(|object| {
-        object.uuid
-    }).collect();
+    let duplicated_uuids: Vec<uuid::Uuid> = duplicated_objects
+        .iter()
+        .map(|object| object.uuid)
+        .collect();
 
     // Update the tree with duplicated objects
     sdf_objects.append(&mut duplicated_objects);
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
-    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(duplicated_uuids));
+    tree.set_path(
+        "scene.sdf_objects",
+        ClaydashValue::VecSDFObject(sdf_objects),
+    );
+    tree.set_path(
+        "scene.selected_uuids",
+        ClaydashValue::VecUuid(duplicated_uuids),
+    );
 
     // Move these new objects
     start_grab(tree);
 }
 
 fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue>) {
-    let selected_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
-    let sdf_objects = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
-
+    let selected_uuids = tree
+        .get_path("scene.selected_uuids")
+        .unwrap_vec_uuid_or(Vec::new());
+    let sdf_objects = tree
+        .get_path("scene.sdf_objects")
+        .unwrap_vec_sdf_object_or(Vec::new());
 
     if selected_uuids.len() == sdf_objects.len() {
         // Everything is selected: now select none
@@ -379,7 +456,7 @@ fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue>) {
         // Select all
         tree.set_path(
             "scene.selected_uuids",
-            ClaydashValue::VecUuid(sdf_objects.iter().map(|object| { object.uuid }).collect())
+            ClaydashValue::VecUuid(sdf_objects.iter().map(|object| object.uuid).collect()),
         );
         tree.set_path("editor.state", ClaydashValue::EditorState(Start));
     }
@@ -387,18 +464,25 @@ fn select_all_or_none(tree: &mut ObservableKVTree<ClaydashValue>) {
 
 fn delete(tree: &mut ObservableKVTree<ClaydashValue>) {
     // Find selected objects
-    let selected_object_uuids = tree.get_path("scene.selected_uuids").unwrap_vec_uuid_or(Vec::new());
+    let selected_object_uuids = tree
+        .get_path("scene.selected_uuids")
+        .unwrap_vec_uuid_or(Vec::new());
 
     let filtered_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(objects) => {
-            objects.iter().filter(|object| {
-                !selected_object_uuids.contains(&object.uuid)
-            }).cloned().collect()
-        },
-        _ => { return; }
+        ClaydashValue::VecSDFObject(objects) => objects
+            .iter()
+            .filter(|object| !selected_object_uuids.contains(&object.uuid))
+            .cloned()
+            .collect(),
+        _ => {
+            return;
+        }
     };
 
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(filtered_objects));
+    tree.set_path(
+        "scene.sdf_objects",
+        ClaydashValue::VecSDFObject(filtered_objects),
+    );
 }
 
 fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
@@ -408,8 +492,10 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
     };
 
     let mut sdf_objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(objects) => { objects },
-        _ => { vec!() }
+        ClaydashValue::VecSDFObject(objects) => objects,
+        _ => {
+            vec![]
+        }
     };
 
     let mut new_object = SDFObject::create(sdf_consts::TYPE_SPHERE);
@@ -419,10 +505,13 @@ fn spawn_sphere(tree: &mut ObservableKVTree<ClaydashValue>) {
     sdf_objects.push(new_object);
 
     // Update the tree with duplicated objects
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    tree.set_path(
+        "scene.sdf_objects",
+        ClaydashValue::VecSDFObject(sdf_objects),
+    );
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 
-    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(vec!(uuid)));
+    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(vec![uuid]));
 
     // Move new objects
     start_grab(tree);
@@ -434,7 +523,9 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue>) {
         _ => Vec4::new(0.4, 0.2, 0.0, 1.0),
     };
 
-    let mut sdf_objects: Vec<SDFObject> = tree.get_path("scene.sdf_objects").unwrap_vec_sdf_object_or(Vec::new());
+    let mut sdf_objects: Vec<SDFObject> = tree
+        .get_path("scene.sdf_objects")
+        .unwrap_vec_sdf_object_or(Vec::new());
 
     let mut new_object = SDFObject::create(TYPE_BOX);
     new_object.color = color;
@@ -444,10 +535,13 @@ fn spawn_box(tree: &mut ObservableKVTree<ClaydashValue>) {
     sdf_objects.push(new_object);
 
     // Update the tree with duplicated objects
-    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(sdf_objects));
+    tree.set_path(
+        "scene.sdf_objects",
+        ClaydashValue::VecSDFObject(sdf_objects),
+    );
     tree.set_path("editor.state", ClaydashValue::EditorState(Start));
 
-    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(vec!(uuid)));
+    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(vec![uuid]));
 
     // Move new objects
     start_grab(tree);

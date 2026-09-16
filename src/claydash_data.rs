@@ -1,18 +1,13 @@
 use bevy::prelude::*;
-use serde::{Serialize, Deserialize};
 use sdf_consts::*;
+use serde::{Deserialize, Serialize};
 
-use observable_key_value_tree::{
-    ObservableKVTree,
-    CanBeNone,
-    Update,
-    Snapshot
-};
+use observable_key_value_tree::{CanBeNone, ObservableKVTree, Snapshot, Update};
 
-use std::sync::{Arc, Mutex};
 use lazy_static::lazy_static;
+use std::sync::{Arc, Mutex};
 
-use crate::bevy_sdf_object::{SDFObjectMaterial, SDFObject, ControlPointType};
+use crate::bevy_sdf_object::{ControlPointType, SDFObject, SDFObjectMaterial};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum EditorState {
@@ -76,14 +71,14 @@ macro_rules! define_unwrap_methods {
         pub fn $unwrap_or_default_method_name(&self) -> $type {
             match &self {
                 Self::$variant(value) => *value,
-                _ => $default
+                _ => $default,
             }
         }
 
         pub fn $unwrap_or_method_name(&self, default_value: $type) -> $type {
             match &self {
                 Self::$variant(value) => *value,
-                _ => default_value
+                _ => default_value,
             }
         }
     };
@@ -104,13 +99,11 @@ macro_rules! define_unwrap_methods_for_vec {
         pub fn $unwrap_or_method_name(&self, default_value: $type) -> $type {
             match &self {
                 Self::$variant(value) => value.clone(),
-                _ => default_value
+                _ => default_value,
             }
         }
     };
 }
-
-
 
 impl ClaydashValue {
     // Add a few methods to help with unwrapping.
@@ -239,12 +232,7 @@ impl ClaydashValue {
         Vec<Snapshot<ClaydashValue>>
     );
 
-    define_unwrap_methods_for_vec!(
-        unwrap_vec_i32,
-        unwrap_vec_i32_or,
-        VecI32,
-        Vec<i32>
-    );
+    define_unwrap_methods_for_vec!(unwrap_vec_i32, unwrap_vec_i32_or, VecI32, Vec<i32>);
 
     pub fn is_none(&self) -> bool {
         match &self {
@@ -256,7 +244,7 @@ impl ClaydashValue {
 
 #[derive(Resource, Default)]
 pub struct ClaydashData {
-    pub tree: ObservableKVTree<ClaydashValue>
+    pub tree: ObservableKVTree<ClaydashValue>,
 }
 
 pub struct ClaydashDataPlugin;
@@ -291,7 +279,7 @@ pub fn get_active_object_index(tree: &ObservableKVTree<ClaydashValue>) -> Option
 // Once the tree supports different update flags, we can split this in separate systems again.
 fn sync_to_bevy(
     mut data_resource: ResMut<ClaydashData>,
-    material_handle: Query<&Handle<SDFObjectMaterial>>,
+    material_handle: Single<&MeshMaterial3d<SDFObjectMaterial>>,
     mut materials: ResMut<Assets<SDFObjectMaterial>>,
 ) {
     let data = data_resource.as_mut();
@@ -301,22 +289,21 @@ fn sync_to_bevy(
     let last_updated_version = LAST_SYNCED_SDF_OBJECTS_VERSION.try_lock();
 
     let mut last_updated_version = match last_updated_version {
-        Ok(version) => { version  }
-        _ => { return }
+        Ok(version) => version,
+        _ => return,
     };
 
-    if version > *last_updated_version  {
+    if version > *last_updated_version {
         // Potentially: move this block to bevy_sdf_object
         // Update sdf objects
         {
-            let handle = material_handle.single();
-            let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+            let mut material = materials.get_mut(&material_handle.0).unwrap();
             material.sdf_meta[0].w = TYPE_END;
 
             let value = data.tree.get_path("scene.sdf_objects");
 
             for (index, object) in value.unwrap_vec_sdf_object().iter().enumerate() {
-                object.params.update_material(index, material);
+                object.params.update_material(index, &mut material);
 
                 material.sdf_meta[index].w = object.object_type;
                 material.sdf_colors[index] = object.color;
@@ -328,15 +315,16 @@ fn sync_to_bevy(
         *last_updated_version = version;
     }
 
-    if data.tree.was_path_updated("scene.selected_uuids") || data.tree.was_path_updated("scene.sdf_objects"){
+    if data.tree.was_path_updated("scene.selected_uuids")
+        || data.tree.was_path_updated("scene.sdf_objects")
+    {
         let active_object_index = get_active_object_index(&data.tree);
         let objects = data.tree.get_path("scene.sdf_objects");
         let uuids = data.tree.get_path("scene.selected_uuids");
         let uuids = uuids.unwrap_vec_uuid();
 
         // Reset in case no material is selected
-        let handle = material_handle.single();
-        let material: &mut SDFObjectMaterial = materials.get_mut(handle).unwrap();
+        let mut material = materials.get_mut(&material_handle.0).unwrap();
         material.num_control_points[0] = 0;
 
         for (index, object) in objects.unwrap_vec_sdf_object().iter().enumerate() {
@@ -349,16 +337,15 @@ fn sync_to_bevy(
             }
         }
 
-        match active_object_index  {
+        match active_object_index {
             Some(index) => {
                 // Show control points
                 let object = &objects.unwrap_vec_sdf_object()[index];
-                show_control_points(material, index, object);
-            },
+                show_control_points(&mut material, index, object);
+            }
             _ => {}
         }
     }
-
 
     data.tree.reset_update_cycle();
 }

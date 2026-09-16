@@ -1,8 +1,8 @@
-use bevy::prelude::*;
 use crate::claydash_data::{ClaydashData, ClaydashValue};
-use observable_key_value_tree::ObservableKVTree;
-use command_central::CommandBuilder;
 use crate::command_central_plugin::CommandCentralState;
+use bevy::prelude::*;
+use command_central::CommandBuilder;
+use observable_key_value_tree::ObservableKVTree;
 
 pub struct ClaydashUndoRedoPlugin;
 
@@ -36,16 +36,12 @@ fn setup_undo_redo_commands(mut bevy_command_central: ResMut<CommandCentralState
         .write(commands);
 }
 
-fn undo(
-    tree: &mut ObservableKVTree<ClaydashValue>
-) {
+fn undo(tree: &mut ObservableKVTree<ClaydashValue>) {
     tree.undo();
     tree.dump_undo_state();
 }
 
-fn redo(
-    tree: &mut ObservableKVTree<ClaydashValue>
-) {
+fn redo(tree: &mut ObservableKVTree<ClaydashValue>) {
     tree.redo();
     tree.dump_undo_state();
 }

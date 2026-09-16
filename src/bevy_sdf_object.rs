@@ -1,19 +1,14 @@
-use bevy_reflect::{TypePath,TypeUuid};
 use bevy::{
+    mesh::MeshVertexBufferLayoutRef,
+    pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
-    pbr::{
-        MaterialPipeline,
-        MaterialPipelineKey,
+    render::render_resource::{
+        AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
     },
-    render::{
-        mesh::MeshVertexBufferLayout,
-        render_resource::{
-            AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError, ShaderDefVal,
-        },
-    },
+    shader::{ShaderDefVal, ShaderRef},
 };
-use serde::{Serialize, Deserialize};
 use sdf_consts::*;
+use serde::{Deserialize, Serialize};
 
 pub struct BevySDFObjectPlugin;
 
@@ -26,7 +21,7 @@ impl Plugin for BevySDFObjectPlugin {
 const MAX_SDFS_PER_ENTITY: i32 = 256;
 const MAX_CONTROL_POINTS: i32 = 16;
 
-#[derive(PartialEq,Copy,Clone,Serialize,Deserialize)]
+#[derive(PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub enum ControlPointType {
     SphereRadius,
     BoxX,
@@ -35,7 +30,7 @@ pub enum ControlPointType {
     None,
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ControlPoint {
     pub position: Vec3,
     pub control_point_type: ControlPointType,
@@ -59,9 +54,8 @@ const CONTROL_POINT_CLICK_DISTANCE: f32 = 0.03;
 pub fn control_points_hit(
     camera_position: Vec3,
     ray: Vec3,
-    objects: &Vec<SDFObject>
+    objects: &Vec<SDFObject>,
 ) -> Option<ControlPoint> {
-
     for obj in objects.iter() {
         for control_point in obj.get_control_points().iter() {
             let hit_distance = control_point.get_hit_distance(camera_position, ray);
@@ -71,10 +65,10 @@ pub fn control_points_hit(
         }
     }
 
-    return None
+    return None;
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BoxParams {
     pub box_q: Vec3,
 }
@@ -82,12 +76,12 @@ pub struct BoxParams {
 impl Default for BoxParams {
     fn default() -> Self {
         Self {
-            box_q: Vec3::new(0.3, 0.3, 0.3)
+            box_q: Vec3::new(0.3, 0.3, 0.3),
         }
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SphereParams {
     pub radius: f32,
 }
@@ -98,29 +92,37 @@ impl Default for SphereParams {
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum SDFObjectParams {
     BoxParams(BoxParams),
-    SphereParams(SphereParams)
+    SphereParams(SphereParams),
 }
 
 impl BoxParams {
     pub fn update_material(&self, index: usize, material: &mut SDFObjectMaterial) {
         material.sdf_params[index] = Mat4::from_cols_array(&[
-            self.box_q.x, self.box_q.y, self.box_q.z, 0.0,
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0
+            self.box_q.x,
+            self.box_q.y,
+            self.box_q.z,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         ]);
     }
 
     fn sdf(&self, p: Vec3) -> f32 {
         let box_q = p.abs() - self.box_q;
-        let max_box_q = Vec3::new(
-            box_q.x.max(0.0),
-            box_q.y.max(0.0),
-            box_q.z.max(0.0)
-        );
+        let max_box_q = Vec3::new(box_q.x.max(0.0), box_q.y.max(0.0), box_q.z.max(0.0));
         return (max_box_q + box_q.x.max(box_q.y.max(box_q.z)).min(0.0)).length();
     }
 }
@@ -128,10 +130,22 @@ impl BoxParams {
 impl SphereParams {
     pub fn update_material(&self, index: usize, material: &mut SDFObjectMaterial) {
         material.sdf_params[index] = Mat4::from_cols_array(&[
-            self.radius, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0
+            self.radius,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         ]);
     }
 
@@ -144,7 +158,9 @@ impl SDFObjectParams {
     pub fn update_material(&self, index: usize, material: &mut SDFObjectMaterial) {
         match self {
             SDFObjectParams::BoxParams(box_params) => box_params.update_material(index, material),
-            SDFObjectParams::SphereParams(sphere_params) => sphere_params.update_material(index, material),
+            SDFObjectParams::SphereParams(sphere_params) => {
+                sphere_params.update_material(index, material)
+            }
         }
     }
 
@@ -174,15 +190,17 @@ impl SDFObject {
     }
 
     pub fn inverse_transform_matrix(&self) -> Mat4 {
-        return self.transform.compute_matrix().inverse();
+        return self.transform.to_matrix().inverse();
     }
 
     pub fn get_control_points(&self) -> Vec<ControlPoint> {
         match self.object_type {
             TYPE_SPHERE => {
                 let r: f32 = match &self.params {
-                    SDFObjectParams::SphereParams(params) => { params.radius },
-                    _ => { panic!("No sphere params.") }
+                    SDFObjectParams::SphereParams(params) => params.radius,
+                    _ => {
+                        panic!("No sphere params.")
+                    }
                 };
 
                 let s = self.transform.scale;
@@ -193,12 +211,14 @@ impl SDFObject {
                     object_uuid: self.uuid,
                     label: "radius".to_owned(),
                 };
-                vec!(radius_control_point)
-            },
+                vec![radius_control_point]
+            }
             TYPE_BOX => {
                 let box_q: Vec3 = match &self.params {
-                    SDFObjectParams::BoxParams(params) => { params.box_q },
-                    _ => { panic!("No sphere params.") }
+                    SDFObjectParams::BoxParams(params) => params.box_q,
+                    _ => {
+                        panic!("No sphere params.")
+                    }
                 };
 
                 let s = self.transform.scale;
@@ -224,10 +244,9 @@ impl SDFObject {
                     label: "z size".to_owned(),
                 };
 
-
-                vec!(x_control_point, y_control_point, z_control_point)
-            },
-            _ => vec!()
+                vec![x_control_point, y_control_point, z_control_point]
+            }
+            _ => vec![],
         }
     }
 
@@ -243,7 +262,7 @@ impl SDFObject {
                 params: SDFObjectParams::BoxParams(BoxParams::default()),
                 ..SDFObject::default()
             },
-            _ => panic!("create() not implemented for {}", object_type)
+            _ => panic!("create() not implemented for {}", object_type),
         }
     }
 }
@@ -263,9 +282,8 @@ impl Default for SDFObject {
 /// SDFObjectMaterial
 /// This material uses our raymarching shader to display SDF objects.
 // TODO: move to strorage buffers once chrome supports it.
-#[derive(Asset, TypeUuid, TypePath, AsBindGroup, Clone)]
-#[uuid = "84F24BEA-CC34-4A35-B223-C5C148A14722"]
-#[repr(C,align(16))]
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[repr(C, align(16))]
 pub struct SDFObjectMaterial {
     #[uniform(0)]
     pub camera: Vec4,
@@ -329,7 +347,7 @@ pub fn raymarch(start_position: Vec3, ray: Vec3, objects: Vec<SDFObject>) -> Opt
         position += direction * d * 0.3;
     }
 
-    return None
+    return None;
 }
 
 impl Default for SDFObjectMaterial {
@@ -338,7 +356,12 @@ impl Default for SDFObjectMaterial {
             camera: Vec4::ZERO,
             camera_up: Vec4::ZERO,
             camera_right: Vec4::ZERO,
-            sdf_meta: [IVec4 { w: TYPE_END, x: 0, y: 0, z: 0 }; MAX_SDFS_PER_ENTITY as usize],
+            sdf_meta: [IVec4 {
+                w: TYPE_END,
+                x: 0,
+                y: 0,
+                z: 0,
+            }; MAX_SDFS_PER_ENTITY as usize],
             sdf_colors: [Vec4::ZERO; MAX_SDFS_PER_ENTITY as usize],
             sdf_inverse_transforms: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
             sdf_params: [Mat4::IDENTITY; MAX_SDFS_PER_ENTITY as usize],
@@ -354,28 +377,26 @@ impl Material for SDFObjectMaterial {
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-	AlphaMode::Blend
+        AlphaMode::Blend
     }
 
     fn specialize(
-        _pipeline: &MaterialPipeline<Self>,
+        _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayout,
+        _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         let fragment = descriptor.fragment.as_mut().unwrap();
-        ShaderDefVal::Int("MAX_SDFS_PER_ENTITY".into(), MAX_SDFS_PER_ENTITY);
-
         let defs = &mut fragment.shader_defs;
 
         defs.push(ShaderDefVal::Int(
             "MAX_SDFS_PER_ENTITY".into(),
-            MAX_SDFS_PER_ENTITY)
-        );
+            MAX_SDFS_PER_ENTITY,
+        ));
         defs.push(ShaderDefVal::Int(
             "MAX_CONTROL_POINTS".into(),
-            MAX_CONTROL_POINTS)
-        );
+            MAX_CONTROL_POINTS,
+        ));
 
         defs.push(ShaderDefVal::Int("TYPE_END".into(), TYPE_END));
         defs.push(ShaderDefVal::Int("TYPE_SPHERE".into(), TYPE_SPHERE));

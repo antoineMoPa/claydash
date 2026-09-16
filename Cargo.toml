@@ -1,20 +1,21 @@
 [workspace]
 members = [
-    "crates/sdf_consts"
+    "crates/command_central",
+    "crates/observable_key_value_tree",
+    "crates/sdf_consts",
 ]
+resolver = "2"
 
 [workspace.dependencies]
-bevy_reflect = "0.12"
-bevy = "0.12"
-serde = "1.0.*"
-serde_json = "1.0.*"
-bevy_egui = "0.23.0"
-uuid = "1.5.0"
-bevy_app = "0.12"
-sdf_consts = { path = "crates/sdf_consts"}
-command_central = { path = "crates/command_central"}
+bevy = "0.19.0"
+bevy_egui = "0.42.0"
+command_central = { path = "crates/command_central" }
+lazy_static = "1.5.0"
 observable_key_value_tree = { path = "crates/observable_key_value_tree" }
-lazy_static = "1.4.0"
+sdf_consts = { path = "crates/sdf_consts" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+uuid = { version = "1.26.1", features = ["serde", "v4"] }
 
 [package]
 name    = "claydash"
@@ -28,33 +29,15 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 bevy_egui = { workspace = true }
 command_central = { workspace = true }
-bevy_reflect = { workspace = true }
 uuid = { workspace = true }
 observable_key_value_tree = { workspace = true }
-wasm-bindgen = "0.2.83"
-wasm-bindgen-futures = "0.4.33"
-futures = "0.3"
-js-sys = "0.3.60"
-bevy_asset = "0.12"
-bevy_pbr = "0.12"
-bevy_framepace = "0.14.1"
-bevy_mod_picking = "0.17"
-smooth-bevy-cameras = "0.10.0"
-epaint = "0.23.0"
-rfd = "0.12.1"
-futures-lite = "2.0.1"
-lazy_static.workspace = true
+bevy_framepace = "0.22.0"
+rfd = "0.17.2"
+lazy_static = { workspace = true }
 
 [dependencies.web-sys]
-version = "0.3.60"
+version = "0.3.105"
 features = [
-  'Headers',
-  'Request',
-  'RequestInit',
-  'RequestMode',
-  'Response',
-  'ReadableStream',
-  'ReadableStreamDefaultReader',
   'Window',
 ]
 
