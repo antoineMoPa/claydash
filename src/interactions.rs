@@ -1,588 +1,349 @@
-use crate::bevy_sdf_object::{
-    control_points_hit, ControlPoint, ControlPointType, SDFObject, SDFObjectParams,
+use std::collections::HashSet;
+
+use glam::{Quat, Vec2, Vec3};
+use winit::keyboard::KeyCode;
+
+use crate::{
+    camera::Camera,
+    commands::{self, Commands},
+    model::{
+        objects, selected, set_objects, set_selected, ClaydashValue, DataTree, EditorState,
+        SdfObject, Transform,
+    },
 };
-use crate::claydash_data::get_active_object_index;
-use crate::claydash_data::{ClaydashData, ClaydashValue, EditorState::*};
-use bevy::{input::keyboard::KeyCode, prelude::*};
-use observable_key_value_tree::ObservableKVTree;
-mod interaction_commands_and_shortcuts;
-use lazy_static::lazy_static;
-use std::sync::{Arc, Mutex};
 
-pub struct ClaydashInteractionPlugin;
+#[derive(Clone)]
+struct TransformSession {
+    mode: EditorState,
+    center: Vec3,
+    initial_cursor: Vec3,
+    initial_angle: f32,
+    initial_radius: f32,
+    objects: Vec<(uuid::Uuid, Transform)>,
+}
 
-impl Plugin for ClaydashInteractionPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<ClaydashData>()
-            .add_systems(
-                Startup,
-                (interaction_commands_and_shortcuts::register_interaction_commands,),
-            )
-            .add_systems(
-                Update,
-                (
-                    (interaction_commands_and_shortcuts::run_shortcut_commands),
-                    update_transformations,
-                    update_control_points_text,
-                    update_control_points_text_position,
-                    finish_control_point_drag,
-                ),
-            );
+pub struct InteractionState {
+    keys: HashSet<KeyCode>,
+    pub mouse_position: Vec2,
+    mouse_delta: Vec2,
+    right_down: bool,
+    transform_session: Option<TransformSession>,
+}
+
+impl Default for InteractionState {
+    fn default() -> Self {
+        Self {
+            keys: HashSet::new(),
+            mouse_position: Vec2::ZERO,
+            mouse_delta: Vec2::ZERO,
+            right_down: false,
+            transform_session: None,
+        }
     }
 }
 
-#[derive(Component)]
-struct ControlPointText {
-    position: Vec3,
-}
-
-lazy_static! {
-    static ref LAST_SYNCED_TEXT_VERSION: Arc<Mutex<i32>> = Arc::new(Mutex::new(-1));
-}
-
-fn update_control_points_text(
-    mut data_resource: ResMut<ClaydashData>,
-    mut commands: Commands,
-    query: Query<Entity, With<ControlPointText>>,
-    asset_server: Res<AssetServer>,
-) {
-    let data = data_resource.as_mut();
-
-    let last_updated_version = LAST_SYNCED_TEXT_VERSION.try_lock();
-
-    let version = data.tree.path_version("scene");
-
-    let mut last_updated_version = match last_updated_version {
-        Ok(version) => version,
-        _ => return,
-    };
-
-    if version > *last_updated_version {
-        // Remove previous text
-        for text in &query {
-            commands.entity(text).despawn();
+impl InteractionState {
+    pub fn key_pressed(
+        &mut self,
+        key: KeyCode,
+        egui_wants_keyboard: bool,
+        command_map: &Commands,
+        tree: &mut DataTree,
+    ) {
+        self.keys.insert(key);
+        if egui_wants_keyboard {
+            return;
         }
-
-        let active_object_index = get_active_object_index(&data.tree);
-        let objects = data.tree.get_path("scene.sdf_objects");
-
-        match active_object_index {
-            Some(index) => {
-                // Show control points
-                let object: &SDFObject = &objects.unwrap_vec_sdf_object()[index];
-
-                for point in object.get_control_points().iter() {
-                    let label = &point.label;
-
-                    commands.spawn((
-                        Text::new(label.to_owned()),
-                        TextFont {
-                            font: asset_server.load("fonts/FiraMono-Medium.ttf").into(),
-                            font_size: FontSize::Px(12.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(0.8, 0.8, 0.8)),
-                        TextLayout::justify(Justify::Center),
-                        BackgroundColor(Color::srgba(0.3, 0.3, 0.3, 0.5)),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            padding: UiRect {
-                                top: Val::Px(10.0),
-                                bottom: Val::Px(4.0),
-                                left: Val::Px(5.0),
-                                right: Val::Px(5.0),
-                            },
-                            ..default()
-                        },
-                        ControlPointText {
-                            position: point.position,
-                        },
-                    ));
-                }
-            }
-            _ => {}
-        }
-
-        *last_updated_version = version;
-    }
-}
-
-fn update_control_points_text_position(
-    mut query: Query<(&mut Node, &ControlPointText)>,
-    camera_global_transform: Single<&GlobalTransform, With<Camera>>,
-    camera: Single<&Camera>,
-) {
-    for (mut node, control_point_text) in query.iter_mut() {
-        let position =
-            camera.world_to_viewport(&camera_global_transform, control_point_text.position);
-        let position = match position {
-            Ok(position) => position,
-            _ => continue,
+        let shift = self.keys.contains(&KeyCode::ShiftLeft)
+            || self.keys.contains(&KeyCode::ShiftRight)
+            || self.keys.contains(&KeyCode::SuperLeft)
+            || self.keys.contains(&KeyCode::SuperRight);
+        let name = match key {
+            KeyCode::KeyG => "grab",
+            KeyCode::KeyS => "scale",
+            KeyCode::KeyR => "rotate",
+            KeyCode::KeyX => "constrain_x",
+            KeyCode::KeyZ if shift => "undo",
+            KeyCode::KeyY if shift => "redo",
+            KeyCode::KeyY => "constrain_y",
+            KeyCode::KeyZ => "constrain_z",
+            KeyCode::KeyA if shift => "select_all_or_none",
+            KeyCode::KeyD if shift => "duplicate",
+            KeyCode::Escape => "quit",
+            KeyCode::Enter => "finish",
+            KeyCode::Backspace => "delete",
+            _ => return,
         };
-
-        let x = position.x + 3.0;
-        let y = position.y + 3.0;
-
-        node.left = Val::Px(x);
-        node.top = Val::Px(y);
+        commands::execute(command_map, name, tree);
     }
-}
 
-fn get_cursor_position_at_selection_dist(
-    camera: &Camera,
-    camera_global_transform: &GlobalTransform,
-    cursor_position: Vec2,
-    selection_translation: Vec3,
-) -> Option<Vec3> {
-    match camera.viewport_to_world(camera_global_transform, cursor_position) {
-        Ok(ray) => {
-            let object_to_viewport_dist = (selection_translation - ray.origin).length();
-            return Some(ray.origin + *ray.direction * object_to_viewport_dist);
+    pub fn key_released(&mut self, key: KeyCode) {
+        self.keys.remove(&key);
+    }
+
+    pub fn cursor_moved(&mut self, position: Vec2, over_ui: bool) {
+        let delta = position - self.mouse_position;
+        self.mouse_position = position;
+        if !over_ui {
+            self.mouse_delta += delta;
         }
-        _ => {
-            return None;
+    }
+
+    pub fn set_right_button(&mut self, pressed: bool, over_ui: bool) {
+        if !pressed || !over_ui {
+            self.right_down = pressed;
         }
-    };
-}
+    }
 
-fn update_control_points(
-    tree: &mut ObservableKVTree<ClaydashValue>,
-    cursor_position: Vec2,
-    camera: &Camera,
-    camera_global_transform: &GlobalTransform,
-) {
-    let uuid = tree
-        .get_path("editor.current_control_point_object_uuid")
-        .unwrap_uuid_or_default();
-    let control_point_type = tree
-        .get_path("editor.current_control_point_type")
-        .unwrap_control_point_type_or_default();
-
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(data) => data,
-        _ => {
-            return;
+    pub fn update(&mut self, camera: &mut Camera, tree: &mut DataTree) {
+        if self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight) {
+            camera.orbit(self.mouse_delta);
         }
-    };
+        if self.right_down {
+            camera.pan(self.mouse_delta);
+        }
+        self.mouse_delta = Vec2::ZERO;
+        self.update_transformation(camera, tree);
+    }
 
-    let active_object = objects.iter_mut().find(|obj| obj.uuid == uuid);
-
-    match active_object {
-        Some(active_object) => {
-            let control_points = active_object.get_control_points();
-
-            let mut control_point: Option<ControlPoint> = None;
-
-            for point in control_points.iter() {
-                if point.control_point_type == control_point_type {
-                    control_point = Some(point.clone());
-                }
-            }
-
-            let control_point = control_point.unwrap();
-
-            let cursor_position_near_control_point = get_cursor_position_at_selection_dist(
-                camera,
-                camera_global_transform,
-                cursor_position,
-                control_point.position,
+    pub fn pointer_down(&mut self, camera: &Camera, tree: &mut DataTree) {
+        if !matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Start)
+        ) {
+            tree.set_path(
+                "editor.state",
+                ClaydashValue::EditorState(EditorState::Start),
             );
-
-            let cursor_position_near_control_point = cursor_position_near_control_point.unwrap();
-            let scale = active_object.transform.scale;
-            let r = active_object.transform.rotation.inverse();
-
-            match &mut active_object.params {
-                SDFObjectParams::BoxParams(params) => {
-                    let new_position =
-                        cursor_position_near_control_point - active_object.transform.translation;
-                    let new_position = r * new_position;
-
-                    match control_point.control_point_type {
-                        ControlPointType::BoxX => {
-                            params.box_q.x = new_position.x / scale.x;
-                        }
-                        ControlPointType::BoxY => {
-                            params.box_q.y = new_position.y / scale.y;
-                        }
-                        ControlPointType::BoxZ => {
-                            params.box_q.z = new_position.z / scale.z;
-                        }
-                        _ => {
-                            panic!("unhandled control point type.");
-                        }
-                    }
-                }
-                SDFObjectParams::SphereParams(params) => {
-                    params.radius = ((cursor_position_near_control_point
-                        - active_object.transform.translation)
-                        / scale)
-                        .length();
-                }
-            };
-
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
-        }
-        _ => {
-            return;
-        }
-    }
-}
-
-fn update_transformations(
-    mut data_resource: ResMut<ClaydashData>,
-    window: Single<&Window>,
-    camera_global_transform: Single<&GlobalTransform, With<Camera>>,
-    camera: Single<&Camera>,
-) {
-    // Based on camera rotation, find what direction mouse moves corresponds to in
-    // 3D space.
-    let tree = &mut data_resource.as_mut().tree;
-
-    let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
-
-    // Find cursor info
-    let cursor_position = window.cursor_position().unwrap_or(Vec2::ZERO);
-
-    // Return early if not editing
-    match state {
-        Start => {
-            return;
-        }
-        GrabbingControlPoint => {
-            update_control_points(tree, cursor_position, &camera, &camera_global_transform);
-            return;
-        }
-        _ => {}
-    }
-
-    let mut objects: Vec<SDFObject> = match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(data) => data,
-        _ => {
-            return;
-        }
-    };
-
-    let selected_object_uuids = match tree.get_path("scene.selected_uuids") {
-        ClaydashValue::VecUuid(uuids) => uuids,
-        _ => {
-            return default();
-        }
-    };
-
-    let constrain_x = match tree.get_path("editor.constrain_x") {
-        ClaydashValue::Bool(value) => value,
-        _ => false,
-    };
-    let constrain_y = match tree.get_path("editor.constrain_y") {
-        ClaydashValue::Bool(value) => value,
-        _ => false,
-    };
-    let constrain_z = match tree.get_path("editor.constrain_z") {
-        ClaydashValue::Bool(value) => value,
-        _ => false,
-    };
-
-    let has_constraints = constrain_x || constrain_y || constrain_z;
-    let constraints = if has_constraints {
-        Vec3::new(
-            if constrain_x { 1.0 } else { 0.0 },
-            if constrain_y { 1.0 } else { 0.0 },
-            if constrain_z { 1.0 } else { 0.0 },
-        )
-    } else {
-        Vec3::ONE
-    };
-
-    let initial_selection_transform = tree
-        .get_path("editor.initial_selection_transform")
-        .unwrap_transform_or(Transform::IDENTITY);
-
-    let selection_translation: Vec3 =
-        match camera.viewport_to_world(&camera_global_transform, cursor_position) {
-            Ok(ray) => {
-                let selection_to_viewport_dist =
-                    (initial_selection_transform.translation - ray.origin).length();
-                ray.origin + *ray.direction * selection_to_viewport_dist
-            }
-            _ => {
-                return;
-            }
-        };
-
-    match state {
-        Grabbing => {
-            for object in objects.iter_mut() {
-                if selected_object_uuids.contains(&object.uuid) {
-                    let initial_transform = tree
-                        .get_path(&format!(
-                            "editor.initial_transform_relative_to_selection.{}",
-                            object.uuid
-                        ))
-                        .unwrap_transform_or(Transform::IDENTITY);
-
-                    object.transform.translation =
-                        initial_transform.translation + selection_translation * constraints;
-                }
-            }
-            tree.set_path_without_notifying(
-                "scene.sdf_objects",
-                ClaydashValue::VecSDFObject(objects),
-            );
-        }
-        Scaling => {
-            for object in objects.iter_mut() {
-                if selected_object_uuids.contains(&object.uuid) {
-                    let cursor_position_near_object = get_cursor_position_at_selection_dist(
-                        &camera,
-                        &camera_global_transform,
-                        cursor_position,
-                        selection_translation,
-                    )
-                    .unwrap_or(Vec3::ZERO);
-
-                    let initial_radius = tree.get_path("editor.initial_radius").unwrap_f32();
-                    let current_radius = (cursor_position_near_object
-                        - initial_selection_transform.translation)
-                        .length();
-                    let scale = current_radius / initial_radius - 1.0;
-
-                    let initial_transform = tree
-                        .get_path(&format!("editor.initial_transform.{}", object.uuid))
-                        .unwrap_transform_or(Transform::IDENTITY);
-                    let initial_transform_relative_to_selection = tree
-                        .get_path(&format!(
-                            "editor.initial_transform_relative_to_selection.{}",
-                            object.uuid
-                        ))
-                        .unwrap_transform_or(Transform::IDENTITY);
-
-                    object.transform = initial_transform;
-                    object.transform.scale += scale * constraints;
-                    object.transform.translation +=
-                        scale * constraints * initial_transform_relative_to_selection.translation;
-                }
-            }
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
-        }
-        Rotating => {
-            for object in objects.iter_mut() {
-                if !selected_object_uuids.contains(&object.uuid) {
-                    continue;
-                }
-                match get_object_angle_relative_to_camera_ray(
-                    &camera,
-                    &camera_global_transform,
-                    cursor_position,
-                    &initial_selection_transform,
-                ) {
-                    Some((axis, angle)) => {
-                        let initial_transform = tree
-                            .get_path(&format!("editor.initial_transform.{}", object.uuid))
-                            .unwrap_transform_or(Transform::IDENTITY);
-
-                        let selection_center = initial_selection_transform.translation;
-
-                        let axis = if has_constraints { constraints } else { axis };
-                        let rotation = Quat::from_axis_angle(axis, -angle);
-
-                        object.transform = initial_transform;
-                        object.transform.rotate_around(selection_center, rotation);
-                    }
-                    _ => {}
-                };
-            }
-            tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(objects));
-        }
-        _ => {}
-    };
-}
-
-fn get_object_angle_relative_to_camera_ray(
-    camera: &Camera,
-    camera_global_transform: &GlobalTransform,
-    cursor_position: Vec2,
-    object_transform: &Transform,
-) -> Option<(Vec3, f32)> {
-    let camera_right = camera_global_transform.right();
-    let camera_up = camera_global_transform.up();
-
-    let cursor_position_near_object = get_cursor_position_at_selection_dist(
-        camera,
-        camera_global_transform,
-        cursor_position,
-        object_transform.translation,
-    );
-
-    match cursor_position_near_object {
-        Some(cursor_position_near_object) => {
-            let object_position_relative_to_camera =
-                object_transform.translation - camera_global_transform.translation();
-            let object_position_relative_to_camera_up =
-                object_position_relative_to_camera.dot(*camera_up);
-            let object_position_relative_to_camera_right =
-                object_position_relative_to_camera.dot(*camera_right);
-
-            let cursor_relative_to_up_vector =
-                cursor_position_near_object.dot(*camera_up) - object_position_relative_to_camera_up;
-            let cursor_relative_to_right_vector = cursor_position_near_object.dot(*camera_right)
-                - object_position_relative_to_camera_right;
-
-            return Some((
-                *camera_global_transform.forward(),
-                cursor_relative_to_up_vector.atan2(cursor_relative_to_right_vector),
-            ));
-        }
-        _ => {
-            return None;
-        }
-    };
-}
-
-/// Handle selection
-/// Also, handle reseting state on click after transforming objects.
-pub fn on_mouse_down(
-    event: On<Pointer<Press>>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut data_resource: ResMut<ClaydashData>,
-    camera_transform: Single<&Transform, With<Camera>>,
-) {
-    if event.button != PointerButton::Primary {
-        return;
-    }
-
-    let tree = &mut data_resource.as_mut().tree;
-    let state = tree.get_path("editor.state").unwrap_editor_state_or(Start);
-
-    match state {
-        Start => {}
-        _ => {
-            // Exit grab/scale on click
-            tree.set_path("editor.state", ClaydashValue::EditorState(Start));
             tree.make_undo_redo_snapshot();
             return;
         }
+        let (origin, direction) = camera.ray(self.mouse_position);
+        let Some(hit) = raymarch(origin, direction, &objects(tree)) else {
+            return;
+        };
+        let mut selection = selected(tree);
+        let shift =
+            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        if selection.contains(&hit) {
+            if shift {
+                selection.retain(|uuid| *uuid != hit);
+            } else {
+                selection = if selection.len() == 1 {
+                    vec![]
+                } else {
+                    vec![hit]
+                };
+            }
+        } else if shift {
+            selection.push(hit);
+        } else {
+            selection = vec![hit];
+        }
+        set_selected(tree, selection);
     }
 
-    let tree = &mut data_resource.as_mut().tree;
-    match tree.get_path("scene.sdf_objects") {
-        ClaydashValue::VecSDFObject(objects) => {
-            let camera_position = camera_transform.translation;
+    fn begin_transform_session(&mut self, mode: EditorState, camera: &Camera, tree: &mut DataTree) {
+        let selection = selected(tree);
+        let selected_objects: Vec<_> = objects(tree)
+            .into_iter()
+            .filter(|object| selection.contains(&object.uuid))
+            .map(|object| (object.uuid, object.transform))
+            .collect();
+        if selected_objects.is_empty() {
+            tree.set_path(
+                "editor.state",
+                ClaydashValue::EditorState(EditorState::Start),
+            );
+            return;
+        }
 
-            let position = match event.hit.position {
-                Some(position) => position,
-                _ => {
-                    return;
-                }
+        let center = selected_objects
+            .iter()
+            .map(|(_, transform)| transform.translation)
+            .sum::<Vec3>()
+            / selected_objects.len() as f32;
+        for (uuid, transform) in &selected_objects {
+            tree.set_path(
+                &format!("editor.initial_transform.{uuid}"),
+                ClaydashValue::Transform(*transform),
+            );
+        }
+        let initial_cursor = camera.cursor_at_depth(self.mouse_position, center);
+        self.transform_session = Some(TransformSession {
+            mode,
+            center,
+            initial_cursor,
+            initial_angle: camera.cursor_angle(self.mouse_position, center),
+            initial_radius: initial_cursor.distance(center).max(0.001),
+            objects: selected_objects,
+        });
+    }
+
+    fn update_transformation(&mut self, camera: &Camera, tree: &mut DataTree) {
+        let mode = match tree.get_path("editor.state") {
+            ClaydashValue::EditorState(mode) => mode,
+            _ => EditorState::Start,
+        };
+        if mode == EditorState::Start {
+            self.transform_session = None;
+            return;
+        }
+        if self
+            .transform_session
+            .as_ref()
+            .is_none_or(|session| session.mode != mode)
+        {
+            self.begin_transform_session(mode, camera, tree);
+        }
+        let Some(session) = self.transform_session.clone() else {
+            return;
+        };
+
+        let constrain_x = matches!(
+            tree.get_path("editor.constrain_x"),
+            ClaydashValue::Bool(true)
+        );
+        let constrain_y = matches!(
+            tree.get_path("editor.constrain_y"),
+            ClaydashValue::Bool(true)
+        );
+        let constrain_z = matches!(
+            tree.get_path("editor.constrain_z"),
+            ClaydashValue::Bool(true)
+        );
+        let constrained = constrain_x || constrain_y || constrain_z;
+        let mask = if constrained {
+            Vec3::new(
+                constrain_x as u8 as f32,
+                constrain_y as u8 as f32,
+                constrain_z as u8 as f32,
+            )
+        } else {
+            Vec3::ONE
+        };
+        let current_cursor = camera.cursor_at_depth(self.mouse_position, session.center);
+        let mut scene = objects(tree);
+
+        for object in &mut scene {
+            let Some((_, initial)) = session
+                .objects
+                .iter()
+                .find(|(uuid, _)| *uuid == object.uuid)
+            else {
+                continue;
             };
-            let ray = position - camera_position;
-
-            let control_point_hit = control_points_hit(camera_position, ray.normalize(), &objects);
-
-            match control_point_hit {
-                Some(control_point) => {
-                    tree.set_path(
-                        "editor.state",
-                        ClaydashValue::EditorState(GrabbingControlPoint),
-                    );
-                    tree.set_path(
-                        "editor.current_control_point_object_uuid",
-                        ClaydashValue::Uuid(control_point.object_uuid),
-                    );
-                    tree.set_path(
-                        "editor.current_control_point_type",
-                        ClaydashValue::ControlPointType(control_point.control_point_type),
-                    );
-
-                    return;
+            match mode {
+                EditorState::Grabbing => {
+                    object.transform.translation =
+                        initial.translation + (current_cursor - session.initial_cursor) * mask;
                 }
-                None => {}
-            }
-
-            let maybe_hit_uuid = crate::bevy_sdf_object::raymarch(position, ray, objects);
-
-            match maybe_hit_uuid {
-                Some(hit) => {
-                    let mut selected_uuids: Vec<uuid::Uuid> = tree
-                        .get_path("scene.selected_uuids")
-                        .unwrap_vec_uuid_or(Vec::new());
-                    let is_selected = selected_uuids.contains(&hit);
-                    let has_shift = keys.pressed(KeyCode::ShiftLeft);
-
-                    if is_selected {
-                        // Remove object from selection
-                        match has_shift {
-                            true => {
-                                // Shift is pressed: remove from selection
-                                selected_uuids = selected_uuids
-                                    .into_iter()
-                                    .filter(|item| *item != hit)
-                                    .collect();
-                            }
-                            false => {
-                                // Shift not pressed.
-                                if selected_uuids.len() == 1 {
-                                    // Last object in selection: un-select
-                                    selected_uuids = selected_uuids
-                                        .into_iter()
-                                        .filter(|item| *item != hit)
-                                        .collect();
-                                } else {
-                                    // Replace entire selection with only this object
-                                    selected_uuids = vec![hit];
-                                }
-                            }
-                        };
-
-                        // un-select object
-                        tree.set_path(
-                            "scene.selected_uuids",
-                            ClaydashValue::VecUuid(selected_uuids),
-                        );
+                EditorState::Scaling => {
+                    let factor = (current_cursor.distance(session.center) / session.initial_radius)
+                        .max(0.001);
+                    let factors = Vec3::ONE + (Vec3::splat(factor) - Vec3::ONE) * mask;
+                    object.transform.scale = initial.scale * factors;
+                    object.transform.translation =
+                        session.center + (initial.translation - session.center) * factors;
+                }
+                EditorState::Rotating => {
+                    let current_angle = camera.cursor_angle(self.mouse_position, session.center);
+                    let raw_angle = current_angle - session.initial_angle;
+                    let angle = raw_angle.sin().atan2(raw_angle.cos());
+                    let axis = if constrained {
+                        mask.normalize_or_zero()
                     } else {
-                        // Add object to selection
-                        match has_shift {
-                            true => {
-                                // Shift is pressed: Additive selection
-                                selected_uuids.push(hit);
-                            }
-                            false => {
-                                // Shift is not pressed: Replace selection with new hit
-                                selected_uuids = vec![hit];
-                            }
-                        };
-
-                        tree.set_path(
-                            "scene.selected_uuids",
-                            ClaydashValue::VecUuid(selected_uuids),
-                        );
-                    }
+                        (camera.target - camera.position).normalize()
+                    };
+                    let rotation = Quat::from_axis_angle(axis, -angle);
+                    object.transform.rotation = rotation * initial.rotation;
+                    object.transform.translation =
+                        session.center + rotation * (initial.translation - session.center);
                 }
-                _ => {
-                    return;
-                }
+                EditorState::Start => {}
             }
         }
-        _ => {}
+        set_objects(tree, scene);
     }
 }
 
-fn finish_control_point_drag(
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mut data_resource: ResMut<ClaydashData>,
-) {
-    if !mouse_buttons.just_released(MouseButton::Left) {
-        return;
+pub fn raymarch(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Option<uuid::Uuid> {
+    let mut point = origin;
+    for _ in 0..64 {
+        let (distance, object) = objects
+            .iter()
+            .map(|object| (object.distance(point), object.uuid))
+            .min_by(|a, b| a.0.total_cmp(&b.0))?;
+        if distance < 0.01 {
+            return Some(object);
+        }
+        point += direction * distance.max(0.003) * 0.8;
+        if point.distance(origin) > 100.0 {
+            return None;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{commands, model::SdfObject};
+    use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
+
+    fn selected_object() -> (DataTree, uuid::Uuid) {
+        let mut tree = DataTree::default();
+        let object = SdfObject::create(TYPE_BOX);
+        let uuid = object.uuid;
+        set_objects(&mut tree, vec![object]);
+        set_selected(&mut tree, vec![uuid]);
+        (tree, uuid)
     }
 
-    let tree = &mut data_resource.as_mut().tree;
-    if !matches!(
-        tree.get_path("editor.state").unwrap_editor_state_or(Start),
-        GrabbingControlPoint
-    ) {
-        return;
+    #[test]
+    fn raymarch_selects_an_object_in_front_of_the_camera() {
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let object = SdfObject::create(TYPE_SPHERE);
+        let expected = object.uuid;
+        let (origin, direction) = camera.ray(camera.viewport / 2.0);
+
+        assert_eq!(raymarch(origin, direction, &[object]), Some(expected));
     }
 
-    tree.set_path("editor.state", ClaydashValue::EditorState(Start));
-    tree.make_undo_redo_snapshot();
+    #[test]
+    fn grab_moves_the_selection_with_the_cursor() {
+        let (mut tree, _) = selected_object();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let mut interactions = InteractionState {
+            mouse_position: camera.viewport / 2.0,
+            ..Default::default()
+        };
+        commands::start_grab(&mut tree);
+        interactions.update(&mut camera, &mut tree);
+
+        interactions.mouse_position.x += 100.0;
+        interactions.update(&mut camera, &mut tree);
+
+        assert!(objects(&tree)[0].transform.translation.length() > 0.01);
+    }
+
+    #[test]
+    fn rotate_turns_the_selection_with_the_cursor() {
+        let (mut tree, _) = selected_object();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let mut interactions = InteractionState {
+            mouse_position: camera.viewport / 2.0 + Vec2::X * 100.0,
+            ..Default::default()
+        };
+        commands::start_rotate(&mut tree);
+        interactions.update(&mut camera, &mut tree);
+
+        interactions.mouse_position = camera.viewport / 2.0 + Vec2::Y * 100.0;
+        interactions.update(&mut camera, &mut tree);
+
+        assert_ne!(objects(&tree)[0].transform.rotation, Quat::IDENTITY);
+    }
 }

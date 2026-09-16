@@ -1,6 +1,6 @@
 # 🐥 Claydash
 
-Claydash is an experimental 3D SDF modeler made in rust + bevy.
+Claydash is an experimental 3D SDF modeler made in Rust with winit, wgpu, and egui.
 
 https://app.claydash.com/ - note: live version does not always point to main branch.
 

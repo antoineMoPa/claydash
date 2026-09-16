@@ -7,8 +7,6 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-bevy = "0.19.0"
-bevy_egui = "0.42.0"
 command_central = { path = "crates/command_central" }
 lazy_static = "1.5.0"
 observable_key_value_tree = { path = "crates/observable_key_value_tree" }
@@ -16,6 +14,7 @@ sdf_consts = { path = "crates/sdf_consts" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 uuid = { version = "1.26.1", features = ["serde", "v4"] }
+glam = { version = "0.32.1", features = ["serde"] }
 
 [package]
 name    = "claydash"
@@ -24,16 +23,21 @@ edition = "2021"
 
 [dependencies]
 sdf_consts = { workspace = true }
-bevy = { workspace = true, features = [ "serialize" ] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-bevy_egui = { workspace = true }
 command_central = { workspace = true }
 uuid = { workspace = true }
 observable_key_value_tree = { workspace = true }
-bevy_framepace = "0.22.0"
 rfd = "0.17.2"
 lazy_static = { workspace = true }
+glam = { workspace = true }
+egui = "0.36.2"
+egui-winit = "0.36.2"
+egui-wgpu = "0.36.2"
+wgpu = "30.0.1"
+winit = "0.30.13"
+pollster = "0.4.0"
+bytemuck = { version = "1.24.0", features = ["derive"] }
 
 [dependencies.web-sys]
 version = "0.3.105"
