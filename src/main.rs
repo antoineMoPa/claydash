@@ -7,6 +7,7 @@ mod model;
 mod renderer;
 mod ui;
 mod undo_redo;
+mod viewport;
 #[cfg(target_arch = "wasm32")]
 mod web_input;
 

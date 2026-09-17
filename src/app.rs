@@ -46,10 +46,21 @@ pub struct App {
     use_bvh: bool,
     #[cfg(not(target_arch = "wasm32"))]
     benchmark: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    ui_benchmark: Option<UiBenchmark>,
     #[cfg(target_arch = "wasm32")]
     renderer_tx: Sender<Renderer>,
     #[cfg(target_arch = "wasm32")]
     renderer_rx: Receiver<Renderer>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct UiBenchmark {
+    edit_objects: bool,
+    preview_pixels: Vec<u32>,
+    frames: usize,
+    last_frame: Option<std::time::Instant>,
+    samples: Vec<f64>,
 }
 
 impl App {
@@ -72,12 +83,47 @@ impl App {
             std::env::args().any(|argument| argument == "--stress-benchmark-brute-force");
         #[cfg(not(target_arch = "wasm32"))]
         let benchmark = brute_force_benchmark
-            || std::env::args().any(|argument| argument == "--stress-benchmark");
+            || std::env::args().any(|argument| {
+                argument == "--stress-benchmark" || argument == "--stress-benchmark-suite"
+            });
         #[cfg(not(target_arch = "wasm32"))]
-        if benchmark {
-            crate::model::set_objects(&mut tree, crate::model::renderer_stress_scene());
+        if benchmark || std::env::args().any(|arg| arg == "--stress-ui-benchmark") {
+            let case = std::env::args()
+                .find_map(|arg| arg.strip_prefix("--benchmark-case=").map(str::to_owned));
+            let scene = case
+                .and_then(|case| {
+                    crate::model::renderer_benchmark_scenes()
+                        .into_iter()
+                        .find(|(name, _)| *name == case)
+                        .map(|(_, scene)| scene)
+                })
+                .unwrap_or_else(crate::model::renderer_stress_scene);
+            crate::model::set_objects(&mut tree, scene);
             crate::model::set_selected(&mut tree, Vec::new());
         }
+        let camera = Camera::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        let camera = if std::env::args().any(|arg| arg == "--benchmark-orthographic") {
+            Camera {
+                projection_mode: crate::camera::ProjectionMode::Orthographic,
+                ..camera
+            }
+        } else {
+            camera
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let camera = if std::env::args().any(|argument| argument == "--ui-preview") {
+            let scene = crate::model::ui_preview_scene();
+            crate::model::set_selected(&mut tree, vec![scene[2].uuid]);
+            crate::model::set_objects(&mut tree, scene);
+            tree.make_undo_redo_snapshot();
+            Camera {
+                position: glam::Vec3::new(0.0, 1.6, 8.5),
+                ..camera
+            }
+        } else {
+            camera
+        };
         let mut commands = Commands::new();
         commands::register_all(&mut commands);
         #[cfg(target_arch = "wasm32")]
@@ -92,13 +138,23 @@ impl App {
             egui_state: crate::web_input::WebInput::default(),
             tree,
             commands,
-            camera: Camera::new(),
+            camera,
             interactions: InteractionState::default(),
             ui: UiState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             use_bvh: !brute_force_benchmark,
             #[cfg(not(target_arch = "wasm32"))]
             benchmark,
+            #[cfg(not(target_arch = "wasm32"))]
+            ui_benchmark: std::env::args()
+                .any(|arg| arg == "--stress-ui-benchmark")
+                .then(|| UiBenchmark {
+                    edit_objects: std::env::args().any(|arg| arg == "--benchmark-edit"),
+                    preview_pixels: Vec::new(),
+                    frames: 0,
+                    last_frame: None,
+                    samples: Vec::new(),
+                }),
             #[cfg(target_arch = "wasm32")]
             renderer_tx,
             #[cfg(target_arch = "wasm32")]
@@ -113,7 +169,9 @@ impl App {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        self.camera.viewport = renderer.size();
+        if self.camera.viewport == Vec2::ONE {
+            self.camera.viewport = renderer.size();
+        }
         self.interactions.update(&mut self.camera, &mut self.tree);
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -125,8 +183,13 @@ impl App {
         let input = self.egui_state.take(&window);
         let egui = self.egui.clone();
         let mut output = egui.run_ui(input, |ui| {
-            self.ui.draw(ui, &mut self.tree, &mut self.commands);
+            self.ui
+                .draw(ui, &mut self.tree, &mut self.commands, &mut self.camera);
         });
+        // Toolbar/palette commands run inside the UI pass. Place their new
+        // objects before rendering, using the just-updated viewport geometry.
+        self.interactions
+            .place_pending_spawn(&self.camera, &mut self.tree);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(egui_state) = &mut self.egui_state {
             egui_state.handle_platform_output(&window, std::mem::take(&mut output.platform_output));
@@ -150,10 +213,9 @@ impl App {
     }
 
     fn pointer_over_ui(&self, position: Vec2, egui_consumed: bool) -> bool {
-        egui_consumed
-            || self
-                .ui
-                .contains_pointer(position, self.egui.pixels_per_point())
+        self.ui
+            .contains_pointer(position, self.egui.pixels_per_point())
+            || (egui_consumed && self.ui.overlay_captures_pointer(&self.egui))
     }
 }
 
@@ -204,10 +266,20 @@ impl ApplicationHandler for App {
         }
         let attributes = Window::default_attributes().with_title("Claydash");
         #[cfg(not(target_arch = "wasm32"))]
-        let attributes = if self.benchmark {
-            attributes.with_inner_size(winit::dpi::PhysicalSize::new(384, 216))
+        let attributes = if self.benchmark || self.ui_benchmark.is_some() {
+            let size = std::env::args()
+                .find_map(|argument| {
+                    let value = argument.strip_prefix("--benchmark-size=")?;
+                    let (width, height) = value.split_once('x')?;
+                    Some((
+                        width.parse::<u32>().expect("benchmark width"),
+                        height.parse::<u32>().expect("benchmark height"),
+                    ))
+                })
+                .unwrap_or((384, 216));
+            attributes.with_inner_size(winit::dpi::PhysicalSize::new(size.0, size.1))
         } else {
-            attributes
+            attributes.with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0))
         };
         #[cfg(target_arch = "wasm32")]
         let attributes = attributes.with_append(true);
@@ -224,20 +296,44 @@ impl ApplicationHandler for App {
                 None,
                 None,
             ));
-            let mut renderer =
-                pollster::block_on(Renderer::new(window.clone(), self.use_bvh, self.benchmark));
+            let mut renderer = pollster::block_on(Renderer::new(
+                window.clone(),
+                self.use_bvh,
+                self.benchmark || self.ui_benchmark.is_some(),
+            ));
             if self.benchmark {
                 self.camera.viewport = renderer.size();
                 let versions = [
                     self.tree.path_version("scene.sdf_objects"),
                     self.tree.path_version("scene.selected_uuids"),
                 ];
-                renderer.benchmark_scene(
-                    &self.camera,
-                    objects_ref(&self.tree),
-                    selected_ref(&self.tree),
-                    versions,
-                );
+                if std::env::args().any(|argument| argument == "--stress-benchmark-suite") {
+                    for (case, scene) in crate::model::renderer_benchmark_scenes() {
+                        if let Some(filter) = std::env::args().find_map(|arg| {
+                            arg.strip_prefix("--benchmark-case=").map(str::to_owned)
+                        }) {
+                            if case != filter {
+                                continue;
+                            }
+                        }
+                        eprintln!("Case: {case}");
+                        renderer.benchmark_scene(
+                            &self.camera,
+                            &scene,
+                            &[],
+                            [i32::MIN + 1, 0],
+                            &case,
+                        );
+                    }
+                } else {
+                    renderer.benchmark_scene(
+                        &self.camera,
+                        objects_ref(&self.tree),
+                        selected_ref(&self.tree),
+                        versions,
+                        "stress",
+                    );
+                }
                 event_loop.exit();
             }
             self.renderer = Some(renderer);
@@ -280,7 +376,58 @@ impl ApplicationHandler for App {
         };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::RedrawRequested => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(benchmark) = &mut self.ui_benchmark {
+                    let now = std::time::Instant::now();
+                    if let Some(last) = benchmark.last_frame {
+                        if benchmark.frames > 10 {
+                            benchmark
+                                .samples
+                                .push(now.duration_since(last).as_secs_f64() * 1000.0);
+                        }
+                    }
+                    benchmark.last_frame = Some(now);
+                    let angle = (benchmark.frames as f32 * 0.08).sin() * 0.3;
+                    if benchmark.edit_objects {
+                        let mut scene = objects_ref(&self.tree).to_vec();
+                        if let Some(object) = scene.first_mut() {
+                            object.transform.rotation = glam::Quat::from_rotation_y(angle);
+                        }
+                        crate::model::set_objects(&mut self.tree, scene);
+                    } else {
+                        self.camera.position =
+                            glam::Quat::from_rotation_y(angle) * glam::Vec3::new(-3.3, 0.8, 1.7);
+                    }
+                    if benchmark.frames > 10 {
+                        if let Some(renderer) = &self.renderer {
+                            benchmark.preview_pixels.push(renderer.preview_pixels());
+                        }
+                    }
+                    benchmark.frames += 1;
+                    if benchmark.frames >= 130 {
+                        benchmark.samples.sort_by(f64::total_cmp);
+                        let samples = &benchmark.samples;
+                        eprintln!(
+                            "Native UI loop: p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms, {} frames",
+                            samples[samples.len() / 2],
+                            samples[(samples.len() - 1) * 95 / 100],
+                            samples[samples.len() - 1],
+                            samples.len()
+                        );
+                        benchmark.preview_pixels.sort_unstable();
+                        if !benchmark.preview_pixels.is_empty() {
+                            eprintln!(
+                                "Median preview pixels: {}",
+                                benchmark.preview_pixels[benchmark.preview_pixels.len() / 2]
+                            );
+                        }
+                        event_loop.exit();
+                        return;
+                    }
+                }
+                self.redraw();
+            }
             WindowEvent::Resized(size) => {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(size);
@@ -310,21 +457,34 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput {
                 button: MouseButton::Left,
+                state: ElementState::Released,
+                ..
+            } => {
+                // Finish a grab even when its release lands over an editor panel.
+                self.interactions.pointer_up(&self.camera, &mut self.tree);
+            }
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
                 state: ElementState::Pressed,
                 ..
             } if !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) => {
-                self.interactions.pointer_down(&self.camera, &mut self.tree);
+                let ghost = self.ui.ghost_at(
+                    self.interactions.mouse_position,
+                    self.egui.pixels_per_point(),
+                );
+                self.interactions
+                    .pointer_down(&self.camera, &mut self.tree, ghost);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
-                    if event.state == ElementState::Pressed {
+                    if event.state == ElementState::Pressed && !event.repeat {
                         self.interactions.key_pressed(
                             key,
                             self.egui.egui_wants_keyboard_input(),
                             &self.commands,
                             &mut self.tree,
                         );
-                    } else {
+                    } else if event.state == ElementState::Released {
                         self.interactions.key_released(key);
                     }
                 }

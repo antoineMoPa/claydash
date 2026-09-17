@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/command_central",
+    "crates/egui_command_palette",
     "crates/observable_key_value_tree",
     "crates/sdf_consts",
 ]
@@ -15,6 +16,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 uuid = { version = "1.26.1", features = ["serde", "v4", "js"] }
 glam = { version = "0.32.1", features = ["serde"] }
+egui_command_palette = { path = "crates/egui_command_palette" }
 
 [package]
 name    = "claydash"
@@ -30,6 +32,9 @@ uuid = { workspace = true }
 observable_key_value_tree = { workspace = true }
 glam = { workspace = true }
 egui = "0.36.2"
+egui_extras = { version = "0.36.2", default-features = false, features = ["svg"] }
+egui_frames = { git = "https://github.com/antoineMoPa/egui_frames", rev = "ea7892f5081983f47322a132bee982ca88d95027", features = ["serde"] }
+egui_command_palette = { workspace = true }
 egui-wgpu = "0.36.2"
 wgpu = "30.0.1"
 winit = "0.30.13"

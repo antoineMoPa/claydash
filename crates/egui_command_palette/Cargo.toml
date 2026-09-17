@@ -1,0 +1,9 @@
+[package]
+name = "egui_command_palette"
+version = "0.1.0"
+edition = "2021"
+description = "A reusable Moon-style command palette for egui applications"
+license = "MIT"
+
+[dependencies]
+egui = "0.36"

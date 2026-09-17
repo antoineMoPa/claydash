@@ -1,6 +1,5 @@
 use command_central::{CommandBuilder, CommandMap};
-use glam::Vec4;
-use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
+use sdf_consts::{TYPE_BOX, TYPE_CYLINDER, TYPE_SPHERE, TYPE_TORUS};
 
 use crate::{
     model::{
@@ -140,6 +139,22 @@ pub fn register_all(commands: &mut Commands) {
     );
     register(
         commands,
+        "spawn-cylinder",
+        "Add Cylinder",
+        "Add a cylinder primitive.",
+        "",
+        |tree| spawn(tree, TYPE_CYLINDER),
+    );
+    register(
+        commands,
+        "spawn-torus",
+        "Add Torus",
+        "Add a torus primitive.",
+        "",
+        |tree| spawn(tree, TYPE_TORUS),
+    );
+    register(
+        commands,
         "undo",
         "Undo",
         "Undo last action.",
@@ -193,11 +208,17 @@ pub fn start_rotate(tree: &mut DataTree) {
 
 fn toggle_constraint(tree: &mut DataTree, path: &str) {
     let current = matches!(tree.get_path(path), ClaydashValue::Bool(true));
-    tree.set_path(path, ClaydashValue::Bool(!current));
+    for axis in [
+        "editor.constrain_x",
+        "editor.constrain_y",
+        "editor.constrain_z",
+    ] {
+        tree.set_path(axis, ClaydashValue::Bool(axis == path && !current));
+    }
 }
 
 fn cancel(tree: &mut DataTree) {
-    let selection = selected(tree);
+    let selection = selected_subtree_ids(&objects(tree), &selected(tree));
     let mut scene = objects(tree);
     for object in &mut scene {
         if !selection.contains(&object.uuid) {
@@ -225,7 +246,7 @@ fn finish(tree: &mut DataTree) {
 }
 
 fn delete(tree: &mut DataTree) {
-    let selection = selected(tree);
+    let selection = selected_subtree_ids(&objects(tree), &selected(tree));
     set_objects(
         tree,
         objects(tree)
@@ -247,12 +268,26 @@ fn select_all(tree: &mut DataTree) {
 }
 
 fn duplicate(tree: &mut DataTree) {
-    let selection = selected(tree);
     let mut scene = objects(tree);
+    let selection = selected_subtree_ids(&scene, &selected(tree));
+    let id_map: std::collections::HashMap<_, _> = selection
+        .iter()
+        .map(|id| (*id, uuid::Uuid::new_v4()))
+        .collect();
     let copies: Vec<_> = scene
         .iter()
         .filter(|object| selection.contains(&object.uuid))
-        .map(SdfObject::duplicate)
+        .map(|object| {
+            let mut copy = object.duplicate();
+            copy.uuid = id_map[&object.uuid];
+            copy.boolean_parent = object
+                .boolean_parent
+                .map(|id| id_map.get(&id).copied().unwrap_or(id));
+            if copy.boolean_parent.is_none() {
+                copy.operation = crate::model::BooleanOperation::Union;
+            }
+            copy
+        })
         .collect();
     set_selected(tree, copies.iter().map(|object| object.uuid).collect());
     scene.extend(copies);
@@ -260,17 +295,111 @@ fn duplicate(tree: &mut DataTree) {
     start_grab(tree);
 }
 
-fn spawn(tree: &mut DataTree, kind: i32) {
-    let color = match tree.get_path("editor.color") {
-        ClaydashValue::Vec4(color) => color,
-        _ => Vec4::new(0.8, 0.0, 0.3, 1.0),
-    };
+pub fn duplicate_object(tree: &mut DataTree, id: uuid::Uuid) {
+    if objects(tree).iter().any(|object| object.uuid == id) {
+        set_selected(tree, vec![id]);
+        duplicate(tree);
+    }
+}
+
+/// Include descendants so editing a group cannot leave dangling parent links.
+pub(crate) fn selected_subtree_ids(
+    scene: &[SdfObject],
+    selection: &[uuid::Uuid],
+) -> Vec<uuid::Uuid> {
+    let mut ids = selection.to_vec();
+    loop {
+        let previous_len = ids.len();
+        for object in scene {
+            if object
+                .boolean_parent
+                .is_some_and(|parent| ids.contains(&parent))
+                && !ids.contains(&object.uuid)
+            {
+                ids.push(object.uuid);
+            }
+        }
+        if ids.len() == previous_len {
+            return ids;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::BooleanOperation;
+
+    #[test]
+    fn all_new_primitives_inherit_the_complete_picked_material() {
+        let mut tree = DataTree::default();
+        let mut material = crate::model::Material::preset(crate::model::MaterialKind::Wood);
+        material.roughness = 0.37;
+        tree.set_path("editor.material", ClaydashValue::Material(material));
+        for kind in [TYPE_BOX, TYPE_SPHERE, TYPE_CYLINDER, TYPE_TORUS] {
+            spawn(&mut tree, kind);
+            let scene = objects(&tree);
+            let object = scene.last().unwrap();
+            assert_eq!(object.material.kind, material.kind);
+            assert_eq!(object.material.roughness, material.roughness);
+            assert_eq!(object.color, material.color);
+        }
+    }
+
+    fn group_tree() -> DataTree {
+        let mut tree = DataTree::default();
+        let target = SdfObject::create(TYPE_BOX);
+        let mut cutter = SdfObject::create(TYPE_SPHERE);
+        cutter.boolean_parent = Some(target.uuid);
+        cutter.operation = BooleanOperation::Subtract;
+        set_selected(&mut tree, vec![target.uuid]);
+        set_objects(&mut tree, vec![target, cutter]);
+        tree
+    }
+
+    #[test]
+    fn deleting_a_group_removes_its_operands() {
+        let mut tree = group_tree();
+        delete(&mut tree);
+        assert!(objects(&tree).is_empty());
+        assert!(selected(&tree).is_empty());
+    }
+
+    #[test]
+    fn duplicating_a_group_remaps_operand_parents() {
+        let mut tree = group_tree();
+        duplicate(&mut tree);
+        let scene = objects(&tree);
+        assert_eq!(scene.len(), 4);
+        assert_eq!(scene[3].boolean_parent, Some(scene[2].uuid));
+        assert_eq!(scene[3].operation, BooleanOperation::Subtract);
+        assert_ne!(scene[2].uuid, scene[0].uuid);
+        assert_eq!(selected(&tree), vec![scene[2].uuid, scene[3].uuid]);
+    }
+
+    #[test]
+    fn duplicating_a_cutter_keeps_its_target_and_operation() {
+        let mut tree = group_tree();
+        let original = objects(&tree);
+        duplicate_object(&mut tree, original[1].uuid);
+        let scene = objects(&tree);
+        assert_eq!(scene.len(), 3);
+        assert_eq!(scene[2].boolean_parent, Some(original[0].uuid));
+        assert_eq!(scene[2].operation, BooleanOperation::Subtract);
+        assert_ne!(scene[2].uuid, original[1].uuid);
+        assert_eq!(selected(&tree), vec![scene[2].uuid]);
+    }
+}
+
+pub fn spawn(tree: &mut DataTree, kind: i32) {
     let mut object = SdfObject::create(kind);
-    object.color = color;
+    object.material = crate::model::picked_material(tree);
+    object.color = object.material.color;
     let uuid = object.uuid;
     let mut scene = objects(tree);
     scene.push(object);
     set_objects(tree, scene);
     set_selected(tree, vec![uuid]);
+    tree.set_path("editor.spawn_at_cursor", ClaydashValue::Uuid(uuid));
     start_grab(tree);
 }
