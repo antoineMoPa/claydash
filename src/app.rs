@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+#[cfg(target_arch = "wasm32")]
+use std::sync::mpsc::{channel, Receiver, Sender};
+
 use glam::{Vec2, Vec4};
 use observable_key_value_tree::ObservableKVTree;
 use winit::{
@@ -8,6 +11,12 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::PhysicalKey,
     window::{Window, WindowId},
+};
+
+#[cfg(target_arch = "wasm32")]
+use winit::{
+    event_loop::ControlFlow,
+    platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys},
 };
 
 use crate::{
@@ -24,12 +33,19 @@ pub struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     egui: egui::Context,
+    #[cfg(not(target_arch = "wasm32"))]
     egui_state: Option<egui_winit::State>,
+    #[cfg(target_arch = "wasm32")]
+    egui_state: crate::web_input::WebInput,
     tree: DataTree,
     commands: Commands,
     camera: Camera,
     interactions: InteractionState,
     ui: UiState,
+    #[cfg(target_arch = "wasm32")]
+    renderer_tx: Sender<Renderer>,
+    #[cfg(target_arch = "wasm32")]
+    renderer_rx: Receiver<Renderer>,
 }
 
 impl App {
@@ -49,16 +65,25 @@ impl App {
 
         let mut commands = Commands::new();
         commands::register_all(&mut commands);
+        #[cfg(target_arch = "wasm32")]
+        let (renderer_tx, renderer_rx) = channel();
         Self {
             window: None,
             renderer: None,
             egui: egui::Context::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             egui_state: None,
+            #[cfg(target_arch = "wasm32")]
+            egui_state: crate::web_input::WebInput::default(),
             tree,
             commands,
             camera: Camera::new(),
             interactions: InteractionState::default(),
             ui: UiState::default(),
+            #[cfg(target_arch = "wasm32")]
+            renderer_tx,
+            #[cfg(target_arch = "wasm32")]
+            renderer_rx,
         }
     }
 
@@ -72,14 +97,18 @@ impl App {
         self.camera.viewport = renderer.size();
         self.interactions.update(&mut self.camera, &mut self.tree);
 
+        #[cfg(not(target_arch = "wasm32"))]
         let input = match &mut self.egui_state {
             Some(egui_state) => egui_state.take_egui_input(&window),
             None => return,
         };
+        #[cfg(target_arch = "wasm32")]
+        let input = self.egui_state.take(&window);
         let egui = self.egui.clone();
         let mut output = egui.run_ui(input, |ui| {
             self.ui.draw(ui, &mut self.tree, &mut self.commands);
         });
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(egui_state) = &mut self.egui_state {
             egui_state.handle_platform_output(&window, std::mem::take(&mut output.platform_output));
         }
@@ -104,25 +133,79 @@ impl App {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn web_canvas_size(window: &Window) -> Option<winit::dpi::PhysicalSize<u32>> {
+    let Some(browser) = web_sys::window() else {
+        return None;
+    };
+    if window.canvas().is_none() {
+        return None;
+    }
+    let width = browser
+        .inner_width()
+        .ok()
+        .and_then(|value| value.as_f64())
+        .unwrap_or(1280.0);
+    let height = browser
+        .inner_height()
+        .ok()
+        .and_then(|value| value.as_f64())
+        .unwrap_or(720.0);
+    let scale = browser.device_pixel_ratio();
+    let width = (width * scale).round() as u32;
+    let height = (height * scale).round() as u32;
+    Some(winit::dpi::PhysicalSize::new(width, height))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn sync_web_canvas(window: &Window) -> Option<winit::dpi::PhysicalSize<u32>> {
+    let canvas = window.canvas()?;
+    let size = web_canvas_size(window)?;
+    let width = size.width;
+    let height = size.height;
+    let changed = canvas.width() != width || canvas.height() != height;
+    if changed {
+        canvas.set_width(width);
+        canvas.set_height(height);
+        Some(size)
+    } else {
+        None
+    }
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
-        let window = Arc::new(
-            event_loop
-                .create_window(Window::default_attributes().with_title("Claydash"))
-                .expect("create window"),
-        );
-        self.egui_state = Some(egui_winit::State::new(
-            self.egui.clone(),
-            egui::ViewportId::ROOT,
-            &window,
-            None,
-            None,
-            None,
-        ));
-        self.renderer = Some(Renderer::new(window.clone()));
+        let attributes = Window::default_attributes().with_title("Claydash");
+        #[cfg(target_arch = "wasm32")]
+        let attributes = attributes.with_append(true);
+        let window = Arc::new(event_loop.create_window(attributes).expect("create window"));
+        #[cfg(target_arch = "wasm32")]
+        sync_web_canvas(&window);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.egui_state = Some(egui_winit::State::new(
+                self.egui.clone(),
+                egui::ViewportId::ROOT,
+                &window,
+                None,
+                None,
+                None,
+            ));
+            self.renderer = Some(pollster::block_on(Renderer::new(window.clone())));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let renderer_tx = self.renderer_tx.clone();
+            let renderer_window = window.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let renderer = Renderer::new(renderer_window).await;
+                let _ = renderer_tx.send(renderer);
+            });
+            event_loop.set_control_flow(ControlFlow::Poll);
+        }
         self.window = Some(window);
     }
 
@@ -130,10 +213,25 @@ impl ApplicationHandler for App {
         let Some(window) = self.window.clone() else {
             return;
         };
+        #[cfg(not(target_arch = "wasm32"))]
         let egui_consumed = self
             .egui_state
             .as_mut()
             .is_some_and(|state| state.on_window_event(&window, &event).consumed);
+        #[cfg(target_arch = "wasm32")]
+        let egui_consumed = {
+            self.egui_state.on_window_event(&window, &event);
+            match event {
+                WindowEvent::CursorMoved { .. }
+                | WindowEvent::CursorLeft { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. } => self.egui.egui_wants_pointer_input(),
+                WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => {
+                    self.egui.egui_wants_keyboard_input()
+                }
+                _ => false,
+            }
+        };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => self.redraw(),
@@ -189,7 +287,29 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = event_loop;
+        #[cfg(target_arch = "wasm32")]
+        if let Some(window) = &self.window {
+            if let Some(size) = sync_web_canvas(window) {
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.resize(size);
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.renderer.is_none() {
+            if let Ok(mut renderer) = self.renderer_rx.try_recv() {
+                if let Some(window) = &self.window {
+                    if let Some(size) = web_canvas_size(window) {
+                        renderer.resize(size);
+                    }
+                }
+                self.renderer = Some(renderer);
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -198,5 +318,8 @@ impl ApplicationHandler for App {
 
 pub fn run() {
     let event_loop = EventLoop::new().expect("create event loop");
+    #[cfg(not(target_arch = "wasm32"))]
     event_loop.run_app(&mut App::new()).expect("run app");
+    #[cfg(target_arch = "wasm32")]
+    event_loop.spawn_app(App::new());
 }

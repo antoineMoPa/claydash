@@ -1,3 +1,4 @@
+<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -51,7 +52,10 @@
     </script>
     <script type="module">
       import init from './target/app.js'
-      init()
+      init().catch(error => {
+          console.error(error);
+          document.querySelector('.loading-message').innerText = `Failed to start: ${error}`;
+      })
     </script>
   </body>
 </html>
