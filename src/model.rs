@@ -139,10 +139,67 @@ pub fn selected(tree: &DataTree) -> Vec<uuid::Uuid> {
     }
 }
 
+pub fn objects_ref(tree: &DataTree) -> &[SdfObject] {
+    match tree.get_path_ref("scene.sdf_objects") {
+        Some(ClaydashValue::VecSDFObject(value)) => value,
+        _ => &[],
+    }
+}
+
+pub fn selected_ref(tree: &DataTree) -> &[uuid::Uuid] {
+    match tree.get_path_ref("scene.selected_uuids") {
+        Some(ClaydashValue::VecUuid(value)) => value,
+        _ => &[],
+    }
+}
+
 pub fn set_objects(tree: &mut DataTree, value: Vec<SdfObject>) {
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
 }
 
 pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
     tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn renderer_stress_scene() -> Vec<SdfObject> {
+    use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
+
+    let mut objects = Vec::with_capacity(256);
+    for z in 0..4 {
+        for y in 0..8 {
+            for x in 0..8 {
+                let object_type = if (x + y + z) % 2 == 0 {
+                    TYPE_SPHERE
+                } else {
+                    TYPE_BOX
+                };
+                let mut object = SdfObject::create(object_type);
+                object.transform.translation = Vec3::new(
+                    (x as f32 - 3.5) * 0.42,
+                    (y as f32 - 3.5) * 0.42,
+                    (z as f32 - 1.5) * 0.42,
+                );
+                object.transform.rotation = Quat::from_euler(
+                    glam::EulerRot::XYZ,
+                    x as f32 * 0.11,
+                    y as f32 * 0.07,
+                    z as f32 * 0.17,
+                );
+                object.transform.scale = Vec3::new(
+                    0.8 + (x % 3) as f32 * 0.14,
+                    0.8 + (y % 3) as f32 * 0.14,
+                    0.8 + (z % 3) as f32 * 0.14,
+                );
+                object.color = Vec4::new(
+                    0.25 + x as f32 * 0.07,
+                    0.2 + y as f32 * 0.06,
+                    0.35 + z as f32 * 0.14,
+                    1.0,
+                );
+                objects.push(object);
+            }
+        }
+    }
+    objects
 }

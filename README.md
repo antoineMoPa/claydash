@@ -31,3 +31,26 @@ https://app.claydash.com/ - note: live version does not always point to main bra
 - real time engine
 - tree view
 - perspective/ortho selection
+
+# Running
+
+```
+cargo run
+```
+
+# Running (Web version)
+
+Install the WebAssembly target and the `wasm-bindgen` CLI version used by the project:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.128
+```
+
+Build the WebAssembly bundle and start a local server:
+
+```sh
+make build
+make serve
+open http://localhost:3001
+```

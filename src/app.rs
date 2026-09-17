@@ -24,7 +24,7 @@ use crate::{
     commands::{self, Commands},
     duck,
     interactions::InteractionState,
-    model::{objects, selected, ClaydashValue, DataTree, EditorState},
+    model::{objects_ref, selected_ref, ClaydashValue, DataTree, EditorState},
     renderer::Renderer,
     ui::UiState,
 };
@@ -42,6 +42,10 @@ pub struct App {
     camera: Camera,
     interactions: InteractionState,
     ui: UiState,
+    #[cfg(not(target_arch = "wasm32"))]
+    use_bvh: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    benchmark: bool,
     #[cfg(target_arch = "wasm32")]
     renderer_tx: Sender<Renderer>,
     #[cfg(target_arch = "wasm32")]
@@ -63,6 +67,17 @@ impl App {
         );
         tree.make_undo_redo_snapshot();
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let brute_force_benchmark =
+            std::env::args().any(|argument| argument == "--stress-benchmark-brute-force");
+        #[cfg(not(target_arch = "wasm32"))]
+        let benchmark = brute_force_benchmark
+            || std::env::args().any(|argument| argument == "--stress-benchmark");
+        #[cfg(not(target_arch = "wasm32"))]
+        if benchmark {
+            crate::model::set_objects(&mut tree, crate::model::renderer_stress_scene());
+            crate::model::set_selected(&mut tree, Vec::new());
+        }
         let mut commands = Commands::new();
         commands::register_all(&mut commands);
         #[cfg(target_arch = "wasm32")]
@@ -80,6 +95,10 @@ impl App {
             camera: Camera::new(),
             interactions: InteractionState::default(),
             ui: UiState::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            use_bvh: !brute_force_benchmark,
+            #[cfg(not(target_arch = "wasm32"))]
+            benchmark,
             #[cfg(target_arch = "wasm32")]
             renderer_tx,
             #[cfg(target_arch = "wasm32")]
@@ -114,10 +133,15 @@ impl App {
         }
 
         if let Some(renderer) = &mut self.renderer {
+            let scene_versions = [
+                self.tree.path_version("scene.sdf_objects"),
+                self.tree.path_version("scene.selected_uuids"),
+            ];
             renderer.render(
                 &self.camera,
-                &objects(&self.tree),
-                &selected(&self.tree),
+                objects_ref(&self.tree),
+                selected_ref(&self.tree),
+                scene_versions,
                 &self.egui,
                 &mut output,
             );
@@ -179,6 +203,12 @@ impl ApplicationHandler for App {
             return;
         }
         let attributes = Window::default_attributes().with_title("Claydash");
+        #[cfg(not(target_arch = "wasm32"))]
+        let attributes = if self.benchmark {
+            attributes.with_inner_size(winit::dpi::PhysicalSize::new(384, 216))
+        } else {
+            attributes
+        };
         #[cfg(target_arch = "wasm32")]
         let attributes = attributes.with_append(true);
         let window = Arc::new(event_loop.create_window(attributes).expect("create window"));
@@ -194,14 +224,30 @@ impl ApplicationHandler for App {
                 None,
                 None,
             ));
-            self.renderer = Some(pollster::block_on(Renderer::new(window.clone())));
+            let mut renderer =
+                pollster::block_on(Renderer::new(window.clone(), self.use_bvh, self.benchmark));
+            if self.benchmark {
+                self.camera.viewport = renderer.size();
+                let versions = [
+                    self.tree.path_version("scene.sdf_objects"),
+                    self.tree.path_version("scene.selected_uuids"),
+                ];
+                renderer.benchmark_scene(
+                    &self.camera,
+                    objects_ref(&self.tree),
+                    selected_ref(&self.tree),
+                    versions,
+                );
+                event_loop.exit();
+            }
+            self.renderer = Some(renderer);
         }
         #[cfg(target_arch = "wasm32")]
         {
             let renderer_tx = self.renderer_tx.clone();
             let renderer_window = window.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let renderer = Renderer::new(renderer_window).await;
+                let renderer = Renderer::new(renderer_window, true, false).await;
                 let _ = renderer_tx.send(renderer);
             });
             event_loop.set_control_flow(ControlFlow::Poll);

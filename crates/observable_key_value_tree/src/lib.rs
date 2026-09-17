@@ -266,6 +266,15 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
         }
     }
 
+    /// Borrows a value without cloning its containing tree.
+    pub fn get_path_ref(&self, path: &str) -> Option<&ValueType> {
+        let mut node = self;
+        for part in path.split('.') {
+            node = node.subtree.get(part)?;
+        }
+        Some(&node.value)
+    }
+
     pub fn get_tree(&self, path: &str) -> Option<ObservableKVTree<ValueType>> {
         return self.get_path_with_parts(&path.split(".").collect());
     }
@@ -684,6 +693,8 @@ mod tests {
         let mut data = ObservableKVTree::<ExampleValueType>::default();
         data.set_path("scene.some", ExampleValueType::I32(1234));
         assert_eq!(data.get_path("scene.some").unwrap_i32(), 1234);
+        assert_eq!(data.get_path_ref("scene.some").unwrap().unwrap_i32(), 1234);
+        assert!(data.get_path_ref("scene.missing").is_none());
     }
 
     #[test]
