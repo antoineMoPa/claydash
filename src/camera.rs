@@ -32,6 +32,24 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn referenced_pan_keeps_world_point_under_cursor() {
+        for mode in [ProjectionMode::Perspective, ProjectionMode::Orthographic] {
+            let mut camera = Camera::new();
+            camera.position = Vec3::new(0.0, 0.0, 8.0);
+            camera.viewport = Vec2::new(800.0, 600.0);
+            camera.projection_mode = mode;
+            let reference = Vec3::new(0.0, 0.0, 0.5);
+            let cursor = Vec2::new(510.0, 365.0);
+
+            camera.pan_to_cursor(cursor, reference);
+
+            let projected = camera.project(reference, 1.0).unwrap();
+            assert!((projected.x - cursor.x).abs() < 0.001);
+            assert!((projected.y - cursor.y).abs() < 0.001);
+        }
+    }
 }
 
 impl ProjectionMode {
@@ -126,6 +144,16 @@ impl Camera {
         origin + direction * world_position.distance(origin)
     }
 
+    pub fn cursor_on_plane(&self, cursor: Vec2, world_position: Vec3) -> Vec3 {
+        let (origin, direction) = self.ray(cursor);
+        let normal = self.target - self.position;
+        let denominator = direction.dot(normal);
+        if denominator.abs() < 1e-6 {
+            return world_position;
+        }
+        origin + direction * ((world_position - origin).dot(normal) / denominator)
+    }
+
     pub fn cursor_angle(&self, cursor: Vec2, center: Vec3) -> f32 {
         let offset = self.cursor_at_depth(cursor, center) - center;
         let inverse_view = self.view().inverse();
@@ -152,6 +180,12 @@ impl Camera {
         let movement = (inverse.x_axis.truncate() * -delta.x + inverse.y_axis.truncate() * delta.y)
             * radius
             * 0.001;
+        self.target += movement;
+        self.position += movement;
+    }
+
+    pub fn pan_to_cursor(&mut self, cursor: Vec2, reference: Vec3) {
+        let movement = reference - self.cursor_on_plane(cursor, reference);
         self.target += movement;
         self.position += movement;
     }

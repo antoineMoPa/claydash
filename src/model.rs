@@ -351,10 +351,18 @@ pub enum ClaydashValue {
     Transform(Transform),
     VecSDFObject(Vec<SdfObject>),
     EditorState(EditorState),
+    SelectionScope(SelectionScope),
     Bool(bool),
     #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
     None,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelectionScope {
+    #[default]
+    Group,
+    Exact,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -441,11 +449,30 @@ pub fn selected_ref(tree: &DataTree) -> &[uuid::Uuid] {
     }
 }
 
+pub fn selection_scope(tree: &DataTree) -> SelectionScope {
+    match tree.get_path("scene.selection_scope") {
+        ClaydashValue::SelectionScope(scope) => scope,
+        _ => SelectionScope::Group,
+    }
+}
+
 pub fn set_objects(tree: &mut DataTree, value: Vec<SdfObject>) {
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
 }
 
 pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    tree.set_path(
+        "scene.selection_scope",
+        ClaydashValue::SelectionScope(SelectionScope::Group),
+    );
+    tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+}
+
+pub fn set_selected_exact(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    tree.set_path(
+        "scene.selection_scope",
+        ClaydashValue::SelectionScope(SelectionScope::Exact),
+    );
     tree.set_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
 }
 

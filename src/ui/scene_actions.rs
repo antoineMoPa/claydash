@@ -82,6 +82,55 @@ pub(crate) fn viewport_group_root(scene: &[SdfObject], hit: Uuid) -> Uuid {
     root
 }
 
+/// Map a viewport hit to the group root on first click, then descend the
+/// clicked branch by one hierarchy level on each repeated click.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ViewportSelectionTarget {
+    pub id: Uuid,
+    pub scope: crate::model::SelectionScope,
+}
+
+pub(crate) fn viewport_selection_target(
+    scene: &[SdfObject],
+    hit: Uuid,
+    selection: &[Uuid],
+) -> ViewportSelectionTarget {
+    let mut path = vec![hit];
+    let mut current = hit;
+    let mut visited = HashSet::new();
+    while visited.insert(current) {
+        let Some(parent) = scene
+            .iter()
+            .find(|object| object.uuid == current)
+            .and_then(|object| object.boolean_parent)
+            .filter(|parent| scene.iter().any(|object| object.uuid == *parent))
+        else {
+            break;
+        };
+        path.push(parent);
+        current = parent;
+    }
+    path.reverse();
+    if selection.len() == 1 {
+        if let Some(index) = path.iter().position(|id| *id == selection[0]) {
+            if let Some(child) = path.get(index + 1) {
+                return ViewportSelectionTarget {
+                    id: *child,
+                    scope: crate::model::SelectionScope::Group,
+                };
+            }
+            return ViewportSelectionTarget {
+                id: hit,
+                scope: crate::model::SelectionScope::Exact,
+            };
+        }
+    }
+    ViewportSelectionTarget {
+        id: path[0],
+        scope: crate::model::SelectionScope::Group,
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct DragObjects(pub Vec<Uuid>);
 
@@ -131,7 +180,7 @@ pub(crate) fn can_attach(scene: &[SdfObject], target: Uuid, operands: &[Uuid]) -
     true
 }
 
-pub(super) fn attach(
+pub(crate) fn attach(
     tree: &mut DataTree,
     target: Uuid,
     operands: &[Uuid],
@@ -149,7 +198,7 @@ pub(super) fn attach(
         }
     }
     set_objects(tree, scene);
-    set_selected(tree, roots);
+    set_selected(tree, vec![target]);
     tree.make_undo_redo_snapshot();
     true
 }
@@ -181,6 +230,53 @@ pub(super) fn add_operand(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewport_selection_descends_the_clicked_boolean_branch() {
+        let root = SdfObject::create_kind(PrimitiveKind::Box);
+        let mut group = SdfObject::create_kind(PrimitiveKind::Sphere);
+        group.boolean_parent = Some(root.uuid);
+        let mut primitive = SdfObject::create_kind(PrimitiveKind::Cylinder);
+        primitive.boolean_parent = Some(group.uuid);
+        let scene = vec![root.clone(), group.clone(), primitive.clone()];
+
+        assert_eq!(
+            viewport_selection_target(&scene, primitive.uuid, &[]),
+            ViewportSelectionTarget {
+                id: root.uuid,
+                scope: crate::model::SelectionScope::Group,
+            }
+        );
+        assert_eq!(
+            viewport_selection_target(&scene, primitive.uuid, &[root.uuid]),
+            ViewportSelectionTarget {
+                id: group.uuid,
+                scope: crate::model::SelectionScope::Group,
+            }
+        );
+        assert_eq!(
+            viewport_selection_target(&scene, primitive.uuid, &[group.uuid]),
+            ViewportSelectionTarget {
+                id: primitive.uuid,
+                scope: crate::model::SelectionScope::Group,
+            }
+        );
+        assert_eq!(
+            viewport_selection_target(&scene, primitive.uuid, &[primitive.uuid]),
+            ViewportSelectionTarget {
+                id: primitive.uuid,
+                scope: crate::model::SelectionScope::Exact,
+            }
+        );
+        assert_eq!(
+            viewport_selection_target(&scene, root.uuid, &[root.uuid]),
+            ViewportSelectionTarget {
+                id: root.uuid,
+                scope: crate::model::SelectionScope::Exact,
+            }
+        );
+    }
+
     #[test]
     fn attaching_groups_preserves_nested_operations_and_rejects_cycles() {
         let target = SdfObject::create_kind(PrimitiveKind::Box);
@@ -205,6 +301,7 @@ mod tests {
         assert_eq!(scene[1].operation, BooleanOperation::Subtract);
         assert_eq!(scene[2].boolean_parent, Some(group.uuid));
         assert_eq!(scene[2].operation, BooleanOperation::Intersect);
+        assert_eq!(selected(&tree), vec![target.uuid]);
         assert!(!attach(
             &mut tree,
             child.uuid,

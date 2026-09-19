@@ -22,12 +22,26 @@ use winit::{
 use crate::{
     camera::Camera,
     commands::{self, Commands},
+    document::{DocumentState, FileMenuAction},
     duck,
     interactions::InteractionState,
-    model::{objects_ref, selected_ref, ClaydashValue, DataTree, EditorState},
+    model::{objects_ref, ClaydashValue, DataTree, EditorState},
     renderer::Renderer,
     ui::UiState,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::document;
+
+#[cfg(target_arch = "wasm32")]
+enum WebDocumentMessage {
+    Opened {
+        name: std::path::PathBuf,
+        bytes: Vec<u8>,
+    },
+    Saved(std::path::PathBuf),
+    Error(String),
+}
 
 pub struct App {
     window: Option<Arc<Window>>,
@@ -42,6 +56,9 @@ pub struct App {
     camera: Camera,
     interactions: InteractionState,
     ui: UiState,
+    document: DocumentState,
+    window_focused: bool,
+    window_occluded: bool,
     #[cfg(not(target_arch = "wasm32"))]
     use_bvh: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -52,6 +69,10 @@ pub struct App {
     renderer_tx: Sender<Renderer>,
     #[cfg(target_arch = "wasm32")]
     renderer_rx: Receiver<Renderer>,
+    #[cfg(target_arch = "wasm32")]
+    document_tx: Sender<WebDocumentMessage>,
+    #[cfg(target_arch = "wasm32")]
+    document_rx: Receiver<WebDocumentMessage>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,18 +86,9 @@ struct UiBenchmark {
 
 impl App {
     pub fn new() -> Self {
-        let mut tree = ObservableKVTree::default();
         let scene = serde_json::from_str(duck::DEFAULT_DUCK).expect("parse default scene");
-        tree.set_tree("scene", scene);
-        tree.set_path(
-            "editor.state",
-            ClaydashValue::EditorState(EditorState::Start),
-        );
-        tree.set_path(
-            "editor.color",
-            ClaydashValue::Vec4(Vec4::new(0.8, 0.0, 0.3, 1.0)),
-        );
-        tree.make_undo_redo_snapshot();
+        #[allow(unused_mut)]
+        let mut tree = data_tree_with_scene(scene);
 
         #[cfg(not(target_arch = "wasm32"))]
         let brute_force_benchmark =
@@ -128,6 +140,8 @@ impl App {
         commands::register_all(&mut commands);
         #[cfg(target_arch = "wasm32")]
         let (renderer_tx, renderer_rx) = channel();
+        #[cfg(target_arch = "wasm32")]
+        let (document_tx, document_rx) = channel();
         Self {
             window: None,
             renderer: None,
@@ -141,6 +155,9 @@ impl App {
             camera,
             interactions: InteractionState::default(),
             ui: UiState::default(),
+            document: DocumentState::default(),
+            window_focused: true,
+            window_occluded: false,
             #[cfg(not(target_arch = "wasm32"))]
             use_bvh: !brute_force_benchmark,
             #[cfg(not(target_arch = "wasm32"))]
@@ -159,10 +176,16 @@ impl App {
             renderer_tx,
             #[cfg(target_arch = "wasm32")]
             renderer_rx,
+            #[cfg(target_arch = "wasm32")]
+            document_tx,
+            #[cfg(target_arch = "wasm32")]
+            document_rx,
         }
     }
 
     fn redraw(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        self.process_web_document_messages();
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -172,7 +195,9 @@ impl App {
         if self.camera.viewport == Vec2::ONE {
             self.camera.viewport = renderer.size();
         }
-        self.interactions.update(&mut self.camera, &mut self.tree);
+        if !self.ui.selection_gesture_active() {
+            self.interactions.update(&mut self.camera, &mut self.tree);
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         let input = match &mut self.egui_state {
@@ -182,10 +207,19 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let input = self.egui_state.take(&window);
         let egui = self.egui.clone();
+        let mut file_action = None;
         let mut output = egui.run_ui(input, |ui| {
-            self.ui
-                .draw(ui, &mut self.tree, &mut self.commands, &mut self.camera);
+            file_action = self.ui.draw(
+                ui,
+                &mut self.tree,
+                &mut self.commands,
+                &mut self.camera,
+                &mut self.document,
+            );
         });
+        if let Some(action) = file_action {
+            self.handle_file_action(action);
+        }
         // Toolbar/palette commands run inside the UI pass. Place their new
         // objects before rendering, using the just-updated viewport geometry.
         self.interactions
@@ -195,6 +229,7 @@ impl App {
             egui_state.handle_platform_output(&window, std::mem::take(&mut output.platform_output));
         }
 
+        let effective_selection = commands::effective_selected_ids(&self.tree);
         if let Some(renderer) = &mut self.renderer {
             let scene_versions = [
                 self.tree.path_version("scene.sdf_objects"),
@@ -203,7 +238,7 @@ impl App {
             renderer.render(
                 &self.camera,
                 objects_ref(&self.tree),
-                selected_ref(&self.tree),
+                &effective_selection,
                 scene_versions,
                 &self.egui,
                 &mut output,
@@ -217,6 +252,146 @@ impl App {
             .contains_pointer(position, self.egui.pixels_per_point())
             || (egui_consumed && self.ui.overlay_captures_pointer(&self.egui))
     }
+
+    fn replace_scene(&mut self, scene: DataTree) {
+        self.tree = data_tree_with_scene(scene);
+        self.interactions = InteractionState::default();
+        self.ui.reset_document_gestures();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_path(&mut self, path: std::path::PathBuf) {
+        match document::read_scene(&path) {
+            Ok(scene) => {
+                self.replace_scene(scene);
+                self.document.mark_opened(path);
+            }
+            Err(error) => self.document.set_error("open the project", error),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_path(&mut self, path: std::path::PathBuf) {
+        match document::write_scene(&path, &self.tree) {
+            Ok(()) => self.document.mark_saved(path),
+            Err(error) => self.document.set_error("save the project", error),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_file_action(&mut self, action: FileMenuAction) {
+        match action {
+            FileMenuAction::Open => {
+                if let Some(path) = document::open_dialog() {
+                    self.open_path(path);
+                }
+            }
+            FileMenuAction::OpenRecent(path) => self.open_path(path),
+            FileMenuAction::Save => {
+                if let Some(path) = self.document.current_path().map(std::path::Path::to_owned) {
+                    self.save_path(path);
+                } else if let Some(path) = document::save_dialog() {
+                    self.save_path(path);
+                }
+            }
+            FileMenuAction::SaveAs => {
+                if let Some(path) = document::save_dialog() {
+                    self.save_path(path);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn handle_file_action(&mut self, action: FileMenuAction) {
+        match action {
+            FileMenuAction::Open => {
+                let tx = self.document_tx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter("Claydash project", &["claydash"])
+                        .pick_file()
+                        .await;
+                    if let Some(file) = file {
+                        let name = std::path::PathBuf::from(file.file_name());
+                        let bytes = file.read().await;
+                        let _ = tx.send(WebDocumentMessage::Opened { name, bytes });
+                    }
+                });
+            }
+            FileMenuAction::Save | FileMenuAction::SaveAs => {
+                let bytes = match crate::document::serialize_scene(&self.tree) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        self.document.set_error("save the project", error);
+                        return;
+                    }
+                };
+                let file_name = self
+                    .document
+                    .current_path()
+                    .and_then(std::path::Path::file_name)
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "untitled.claydash".to_string());
+                let tx = self.document_tx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter("Claydash project", &["claydash"])
+                        .set_file_name(&file_name)
+                        .save_file()
+                        .await;
+                    if let Some(file) = file {
+                        let name = std::path::PathBuf::from(file.file_name());
+                        match file.write(&bytes).await {
+                            Ok(()) => {
+                                let _ = tx.send(WebDocumentMessage::Saved(name));
+                            }
+                            Err(error) => {
+                                let _ = tx.send(WebDocumentMessage::Error(format!("{error:?}")));
+                            }
+                        }
+                    }
+                });
+            }
+            FileMenuAction::OpenRecent(_) => {}
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn process_web_document_messages(&mut self) {
+        while let Ok(message) = self.document_rx.try_recv() {
+            match message {
+                WebDocumentMessage::Opened { name, bytes } => {
+                    match crate::document::deserialize_scene(&bytes) {
+                        Ok(scene) => {
+                            self.replace_scene(scene);
+                            self.document.mark_opened(name);
+                        }
+                        Err(error) => self.document.set_error("open the project", error),
+                    }
+                }
+                WebDocumentMessage::Saved(name) => self.document.mark_saved(name),
+                WebDocumentMessage::Error(error) => {
+                    self.document.set_error("save the project", error)
+                }
+            }
+        }
+    }
+}
+
+fn data_tree_with_scene(scene: DataTree) -> DataTree {
+    let mut tree = ObservableKVTree::default();
+    tree.set_tree("scene", scene);
+    tree.set_path(
+        "editor.state",
+        ClaydashValue::EditorState(EditorState::Start),
+    );
+    tree.set_path(
+        "editor.color",
+        ClaydashValue::Vec4(Vec4::new(0.8, 0.0, 0.3, 1.0)),
+    );
+    tree.make_undo_redo_snapshot();
+    tree
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -329,7 +504,7 @@ impl ApplicationHandler for App {
                     renderer.benchmark_scene(
                         &self.camera,
                         objects_ref(&self.tree),
-                        selected_ref(&self.tree),
+                        &commands::effective_selected_ids(&self.tree),
                         versions,
                         "stress",
                     );
@@ -376,7 +551,24 @@ impl ApplicationHandler for App {
         };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(focused) => {
+                self.window_focused = focused;
+                if focused {
+                    window.request_redraw();
+                } else {
+                    self.interactions.suspend_navigation();
+                }
+            }
+            WindowEvent::Occluded(occluded) => {
+                self.window_occluded = occluded;
+                if !occluded {
+                    window.request_redraw();
+                }
+            }
             WindowEvent::RedrawRequested => {
+                if !self.window_focused || self.window_occluded {
+                    return;
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(benchmark) = &mut self.ui_benchmark {
                     let now = std::time::Instant::now();
@@ -435,11 +627,13 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let position = Vec2::new(position.x as f32, position.y as f32);
-                let over_ui = self.pointer_over_ui(position, egui_consumed);
+                let over_ui = self.ui.selection_gesture_active()
+                    || self.pointer_over_ui(position, egui_consumed);
                 self.interactions.cursor_moved(position, over_ui);
             }
             WindowEvent::MouseWheel { delta, .. }
-                if !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
+                if !self.ui.selection_gesture_active()
+                    && !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
             {
                 match delta {
                     MouseScrollDelta::LineDelta(_, y) => self.camera.zoom(y),
@@ -451,9 +645,14 @@ impl ApplicationHandler for App {
                 state,
                 ..
             } => {
-                let over_ui = self.pointer_over_ui(self.interactions.mouse_position, egui_consumed);
-                self.interactions
-                    .set_right_button(state == ElementState::Pressed, over_ui);
+                let over_ui = self.ui.selection_gesture_active()
+                    || self.pointer_over_ui(self.interactions.mouse_position, egui_consumed);
+                self.interactions.set_right_button(
+                    state == ElementState::Pressed,
+                    over_ui,
+                    &self.camera,
+                    &self.tree,
+                );
             }
             WindowEvent::MouseInput {
                 button: MouseButton::Left,
@@ -467,7 +666,12 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 state: ElementState::Pressed,
                 ..
-            } if !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) => {
+            } if !self.ui.selection_gesture_active()
+                && !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
+            {
+                if self.ui.box_selection_enabled(&self.tree) {
+                    return;
+                }
                 let ghost = self.ui.ghost_at(
                     self.interactions.mouse_position,
                     self.egui.pixels_per_point(),
@@ -477,13 +681,23 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
-                    if event.state == ElementState::Pressed && !event.repeat {
-                        self.interactions.key_pressed(
-                            key,
-                            self.egui.egui_wants_keyboard_input(),
-                            &self.commands,
-                            &mut self.tree,
-                        );
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && !self.ui.selection_gesture_active()
+                    {
+                        let wants_keyboard = self.egui.egui_wants_keyboard_input();
+                        let entered_box_selection = key == winit::keyboard::KeyCode::KeyB
+                            && !wants_keyboard
+                            && !self.interactions.command_modifier_down()
+                            && self.ui.enter_box_selection_mode(&self.tree);
+                        if !entered_box_selection {
+                            self.interactions.key_pressed(
+                                key,
+                                wants_keyboard,
+                                &self.commands,
+                                &mut self.tree,
+                            );
+                        }
                     } else if event.state == ElementState::Released {
                         self.interactions.key_released(key);
                     }
@@ -516,7 +730,10 @@ impl ApplicationHandler for App {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
         }
-        if let Some(window) = &self.window {
+        if self.window_focused && !self.window_occluded {
+            let Some(window) = &self.window else {
+                return;
+            };
             window.request_redraw();
         }
     }

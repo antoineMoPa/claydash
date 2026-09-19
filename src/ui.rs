@@ -1,5 +1,6 @@
 mod boolean_overlay;
 pub(crate) mod scene_actions;
+mod selection_tools;
 
 use egui::{Color32, CornerRadius, RichText, Stroke};
 use egui_command_palette::{Command as PaletteCommand, CommandPalette};
@@ -9,6 +10,7 @@ use glam::{EulerRot, Vec2, Vec3, Vec4};
 use crate::{
     camera::{Camera, ViewAngle},
     commands::{self, Commands},
+    document::{DocumentState, FileMenuAction},
     model::{
         objects, selected, set_objects, set_selected, BooleanOperation, DataTree, Material,
         MaterialKind, PrimitiveKind, SdfObject, SdfParams,
@@ -46,6 +48,7 @@ pub struct UiState {
     regions: Vec<egui::Rect>,
     viewport_rect: Option<egui::Rect>,
     ghosts: boolean_overlay::Ghosts,
+    selection_tools: selection_tools::SelectionTools,
 }
 
 impl Default for UiState {
@@ -71,6 +74,7 @@ impl Default for UiState {
             regions: Vec::new(),
             viewport_rect: None,
             ghosts: boolean_overlay::Ghosts::default(),
+            selection_tools: selection_tools::SelectionTools::default(),
         }
     }
 }
@@ -82,10 +86,12 @@ impl UiState {
         tree: &mut DataTree,
         command_map: &mut Commands,
         camera: &mut Camera,
-    ) {
+        document: &mut DocumentState,
+    ) -> Option<FileMenuAction> {
         self.regions.clear();
         self.ghosts = boolean_overlay::Ghosts::default();
         egui_extras::install_image_loaders(viewport_ui.ctx());
+        let file_action = draw_file_menu(viewport_ui, document);
         let mut frames = std::mem::take(&mut self.frames);
         let mut layout = std::mem::take(&mut self.layout);
         let mut view = WorkspaceView { tree };
@@ -143,7 +149,10 @@ impl UiState {
                         Color32::WHITE,
                     );
                 } else {
-                    self.draw_object_gizmos(ui, tree, camera);
+                    self.draw_selection_tools(ui, tree, camera);
+                    if !self.selection_tools.box_mode() && !self.selection_tools.active() {
+                        self.draw_object_gizmos(ui, tree, camera);
+                    }
                 }
             });
         }
@@ -170,6 +179,15 @@ impl UiState {
         if let Some(rect) = self.palette.rect() {
             self.regions.push(rect);
         }
+        if let Some(rect) = draw_file_error(viewport_ui.ctx(), document) {
+            self.regions.push(rect);
+        }
+        file_action
+    }
+
+    pub fn reset_document_gestures(&mut self) {
+        self.selection_tools = selection_tools::SelectionTools::default();
+        self.ghosts = boolean_overlay::Ghosts::default();
     }
 
     pub fn contains_pointer(&self, physical_position: Vec2, pixels_per_point: f32) -> bool {
@@ -200,16 +218,16 @@ impl UiState {
         let viewport = self.viewport_rect.unwrap();
         let left = egui::Area::new("top-left-tools".into())
             .order(egui::Order::Foreground)
-            .fixed_pos(self.viewport_rect.unwrap().left_top() + egui::vec2(10.0, 10.0))
+            .fixed_pos(self.viewport_rect.unwrap().left_top() + egui::vec2(6.0, 6.0))
             .show(ctx, |ui| {
                 ui.set_clip_rect(viewport);
-                ui.set_max_width((viewport.width() - 20.0).max(80.0));
+                ui.set_max_width((viewport.width() - 12.0).max(80.0));
                 egui::Frame::NONE.show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     ui.horizontal_wrapped(|ui| {
                         if viewport.width() >= 400.0 {
                             for kind in PrimitiveKind::ALL {
-                                if tool_button(
+                                if view_button(
                                     ui,
                                     primitive_icon_source(kind),
                                     &format!("Add {}", kind.label()),
@@ -220,31 +238,34 @@ impl UiState {
                                 }
                             }
                         } else {
-                            let add_button = toolbar_button(egui::Button::image_and_text(
-                                toolbar_icon(egui::include_image!(
-                                    "../assets/icons/lucide/plus.svg"
-                                )),
-                                RichText::new("Add").color(Color32::BLACK),
-                            ));
-                            add_button.menu(ui, |ui| {
-                                for kind in PrimitiveKind::ALL {
-                                    let clicked = ui
-                                        .add(egui::Button::image_and_text(
-                                            icon_image(
-                                                primitive_icon_source(kind),
-                                                ui.visuals().text_color(),
-                                            ),
-                                            kind.label(),
-                                        ))
-                                        .clicked();
-                                    if clicked {
-                                        commands::spawn(tree, kind.object_type());
-                                        ui.close();
+                            ui.scope(|ui| {
+                                style_view_buttons(ui);
+                                egui::containers::menu::MenuButton::from_button(view_icon_button(
+                                    egui::include_image!("../assets/icons/lucide/plus.svg"),
+                                    false,
+                                ))
+                                .ui(ui, |ui| {
+                                    for kind in PrimitiveKind::ALL {
+                                        if ui
+                                            .add(egui::Button::image_and_text(
+                                                icon_image(
+                                                    primitive_icon_source(kind),
+                                                    ui.visuals().text_color(),
+                                                ),
+                                                kind.label(),
+                                            ))
+                                            .clicked()
+                                        {
+                                            commands::spawn(tree, kind.object_type());
+                                            ui.close();
+                                        }
                                     }
-                                }
+                                })
+                                .0
+                                .on_hover_text("Add object");
                             });
                         }
-                        if tool_button(
+                        if view_button(
                             ui,
                             egui::include_image!("../assets/icons/lucide/command.svg"),
                             "Command palette (Cmd/Ctrl+Shift+P)",
@@ -253,7 +274,7 @@ impl UiState {
                         {
                             self.palette.open();
                         }
-                        if tool_button(
+                        if view_button(
                             ui,
                             egui::include_image!("../assets/icons/lucide/undo-2.svg"),
                             "Undo",
@@ -262,7 +283,7 @@ impl UiState {
                         {
                             undo_redo::undo(tree);
                         }
-                        if tool_button(
+                        if view_button(
                             ui,
                             egui::include_image!("../assets/icons/lucide/redo-2.svg"),
                             "Redo",
@@ -277,19 +298,20 @@ impl UiState {
         self.regions.push(left.response.rect);
 
         // Move the right-hand group below the tools when space is tight.
-        let projection_y = if viewport.width() < left.response.rect.width() + 94.0 {
-            left.response.rect.height() + 16.0
+        let projection_y = if viewport.width() < left.response.rect.width() + 72.0 {
+            left.response.rect.height() + 10.0
         } else {
-            10.0
+            6.0
         };
         let right = egui::Area::new("top-right-tools".into())
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
-            .fixed_pos(viewport.right_top() + egui::vec2(-10.0, projection_y))
+            .fixed_pos(viewport.right_top() + egui::vec2(-6.0, projection_y))
             .show(ctx, |ui| {
                 ui.set_clip_rect(viewport);
                 ui.horizontal(|ui| {
-                    ui.set_height(28.0);
+                    ui.set_height(26.0);
+                    ui.spacing_mut().item_spacing.x = 4.0;
                     let (projection_icon, next_mode) = match camera.projection_mode {
                         crate::camera::ProjectionMode::Perspective => (
                             egui::include_image!("../assets/icons/lucide/box.svg"),
@@ -317,6 +339,7 @@ impl UiState {
                 });
             });
         self.regions.push(right.response.rect);
+        self.draw_selection_toolbar(ctx, viewport);
     }
 
     fn draw_view_gizmo(&mut self, ctx: &egui::Context, camera: &mut Camera) {
@@ -504,6 +527,104 @@ impl UiState {
             tree.make_undo_redo_snapshot();
         }
     }
+}
+
+fn draw_file_menu(viewport_ui: &mut egui::Ui, document: &DocumentState) -> Option<FileMenuAction> {
+    let mut action = None;
+    egui::Panel::top("file-menu").show(viewport_ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui
+                    .add(egui::Button::new("Open…").shortcut_text("Cmd/Ctrl+O"))
+                    .clicked()
+                {
+                    action = Some(FileMenuAction::Open);
+                    ui.close();
+                }
+                ui.menu_button("Open Recent", |ui| {
+                    if document.recent_paths().is_empty() {
+                        ui.add_enabled(false, egui::Button::new("No Recent Projects"));
+                    }
+                    for path in document.recent_paths() {
+                        let name = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy())
+                            .unwrap_or_else(|| path.as_os_str().to_string_lossy());
+                        if ui
+                            .button(name)
+                            .on_hover_text(path.display().to_string())
+                            .clicked()
+                        {
+                            action = Some(FileMenuAction::OpenRecent(path.clone()));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui
+                    .add(egui::Button::new("Save").shortcut_text("Cmd/Ctrl+S"))
+                    .clicked()
+                {
+                    action = Some(FileMenuAction::Save);
+                    ui.close();
+                }
+                if ui
+                    .add(egui::Button::new("Save As…").shortcut_text("Cmd/Ctrl+Shift+S"))
+                    .clicked()
+                {
+                    action = Some(FileMenuAction::SaveAs);
+                    ui.close();
+                }
+            });
+            if let Some(path) = document.current_path() {
+                ui.separator();
+                ui.weak(
+                    path.file_name()
+                        .map(|name| name.to_string_lossy())
+                        .unwrap_or_else(|| path.as_os_str().to_string_lossy()),
+                );
+            }
+        });
+    });
+
+    let open = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
+    let save = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+    let save_as = egui::KeyboardShortcut::new(
+        egui::Modifiers {
+            shift: true,
+            command: true,
+            ..Default::default()
+        },
+        egui::Key::S,
+    );
+    viewport_ui.ctx().input_mut(|input| {
+        if input.consume_shortcut(&open) {
+            action = Some(FileMenuAction::Open);
+        } else if input.consume_shortcut(&save_as) {
+            action = Some(FileMenuAction::SaveAs);
+        } else if input.consume_shortcut(&save) {
+            action = Some(FileMenuAction::Save);
+        }
+    });
+    action
+}
+
+fn draw_file_error(ctx: &egui::Context, document: &mut DocumentState) -> Option<egui::Rect> {
+    let message = document.error().map(str::to_owned)?;
+    let mut open = true;
+    let mut dismiss = false;
+    let response = egui::Window::new("File error")
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.label(message);
+            dismiss = ui.button("Dismiss").clicked();
+        });
+    if dismiss || !open {
+        document.clear_error();
+    }
+    response.map(|response| response.response.rect)
 }
 
 struct WorkspaceView<'a> {
@@ -759,20 +880,67 @@ fn object_row(
                         }
                         primitive_icon(ui, PrimitiveKind::from_object_type(object.object_type));
                         let selected_now = selection.contains(&object.uuid);
-                        let response = ui
-                            .add_sized(
+                        let rename_id = ui.id().with("rename");
+                        let rename_focus_id = ui.id().with("rename-focus");
+                        let response = if let Some(mut draft) =
+                            ui.ctx().data(|data| data.get_temp::<String>(rename_id))
+                        {
+                            let response = ui.add_sized(
                                 egui::vec2(ui.available_width().max(1.0), 24.0),
-                                egui::Button::new(object.display_name())
-                                    .selected(selected_now)
-                                    .frame(false)
-                                    .truncate()
-                                    .sense(egui::Sense::click_and_drag()),
-                            )
-                            .on_hover_text(format!(
-                                "{}\nDrag onto another object to combine",
+                                egui::TextEdit::singleline(&mut draft),
+                            );
+                            let needs_focus = ui.ctx().data(|data| {
+                                !data.get_temp::<bool>(rename_focus_id).unwrap_or(false)
+                            });
+                            if needs_focus {
+                                response.request_focus();
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(rename_focus_id, true);
+                                });
+                            }
+                            let cancel = response.has_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Escape));
+                            let commit = response.has_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                            ui.ctx().data_mut(|data| {
+                                data.insert_temp(rename_id, draft.clone());
+                            });
+                            if cancel || commit || response.lost_focus() {
+                                ui.ctx().data_mut(|data| {
+                                    data.remove_temp::<String>(rename_id);
+                                    data.remove_temp::<bool>(rename_focus_id);
+                                });
+                                if !cancel {
+                                    rename_object(tree, object.uuid, draft);
+                                }
+                            }
+                            None
+                        } else {
+                            Some(
+                                ui.add_sized(
+                                    egui::vec2(ui.available_width().max(1.0), 24.0),
+                                    egui::Button::new(object.display_name())
+                                        .selected(selected_now)
+                                        .frame(false)
+                                        .truncate()
+                                        .sense(egui::Sense::click_and_drag()),
+                                )
+                                .on_hover_text(format!(
+                                "{}\nDouble-click to rename · Drag onto another object to combine",
                                 object.display_name()
-                            ));
-                        if response.clicked() {
+                            )),
+                            )
+                        };
+                        let Some(response) = response else {
+                            return;
+                        };
+                        if response.double_clicked() {
+                            ui.ctx().data_mut(|data| {
+                                data.insert_temp(rename_id, object.display_name());
+                                data.insert_temp(rename_focus_id, false);
+                            });
+                        }
+                        if response.clicked() && !response.double_clicked() {
                             response.surrender_focus();
                             if !scene_actions::apply_boolean_pick(tree, object.uuid) {
                                 let extend = ui.input(|input| {
@@ -902,6 +1070,19 @@ fn edit_boolean_operand(tree: &mut DataTree, id: uuid::Uuid, operation: Option<B
         set_objects(tree, scene);
         tree.make_undo_redo_snapshot();
     }
+}
+
+fn rename_object(tree: &mut DataTree, id: uuid::Uuid, name: String) {
+    let mut scene = objects(tree);
+    let Some(object) = scene.iter_mut().find(|object| object.uuid == id) else {
+        return;
+    };
+    if object.name == name {
+        return;
+    }
+    object.name = name;
+    set_objects(tree, scene);
+    tree.make_undo_redo_snapshot();
 }
 
 fn apply_boolean(tree: &mut DataTree, operation: BooleanOperation) {
@@ -1438,108 +1619,58 @@ fn view_button(
     source: egui::ImageSource<'static>,
     tooltip: &str,
 ) -> egui::Response {
+    selectable_view_button(ui, source, tooltip, false)
+}
+
+fn selectable_view_button(
+    ui: &mut egui::Ui,
+    source: egui::ImageSource<'static>,
+    tooltip: &str,
+    selected: bool,
+) -> egui::Response {
     ui.scope(|ui| {
-        ui.spacing_mut().button_padding = egui::vec2(5.0, 5.0);
-        ui.add(
-            egui::Button::image(icon_image(source, Color32::WHITE))
-                .fill(Color32::from_black_alpha(165))
-                .stroke(Stroke::NONE)
-                .corner_radius(CornerRadius::same(255))
-                .min_size(egui::vec2(28.0, 28.0)),
-        )
+        style_view_buttons(ui);
+        ui.add(view_icon_button(source, selected))
     })
     .inner
     .on_hover_text(tooltip)
 }
 
-fn toolbar_icon(source: egui::ImageSource<'static>) -> egui::Image<'static> {
-    egui::Image::new(source)
-        .fit_to_exact_size(egui::vec2(12.0, 12.0))
-        .tint(Color32::BLACK)
+// egui derives frame margins from theme strokes before applying Button::stroke.
+// Keep those inputs fixed so hover/focus cannot change the allocated size.
+fn style_view_buttons(ui: &mut egui::Ui) {
+    ui.spacing_mut().button_padding = egui::vec2(3.0, 3.0);
+    let widgets = &mut ui.style_mut().visuals.widgets;
+    for state in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        state.bg_stroke.width = 1.5;
+        state.expansion = 0.0;
+    }
 }
 
-struct ToolbarButton<'a>(egui::Button<'a>);
-
-impl ToolbarButton<'_> {
-    fn show(
-        self,
-        ui: &mut egui::Ui,
-        show: impl FnOnce(&mut egui::Ui, egui::Button<'_>) -> egui::Response,
-    ) -> egui::Response {
-        // Reserve the background before the standard button paints its content,
-        // preserving egui's click, tooltip, menu, and keyboard handling.
-        let background = ui.painter().add(egui::Shape::Noop);
-        let response = show(ui, self.0);
-        let texture_id = egui::Id::new("toolbar-tile-gradient");
-        let cached = ui
-            .ctx()
-            .data_mut(|data| data.get_temp::<egui::TextureHandle>(texture_id));
-        let texture = cached.unwrap_or_else(|| {
-            let texture = ui.ctx().load_texture(
-                "toolbar-tile-gradient",
-                egui::ColorImage::new([1, 2], vec![Color32::WHITE, Color32::from_gray(230)]),
-                egui::TextureOptions::LINEAR,
-            );
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(texture_id, texture.clone()));
-            texture
-        });
-        let uv = if response.is_pointer_button_down_on() {
-            egui::Rect::from_min_max(egui::pos2(0.0, 1.0), egui::pos2(1.0, 0.0))
+fn view_icon_button(source: egui::ImageSource<'static>, selected: bool) -> egui::Button<'static> {
+    egui::Button::image(icon_image(source, Color32::WHITE))
+        .fill(if selected {
+            Color32::from_rgba_unmultiplied(151, 73, 235, 155)
         } else {
-            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0))
-        };
-        let tint = if response.hovered() {
-            Color32::WHITE
-        } else {
-            Color32::from_gray(250)
-        };
-        let mut shape = egui::epaint::RectShape::filled(response.rect, CornerRadius::same(7), tint)
-            .with_texture(texture.id(), uv);
-        if response.has_focus() {
-            shape.stroke = ui.visuals().selection.stroke;
-        }
-        ui.painter().set(background, shape);
-        response
-    }
-
-    fn menu(self, ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) -> egui::Response {
-        self.show(ui, |ui, button| {
-            egui::containers::menu::MenuButton::from_button(button)
-                .ui(ui, content)
-                .0
+            Color32::from_black_alpha(165)
         })
-    }
-}
-
-impl egui::Widget for ToolbarButton<'_> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        self.show(ui, |ui, button| ui.add(button))
-    }
-}
-
-fn toolbar_button(button: egui::Button<'_>) -> ToolbarButton<'_> {
-    ToolbarButton(
-        button
-            .wrap_mode(egui::TextWrapMode::Extend)
-            .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::NONE)
-            .corner_radius(CornerRadius::same(7))
-            .min_size(egui::vec2(18.0, 18.0)),
-    )
-}
-
-fn tool_button(
-    ui: &mut egui::Ui,
-    source: egui::ImageSource<'static>,
-    label: &str,
-) -> egui::Response {
-    ui.scope(|ui| {
-        ui.spacing_mut().button_padding = egui::vec2(3.0, 3.0);
-        ui.add(toolbar_button(egui::Button::image(toolbar_icon(source))))
-    })
-    .inner
-    .on_hover_text(label)
+        .selected(selected)
+        .stroke(Stroke::new(
+            1.5,
+            if selected {
+                Color32::from_rgb(232, 183, 255)
+            } else {
+                Color32::TRANSPARENT
+            },
+        ))
+        .corner_radius(CornerRadius::same(255))
+        .min_size(egui::vec2(26.0, 26.0))
 }
 
 fn axis_label(axis: usize) -> &'static str {
@@ -1738,6 +1869,23 @@ mod tests {
         assert!(objects(&tree)[1].softness > 0.1);
         undo_redo::undo(&mut tree);
         assert_eq!(objects(&tree)[1].softness, 0.05);
+    }
+
+    #[test]
+    fn inline_rename_updates_the_tree_and_undoes() {
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::Box);
+        let id = object.uuid;
+        set_objects(&mut tree, vec![object]);
+        tree.make_undo_redo_snapshot();
+
+        rename_object(&mut tree, id, "Workbench".into());
+
+        assert_eq!(objects(&tree)[0].display_name(), "Workbench");
+        undo_redo::undo(&mut tree);
+        assert_eq!(objects(&tree)[0].display_name(), "Box");
+        undo_redo::redo(&mut tree);
+        assert_eq!(objects(&tree)[0].display_name(), "Workbench");
     }
 
     fn scene_frame(
@@ -1978,12 +2126,61 @@ mod tests {
                     },
                 );
                 output.textures_delta.clear();
-                assert_eq!(state.regions.len(), 2);
+                assert_eq!(state.regions.len(), 3);
                 assert!(
-                    !state.regions[0].intersects(state.regions[1]),
+                    !state.regions[0].intersects(state.regions[1])
+                        && !state.regions[0].intersects(state.regions[2])
+                        && !state.regions[1].intersects(state.regions[2]),
                     "overlapping toolbars at width {width}: {:?}",
                     state.regions
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn toolbar_button_size_stays_fixed_on_hover_press_and_selection() {
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        let mut rect = egui::Rect::NOTHING;
+        for pass in 0..10 {
+            let events = match pass {
+                2 | 3 => vec![egui::Event::PointerMoved(rect.center())],
+                4 => vec![egui::Event::PointerButton {
+                    pos: rect.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                5 => vec![egui::Event::PointerButton {
+                    pos: rect.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                8 => vec![egui::Event::PointerMoved(egui::pos2(500.0, 500.0))],
+                _ => vec![],
+            };
+            let previous = rect;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    rect = selectable_view_button(
+                        ui,
+                        primitive_icon_source(PrimitiveKind::Box),
+                        "Box",
+                        pass >= 6,
+                    )
+                    .rect;
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(rect.size(), egui::vec2(26.0, 26.0), "pass {pass}");
+            if pass > 0 {
+                assert_eq!(rect, previous, "pass {pass}");
             }
         }
     }
@@ -1993,9 +2190,9 @@ mod tests {
         let ctx = egui::Context::default();
         egui_extras::install_image_loaders(&ctx);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let response = tool_button(ui, primitive_icon_source(PrimitiveKind::Box), "Add Box");
-            assert_eq!(response.rect.width(), 18.0);
-            assert_eq!(response.rect.height(), 18.0);
+            let response = view_button(ui, primitive_icon_source(PrimitiveKind::Box), "Add Box");
+            assert_eq!(response.rect.width(), 26.0);
+            assert_eq!(response.rect.width(), response.rect.height());
         });
         output.textures_delta.clear();
         let mut state = UiState::default();
@@ -2041,7 +2238,10 @@ mod tests {
                     .shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Rect(rect) if rect.fill == Color32::from_black_alpha(165) => {
+                        egui::Shape::Rect(rect)
+                            if rect.fill == Color32::from_black_alpha(165)
+                                && state.regions[1].contains_rect(rect.rect) =>
+                        {
                             Some(rect.rect)
                         }
                         _ => None,
@@ -2292,6 +2492,7 @@ mod tests {
         set_objects(&mut tree, vec![object]);
         let mut commands = Commands::new();
         let mut camera = Camera::new();
+        let mut document = DocumentState::default();
         for width in [1200.0, 800.0, 480.0] {
             for _ in 0..3 {
                 let mut output = ctx.run_ui(
@@ -2302,7 +2503,9 @@ mod tests {
                         )),
                         ..Default::default()
                     },
-                    |ui| state.draw(ui, &mut tree, &mut commands, &mut camera),
+                    |ui| {
+                        state.draw(ui, &mut tree, &mut commands, &mut camera, &mut document);
+                    },
                 );
                 output.textures_delta.clear(); // Headless test has no GPU texture consumer.
                 for shape in output.shapes {

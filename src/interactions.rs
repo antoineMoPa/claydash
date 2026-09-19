@@ -7,8 +7,8 @@ use crate::{
     camera::Camera,
     commands::{self, Commands},
     model::{
-        objects, selected, set_objects, set_selected, ClaydashValue, DataTree, EditorState,
-        SdfObject, Transform,
+        objects, selected, set_objects, set_selected, set_selected_exact, ClaydashValue, DataTree,
+        EditorState, SdfObject, Transform,
     },
 };
 
@@ -23,11 +23,22 @@ struct TransformSession {
     objects: Vec<(uuid::Uuid, Transform)>,
 }
 
+struct ShiftPanSession {
+    start: Vec2,
+    last_applied: Vec2,
+    ghost: Option<uuid::Uuid>,
+    reference: Option<Vec3>,
+}
+
+const PAN_DRAG_THRESHOLD: f32 = 3.0;
+
 pub struct InteractionState {
     keys: HashSet<KeyCode>,
     pub mouse_position: Vec2,
     mouse_delta: Vec2,
     right_down: bool,
+    right_pan_reference: Option<Vec3>,
+    shift_pan: Option<ShiftPanSession>,
     transform_session: Option<TransformSession>,
 }
 
@@ -38,12 +49,35 @@ impl Default for InteractionState {
             mouse_position: Vec2::ZERO,
             mouse_delta: Vec2::ZERO,
             right_down: false,
+            right_pan_reference: None,
+            shift_pan: None,
             transform_session: None,
         }
     }
 }
 
 impl InteractionState {
+    pub fn suspend_navigation(&mut self) {
+        self.keys.clear();
+        self.mouse_delta = Vec2::ZERO;
+        self.right_down = false;
+        self.right_pan_reference = None;
+        self.shift_pan = None;
+    }
+
+    pub fn command_modifier_down(&self) -> bool {
+        [
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::SuperLeft,
+            KeyCode::SuperRight,
+            KeyCode::AltLeft,
+            KeyCode::AltRight,
+        ]
+        .iter()
+        .any(|key| self.keys.contains(key))
+    }
+
     pub fn key_pressed(
         &mut self,
         key: KeyCode,
@@ -59,16 +93,16 @@ impl InteractionState {
             crate::ui::scene_actions::cancel_boolean_pick(tree);
             return;
         }
-        let has_command_modifier = [
-            KeyCode::ControlLeft,
-            KeyCode::ControlRight,
-            KeyCode::SuperLeft,
-            KeyCode::SuperRight,
-            KeyCode::AltLeft,
-            KeyCode::AltRight,
-        ]
-        .iter()
-        .any(|key| self.keys.contains(key));
+        if key == KeyCode::Escape
+            && matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::None | ClaydashValue::EditorState(EditorState::Start)
+            )
+        {
+            set_selected(tree, vec![]);
+            return;
+        }
+        let has_command_modifier = self.command_modifier_down();
         if !has_command_modifier {
             let operation = match key {
                 KeyCode::Equal | KeyCode::NumpadAdd => Some(crate::model::BooleanOperation::Union),
@@ -133,18 +167,46 @@ impl InteractionState {
         }
     }
 
-    pub fn set_right_button(&mut self, pressed: bool, over_ui: bool) {
+    pub fn set_right_button(
+        &mut self,
+        pressed: bool,
+        over_ui: bool,
+        camera: &Camera,
+        tree: &DataTree,
+    ) {
         if !pressed || !over_ui {
             self.right_down = pressed;
+            self.right_pan_reference = if pressed {
+                pan_reference(camera, tree, self.mouse_position)
+            } else {
+                None
+            };
         }
     }
 
     pub fn update(&mut self, camera: &mut Camera, tree: &mut DataTree) {
-        if self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight) {
-            camera.orbit(self.mouse_delta);
-        }
-        if self.right_down {
-            camera.pan(self.mouse_delta);
+        if let Some(session) = &mut self.shift_pan {
+            if self.mouse_position.distance(session.start) >= PAN_DRAG_THRESHOLD {
+                if let Some(reference) = session.reference {
+                    camera.pan_to_cursor(self.mouse_position, reference);
+                } else {
+                    camera.pan(self.mouse_position - session.last_applied);
+                }
+                session.last_applied = self.mouse_position;
+            }
+        } else {
+            if self.keys.contains(&KeyCode::ControlLeft)
+                || self.keys.contains(&KeyCode::ControlRight)
+            {
+                camera.orbit(self.mouse_delta);
+            }
+            if self.right_down {
+                if let Some(reference) = self.right_pan_reference {
+                    camera.pan_to_cursor(self.mouse_position, reference);
+                } else {
+                    camera.pan(self.mouse_delta);
+                }
+            }
         }
         self.mouse_delta = Vec2::ZERO;
         self.update_transformation(camera, tree);
@@ -173,7 +235,28 @@ impl InteractionState {
             tree.make_undo_redo_snapshot();
             return;
         }
-        let (origin, direction) = camera.ray(self.mouse_position);
+        let shift =
+            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        if shift {
+            self.shift_pan = Some(ShiftPanSession {
+                start: self.mouse_position,
+                last_applied: self.mouse_position,
+                ghost,
+                reference: pan_reference(camera, tree, self.mouse_position),
+            });
+            return;
+        }
+        Self::select_at(camera, tree, self.mouse_position, ghost, shift);
+    }
+
+    pub(crate) fn select_at(
+        camera: &Camera,
+        tree: &mut DataTree,
+        position: Vec2,
+        ghost: Option<uuid::Uuid>,
+        shift: bool,
+    ) {
+        let (origin, direction) = camera.ray(position);
         let scene = objects(tree);
         let ghost = ghost.filter(|id| scene.iter().any(|object| object.uuid == *id));
         if let Some(pick) = crate::ui::scene_actions::pending_boolean(tree) {
@@ -199,30 +282,37 @@ impl InteractionState {
             return;
         }
         let Some(hit) = ghost.or_else(|| raymarch(origin, direction, &scene)) else {
+            set_selected(tree, vec![]);
             return;
         };
         let mut selection = selected(tree);
-        let shift =
-            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
-        if selection.contains(&hit) {
-            if shift {
-                selection.retain(|uuid| *uuid != hit);
+        if shift {
+            let target = crate::ui::scene_actions::viewport_group_root(&scene, hit);
+            if selection.contains(&target) {
+                selection.retain(|uuid| *uuid != target);
             } else {
-                selection = if selection.len() == 1 {
-                    vec![]
-                } else {
-                    vec![hit]
-                };
+                selection.push(target);
             }
-        } else if shift {
-            selection.push(hit);
         } else {
-            selection = vec![hit];
+            let target =
+                crate::ui::scene_actions::viewport_selection_target(&scene, hit, &selection);
+            if target.scope == crate::model::SelectionScope::Exact {
+                set_selected_exact(tree, vec![target.id]);
+            } else {
+                set_selected(tree, vec![target.id]);
+            }
+            return;
         }
         set_selected(tree, selection);
     }
 
     pub fn pointer_up(&mut self, camera: &Camera, tree: &mut DataTree) {
+        if let Some(session) = self.shift_pan.take() {
+            if self.mouse_position.distance(session.start) < PAN_DRAG_THRESHOLD {
+                Self::select_at(camera, tree, session.start, session.ghost, true);
+            }
+            return;
+        }
         if matches!(
             tree.get_path("editor.state"),
             ClaydashValue::EditorState(EditorState::Grabbing)
@@ -238,7 +328,7 @@ impl InteractionState {
     }
 
     fn begin_transform_session(&mut self, mode: EditorState, camera: &Camera, tree: &mut DataTree) {
-        let selection = commands::selected_subtree_ids(&objects(tree), &selected(tree));
+        let selection = commands::effective_selected_ids(tree);
         let selected_objects: Vec<_> = objects(tree)
             .into_iter()
             .filter(|object| selection.contains(&object.uuid))
@@ -263,7 +353,11 @@ impl InteractionState {
                 ClaydashValue::Transform(*transform),
             );
         }
-        let initial_cursor = camera.cursor_at_depth(self.mouse_position, center);
+        let initial_cursor = if mode == EditorState::Grabbing {
+            camera.cursor_on_plane(self.mouse_position, center)
+        } else {
+            camera.cursor_at_depth(self.mouse_position, center)
+        };
         self.transform_session = Some(TransformSession {
             mode,
             selection: selected(tree),
@@ -336,7 +430,11 @@ impl InteractionState {
         } else {
             Vec3::ONE
         };
-        let current_cursor = camera.cursor_at_depth(self.mouse_position, session.center);
+        let current_cursor = if mode == EditorState::Grabbing {
+            camera.cursor_on_plane(self.mouse_position, session.center)
+        } else {
+            camera.cursor_at_depth(self.mouse_position, session.center)
+        };
         let mut scene = objects(tree);
 
         for object in &mut scene {
@@ -381,12 +479,21 @@ impl InteractionState {
     }
 }
 
-pub fn raymarch(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Option<uuid::Uuid> {
+#[derive(Clone, Copy, Debug)]
+pub struct RayHit {
+    pub object: uuid::Uuid,
+    pub position: Vec3,
+}
+
+pub fn raymarch_hit(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Option<RayHit> {
     let mut point = origin;
     for _ in 0..64 {
         let (distance, object) = scene_distance(point, objects)?;
         if distance < 0.01 {
-            return Some(object);
+            return Some(RayHit {
+                object,
+                position: point,
+            });
         }
         point += direction * distance.max(0.003) * 0.8;
         if point.distance(origin) > 100.0 {
@@ -394,6 +501,15 @@ pub fn raymarch(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Option<
         }
     }
     None
+}
+
+pub fn raymarch(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Option<uuid::Uuid> {
+    raymarch_hit(origin, direction, objects).map(|hit| hit.object)
+}
+
+fn pan_reference(camera: &Camera, tree: &DataTree, cursor: Vec2) -> Option<Vec3> {
+    let (origin, direction) = camera.ray(cursor);
+    raymarch_hit(origin, direction, &objects(tree)).map(|hit| hit.position)
 }
 
 fn scene_distance(point: Vec3, objects: &[SdfObject]) -> Option<(f32, uuid::Uuid)> {
@@ -430,6 +546,37 @@ mod tests {
     }
 
     #[test]
+    fn raymarch_hit_includes_visible_surface_position() {
+        let object = SdfObject::create(TYPE_SPHERE);
+        let origin = Vec3::new(0.0, 0.0, 3.0);
+        let hit = raymarch_hit(origin, Vec3::NEG_Z, &[object]).unwrap();
+
+        assert!(hit.position.z > 0.0);
+        assert!(hit.position.distance(origin) < origin.length());
+    }
+
+    #[test]
+    fn background_click_clears_selection() {
+        let (mut tree, _) = selected_object();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+
+        InteractionState::select_at(&camera, &mut tree, Vec2::ZERO, None, false);
+
+        assert!(selected(&tree).is_empty());
+    }
+
+    #[test]
+    fn escape_clears_selection_when_no_operation_is_active() {
+        let (mut tree, _) = selected_object();
+        let mut interactions = InteractionState::default();
+
+        interactions.key_pressed(KeyCode::Escape, false, &Commands::new(), &mut tree);
+
+        assert!(selected(&tree).is_empty());
+    }
+
+    #[test]
     fn subtraction_changes_the_cpu_selection_distance_field() {
         let mut outer = SdfObject::create(TYPE_SPHERE);
         let mut cutter = SdfObject::create(TYPE_SPHERE);
@@ -448,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn ghost_click_selects_exact_operand_and_supports_shift() {
+    fn repeated_ghost_click_dives_into_group_and_shift_toggles_the_group() {
         let (mut tree, target) = selected_object();
         tree.set_path(
             "editor.state",
@@ -468,9 +615,73 @@ mod tests {
         set_selected(&mut tree, vec![target]);
         interactions.keys.insert(KeyCode::ShiftLeft);
         interactions.pointer_down(&camera, &mut tree, Some(id));
-        assert_eq!(selected(&tree), vec![target, id]);
+        interactions.pointer_up(&camera, &mut tree);
+        assert!(selected(&tree).is_empty());
         interactions.pointer_down(&camera, &mut tree, Some(id));
+        interactions.pointer_up(&camera, &mut tree);
         assert_eq!(selected(&tree), vec![target]);
+    }
+
+    #[test]
+    fn shift_drag_pans_camera_without_changing_selection() {
+        let (mut tree, selected_id) = selected_object();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let initial_target = camera.target;
+        let mut interactions = InteractionState {
+            mouse_position: camera.viewport / 2.0,
+            ..Default::default()
+        };
+        interactions.keys.insert(KeyCode::ShiftLeft);
+
+        interactions.pointer_down(&camera, &mut tree, Some(selected_id));
+        interactions.cursor_moved(interactions.mouse_position + Vec2::new(80.0, 30.0), false);
+        interactions.update(&mut camera, &mut tree);
+        interactions.pointer_up(&camera, &mut tree);
+
+        assert_ne!(camera.target, initial_target);
+        assert_eq!(selected(&tree), vec![selected_id]);
+    }
+
+    #[test]
+    fn suspended_navigation_releases_buttons_and_modifiers() {
+        let mut interactions = InteractionState::default();
+        interactions.keys.insert(KeyCode::ControlLeft);
+        interactions.right_down = true;
+        interactions.mouse_delta = Vec2::new(20.0, 10.0);
+        interactions.right_pan_reference = Some(Vec3::ZERO);
+
+        interactions.suspend_navigation();
+
+        assert!(interactions.keys.is_empty());
+        assert!(!interactions.right_down);
+        assert_eq!(interactions.mouse_delta, Vec2::ZERO);
+        assert!(interactions.right_pan_reference.is_none());
+    }
+
+    #[test]
+    fn repeated_click_on_group_root_switches_from_group_to_exact_primitive() {
+        let mut tree = DataTree::default();
+        let root = SdfObject::create(TYPE_BOX);
+        let mut child = SdfObject::create(TYPE_SPHERE);
+        child.boolean_parent = Some(root.uuid);
+        set_objects(&mut tree, vec![root.clone(), child.clone()]);
+        let camera = Camera::new();
+
+        InteractionState::select_at(&camera, &mut tree, Vec2::ZERO, Some(root.uuid), false);
+        assert_eq!(selected(&tree), vec![root.uuid]);
+        assert_eq!(
+            commands::effective_selected_ids(&tree),
+            vec![root.uuid, child.uuid]
+        );
+
+        InteractionState::select_at(&camera, &mut tree, Vec2::ZERO, Some(root.uuid), false);
+        assert_eq!(selected(&tree), vec![root.uuid]);
+        assert_eq!(commands::effective_selected_ids(&tree), vec![root.uuid]);
+        assert_eq!(
+            crate::model::selection_scope(&tree),
+            crate::model::SelectionScope::Exact
+        );
     }
 
     #[test]
@@ -616,13 +827,17 @@ mod tests {
             mouse_position: camera.viewport / 2.0,
             ..Default::default()
         };
-        commands::start_grab(&mut tree);
+        let mut command_map = Commands::new();
+        commands::register_all(&mut command_map);
+        interactions.key_pressed(KeyCode::KeyG, false, &command_map, &mut tree);
         interactions.update(&mut camera, &mut tree);
 
         interactions.mouse_position.x += 100.0;
         interactions.update(&mut camera, &mut tree);
 
-        assert!(objects(&tree)[0].transform.translation.length() > 0.01);
+        let movement = objects(&tree)[0].transform.translation;
+        assert!(movement.length() > 0.01);
+        assert!(movement.dot(camera.target - camera.position).abs() < 0.0001);
     }
 
     #[test]
@@ -670,7 +885,6 @@ mod tests {
                 let (mut tree, target) = selected_object();
                 let mut scene = objects(&tree);
                 let operand = SdfObject::create(TYPE_SPHERE);
-                let operand_id = operand.uuid;
                 // Sphere is entirely hidden by the selected box.
                 scene.push(operand);
                 set_objects(&mut tree, scene);
@@ -687,7 +901,7 @@ mod tests {
                 interactions.pointer_down(&camera, &mut tree, None);
                 assert!(crate::ui::scene_actions::pending_boolean(&tree).is_none());
                 assert_eq!(objects(&tree)[1].boolean_parent, Some(target));
-                assert_eq!(selected(&tree), vec![operand_id]);
+                assert_eq!(selected(&tree), vec![target]);
                 crate::undo_redo::undo(&mut tree);
                 assert!(objects(&tree)[1].boolean_parent.is_none());
                 assert!(crate::ui::scene_actions::pending_boolean(&tree).is_none());

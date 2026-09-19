@@ -435,9 +435,9 @@ impl Renderer {
 
         // Children precede parents, so the fragment shader can evaluate the
         // boolean tree in one forward pass while preserving sibling order.
+        let selected_ids: std::collections::HashSet<_> = selected.iter().copied().collect();
         let ordered = boolean_postorder(&objects[..objects.len().min(MAX_OBJECTS)]);
         let objects = &ordered;
-        let selected_ids: std::collections::HashSet<_> = selected.iter().copied().collect();
         let object_indices: std::collections::HashMap<_, _> = objects
             .iter()
             .enumerate()

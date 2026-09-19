@@ -6,7 +6,10 @@ use glam::{Mat4, Vec3, Vec4};
 
 use crate::{
     camera::Camera,
-    model::{objects_ref, selected_ref, BooleanOperation, DataTree, SdfObject, SdfParams},
+    model::{
+        objects_ref, selected_ref, selection_scope, BooleanOperation, DataTree, SdfObject,
+        SdfParams, SelectionScope,
+    },
 };
 
 const SEGMENT_BUDGET: usize = 8192;
@@ -43,7 +46,11 @@ pub(super) fn draw(ui: &egui::Ui, tree: &DataTree, camera: &Camera) -> Ghosts {
         return ghosts;
     }
     let scene = objects_ref(tree);
-    let operands = editing_operands(scene, selected);
+    let operands = editing_operands(
+        scene,
+        selected,
+        selection_scope(tree) == SelectionScope::Group,
+    );
     if operands.is_empty() {
         return ghosts;
     }
@@ -114,7 +121,11 @@ pub(super) fn draw(ui: &egui::Ui, tree: &DataTree, camera: &Camera) -> Ghosts {
     ghosts
 }
 
-fn editing_operands(scene: &[SdfObject], selection: &[uuid::Uuid]) -> Vec<(usize, bool)> {
+fn editing_operands(
+    scene: &[SdfObject],
+    selection: &[uuid::Uuid],
+    include_descendants: bool,
+) -> Vec<(usize, bool)> {
     let selected: HashSet<_> = selection.iter().copied().collect();
     let mut children: HashMap<_, Vec<_>> = HashMap::new();
     for object in scene {
@@ -126,8 +137,10 @@ fn editing_operands(scene: &[SdfObject], selection: &[uuid::Uuid]) -> Vec<(usize
     let mut pending = selection.to_vec();
     while let Some(id) = pending.pop() {
         if related.insert(id) {
-            if let Some(children) = children.get(&id) {
-                pending.extend(children);
+            if include_descendants {
+                if let Some(children) = children.get(&id) {
+                    pending.extend(children);
+                }
             }
         }
     }
@@ -335,14 +348,14 @@ mod tests {
         unrelated.boolean_parent = Some(uuid::Uuid::new_v4());
         let scene = [root.clone(), cutter.clone(), nested, unrelated];
         assert_eq!(
-            editing_operands(&scene, &[root.uuid]),
+            editing_operands(&scene, &[root.uuid], true),
             [(1, false), (2, false)]
         );
         assert_eq!(
-            editing_operands(&scene, &[cutter.uuid]),
+            editing_operands(&scene, &[cutter.uuid], true),
             [(1, true), (2, false)]
         );
-        assert!(editing_operands(&scene, &[]).is_empty());
+        assert!(editing_operands(&scene, &[], true).is_empty());
     }
 
     #[test]

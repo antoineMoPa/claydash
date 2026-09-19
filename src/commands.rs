@@ -37,7 +37,7 @@ pub fn register_all(commands: &mut Commands) {
         commands,
         "grab",
         "Grab",
-        "Start moving selection.",
+        "Move the selection in the current view plane.",
         "G",
         start_grab,
     );
@@ -218,7 +218,7 @@ fn toggle_constraint(tree: &mut DataTree, path: &str) {
 }
 
 fn cancel(tree: &mut DataTree) {
-    let selection = selected_subtree_ids(&objects(tree), &selected(tree));
+    let selection = effective_selected_ids(tree);
     let mut scene = objects(tree);
     for object in &mut scene {
         if !selection.contains(&object.uuid) {
@@ -246,7 +246,7 @@ fn finish(tree: &mut DataTree) {
 }
 
 fn delete(tree: &mut DataTree) {
-    let selection = selected_subtree_ids(&objects(tree), &selected(tree));
+    let selection = effective_selected_ids(tree);
     set_objects(
         tree,
         objects(tree)
@@ -269,7 +269,7 @@ fn select_all(tree: &mut DataTree) {
 
 fn duplicate(tree: &mut DataTree) {
     let mut scene = objects(tree);
-    let selection = selected_subtree_ids(&scene, &selected(tree));
+    let selection = effective_selected_ids(tree);
     let id_map: std::collections::HashMap<_, _> = selection
         .iter()
         .map(|id| (*id, uuid::Uuid::new_v4()))
@@ -322,6 +322,14 @@ pub(crate) fn selected_subtree_ids(
         if ids.len() == previous_len {
             return ids;
         }
+    }
+}
+
+pub(crate) fn effective_selected_ids(tree: &DataTree) -> Vec<uuid::Uuid> {
+    let selection = selected(tree);
+    match crate::model::selection_scope(tree) {
+        crate::model::SelectionScope::Group => selected_subtree_ids(&objects(tree), &selection),
+        crate::model::SelectionScope::Exact => selection,
     }
 }
 

@@ -36,6 +36,7 @@ egui_extras = { version = "0.36.2", default-features = false, features = ["svg"]
 egui_frames = { git = "https://github.com/antoineMoPa/egui_frames", rev = "ea7892f5081983f47322a132bee982ca88d95027", features = ["serde"] }
 egui_command_palette = { workspace = true }
 egui-wgpu = "0.36.2"
+rfd = "0.17.2"
 wgpu = "30.0.1"
 winit = "0.30.13"
 bytemuck = { version = "1.24.0", features = ["derive"] }
@@ -57,7 +58,7 @@ features = [
 ]
 
 [[bin]]
-name = "main"
+name = "claydash"
 path = "./src/main.rs"
 
 [profile.dev]

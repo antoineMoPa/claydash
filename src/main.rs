@@ -1,6 +1,7 @@
 mod app;
 mod camera;
 mod commands;
+mod document;
 mod duck;
 mod interactions;
 mod model;
