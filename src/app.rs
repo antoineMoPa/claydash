@@ -257,6 +257,9 @@ impl App {
         self.tree = data_tree_with_scene(scene);
         self.interactions = InteractionState::default();
         self.ui.reset_document_gestures();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.invalidate_scene();
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

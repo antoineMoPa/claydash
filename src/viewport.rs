@@ -169,6 +169,11 @@ impl Viewport {
         }
     }
 
+    pub fn invalidate(&mut self) {
+        self.key = None;
+        self.completed = 0;
+    }
+
     pub fn prepare(&mut self, device: &wgpu::Device, key: ViewKey) -> Work {
         // Poll is nonblocking. WebGPU delivers map callbacks through its event loop.
         let _ = device.poll(wgpu::PollType::Poll);

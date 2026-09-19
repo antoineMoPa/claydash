@@ -274,6 +274,11 @@ impl Renderer {
         }
     }
 
+    pub fn invalidate_scene(&mut self) {
+        self.uploaded_scene_versions = [i32::MIN; 2];
+        self.viewport.invalidate();
+    }
+
     pub fn render(
         &mut self,
         camera: &Camera,
