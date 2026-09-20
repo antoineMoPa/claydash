@@ -191,9 +191,10 @@ pub(crate) fn attach(
         return false;
     }
     let roots = operand_roots(&scene, operands);
-    for object in &mut scene {
-        if roots.contains(&object.uuid) {
-            object.boolean_parent = Some(target);
+    initialize_group_transform(&mut scene, target, &roots);
+    for root in roots {
+        reparent_preserving_world(&mut scene, root, Some(target));
+        if let Some(object) = scene.iter_mut().find(|object| object.uuid == root) {
             object.operation = operation;
         }
     }
@@ -210,21 +211,98 @@ pub(super) fn add_operand(
     operation: BooleanOperation,
 ) {
     let mut scene = objects(tree);
-    let Some(parent) = scene.iter().find(|object| object.uuid == target) else {
+    if !scene.iter().any(|object| object.uuid == target) {
         return;
-    };
+    }
+    initialize_group_transform(&mut scene, target, &[]);
+    let parent = scene.iter().find(|object| object.uuid == target).unwrap();
     let mut operand = SdfObject::create_kind(kind);
     operand.material = crate::model::picked_material(tree);
     operand.color = operand.material.color;
-    operand.transform = parent.transform.clone();
+    operand.transform = parent.transform;
     operand.transform.scale *= 0.65;
     operand.boolean_parent = Some(target);
     operand.operation = operation;
     let id = operand.uuid;
     scene.push(operand);
+    let target_world = crate::model::object_world_matrix(&scene, target);
+    let local = crate::model::group_world_matrix(&scene, id).inverse()
+        * target_world
+        * glam::Mat4::from_scale(Vec3::splat(0.65));
+    let (scale, rotation, translation) = local.to_scale_rotation_translation();
+    if let Some(operand) = scene.iter_mut().find(|object| object.uuid == id) {
+        operand.transform = crate::model::Transform {
+            translation,
+            rotation,
+            scale,
+        };
+    }
     set_objects(tree, scene);
     set_selected(tree, vec![id]);
     tree.make_undo_redo_snapshot();
+}
+
+fn initialize_group_transform(scene: &mut [SdfObject], target: Uuid, operands: &[Uuid]) {
+    if crate::model::has_boolean_children(scene, target) {
+        return;
+    }
+    let target_world = crate::model::object_world_matrix(scene, target);
+    let mut pivot = target_world.transform_point3(Vec3::ZERO);
+    let mut count = 1.0;
+    for operand in operands {
+        pivot += crate::model::object_world_matrix(scene, *operand).transform_point3(Vec3::ZERO);
+        count += 1.0;
+    }
+    pivot /= count;
+    let parent_world = crate::model::parent_group_world_matrix(scene, target);
+    let group_local = parent_world.inverse() * glam::Mat4::from_translation(pivot);
+    let (group_scale, group_rotation, group_translation) =
+        group_local.to_scale_rotation_translation();
+    let group_transform = crate::model::Transform {
+        translation: group_translation,
+        rotation: group_rotation,
+        scale: group_scale,
+    };
+    let primitive_local = (parent_world * group_transform.matrix()).inverse() * target_world;
+    let (scale, rotation, translation) = primitive_local.to_scale_rotation_translation();
+    let object = scene
+        .iter_mut()
+        .find(|object| object.uuid == target)
+        .unwrap();
+    object.group_transform = group_transform;
+    object.transform = crate::model::Transform {
+        translation,
+        rotation,
+        scale,
+    };
+}
+
+pub(super) fn reparent_preserving_world(scene: &mut [SdfObject], id: Uuid, parent: Option<Uuid>) {
+    let is_group = crate::model::has_boolean_children(scene, id);
+    let old_world = if is_group {
+        crate::model::group_world_matrix(scene, id)
+    } else {
+        crate::model::object_world_matrix(scene, id)
+    };
+    let Some(object) = scene.iter_mut().find(|object| object.uuid == id) else {
+        return;
+    };
+    object.boolean_parent = parent;
+    let parent_world = crate::model::parent_group_world_matrix(scene, id);
+    let local = parent_world.inverse() * old_world;
+    let (scale, rotation, translation) = local.to_scale_rotation_translation();
+    let transform = crate::model::Transform {
+        translation,
+        rotation,
+        scale,
+    };
+    let object = scene.iter_mut().find(|object| object.uuid == id).unwrap();
+    if is_group {
+        object.group_transform = transform;
+    } else {
+        object.transform = transform;
+    }
+    crate::model::map_leaf_group_transforms_to_primitives(scene);
 }
 
 #[cfg(test)]
@@ -317,6 +395,49 @@ mod tests {
         undo_redo::undo(&mut tree);
         assert_eq!(objects(&tree)[1].boolean_parent, None);
     }
+
+    #[test]
+    fn attach_and_detach_preserve_world_transform_under_a_transformed_group() {
+        let mut target = SdfObject::create_kind(PrimitiveKind::Box);
+        target.group_transform.translation = Vec3::new(2.0, -1.0, 0.5);
+        target.group_transform.rotation = glam::Quat::from_rotation_y(0.4);
+        target.group_transform.scale = Vec3::splat(1.3);
+        let mut operand = SdfObject::create_kind(PrimitiveKind::Sphere);
+        operand.transform.translation = Vec3::new(-3.0, 2.0, 1.0);
+        let initial = [target.clone(), operand.clone()];
+        let original = operand_world(&initial, operand.uuid);
+        let target_original = operand_world(&initial, target.uuid);
+        let mut tree = DataTree::default();
+        set_objects(&mut tree, vec![target.clone(), operand.clone()]);
+
+        assert!(attach(
+            &mut tree,
+            target.uuid,
+            &[operand.uuid],
+            BooleanOperation::Subtract,
+        ));
+        let mut scene = objects(&tree);
+        assert_matrix_close(operand_world(&scene, operand.uuid), original);
+
+        reparent_preserving_world(&mut scene, operand.uuid, None);
+        assert_matrix_close(operand_world(&scene, operand.uuid), original);
+        assert_matrix_close(operand_world(&scene, target.uuid), target_original);
+        assert_eq!(scene[0].group_transform, crate::model::Transform::default());
+    }
+
+    fn operand_world(scene: &[SdfObject], id: Uuid) -> glam::Mat4 {
+        crate::model::object_world_matrix(scene, id)
+    }
+
+    fn assert_matrix_close(actual: glam::Mat4, expected: glam::Mat4) {
+        for (actual, expected) in actual
+            .to_cols_array()
+            .into_iter()
+            .zip(expected.to_cols_array())
+        {
+            assert!((actual - expected).abs() < 0.0001, "{actual} != {expected}");
+        }
+    }
     #[test]
     fn new_cutter_is_selected_at_target_and_can_be_undone() {
         let mut target = SdfObject::create_kind(PrimitiveKind::Box);
@@ -333,7 +454,14 @@ mod tests {
         let scene = objects(&tree);
         assert_eq!(scene[1].boolean_parent, Some(target.uuid));
         assert_eq!(scene[1].operation, BooleanOperation::Subtract);
-        assert_eq!(scene[1].transform.translation, target.transform.translation);
+        assert_eq!(
+            crate::model::object_world_matrix(&scene, scene[1].uuid).transform_point3(Vec3::ZERO),
+            target.transform.translation
+        );
+        assert_eq!(
+            scene[0].group_transform.translation,
+            target.transform.translation
+        );
         assert_eq!(selected(&tree), vec![scene[1].uuid]);
         undo_redo::undo(&mut tree);
         assert_eq!(objects(&tree).len(), 1);

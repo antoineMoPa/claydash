@@ -105,6 +105,12 @@ Colored child badges show the operation; click a badge to change it or detach th
 Shift-click selection followed by the compact combine buttons also remains available.
 G/R/S, duplicate, and delete include a target's descendants. Undo restores grouping changes.
 
+Selecting a Boolean group exposes its own Position, Rotation, and Scale in the Object inspector;
+those values transform the complete subtree without rewriting its primitive transforms. The
+viewport shows move, rotate, and scale gizmos for the group. Repeated viewport clicks drill into
+the hierarchy, where the exact primitive's shape, material, repetition, and operand properties
+become available again.
+
 Selected boolean operands show translucent wire guides through solid surfaces: amber for
 subtraction and blue for other operations. Selecting a target shows its nested cutters and
 intersection operands more faintly. Guides follow transforms and repetition; dense scenes

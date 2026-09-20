@@ -65,6 +65,9 @@ pub enum AnimatableProperty {
     Position(VectorAxis),
     Rotation(VectorAxis),
     Scale(VectorAxis),
+    GroupPosition(VectorAxis),
+    GroupRotation(VectorAxis),
+    GroupScale(VectorAxis),
     BoxHalfExtent(VectorAxis),
     SphereRadius,
     CylinderRadius,
@@ -90,6 +93,9 @@ impl AnimatableProperty {
             Self::Position(axis) => format!("Position {}", axis.label()),
             Self::Rotation(axis) => format!("Rotation {}", axis.label()),
             Self::Scale(axis) => format!("Scale {}", axis.label()),
+            Self::GroupPosition(axis) => format!("Group position {}", axis.label()),
+            Self::GroupRotation(axis) => format!("Group rotation {}", axis.label()),
+            Self::GroupScale(axis) => format!("Group scale {}", axis.label()),
             Self::BoxHalfExtent(axis) => format!("Half extent {}", axis.label()),
             Self::SphereRadius => "Radius".into(),
             Self::CylinderRadius => "Radius".into(),
@@ -118,6 +124,12 @@ impl AnimatableProperty {
                 Some([x.to_degrees(), y.to_degrees(), z.to_degrees()][axis.index()])
             }
             Self::Scale(axis) => Some(object.transform.scale[axis.index()]),
+            Self::GroupPosition(axis) => Some(object.group_transform.translation[axis.index()]),
+            Self::GroupRotation(axis) => {
+                let (x, y, z) = object.group_transform.rotation.to_euler(EulerRot::XYZ);
+                Some([x.to_degrees(), y.to_degrees(), z.to_degrees()][axis.index()])
+            }
+            Self::GroupScale(axis) => Some(object.group_transform.scale[axis.index()]),
             Self::BoxHalfExtent(axis) => match &object.params {
                 SdfParams::BoxParams(params) => Some(params.box_q[axis.index()]),
                 _ => None,
@@ -175,6 +187,19 @@ impl AnimatableProperty {
                 );
             }
             Self::Scale(axis) => object.transform.scale[axis.index()] = value,
+            Self::GroupPosition(axis) => object.group_transform.translation[axis.index()] = value,
+            Self::GroupRotation(axis) => {
+                let (x, y, z) = object.group_transform.rotation.to_euler(EulerRot::XYZ);
+                let mut degrees = [x.to_degrees(), y.to_degrees(), z.to_degrees()];
+                degrees[axis.index()] = value;
+                object.group_transform.rotation = Quat::from_euler(
+                    EulerRot::XYZ,
+                    degrees[0].to_radians(),
+                    degrees[1].to_radians(),
+                    degrees[2].to_radians(),
+                );
+            }
+            Self::GroupScale(axis) => object.group_transform.scale[axis.index()] = value,
             Self::BoxHalfExtent(axis) => {
                 if let SdfParams::BoxParams(params) = &mut object.params {
                     params.box_q[axis.index()] = value.max(0.01);
@@ -306,7 +331,7 @@ impl Default for AnimationData {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EditorState {
     Start,
     Grabbing,
@@ -477,7 +502,7 @@ impl Default for Repetition {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Transform {
     pub translation: Vec3,
     pub rotation: Quat,
@@ -528,6 +553,7 @@ pub enum SdfParams {
 pub struct SdfObject {
     pub uuid: uuid::Uuid,
     pub transform: Transform,
+    pub group_transform: Transform,
     pub color: Vec4,
     pub object_type: i32,
     pub params: SdfParams,
@@ -556,6 +582,7 @@ impl SdfObject {
         Self {
             uuid: uuid::Uuid::new_v4(),
             transform: Transform::default(),
+            group_transform: Transform::default(),
             color: material.color,
             object_type: kind.object_type(),
             params: match kind {
@@ -597,8 +624,13 @@ impl SdfObject {
         copy
     }
 
+    #[cfg(test)]
     pub fn distance(&self, point: Vec3) -> f32 {
-        let local = (self.transform.matrix().inverse() * point.extend(1.0)).truncate();
+        self.distance_with_matrix(point, self.transform.matrix())
+    }
+
+    pub fn distance_with_matrix(&self, point: Vec3, matrix: Mat4) -> f32 {
+        let local = (matrix.inverse() * point.extend(1.0)).truncate();
         let local = self.repeated_local_point(local);
         let distance = match self.params {
             SdfParams::SphereParams(ref params) => local.length() - params.radius,
@@ -622,7 +654,12 @@ impl SdfObject {
                     - minor_radius
             }
         };
-        distance * self.transform.scale.abs().min_element()
+        let scale = Vec3::new(
+            matrix.x_axis.truncate().length(),
+            matrix.y_axis.truncate().length(),
+            matrix.z_axis.truncate().length(),
+        );
+        distance * scale.min_element()
     }
 
     fn repeated_local_point(&self, mut local: Vec3) -> Vec3 {
@@ -639,6 +676,67 @@ impl SdfObject {
             local[axis] -= cell * spacing;
         }
         local
+    }
+}
+
+pub fn has_boolean_children(scene: &[SdfObject], id: uuid::Uuid) -> bool {
+    scene.iter().any(|object| object.boolean_parent == Some(id))
+}
+
+pub fn group_world_matrix(scene: &[SdfObject], id: uuid::Uuid) -> Mat4 {
+    fn visit(
+        scene: &[SdfObject],
+        id: uuid::Uuid,
+        visited: &mut std::collections::HashSet<uuid::Uuid>,
+    ) -> Mat4 {
+        if !visited.insert(id) {
+            return Mat4::IDENTITY;
+        }
+        let Some(object) = scene.iter().find(|object| object.uuid == id) else {
+            return Mat4::IDENTITY;
+        };
+        let parent = object
+            .boolean_parent
+            .map(|parent| visit(scene, parent, visited))
+            .unwrap_or(Mat4::IDENTITY);
+        parent * object.group_transform.matrix()
+    }
+    visit(scene, id, &mut std::collections::HashSet::new())
+}
+
+pub fn parent_group_world_matrix(scene: &[SdfObject], id: uuid::Uuid) -> Mat4 {
+    scene
+        .iter()
+        .find(|object| object.uuid == id)
+        .and_then(|object| object.boolean_parent)
+        .map(|parent| group_world_matrix(scene, parent))
+        .unwrap_or(Mat4::IDENTITY)
+}
+
+pub fn object_world_matrix(scene: &[SdfObject], id: uuid::Uuid) -> Mat4 {
+    let Some(object) = scene.iter().find(|object| object.uuid == id) else {
+        return Mat4::IDENTITY;
+    };
+    group_world_matrix(scene, id) * object.transform.matrix()
+}
+
+pub fn map_leaf_group_transforms_to_primitives(scene: &mut [SdfObject]) {
+    let group_ids: std::collections::HashSet<_> = scene
+        .iter()
+        .filter_map(|object| object.boolean_parent)
+        .collect();
+    for object in scene {
+        if group_ids.contains(&object.uuid) || object.group_transform == Transform::default() {
+            continue;
+        }
+        let matrix = object.group_transform.matrix() * object.transform.matrix();
+        let (scale, rotation, translation) = matrix.to_scale_rotation_translation();
+        object.transform = Transform {
+            translation,
+            rotation,
+            scale,
+        };
+        object.group_transform = Transform::default();
     }
 }
 
@@ -847,7 +945,10 @@ pub fn ui_preview_scene() -> Vec<SdfObject> {
 pub fn scene_sample(point: Vec3, scene: &[SdfObject]) -> Option<(f32, uuid::Uuid)> {
     fn subtree(point: Vec3, scene: &[SdfObject], index: usize, depth: usize) -> (f32, uuid::Uuid) {
         let object = &scene[index];
-        let mut result = (object.distance(point), object.uuid);
+        let mut result = (
+            object.distance_with_matrix(point, object_world_matrix(scene, object.uuid)),
+            object.uuid,
+        );
         if depth >= scene.len() {
             return result;
         }
@@ -1093,5 +1194,53 @@ mod tests {
         let scene = [cutter_hole, target, cutter];
         assert!(scene_sample(Vec3::ZERO, &scene).unwrap().0 < 0.0);
         assert!(scene_sample(Vec3::X * 0.2, &scene).unwrap().0 > 0.0);
+    }
+
+    #[test]
+    fn nested_group_transforms_compose_without_changing_primitive_transforms() {
+        let mut root = SdfObject::create(TYPE_BOX);
+        root.group_transform.translation = Vec3::new(2.0, 0.0, 0.0);
+        let mut child = SdfObject::create(TYPE_SPHERE);
+        child.boolean_parent = Some(root.uuid);
+        child.transform.translation = Vec3::new(0.5, 0.0, 0.0);
+        child.group_transform.translation = Vec3::new(0.0, 3.0, 0.0);
+        let mut grandchild = SdfObject::create(TYPE_SPHERE);
+        grandchild.boolean_parent = Some(child.uuid);
+        grandchild.transform.translation = Vec3::new(0.0, 0.0, 4.0);
+        let scene = vec![root.clone(), child.clone(), grandchild.clone()];
+
+        assert_eq!(
+            object_world_matrix(&scene, root.uuid).transform_point3(Vec3::ZERO),
+            Vec3::new(2.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            object_world_matrix(&scene, child.uuid).transform_point3(Vec3::ZERO),
+            Vec3::new(2.5, 3.0, 0.0)
+        );
+        assert_eq!(
+            object_world_matrix(&scene, grandchild.uuid).transform_point3(Vec3::ZERO),
+            Vec3::new(2.0, 3.0, 4.0)
+        );
+        assert_eq!(child.transform.translation, Vec3::new(0.5, 0.0, 0.0));
+        assert_eq!(grandchild.transform.translation, Vec3::new(0.0, 0.0, 4.0));
+    }
+
+    #[test]
+    fn group_rotation_and_scale_affect_every_primitive_in_the_subtree() {
+        let mut root = SdfObject::create(TYPE_BOX);
+        root.transform.translation = Vec3::X;
+        root.group_transform.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        root.group_transform.scale = Vec3::splat(2.0);
+        let mut child = SdfObject::create(TYPE_SPHERE);
+        child.boolean_parent = Some(root.uuid);
+        child.transform.translation = Vec3::X * 2.0;
+        let scene = vec![root.clone(), child.clone()];
+
+        let root_position = object_world_matrix(&scene, root.uuid).transform_point3(Vec3::ZERO);
+        let child_position = object_world_matrix(&scene, child.uuid).transform_point3(Vec3::ZERO);
+        assert!((root_position - Vec3::Y * 2.0).length() < 0.0001);
+        assert!((child_position - Vec3::Y * 4.0).length() < 0.0001);
+        assert_eq!(root.transform.translation, Vec3::X);
+        assert_eq!(child.transform.translation, Vec3::X * 2.0);
     }
 }

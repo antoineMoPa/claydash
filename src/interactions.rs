@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use glam::{Quat, Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use winit::keyboard::KeyCode;
 
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
     commands::{self, Commands},
     model::{
         objects, selected, set_objects, set_selected, set_selected_exact, ClaydashValue, DataTree,
-        EditorState, SdfObject, Transform,
+        EditorState, SdfObject,
     },
 };
 
@@ -20,7 +20,9 @@ struct TransformSession {
     initial_cursor: Vec3,
     initial_angle: f32,
     initial_radius: f32,
-    objects: Vec<(uuid::Uuid, Transform)>,
+    last_mouse_position: Vec2,
+    rotation_snap_active: bool,
+    targets: Vec<commands::TransformTarget>,
 }
 
 struct ShiftPanSession {
@@ -31,6 +33,27 @@ struct ShiftPanSession {
 }
 
 const PAN_DRAG_THRESHOLD: f32 = 3.0;
+const ROTATION_SNAP_DEGREES: f32 = 5.0;
+
+pub(crate) fn rotation_drag_angle(raw_angle: f32, snap: bool) -> f32 {
+    let wrapped = raw_angle.sin().atan2(raw_angle.cos());
+    if snap {
+        let increment = ROTATION_SNAP_DEGREES.to_radians();
+        (wrapped / increment).round() * increment
+    } else {
+        wrapped
+    }
+}
+
+pub(crate) fn rotation_snap_active(was_active: bool, ctrl_down: bool, pointer_moved: bool) -> bool {
+    if ctrl_down {
+        true
+    } else if pointer_moved {
+        false
+    } else {
+        was_active
+    }
+}
 
 #[derive(Default)]
 enum NumericRotationInput {
@@ -282,8 +305,15 @@ impl InteractionState {
                 session.last_applied = self.mouse_position;
             }
         } else {
-            if self.keys.contains(&KeyCode::ControlLeft)
-                || self.keys.contains(&KeyCode::ControlRight)
+            let transforming = matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::EditorState(
+                    EditorState::Grabbing | EditorState::Scaling | EditorState::Rotating
+                )
+            );
+            if !transforming
+                && (self.keys.contains(&KeyCode::ControlLeft)
+                    || self.keys.contains(&KeyCode::ControlRight))
             {
                 camera.orbit(self.mouse_delta);
             }
@@ -417,13 +447,9 @@ impl InteractionState {
     }
 
     fn begin_transform_session(&mut self, mode: EditorState, camera: &Camera, tree: &mut DataTree) {
-        let selection = commands::effective_selected_ids(tree);
-        let selected_objects: Vec<_> = objects(tree)
-            .into_iter()
-            .filter(|object| selection.contains(&object.uuid))
-            .map(|object| (object.uuid, object.transform))
-            .collect();
-        if selected_objects.is_empty() {
+        let scene = objects(tree);
+        let targets = commands::transform_targets(tree);
+        if targets.is_empty() {
             tree.set_path(
                 "editor.state",
                 ClaydashValue::EditorState(EditorState::Start),
@@ -431,15 +457,23 @@ impl InteractionState {
             return;
         }
 
-        let center = selected_objects
+        let selection = commands::effective_selected_ids(tree);
+        let selected_world: Vec<_> = scene
             .iter()
-            .map(|(_, transform)| transform.translation)
-            .sum::<Vec3>()
-            / selected_objects.len() as f32;
-        for (uuid, transform) in &selected_objects {
+            .filter(|object| selection.contains(&object.uuid))
+            .map(|object| {
+                crate::model::object_world_matrix(&scene, object.uuid).transform_point3(Vec3::ZERO)
+            })
+            .collect();
+        let center = selected_world.iter().copied().sum::<Vec3>() / selected_world.len() as f32;
+        for target in &targets {
+            let path = match target.kind {
+                commands::TransformTargetKind::Object => "editor.initial_transform",
+                commands::TransformTargetKind::Group => "editor.initial_group_transform",
+            };
             tree.set_path(
-                &format!("editor.initial_transform.{uuid}"),
-                ClaydashValue::Transform(*transform),
+                &format!("{path}.{}", target.id),
+                ClaydashValue::Transform(target.transform),
             );
         }
         let initial_cursor = if mode == EditorState::Grabbing {
@@ -454,7 +488,10 @@ impl InteractionState {
             initial_cursor,
             initial_angle: camera.cursor_angle(self.mouse_position, center),
             initial_radius: initial_cursor.distance(center).max(0.001),
-            objects: selected_objects,
+            last_mouse_position: self.mouse_position,
+            rotation_snap_active: self.keys.contains(&KeyCode::ControlLeft)
+                || self.keys.contains(&KeyCode::ControlRight),
+            targets,
         });
     }
 
@@ -494,6 +531,17 @@ impl InteractionState {
         }) {
             self.begin_transform_session(mode, camera, tree);
         }
+        if let Some(session) = &mut self.transform_session {
+            if mode == EditorState::Rotating {
+                let ctrl_snap = self.keys.contains(&KeyCode::ControlLeft)
+                    || self.keys.contains(&KeyCode::ControlRight);
+                let pointer_moved =
+                    self.mouse_position.distance(session.last_mouse_position) > 0.001;
+                session.rotation_snap_active =
+                    rotation_snap_active(session.rotation_snap_active, ctrl_snap, pointer_moved);
+                session.last_mouse_position = self.mouse_position;
+            }
+        }
         let Some(session) = self.transform_session.clone() else {
             return;
         };
@@ -527,31 +575,23 @@ impl InteractionState {
         };
         let mut scene = objects(tree);
 
-        for object in &mut scene {
-            let Some((_, initial)) = session
-                .objects
-                .iter()
-                .find(|(uuid, _)| *uuid == object.uuid)
-            else {
-                continue;
-            };
-            match mode {
+        for target in &session.targets {
+            let operation = match mode {
                 EditorState::Grabbing => {
-                    object.transform.translation =
-                        initial.translation + (current_cursor - session.initial_cursor) * mask;
+                    Mat4::from_translation((current_cursor - session.initial_cursor) * mask)
                 }
                 EditorState::Scaling => {
                     let factor = (current_cursor.distance(session.center) / session.initial_radius)
                         .max(0.001);
                     let factors = Vec3::ONE + (Vec3::splat(factor) - Vec3::ONE) * mask;
-                    object.transform.scale = initial.scale * factors;
-                    object.transform.translation =
-                        session.center + (initial.translation - session.center) * factors;
+                    Mat4::from_translation(session.center)
+                        * Mat4::from_scale(factors)
+                        * Mat4::from_translation(-session.center)
                 }
                 EditorState::Rotating => {
                     let current_angle = camera.cursor_angle(self.mouse_position, session.center);
                     let raw_angle = current_angle - session.initial_angle;
-                    let angle = raw_angle.sin().atan2(raw_angle.cos());
+                    let angle = rotation_drag_angle(raw_angle, session.rotation_snap_active);
                     let axis = if constrained {
                         mask.normalize_or_zero()
                     } else {
@@ -561,14 +601,29 @@ impl InteractionState {
                         NumericRotationInput::Editing(input) => input.parse::<f32>().ok(),
                         NumericRotationInput::Idle => None,
                     };
-                    let rotation =
-                        Quat::from_axis_angle(axis, numeric_angle.map_or(-angle, f32::to_radians));
-                    object.transform.rotation = rotation * initial.rotation;
-                    object.transform.translation =
-                        session.center + rotation * (initial.translation - session.center);
+                    let pointer_angle = if constrained { -angle } else { angle };
+                    let rotation = Quat::from_axis_angle(
+                        axis,
+                        numeric_angle.map_or(pointer_angle, f32::to_radians),
+                    );
+                    Mat4::from_translation(session.center)
+                        * Mat4::from_quat(rotation)
+                        * Mat4::from_translation(-session.center)
                 }
-                EditorState::Start => {}
-            }
+                EditorState::Start => Mat4::IDENTITY,
+            };
+            let local = target.parent_world.inverse() * operation * target.world;
+            let (scale, rotation, translation) = local.to_scale_rotation_translation();
+            commands::set_transform_target(
+                &mut scene,
+                target.kind,
+                target.id,
+                crate::model::Transform {
+                    translation,
+                    rotation,
+                    scale,
+                },
+            );
         }
         set_objects(tree, scene);
     }
@@ -1191,6 +1246,42 @@ mod tests {
     }
 
     #[test]
+    fn releasing_ctrl_keeps_rotation_snapped_until_the_pointer_moves() {
+        assert!(rotation_snap_active(true, false, false));
+        assert!(!rotation_snap_active(true, false, true));
+
+        let (mut tree, _) = selected_object();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let center = camera.viewport / 2.0;
+        let mut interactions = InteractionState {
+            mouse_position: center + Vec2::X * 100.0,
+            ..Default::default()
+        };
+        let mut command_map = Commands::new();
+        commands::register_all(&mut command_map);
+        commands::start_rotate(&mut tree);
+        interactions.update(&mut camera, &mut tree);
+
+        interactions.key_pressed(KeyCode::ControlLeft, false, &command_map, &mut tree);
+        let seven_degrees = 7.0_f32.to_radians();
+        interactions.mouse_position =
+            center + Vec2::new(seven_degrees.cos(), seven_degrees.sin()) * 100.0;
+        interactions.update(&mut camera, &mut tree);
+        let snapped = objects(&tree)[0].transform.rotation;
+
+        interactions.key_released(KeyCode::ControlLeft);
+        interactions.update(&mut camera, &mut tree);
+        assert_eq!(objects(&tree)[0].transform.rotation, snapped);
+
+        let eight_degrees = 8.0_f32.to_radians();
+        interactions.mouse_position =
+            center + Vec2::new(eight_degrees.cos(), eight_degrees.sin()) * 100.0;
+        interactions.update(&mut camera, &mut tree);
+        assert_ne!(objects(&tree)[0].transform.rotation, snapped);
+    }
+
+    #[test]
     fn numeric_rotation_uses_degrees_and_escape_cancels_the_sequence() {
         let (mut tree, _) = selected_object();
         let mut camera = Camera::new();
@@ -1249,20 +1340,22 @@ mod tests {
         interactions.mouse_position.x += 100.0;
         interactions.update(&mut camera, &mut tree);
         let moved = objects(&tree);
-        let delta = moved[0].transform.translation - scene[0].transform.translation;
+        let delta = crate::model::object_world_matrix(&moved, target).transform_point3(Vec3::ZERO)
+            - crate::model::object_world_matrix(&scene, target).transform_point3(Vec3::ZERO);
         assert!(delta.length() > 0.01);
-        assert!(
-            (moved[1].transform.translation - scene[1].transform.translation - delta).length()
-                < 0.00001
-        );
+        let operand_delta = crate::model::object_world_matrix(&moved, moved[1].uuid)
+            .transform_point3(Vec3::ZERO)
+            - crate::model::object_world_matrix(&scene, scene[1].uuid).transform_point3(Vec3::ZERO);
+        assert!((operand_delta - delta).length() < 0.00001);
+        assert_eq!(moved[0].transform, scene[0].transform);
+        assert_eq!(moved[1].transform, scene[1].transform);
+        assert_ne!(moved[0].group_transform, scene[0].group_transform);
         let mut commands = Commands::new();
         crate::commands::register_all(&mut commands);
         interactions.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
         for (restored, initial) in objects(&tree).iter().zip(&scene) {
-            assert_eq!(
-                restored.transform.translation,
-                initial.transform.translation
-            );
+            assert_eq!(restored.transform, initial.transform);
+            assert_eq!(restored.group_transform, initial.group_transform);
         }
     }
 

@@ -67,7 +67,7 @@ pub(super) fn draw(ui: &egui::Ui, tree: &DataTree, camera: &Camera) -> Ghosts {
         };
         let stroke = Stroke::new(if active { 1.5 } else { 1.0 }, color);
         let segments = primitive_segments(&object.params);
-        let transform = object.transform.matrix();
+        let transform = crate::model::object_world_matrix(scene, object.uuid);
         let world_to_clip = projection * transform;
         let local_eye = transform.inverse().transform_point3(camera.position);
         let cells: [Vec<Cell>; 3] = std::array::from_fn(|axis| {

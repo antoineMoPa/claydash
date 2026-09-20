@@ -1,5 +1,16 @@
 {
   "subtree": {
+    "animation": {
+      "subtree": {},
+      "value": {
+        "Animation": {
+          "fps": 24,
+          "start_frame": 0,
+          "end_frame": 250,
+          "tracks": []
+        }
+      }
+    },
     "sdf_objects": {
       "subtree": {},
       "value": {
@@ -8,14 +19,14 @@
             "uuid": "6183084e-b025-4c72-bb5c-071eadf939e4",
             "transform": {
               "translation": [
-                -0.2763243,
-                -0.05530733,
-                -0.32021177
+                0,
+                0,
+                0
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -24,11 +35,29 @@
                 2.0542152
               ]
             },
+            "group_transform": {
+              "translation": [
+                -0.2763243,
+                -0.05530733,
+                -0.32021177
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.9607843,
               0.47058824,
-              0.0,
-              1.0
+              0,
+              1
             ],
             "object_type": 1,
             "params": {
@@ -39,20 +68,20 @@
             "name": "Duck",
             "operation": "Union",
             "boolean_parent": null,
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -77,14 +106,14 @@
             "uuid": "fcd905e5-3692-42fd-b36d-1106dc39428e",
             "transform": {
               "translation": [
-                -0.26157933,
-                0.33660573,
-                0.07608156
+                0.014744970000000024,
+                0.39191306,
+                0.39629333
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -93,11 +122,29 @@
                 1.2369081
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.9607843,
               0.47058824,
-              0.0,
-              1.0
+              0,
+              1
             ],
             "object_type": 1,
             "params": {
@@ -108,20 +155,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -146,14 +193,14 @@
             "uuid": "25fe69fd-4e67-498f-9ff0-9ebfcdeca716",
             "transform": {
               "translation": [
-                -0.25035113,
-                0.29824245,
-                0.31719655
+                0.025973170000000045,
+                0.35354978,
+                0.63740832
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -162,11 +209,29 @@
                 0.68878657
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.96862745,
               0.09019608,
               0.003921569,
-              1.0
+              1
             ],
             "object_type": 1,
             "params": {
@@ -177,20 +242,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -215,14 +280,14 @@
             "uuid": "83cb6349-a194-4c94-ad87-1b6ad1942a87",
             "transform": {
               "translation": [
-                -0.3464109,
-                0.38067508,
-                0.22599117
+                -0.0700866,
+                0.43598241,
+                0.54620294
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -231,11 +296,29 @@
                 0.38934505
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.99215686,
               0.98039216,
-              1.0,
-              1.0
+              1,
+              1
             ],
             "object_type": 1,
             "params": {
@@ -246,20 +329,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -284,14 +367,14 @@
             "uuid": "c424bca1-18f1-4929-bf4b-ac66c2d24e3c",
             "transform": {
               "translation": [
-                -0.17661376,
-                0.38714525,
-                0.2265672
+                0.09971054000000001,
+                0.44245258,
+                0.54677897
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -300,11 +383,29 @@
                 0.38934505
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.99215686,
               0.98039216,
-              1.0,
-              1.0
+              1,
+              1
             ],
             "object_type": 1,
             "params": {
@@ -315,20 +416,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -353,14 +454,14 @@
             "uuid": "0bc162ca-1ca7-4306-9caf-fce36617241c",
             "transform": {
               "translation": [
-                -0.3567249,
-                0.37902522,
-                0.29392675
+                -0.08040059999999999,
+                0.43433255,
+                0.61413852
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -369,11 +470,29 @@
                 0.17503834
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.22745098,
               0.3019608,
               0.9882353,
-              1.0
+              1
             ],
             "object_type": 1,
             "params": {
@@ -384,20 +503,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -422,14 +541,14 @@
             "uuid": "24ef5e99-59aa-46ff-afe8-197a16bf2aa1",
             "transform": {
               "translation": [
-                -0.18137695,
-                0.38266537,
-                0.30230466
+                0.09494735000000001,
+                0.4379727,
+                0.62251643
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -438,11 +557,29 @@
                 0.17503834
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.22745098,
               0.3019608,
               0.9882353,
-              1.0
+              1
             ],
             "object_type": 1,
             "params": {
@@ -453,20 +590,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -496,9 +633,9 @@
                 0.17136851
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -507,11 +644,29 @@
                 0.655612
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.8,
-              0.0,
+              0,
               0.3,
-              1.0
+              1
             ],
             "object_type": 2,
             "params": {
@@ -526,20 +681,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": null,
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -569,9 +724,9 @@
                 -0.76288575
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -580,11 +735,29 @@
                 1.04097
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.8,
-              0.0,
+              0,
               0.3,
-              1.0
+              1
             ],
             "object_type": 2,
             "params": {
@@ -599,20 +772,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": null,
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,
@@ -642,9 +815,9 @@
                 -0.9278898
               ],
               "rotation": [
-                0.0,
+                0,
                 0.70710677,
-                0.0,
+                0,
                 0.70710677
               ],
               "scale": [
@@ -653,11 +826,29 @@
                 0.5556836
               ]
             },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
             "color": [
               0.8,
-              0.0,
+              0,
               0.3,
-              1.0
+              1
             ],
             "object_type": 2,
             "params": {
@@ -672,20 +863,20 @@
             "name": "",
             "operation": "Union",
             "boolean_parent": null,
-            "softness": 0.0,
+            "softness": 0,
             "material": {
               "kind": "Solid",
               "color": [
                 0.8,
-                0.0,
+                0,
                 0.3,
-                1.0
+                1
               ],
               "roughness": 0.55,
-              "metallic": 0.0,
+              "metallic": 0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1
             },
             "repetition": {
               "enabled": false,

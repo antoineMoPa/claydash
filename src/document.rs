@@ -259,7 +259,17 @@ mod tests {
         let mut tree = DataTree::default();
         tree.set_tree("scene", scene);
 
-        assert!(!objects(&tree).is_empty());
+        let objects = objects(&tree);
+        assert!(!objects.is_empty());
+        let group = objects
+            .iter()
+            .find(|candidate| {
+                objects
+                    .iter()
+                    .any(|object| object.boolean_parent == Some(candidate.uuid))
+            })
+            .expect("default document includes its Boolean group");
+        assert_ne!(group.group_transform, crate::model::Transform::default());
     }
 
     fn remember_path(paths: &mut Vec<PathBuf>, path: PathBuf) {

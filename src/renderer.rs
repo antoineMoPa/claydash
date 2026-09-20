@@ -441,7 +441,8 @@ impl Renderer {
         // Children precede parents, so the fragment shader can evaluate the
         // boolean tree in one forward pass while preserving sibling order.
         let selected_ids: std::collections::HashSet<_> = selected.iter().copied().collect();
-        let ordered = boolean_postorder(&objects[..objects.len().min(MAX_OBJECTS)]);
+        let scene_objects = &objects[..objects.len().min(MAX_OBJECTS)];
+        let ordered = boolean_postorder(scene_objects);
         let objects = &ordered;
         let object_indices: std::collections::HashMap<_, _> = objects
             .iter()
@@ -455,7 +456,12 @@ impl Renderer {
             .take(MAX_OBJECTS)
             .enumerate()
             .map(|(index, object)| {
-                let abs_scale = object.transform.scale.abs();
+                let matrix = crate::model::object_world_matrix(scene_objects, object.uuid);
+                let abs_scale = Vec3::new(
+                    matrix.x_axis.truncate().length(),
+                    matrix.y_axis.truncate().length(),
+                    matrix.z_axis.truncate().length(),
+                );
                 let distance_scale = abs_scale.min_element().max(0.000_001);
                 let (params, radius) = match object.params {
                     SdfParams::SphereParams(ref params) => (
@@ -541,13 +547,12 @@ impl Renderer {
                         }
                     }
                 }
-                let matrix = object.transform.matrix();
                 let half_extent = matrix.x_axis.truncate().abs() * repeated_extent.x
                     + matrix.y_axis.truncate().abs() * repeated_extent.y
                     + matrix.z_axis.truncate().abs() * repeated_extent.z;
                 bounds.push(ObjectBound {
                     half_extent,
-                    center: object.transform.translation,
+                    center: matrix.transform_point3(Vec3::ZERO),
                     radius: repeated_radius,
                     object_index: index as u32,
                 });
@@ -569,7 +574,7 @@ impl Renderer {
                             .unwrap_or(-1),
                     ],
                     color: object.color.to_array(),
-                    inverse_rows: inverse_affine_rows(object.transform.matrix().inverse()),
+                    inverse_rows: inverse_affine_rows(matrix.inverse()),
                     params,
                     material: [
                         object.material.roughness,

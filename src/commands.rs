@@ -240,16 +240,16 @@ fn toggle_constraint(tree: &mut DataTree, path: &str) {
 }
 
 fn cancel(tree: &mut DataTree) {
-    let selection = effective_selected_ids(tree);
+    let targets = transform_targets(tree);
     let mut scene = objects(tree);
-    for object in &mut scene {
-        if !selection.contains(&object.uuid) {
-            continue;
-        }
-        if let ClaydashValue::Transform(transform) =
-            tree.get_path(&format!("editor.initial_transform.{}", object.uuid))
+    for target in targets {
+        let path = match target.kind {
+            TransformTargetKind::Object => "editor.initial_transform",
+            TransformTargetKind::Group => "editor.initial_group_transform",
+        };
+        if let ClaydashValue::Transform(transform) = tree.get_path(&format!("{path}.{}", target.id))
         {
-            object.transform = transform;
+            set_transform_target(&mut scene, target.kind, target.id, transform);
         }
     }
     set_objects(tree, scene);
@@ -270,13 +270,12 @@ fn finish(tree: &mut DataTree) {
 fn delete(tree: &mut DataTree) {
     let selection = effective_selected_ids(tree);
     animation::remove_tracks_for_objects(tree, &selection);
-    set_objects(
-        tree,
-        objects(tree)
-            .into_iter()
-            .filter(|object| !selection.contains(&object.uuid))
-            .collect(),
-    );
+    let mut scene: Vec<_> = objects(tree)
+        .into_iter()
+        .filter(|object| !selection.contains(&object.uuid))
+        .collect();
+    crate::model::map_leaf_group_transforms_to_primitives(&mut scene);
+    set_objects(tree, scene);
     set_selected(tree, vec![]);
     tree.make_undo_redo_snapshot();
 }
@@ -364,6 +363,95 @@ pub(crate) fn effective_selected_ids(tree: &DataTree) -> Vec<uuid::Uuid> {
     match crate::model::selection_scope(tree) {
         crate::model::SelectionScope::Group => selected_subtree_ids(&objects(tree), &selection),
         crate::model::SelectionScope::Exact => selection,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransformTargetKind {
+    Object,
+    Group,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TransformTarget {
+    pub id: uuid::Uuid,
+    pub kind: TransformTargetKind,
+    pub transform: crate::model::Transform,
+    pub parent_world: glam::Mat4,
+    pub world: glam::Mat4,
+}
+
+pub(crate) fn selected_group_id(tree: &DataTree) -> Option<uuid::Uuid> {
+    let selection = selected(tree);
+    let id = *selection.first()?;
+    (selection.len() == 1
+        && crate::model::selection_scope(tree) == crate::model::SelectionScope::Group
+        && crate::model::has_boolean_children(&objects(tree), id))
+    .then_some(id)
+}
+
+pub(crate) fn transform_targets(tree: &DataTree) -> Vec<TransformTarget> {
+    let scene = objects(tree);
+    let selection = selected(tree);
+    let group_scope = crate::model::selection_scope(tree) == crate::model::SelectionScope::Group;
+    selection
+        .iter()
+        .filter(|id| {
+            if !group_scope {
+                return true;
+            }
+            let mut parent = scene
+                .iter()
+                .find(|object| object.uuid == **id)
+                .and_then(|object| object.boolean_parent);
+            while let Some(ancestor) = parent {
+                if selection.contains(&ancestor) {
+                    return false;
+                }
+                parent = scene
+                    .iter()
+                    .find(|object| object.uuid == ancestor)
+                    .and_then(|object| object.boolean_parent);
+            }
+            true
+        })
+        .filter_map(|id| {
+            let object = scene.iter().find(|object| object.uuid == *id)?;
+            let parent_world = crate::model::parent_group_world_matrix(&scene, *id);
+            if group_scope && crate::model::has_boolean_children(&scene, *id) {
+                Some(TransformTarget {
+                    id: *id,
+                    kind: TransformTargetKind::Group,
+                    transform: object.group_transform,
+                    parent_world,
+                    world: crate::model::group_world_matrix(&scene, *id),
+                })
+            } else {
+                let group_world = crate::model::group_world_matrix(&scene, *id);
+                Some(TransformTarget {
+                    id: *id,
+                    kind: TransformTargetKind::Object,
+                    transform: object.transform,
+                    parent_world: group_world,
+                    world: group_world * object.transform.matrix(),
+                })
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn set_transform_target(
+    scene: &mut [SdfObject],
+    target: TransformTargetKind,
+    id: uuid::Uuid,
+    transform: crate::model::Transform,
+) {
+    let Some(object) = scene.iter_mut().find(|object| object.uuid == id) else {
+        return;
+    };
+    match target {
+        TransformTargetKind::Object => object.transform = transform,
+        TransformTargetKind::Group => object.group_transform = transform,
     }
 }
 
