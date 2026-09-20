@@ -6,6 +6,8 @@ mod document;
 mod duck;
 mod interactions;
 mod model;
+#[cfg(not(target_arch = "wasm32"))]
+mod render_export;
 mod renderer;
 mod ui;
 mod undo_redo;

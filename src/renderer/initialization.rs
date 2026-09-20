@@ -51,8 +51,11 @@ impl Renderer {
         } else {
             wgpu::PresentMode::Fifo
         };
+        let surface_usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        #[cfg(not(target_arch = "wasm32"))]
+        let surface_usage = surface_usage | wgpu::TextureUsages::COPY_SRC;
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: surface_usage,
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),

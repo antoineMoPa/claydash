@@ -251,15 +251,18 @@ impl UiState {
         if cancel {
             if let Some(Gesture::Transform(session)) = self.selection_tools.gesture.take() {
                 let mut scene = objects(tree);
+                let mut cameras = crate::model::scene_cameras(tree);
                 for target in session.targets {
                     commands::set_transform_target(
                         &mut scene,
+                        &mut cameras,
                         target.kind,
                         target.id,
                         target.transform,
                     );
                 }
                 set_objects(tree, scene);
+                crate::model::set_scene_cameras(tree, cameras);
             }
             self.selection_tools.gesture = None;
             return;
@@ -272,16 +275,13 @@ impl UiState {
         }
         let scene = objects(tree);
         let selection = selected(tree);
-        let ids = commands::effective_selected_ids(tree);
-        let selected_objects: Vec<_> = scene.iter().filter(|o| ids.contains(&o.uuid)).collect();
-        if !self.selection_tools.box_mode() && !selected_objects.is_empty() {
-            let center = selected_objects
+        let transform_targets = commands::transform_targets(tree);
+        if !self.selection_tools.box_mode() && !transform_targets.is_empty() {
+            let center = transform_targets
                 .iter()
-                .map(|o| {
-                    crate::model::object_world_matrix(&scene, o.uuid).transform_point3(Vec3::ZERO)
-                })
+                .map(|target| target.world.transform_point3(Vec3::ZERO))
                 .sum::<Vec3>()
-                / selected_objects.len() as f32;
+                / transform_targets.len() as f32;
             if let Some(geometry) = selection_gizmo_geometry(camera, center, scale) {
                 self.draw_transform_gizmo(ui, &geometry, pointer, camera, snap_rotation);
                 let hovered_action = pointer.and_then(|point| gizmo_action_at(point, &geometry));
@@ -325,7 +325,7 @@ impl UiState {
                             axis_screen_direction,
                             world_units_per_point: geometry.world_units_per_point,
                             rotation_snap_active: snap_rotation,
-                            targets: commands::transform_targets(tree),
+                            targets: transform_targets.clone(),
                         }));
                     }
                 }
@@ -351,6 +351,7 @@ impl UiState {
             Some(Gesture::Transform(session)) => {
                 if let Some(p) = pointer {
                     let mut scene = scene.clone();
+                    let mut cameras = crate::model::scene_cameras(tree);
                     let operation = match session.action {
                         GizmoAction::MoveFree => {
                             let physical = Vec2::new(p.x, p.y) * scale;
@@ -429,6 +430,7 @@ impl UiState {
                         let (scale, rotation, translation) = local.to_scale_rotation_translation();
                         commands::set_transform_target(
                             &mut scene,
+                            &mut cameras,
                             target.kind,
                             target.id,
                             crate::model::Transform {
@@ -439,6 +441,7 @@ impl UiState {
                         );
                     }
                     set_objects(tree, scene);
+                    crate::model::set_scene_cameras(tree, cameras);
                 }
                 if released {
                     tree.make_undo_redo_snapshot();

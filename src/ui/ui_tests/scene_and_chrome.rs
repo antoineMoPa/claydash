@@ -325,7 +325,7 @@
                 |ui| {
                     state.regions.clear();
                     state.draw_top_controls(ui.ctx(), &mut tree, &mut camera);
-                    state.draw_view_gizmo(ui.ctx(), &mut camera);
+                    state.draw_view_gizmo(ui.ctx(), &mut tree, &mut camera);
                 },
             );
             output.textures_delta.clear();
@@ -357,7 +357,7 @@
                         _ => None,
                     })
                     .collect();
-                assert_eq!(circles.len(), 2);
+                assert_eq!(circles.len(), 3);
                 for circle in &circles {
                     assert_eq!(circle.width(), circle.height());
                     assert!(state.regions[1].contains_rect(*circle));
@@ -366,11 +366,10 @@
                     (circles[0].center().y - circles[1].center().y).abs() < 2.0,
                     "top-right controls should be side by side"
                 );
-                assert!(circles[0].right() < circles[1].left());
+                assert!(circles.windows(2).all(|pair| pair[0].right() < pair[1].left()));
                 assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
                     egui::Shape::Rect(rect) if state.regions[2].contains_rect(rect.rect) && rect.rect.width() > 80.0 && rect.fill != Color32::TRANSPARENT
                 )), "bottom-left gizmo should have no background");
             }
         }
     }
-

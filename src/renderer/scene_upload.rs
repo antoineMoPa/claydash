@@ -155,7 +155,7 @@ impl Renderer {
                         0,
                         0,
                         object.softness.to_bits(),
-                        u32::from(object.material.kind == crate::model::MaterialKind::Wood),
+                        object.material.kind.gpu_code(),
                     ],
                     meta: [
                         i32::from(selected_ids.contains(&object.uuid)),

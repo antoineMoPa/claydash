@@ -1,11 +1,19 @@
 use super::*;
 
 pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut AnimationRuntime) {
+    let selection = selected(tree);
+    if selection.len() == 1
+        && crate::model::scene_cameras(tree)
+            .iter()
+            .any(|camera| camera.uuid == selection[0])
+    {
+        camera_object_panel(ui, tree, runtime, selection[0]);
+        return;
+    }
     if let Some(group) = commands::selected_group_id(tree) {
         group_transform_panel(ui, tree, runtime, group);
         return;
     }
-    let selection = selected(tree);
     if selection.len() != 1 {
         ui.label("Select one object to edit it.");
         return;
@@ -119,6 +127,199 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
         if reset_position || reset_rotation {
             tree.make_undo_redo_snapshot();
         }
+    }
+    apply_keyframe_requests(tree, runtime, keyframes);
+}
+
+fn camera_object_panel(
+    ui: &mut egui::Ui,
+    tree: &mut DataTree,
+    runtime: &mut AnimationRuntime,
+    camera_id: uuid::Uuid,
+) {
+    let mut cameras = crate::model::scene_cameras(tree);
+    let Some(camera) = cameras.iter_mut().find(|camera| camera.uuid == camera_id) else {
+        return;
+    };
+    let mut changed = false;
+    let mut keyframes = Vec::new();
+    ui.label(RichText::new("Camera settings").strong());
+    changed |= ui.text_edit_singleline(&mut camera.name).changed();
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        ui.label("Position");
+        if ui
+            .add_enabled(
+                camera.transform.translation != Vec3::ZERO,
+                egui::Button::new("Reset"),
+            )
+            .clicked()
+        {
+            camera.transform.translation = Vec3::ZERO;
+            changed = true;
+        }
+    });
+    changed |= animatable_vec3_editor(
+        ui,
+        tree,
+        runtime,
+        &mut camera.transform.translation,
+        0.01,
+        camera_id,
+        [
+            AnimatableProperty::Position(VectorAxis::X),
+            AnimatableProperty::Position(VectorAxis::Y),
+            AnimatableProperty::Position(VectorAxis::Z),
+        ],
+        &mut keyframes,
+    );
+
+    ui.horizontal(|ui| {
+        ui.label("Rotation");
+        if ui
+            .add_enabled(
+                camera.transform.rotation != glam::Quat::IDENTITY,
+                egui::Button::new("Reset"),
+            )
+            .clicked()
+        {
+            camera.transform.rotation = glam::Quat::IDENTITY;
+            changed = true;
+        }
+    });
+    let (x, y, z) = camera.transform.rotation.to_euler(EulerRot::XYZ);
+    let mut degrees = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+    if animatable_vec3_editor(
+        ui,
+        tree,
+        runtime,
+        &mut degrees,
+        1.0,
+        camera_id,
+        [
+            AnimatableProperty::Rotation(VectorAxis::X),
+            AnimatableProperty::Rotation(VectorAxis::Y),
+            AnimatableProperty::Rotation(VectorAxis::Z),
+        ],
+        &mut keyframes,
+    ) {
+        camera.transform.rotation = glam::Quat::from_euler(
+            EulerRot::XYZ,
+            degrees.x.to_radians(),
+            degrees.y.to_radians(),
+            degrees.z.to_radians(),
+        );
+        changed = true;
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Scale");
+        if ui
+            .add_enabled(
+                camera.transform.scale != Vec3::ONE,
+                egui::Button::new("Reset"),
+            )
+            .clicked()
+        {
+            camera.transform.scale = Vec3::ONE;
+            changed = true;
+        }
+    });
+    changed |= animatable_vec3_editor(
+        ui,
+        tree,
+        runtime,
+        &mut camera.transform.scale,
+        0.01,
+        camera_id,
+        [
+            AnimatableProperty::Scale(VectorAxis::X),
+            AnimatableProperty::Scale(VectorAxis::Y),
+            AnimatableProperty::Scale(VectorAxis::Z),
+        ],
+        &mut keyframes,
+    );
+
+    ui.separator();
+    let focal_binding = AnimationBinding {
+        object: camera_id,
+        property: AnimatableProperty::CameraFocalDistance,
+    };
+    let focal_response = animatable_widget(ui, tree, runtime, focal_binding, |ui| {
+        ui.add(
+            egui::DragValue::new(&mut camera.focal_distance)
+                .speed(0.02)
+                .range(0.01..=100.0)
+                .prefix("Focal distance  "),
+        )
+    });
+    changed |= focal_response.changed();
+    animatable_response(
+        ui,
+        &focal_response,
+        focal_binding,
+        camera.focal_distance,
+        &mut keyframes,
+    );
+
+    let mut projection = camera.projection_mode;
+    let projection_binding = AnimationBinding {
+        object: camera_id,
+        property: AnimatableProperty::CameraProjection,
+    };
+    let projection_response = animatable_widget(ui, tree, runtime, projection_binding, |ui| {
+        egui::ComboBox::from_label("Projection")
+            .selected_text(projection.label())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut projection,
+                    crate::camera::ProjectionMode::Perspective,
+                    "Perspective",
+                );
+                ui.selectable_value(
+                    &mut projection,
+                    crate::camera::ProjectionMode::Orthographic,
+                    "Orthographic",
+                );
+            })
+            .response
+    });
+    changed |= projection_response.changed();
+    camera.projection_mode = projection;
+    animatable_response(
+        ui,
+        &projection_response,
+        projection_binding,
+        if projection == crate::camera::ProjectionMode::Orthographic {
+            1.0
+        } else {
+            0.0
+        },
+        &mut keyframes,
+    );
+
+    let mut camera_view = matches!(
+        tree.get_path("editor.camera_view"),
+        crate::model::ClaydashValue::Bool(true)
+    );
+    if ui
+        .checkbox(&mut camera_view, "View through camera")
+        .changed()
+    {
+        tree.set_path(
+            "scene.active_camera",
+            crate::model::ClaydashValue::Uuid(camera_id),
+        );
+        tree.set_transient_path(
+            "editor.camera_view",
+            crate::model::ClaydashValue::Bool(camera_view),
+        );
+    }
+
+    if changed {
+        crate::model::set_scene_cameras(tree, cameras);
+        tree.make_undo_redo_snapshot();
     }
     apply_keyframe_requests(tree, runtime, keyframes);
 }

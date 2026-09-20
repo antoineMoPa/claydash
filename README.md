@@ -12,11 +12,15 @@ https://app.claydash.com/ - note: live version does not always point to main bra
   with draggable `egui_frames` tabs.
 * Build union, subtraction, and intersection groups directly in the scene tree.
 * Apply and tune solid, metallic, transparent, and procedural wood materials.
-  New primitives and cutters inherit the last picked material, including its edited settings.
+  Materials are reusable scene assets: new primitives inherit the active link, linked edits stay
+  synchronized, complete Boolean groups can be assigned together, and materials can be copied,
+  pasted, filtered, or unlinked into unique copies.
 * Create finite, GPU-efficient domain repetitions on any combination of axes.
 * Resize primitives with viewport handles and snap the camera with the orientation gizmo.
+* Save distinct camera objects, switch the viewport into the active camera, and animate camera shots.
 * Animate transform, shape, material, operand, and repetition properties on a real-time,
   serializable keyframe timeline.
+* Export a clean still as WebP or the animated timeline as MP4 from the **Render** menu.
 * Various operations through shortcuts:
   * Union selection: + or =
   * Scale: S
@@ -68,13 +72,14 @@ property to zero, preserve scale and the other property, and support Undo.
 
 ## Animation workflow
 
-Open **Panels → Animation Timeline** to add the optional bottom animation editor. The panel
-starts closed so the modeling viewport keeps its existing layout. Hover a numeric, color,
+Open **Panels → Animation Timeline** to add the optional bottom animation editor. Its open or
+closed state is restored on the next launch; a first launch starts closed. Hover a numeric, color,
 checkbox, or repetition input in the Object, Materials, Operand, or Repeat inspector and press
 `I` to insert a keyframe at the current frame. Color inserts one key for each RGBA channel.
 
 The timeline provides play/pause, stop, looping, frame scrubbing, editable start/end/FPS values,
-and one curve lane per animated property. Space toggles playback from the 3D view; Left and Right
+and one curve lane per animated property. Labels use a fixed-width, truncated column so every lane
+starts at the same horizontal position. Space toggles playback from the 3D view; Left and Right
 step continuously while held and pause playback. Hold Shift to step ten frames at a time. Drag a
 diamond horizontally to move its keyframe, or click it to edit its frame, value, and easing.
 Smooth easing is the default for continuous properties, with Ease In, Ease Out, Linear, and
@@ -84,6 +89,21 @@ the scene. Tracks and keyframes are saved in the project; the current playhead a
 remain local editor state. Runtime evaluation marks the scene dirty for rendering without
 recording each evaluated frame in Undo/Redo. Inspector fields use Blender-style animation colors:
 green when animated and yellow when a key exists at the current frame.
+
+With the pointer over the viewport, press `I` to open the transform keying menu and insert
+Location, Rotation, Scale, or all three for every selected object, Boolean group, or camera.
+Material properties and camera fields use the same hovered-field `I` workflow.
+
+Camera objects are selectable in the scene tree and viewport. Their position, rotation, scale,
+focal distance, and projection live in the regular **Object** inspector and can be keyframed. The
+globe button in the top-right viewport toolbar creates the first camera from the current view and
+toggles the active camera view.
+
+The **Render** menu captures only the rendered scene, excluding editor panels, viewport buttons,
+labels, and transform gizmos. Desktop WebP export uses `cwebp`; MP4 export evaluates and captures
+every frame in the animation range, waiting for full-resolution viewport refinement before each
+capture, and then encodes it with Claydash's bundled H.264 encoder. File-operation errors can be
+copied from their dialog with Cmd/Ctrl+C.
 
 During G/R/S transforms (including the move started by Duplicate), X/Y/Z selects one
 world axis, replacing the previous axis. Press the same axis again to unlock it. Held-key

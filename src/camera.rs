@@ -1,13 +1,60 @@
 use glam::{Mat4, Quat, Vec2, Vec3};
+use serde::{Deserialize, Serialize};
 
 const DEFAULT_CAMERA_DISTANCE: f32 = 3.8;
 // The showcase view: 34 degrees around Y and 15 degrees above the ground plane.
 const ISOMETRIC_DIRECTION: Vec3 = Vec3::new(0.540_138_84, 0.258_819_04, 0.800_788_8);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectionMode {
     Perspective,
     Orthographic,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SceneCamera {
+    pub uuid: uuid::Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub transform: crate::model::Transform,
+    #[serde(default = "default_focal_distance")]
+    pub focal_distance: f32,
+    pub projection_mode: ProjectionMode,
+}
+
+fn default_focal_distance() -> f32 {
+    DEFAULT_CAMERA_DISTANCE
+}
+
+impl SceneCamera {
+    pub fn from_view(name: impl Into<String>, camera: &Camera) -> Self {
+        let offset = camera.target - camera.position;
+        let distance = offset.length().max(0.0001);
+        let (_, rotation, _) = camera.view().inverse().to_scale_rotation_translation();
+        Self {
+            uuid: uuid::Uuid::new_v4(),
+            name: name.into(),
+            transform: crate::model::Transform {
+                translation: camera.position,
+                rotation,
+                scale: Vec3::ONE,
+            },
+            focal_distance: distance,
+            projection_mode: camera.projection_mode,
+        }
+    }
+
+    pub fn apply_to_view(&self, camera: &mut Camera) {
+        camera.position = self.transform.translation;
+        camera.target = self.target();
+        camera.up = self.transform.rotation * Vec3::Y;
+        camera.projection_mode = self.projection_mode;
+    }
+
+    pub fn target(&self) -> Vec3 {
+        self.transform.translation
+            + self.transform.rotation * Vec3::NEG_Z * self.focal_distance.max(0.01)
+    }
 }
 
 #[cfg(test)]
@@ -69,6 +116,46 @@ mod tests {
         assert!((snapped_offset.length() - snap_distance).abs() < 0.0001);
         assert!((snapped_offset / snapped_offset.length()).distance(ISOMETRIC_DIRECTION) < 0.0001);
     }
+
+    #[test]
+    fn zoom_amounts_match_scroll_and_trackpad_pinch_direction() {
+        let mut camera = Camera::new();
+        let initial = camera.position.distance(camera.target);
+        camera.zoom(0.5);
+        assert!(camera.position.distance(camera.target) < initial);
+        camera.zoom(-0.5);
+        assert!(camera.position.distance(camera.target) > initial * 0.9);
+    }
+
+    #[test]
+    fn scene_camera_view_preserves_roll() {
+        let rotation = Quat::from_rotation_y(0.4) * Quat::from_rotation_z(0.7);
+        let scene_camera = SceneCamera {
+            uuid: uuid::Uuid::new_v4(),
+            name: "Rolled camera".into(),
+            transform: crate::model::Transform {
+                translation: Vec3::new(2.0, 1.0, 5.0),
+                rotation,
+                scale: Vec3::ONE,
+            },
+            focal_distance: 4.0,
+            projection_mode: ProjectionMode::Perspective,
+        };
+        let mut viewport_camera = Camera::new();
+
+        scene_camera.apply_to_view(&mut viewport_camera);
+
+        let view_rotation = viewport_camera
+            .view()
+            .inverse()
+            .to_scale_rotation_translation()
+            .1;
+        assert!((view_rotation * Vec3::Y).distance(rotation * Vec3::Y) < 0.0001);
+        assert!((view_rotation * Vec3::NEG_Z).distance(rotation * Vec3::NEG_Z) < 0.0001);
+
+        let captured = SceneCamera::from_view("Captured", &viewport_camera);
+        assert!((captured.transform.rotation * Vec3::Y).distance(rotation * Vec3::Y) < 0.0001);
+    }
 }
 
 impl ProjectionMode {
@@ -96,6 +183,7 @@ pub struct Camera {
     pub position: Vec3,
     pub viewport: Vec2,
     pub viewport_origin: Vec2,
+    pub up: Vec3,
     pub projection_mode: ProjectionMode,
 }
 
@@ -106,16 +194,18 @@ impl Camera {
             position: ISOMETRIC_DIRECTION * DEFAULT_CAMERA_DISTANCE,
             viewport: Vec2::ONE,
             viewport_origin: Vec2::ZERO,
+            up: Vec3::Y,
             projection_mode: ProjectionMode::Perspective,
         }
     }
 
     pub fn view(&self) -> Mat4 {
         let offset = self.position - self.target;
-        let up = if offset.x.abs() + offset.z.abs() < 0.0001 {
+        let forward = -offset.normalize_or_zero();
+        let up = if self.up.cross(forward).length_squared() < 0.0001 {
             Vec3::NEG_Z
         } else {
-            Vec3::Y
+            self.up.normalize()
         };
         Mat4::look_at_rh(self.position, self.target, up)
     }
@@ -232,6 +322,14 @@ impl Camera {
             ViewAngle::Top => Vec3::Y,
             ViewAngle::Bottom => Vec3::NEG_Y,
             ViewAngle::Isometric => ISOMETRIC_DIRECTION,
+        };
+        self.up = match angle {
+            ViewAngle::Top | ViewAngle::Bottom => Vec3::NEG_Z,
+            ViewAngle::Front
+            | ViewAngle::Back
+            | ViewAngle::Left
+            | ViewAngle::Right
+            | ViewAngle::Isometric => Vec3::Y,
         };
         self.position = self.target + direction * radius;
     }

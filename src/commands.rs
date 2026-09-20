@@ -242,17 +242,20 @@ fn toggle_constraint(tree: &mut DataTree, path: &str) {
 fn cancel(tree: &mut DataTree) {
     let targets = transform_targets(tree);
     let mut scene = objects(tree);
+    let mut cameras = crate::model::scene_cameras(tree);
     for target in targets {
         let path = match target.kind {
             TransformTargetKind::Object => "editor.initial_transform",
             TransformTargetKind::Group => "editor.initial_group_transform",
+            TransformTargetKind::Camera => "editor.initial_camera_transform",
         };
         if let ClaydashValue::Transform(transform) = tree.get_path(&format!("{path}.{}", target.id))
         {
-            set_transform_target(&mut scene, target.kind, target.id, transform);
+            set_transform_target(&mut scene, &mut cameras, target.kind, target.id, transform);
         }
     }
     set_objects(tree, scene);
+    crate::model::set_scene_cameras(tree, cameras);
     tree.set_path(
         "editor.state",
         ClaydashValue::EditorState(EditorState::Start),
@@ -276,26 +279,54 @@ fn delete(tree: &mut DataTree) {
         .collect();
     crate::model::map_leaf_group_transforms_to_primitives(&mut scene);
     set_objects(tree, scene);
+    let cameras: Vec<_> = crate::model::scene_cameras(tree)
+        .into_iter()
+        .filter(|camera| !selection.contains(&camera.uuid))
+        .collect();
+    let active = crate::model::active_camera_id(tree);
+    if active.is_some_and(|id| selection.contains(&id)) {
+        if let Some(camera) = cameras.first() {
+            tree.set_path("scene.active_camera", ClaydashValue::Uuid(camera.uuid));
+        } else {
+            tree.set_path("scene.active_camera", ClaydashValue::None);
+            tree.set_transient_path("editor.camera_view", ClaydashValue::Bool(false));
+        }
+    }
+    crate::model::set_scene_cameras(tree, cameras);
     set_selected(tree, vec![]);
     tree.make_undo_redo_snapshot();
 }
 
 fn select_all(tree: &mut DataTree) {
-    let scene = objects(tree);
-    if selected(tree).len() == scene.len() {
+    let mut ids: Vec<_> = objects(tree)
+        .into_iter()
+        .map(|object| object.uuid)
+        .collect();
+    ids.extend(
+        crate::model::scene_cameras(tree)
+            .into_iter()
+            .map(|camera| camera.uuid),
+    );
+    if selected(tree).len() == ids.len() {
         set_selected(tree, vec![]);
     } else {
-        set_selected(tree, scene.into_iter().map(|object| object.uuid).collect());
+        set_selected(tree, ids);
     }
 }
 
 fn invert_selection(tree: &mut DataTree) {
     let current = selected(tree);
-    let inverted = objects(tree)
+    let mut inverted: Vec<_> = objects(tree)
         .into_iter()
         .filter(|object| !current.contains(&object.uuid))
         .map(|object| object.uuid)
         .collect();
+    inverted.extend(
+        crate::model::scene_cameras(tree)
+            .into_iter()
+            .filter(|camera| !current.contains(&camera.uuid))
+            .map(|camera| camera.uuid),
+    );
     set_selected(tree, inverted);
 }
 
@@ -321,10 +352,25 @@ fn duplicate(tree: &mut DataTree) {
             copy
         })
         .collect();
+    let mut cameras = crate::model::scene_cameras(tree);
+    let camera_copies: Vec<_> = cameras
+        .iter()
+        .filter(|camera| selection.contains(&camera.uuid))
+        .map(|camera| {
+            let mut copy = camera.clone();
+            copy.uuid = id_map[&camera.uuid];
+            copy.name = format!("{} copy", camera.name);
+            copy
+        })
+        .collect();
     animation::duplicate_tracks_for_objects(tree, &id_map);
-    set_selected(tree, copies.iter().map(|object| object.uuid).collect());
+    let mut copied_ids: Vec<_> = copies.iter().map(|object| object.uuid).collect();
+    copied_ids.extend(camera_copies.iter().map(|camera| camera.uuid));
+    set_selected(tree, copied_ids);
     scene.extend(copies);
+    cameras.extend(camera_copies);
     set_objects(tree, scene);
+    crate::model::set_scene_cameras(tree, cameras);
     start_grab(tree);
 }
 
@@ -370,6 +416,7 @@ pub(crate) fn effective_selected_ids(tree: &DataTree) -> Vec<uuid::Uuid> {
 pub(crate) enum TransformTargetKind {
     Object,
     Group,
+    Camera,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -394,7 +441,7 @@ pub(crate) fn transform_targets(tree: &DataTree) -> Vec<TransformTarget> {
     let scene = objects(tree);
     let selection = selected(tree);
     let group_scope = crate::model::selection_scope(tree) == crate::model::SelectionScope::Group;
-    selection
+    let mut targets: Vec<_> = selection
         .iter()
         .filter(|id| {
             if !group_scope {
@@ -437,21 +484,44 @@ pub(crate) fn transform_targets(tree: &DataTree) -> Vec<TransformTarget> {
                 })
             }
         })
-        .collect()
+        .collect();
+    for camera in crate::model::scene_cameras(tree) {
+        if selection.contains(&camera.uuid) {
+            targets.push(TransformTarget {
+                id: camera.uuid,
+                kind: TransformTargetKind::Camera,
+                transform: camera.transform,
+                parent_world: glam::Mat4::IDENTITY,
+                world: camera.transform.matrix(),
+            });
+        }
+    }
+    targets
 }
 
 pub(crate) fn set_transform_target(
     scene: &mut [SdfObject],
+    cameras: &mut [crate::camera::SceneCamera],
     target: TransformTargetKind,
     id: uuid::Uuid,
     transform: crate::model::Transform,
 ) {
-    let Some(object) = scene.iter_mut().find(|object| object.uuid == id) else {
-        return;
-    };
     match target {
-        TransformTargetKind::Object => object.transform = transform,
-        TransformTargetKind::Group => object.group_transform = transform,
+        TransformTargetKind::Object => {
+            if let Some(object) = scene.iter_mut().find(|object| object.uuid == id) {
+                object.transform = transform;
+            }
+        }
+        TransformTargetKind::Group => {
+            if let Some(object) = scene.iter_mut().find(|object| object.uuid == id) {
+                object.group_transform = transform;
+            }
+        }
+        TransformTargetKind::Camera => {
+            if let Some(camera) = cameras.iter_mut().find(|camera| camera.uuid == id) {
+                camera.transform = transform;
+            }
+        }
     }
 }
 
@@ -465,7 +535,9 @@ mod tests {
         let mut tree = DataTree::default();
         let mut material = crate::model::Material::preset(crate::model::MaterialKind::Wood);
         material.roughness = 0.37;
+        let material_id = crate::model::ensure_material_asset(&mut tree, material);
         tree.set_path("editor.material", ClaydashValue::Material(material));
+        tree.set_path("editor.material_id", ClaydashValue::Uuid(material_id));
         for kind in [TYPE_BOX, TYPE_SPHERE, TYPE_CYLINDER, TYPE_TORUS] {
             spawn(&mut tree, kind);
             let scene = objects(&tree);
@@ -473,6 +545,7 @@ mod tests {
             assert_eq!(object.material.kind, material.kind);
             assert_eq!(object.material.roughness, material.roughness);
             assert_eq!(object.color, material.color);
+            assert_eq!(object.material_id, Some(material_id));
         }
     }
 
@@ -535,11 +608,40 @@ mod tests {
         assert_ne!(scene[2].uuid, original[1].uuid);
         assert_eq!(selected(&tree), vec![scene[2].uuid]);
     }
+
+    #[test]
+    fn camera_objects_are_regular_transform_targets() {
+        let mut tree = DataTree::default();
+        let view = crate::camera::Camera::new();
+        let camera = crate::camera::SceneCamera::from_view("Camera", &view);
+        let id = camera.uuid;
+        crate::model::set_scene_cameras(&mut tree, vec![camera]);
+        set_selected(&mut tree, vec![id]);
+
+        let target = transform_targets(&tree)[0];
+        assert_eq!(target.kind, TransformTargetKind::Camera);
+        let mut scene = objects(&tree);
+        let mut cameras = crate::model::scene_cameras(&tree);
+        let mut transform = target.transform;
+        transform.translation.x += 2.0;
+        transform.rotation = glam::Quat::from_rotation_y(0.5);
+        transform.scale = glam::Vec3::splat(1.5);
+        set_transform_target(
+            &mut scene,
+            &mut cameras,
+            TransformTargetKind::Camera,
+            id,
+            transform,
+        );
+
+        assert_eq!(cameras[0].transform, transform);
+    }
 }
 
 pub fn spawn(tree: &mut DataTree, kind: i32) {
     let mut object = SdfObject::create(kind);
     object.material = crate::model::picked_material(tree);
+    object.material_id = crate::model::picked_material_id(tree);
     object.color = object.material.color;
     let uuid = object.uuid;
     let mut scene = objects(tree);

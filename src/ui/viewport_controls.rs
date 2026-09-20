@@ -5,7 +5,7 @@ impl UiState {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (toggle, step) = ctx.input(|input| {
+        let (toggle, step, insert_keyframe) = ctx.input(|input| {
             let toggle = input.events.iter().any(|event| {
                 matches!(
                     event,
@@ -38,15 +38,84 @@ impl UiState {
                 };
                 Some(direction * if modifiers.shift { 10.0 } else { 1.0 })
             });
-            (toggle, step)
+            let insert_keyframe = input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::I,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                        ..
+                    } if modifiers.is_none()
+                )
+            });
+            (toggle, step, insert_keyframe)
         });
-        if toggle {
+        if insert_keyframe && !selected(tree).is_empty() {
+            self.insert_keyframe_menu_position = Some(
+                ctx.pointer_latest_pos()
+                    .unwrap_or_else(|| ctx.content_rect().center()),
+            );
+        } else if toggle {
             self.animation.toggle_playback();
         } else if let Some(step) = step {
             self.animation.playing = false;
             self.animation
                 .set_frame(tree, self.animation.current_frame.round() + step);
         }
+    }
+
+    pub(super) fn draw_insert_keyframe_menu(&mut self, ctx: &egui::Context, tree: &mut DataTree) {
+        let Some(cursor_position) = self.insert_keyframe_menu_position else {
+            return;
+        };
+        let mut open = true;
+        let mut properties = None;
+        let style = ctx.style_of(ctx.theme());
+        let response = egui::Window::new("Insert keyframe")
+            .id(egui::Id::new("insert-keyframe-menu"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .current_pos(cursor_position + egui::vec2(8.0, 8.0))
+            .frame(egui::Frame::popup(&style).inner_margin(egui::Margin::symmetric(8, 6)))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.set_min_width(174.0);
+                ui.strong("Insert Keyframe");
+                for (label, value) in [
+                    ("Location", TransformKeySet::Location),
+                    ("Rotation", TransformKeySet::Rotation),
+                    ("Scale", TransformKeySet::Scale),
+                    (
+                        "Location, Rotation & Scale",
+                        TransformKeySet::LocationRotationScale,
+                    ),
+                ] {
+                    if ui.button(label).clicked() {
+                        properties = Some(value);
+                    }
+                }
+            });
+        if let Some(response) = response {
+            self.regions.push(response.response.rect);
+            let close_from_input = ctx.input(|input| {
+                input.key_pressed(egui::Key::Escape)
+                    || input.pointer.any_pressed()
+                        && input
+                            .pointer
+                            .interact_pos()
+                            .is_none_or(|position| !response.response.rect.contains(position))
+            });
+            open &= !close_from_input;
+        }
+        if let Some(properties) = properties {
+            insert_transform_keyframes(tree, &mut self.animation, properties);
+            open = false;
+        }
+        self.insert_keyframe_menu_position = open.then_some(cursor_position);
     }
 
     pub(super) fn draw_top_controls(
@@ -138,7 +207,7 @@ impl UiState {
         self.regions.push(left.response.rect);
 
         // Move the right-hand group below the tools when space is tight.
-        let projection_y = if viewport.width() < left.response.rect.width() + 72.0 {
+        let projection_y = if viewport.width() < left.response.rect.width() + 130.0 {
             left.response.rect.height() + 10.0
         } else {
             6.0
@@ -165,6 +234,7 @@ impl UiState {
                     let tooltip =
                         format!("{} — click for {next_mode}", camera.projection_mode.label());
                     if view_button(ui, projection_icon, &tooltip).clicked() {
+                        exit_camera_view(tree);
                         camera.toggle_projection();
                     }
                     if view_button(
@@ -174,7 +244,22 @@ impl UiState {
                     )
                     .clicked()
                     {
+                        exit_camera_view(tree);
                         camera.snap(ViewAngle::Isometric);
+                    }
+                    let camera_view = matches!(
+                        tree.get_path("editor.camera_view"),
+                        crate::model::ClaydashValue::Bool(true)
+                    );
+                    if selectable_view_button(
+                        ui,
+                        egui::include_image!("../../assets/icons/lucide/camera.svg"),
+                        "Toggle active camera view",
+                        camera_view,
+                    )
+                    .clicked()
+                    {
+                        toggle_camera_view(tree, camera);
                     }
                 });
             });
@@ -182,7 +267,12 @@ impl UiState {
         self.draw_selection_toolbar(ctx, viewport);
     }
 
-    pub(super) fn draw_view_gizmo(&mut self, ctx: &egui::Context, camera: &mut Camera) {
+    pub(super) fn draw_view_gizmo(
+        &mut self,
+        ctx: &egui::Context,
+        tree: &mut DataTree,
+        camera: &mut Camera,
+    ) {
         let viewport = self.viewport_rect.unwrap();
         if viewport.height() < 250.0 || viewport.width() < 150.0 {
             return;
@@ -204,9 +294,77 @@ impl UiState {
                                 .small()
                                 .color(Color32::LIGHT_GRAY),
                         );
-                        orientation_axes(ui, camera);
+                        orientation_axes(ui, tree, camera);
                     });
             });
         self.regions.push(area.response.rect);
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TransformKeySet {
+    Location,
+    Rotation,
+    Scale,
+    LocationRotationScale,
+}
+
+pub(super) fn insert_transform_keyframes(
+    tree: &mut DataTree,
+    runtime: &mut AnimationRuntime,
+    key_set: TransformKeySet,
+) {
+    let targets = commands::transform_targets(tree);
+    let frame = runtime.current_frame.round().max(0.0) as u32;
+    let include_location = matches!(
+        key_set,
+        TransformKeySet::Location | TransformKeySet::LocationRotationScale
+    );
+    let include_rotation = matches!(
+        key_set,
+        TransformKeySet::Rotation | TransformKeySet::LocationRotationScale
+    );
+    let include_scale = matches!(
+        key_set,
+        TransformKeySet::Scale | TransformKeySet::LocationRotationScale
+    );
+    for target in targets {
+        let (rotation_x, rotation_y, rotation_z) =
+            target.transform.rotation.to_euler(EulerRot::XYZ);
+        let rotation_degrees = Vec3::new(
+            rotation_x.to_degrees(),
+            rotation_y.to_degrees(),
+            rotation_z.to_degrees(),
+        );
+        for axis in VectorAxis::ALL {
+            let (position, rotation, scale) = match target.kind {
+                commands::TransformTargetKind::Group => (
+                    AnimatableProperty::GroupPosition(axis),
+                    AnimatableProperty::GroupRotation(axis),
+                    AnimatableProperty::GroupScale(axis),
+                ),
+                commands::TransformTargetKind::Object | commands::TransformTargetKind::Camera => (
+                    AnimatableProperty::Position(axis),
+                    AnimatableProperty::Rotation(axis),
+                    AnimatableProperty::Scale(axis),
+                ),
+            };
+            for (property, value) in [
+                include_location.then_some((position, target.transform.translation[axis.index()])),
+                include_rotation.then_some((rotation, rotation_degrees[axis.index()])),
+                include_scale.then_some((scale, target.transform.scale[axis.index()])),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let binding = AnimationBinding {
+                    object: target.id,
+                    property,
+                };
+                animation::insert_keyframe(tree, binding, frame, value);
+                runtime.selected_keyframe = Some(SelectedKeyframe { binding, frame });
+            }
+        }
+    }
+    tree.make_undo_redo_snapshot();
 }

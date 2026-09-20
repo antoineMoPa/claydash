@@ -85,6 +85,8 @@ pub enum AnimatableProperty {
     RepetitionAxis(VectorAxis),
     RepetitionCount(VectorAxis),
     RepetitionSpacing(VectorAxis),
+    CameraFocalDistance,
+    CameraProjection,
 }
 
 impl AnimatableProperty {
@@ -113,6 +115,8 @@ impl AnimatableProperty {
             Self::RepetitionAxis(axis) => format!("Repeat {}", axis.label()),
             Self::RepetitionCount(axis) => format!("Count {}", axis.label()),
             Self::RepetitionSpacing(axis) => format!("Spacing {}", axis.label()),
+            Self::CameraFocalDistance => "Camera focal distance".into(),
+            Self::CameraProjection => "Camera projection".into(),
         }
     }
 
@@ -169,6 +173,7 @@ impl AnimatableProperty {
             }),
             Self::RepetitionCount(axis) => Some(object.repetition.count[axis.index()] as f32),
             Self::RepetitionSpacing(axis) => Some(object.repetition.spacing[axis.index()]),
+            Self::CameraFocalDistance | Self::CameraProjection => None,
         }
     }
 
@@ -250,13 +255,73 @@ impl AnimatableProperty {
             Self::RepetitionSpacing(axis) => {
                 object.repetition.spacing[axis.index()] = value.clamp(0.01, 20.0)
             }
+            Self::CameraFocalDistance | Self::CameraProjection => {}
         }
     }
 
     pub fn uses_step_interpolation(self) -> bool {
         matches!(
             self,
-            Self::RepetitionEnabled | Self::RepetitionAxis(_) | Self::RepetitionCount(_)
+            Self::RepetitionEnabled
+                | Self::RepetitionAxis(_)
+                | Self::RepetitionCount(_)
+                | Self::CameraProjection
+        )
+    }
+
+    pub fn camera_value(self, camera: &crate::camera::SceneCamera) -> Option<f32> {
+        match self {
+            Self::Position(axis) => Some(camera.transform.translation[axis.index()]),
+            Self::Rotation(axis) => {
+                let (x, y, z) = camera.transform.rotation.to_euler(EulerRot::XYZ);
+                Some([x.to_degrees(), y.to_degrees(), z.to_degrees()][axis.index()])
+            }
+            Self::Scale(axis) => Some(camera.transform.scale[axis.index()]),
+            Self::CameraFocalDistance => Some(camera.focal_distance),
+            Self::CameraProjection => Some(match camera.projection_mode {
+                crate::camera::ProjectionMode::Perspective => 0.0,
+                crate::camera::ProjectionMode::Orthographic => 1.0,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn apply_camera(self, camera: &mut crate::camera::SceneCamera, value: f32) {
+        match self {
+            Self::Position(axis) => camera.transform.translation[axis.index()] = value,
+            Self::Rotation(axis) => {
+                let (x, y, z) = camera.transform.rotation.to_euler(EulerRot::XYZ);
+                let mut degrees = [x.to_degrees(), y.to_degrees(), z.to_degrees()];
+                degrees[axis.index()] = value;
+                camera.transform.rotation = Quat::from_euler(
+                    EulerRot::XYZ,
+                    degrees[0].to_radians(),
+                    degrees[1].to_radians(),
+                    degrees[2].to_radians(),
+                );
+            }
+            Self::Scale(axis) => camera.transform.scale[axis.index()] = value,
+            Self::CameraFocalDistance => camera.focal_distance = value.max(0.01),
+            Self::CameraProjection => {
+                camera.projection_mode = if value >= 0.5 {
+                    crate::camera::ProjectionMode::Orthographic
+                } else {
+                    crate::camera::ProjectionMode::Perspective
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn is_material(self) -> bool {
+        matches!(
+            self,
+            Self::MaterialColor(_)
+                | Self::MaterialRoughness
+                | Self::MaterialMetallic
+                | Self::MaterialReflectivity
+                | Self::MaterialRefractiveIndex
+                | Self::MaterialOpacity
         )
     }
 }

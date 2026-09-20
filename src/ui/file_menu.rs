@@ -66,6 +66,14 @@ pub(super) fn draw_file_menu(
                     ui.weak("Animation Timeline is open");
                 }
             });
+            ui.menu_button("Render", |ui| {
+                for format in crate::document::RenderFormat::ALL {
+                    if ui.button(format.label()).clicked() {
+                        action = Some(FileMenuAction::Render(format));
+                        ui.close();
+                    }
+                }
+            });
             if let Some(path) = document.current_path() {
                 ui.separator();
                 ui.weak(
@@ -111,11 +119,52 @@ pub(super) fn draw_file_error(
         .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.label(message);
-            dismiss = ui.button("Dismiss").clicked();
+            ui.add(egui::Label::new(&message).selectable(true));
+            ui.horizontal(|ui| {
+                if ui.button("Copy error").clicked() {
+                    ui.ctx().copy_text(message.clone());
+                }
+                dismiss = ui.button("Dismiss").clicked();
+            });
         });
+    let copy = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::C);
+    if ctx.input_mut(|input| input.consume_shortcut(&copy)) {
+        ctx.copy_text(message);
+    }
     if dismiss || !open {
         document.clear_error();
     }
     response.map(|response| response.response.rect)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_c_copies_the_complete_file_error() {
+        let ctx = egui::Context::default();
+        let mut document = DocumentState::default();
+        document.set_error("encode the animation", "missing codec details");
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                }],
+                ..Default::default()
+            },
+            |_ui| {
+                draw_file_error(&ctx, &mut document);
+            },
+        );
+        let commands = output.platform_output.commands.clone();
+        output.textures_delta.clear();
+        assert!(commands.contains(&egui::OutputCommand::CopyText(
+            "Could not encode the animation: missing codec details".to_owned()
+        )));
+    }
 }

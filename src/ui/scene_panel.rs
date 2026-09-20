@@ -54,6 +54,22 @@ pub(super) fn scene_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     {
         subtree_rows(ui, tree, &scene, object, &selection, 0);
     }
+    let cameras = crate::model::scene_cameras(tree);
+    if !cameras.is_empty() {
+        ui.separator();
+        ui.label(RichText::new("Cameras").strong());
+        for camera in cameras {
+            let response = ui.selectable_label(selection.contains(&camera.uuid), &camera.name);
+            if response.clicked() {
+                set_selected(tree, vec![camera.uuid]);
+                tree.set_path(
+                    "scene.active_camera",
+                    crate::model::ClaydashValue::Uuid(camera.uuid),
+                );
+            }
+            response.on_hover_text("Select camera object");
+        }
+    }
 }
 
 pub(super) fn subtree_rows(

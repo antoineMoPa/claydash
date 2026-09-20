@@ -124,7 +124,6 @@ impl InteractionState {
         camera: &Camera,
         tree: &mut DataTree,
     ) {
-        let scene = objects(tree);
         let targets = commands::transform_targets(tree);
         if targets.is_empty() {
             tree.set_path(
@@ -134,19 +133,16 @@ impl InteractionState {
             return;
         }
 
-        let selection = commands::effective_selected_ids(tree);
-        let selected_world: Vec<_> = scene
+        let selected_world: Vec<_> = targets
             .iter()
-            .filter(|object| selection.contains(&object.uuid))
-            .map(|object| {
-                crate::model::object_world_matrix(&scene, object.uuid).transform_point3(Vec3::ZERO)
-            })
+            .map(|target| target.world.transform_point3(Vec3::ZERO))
             .collect();
         let center = selected_world.iter().copied().sum::<Vec3>() / selected_world.len() as f32;
         for target in &targets {
             let path = match target.kind {
                 commands::TransformTargetKind::Object => "editor.initial_transform",
                 commands::TransformTargetKind::Group => "editor.initial_group_transform",
+                commands::TransformTargetKind::Camera => "editor.initial_camera_transform",
             };
             tree.set_path(
                 &format!("{path}.{}", target.id),

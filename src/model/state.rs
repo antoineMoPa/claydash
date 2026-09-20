@@ -2,12 +2,17 @@ use glam::{Vec2, Vec4};
 use observable_key_value_tree::{CanBeNone, ObservableKVTree};
 use serde::{Deserialize, Serialize};
 
-use super::{AnimationData, BooleanOperation, EditorState, Material, SdfObject, Transform};
+use super::{
+    AnimationData, BooleanOperation, EditorState, Material, MaterialAsset, SdfObject, Transform,
+};
+use crate::camera::SceneCamera;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ClaydashValue {
     Animation(AnimationData),
     Material(Material),
+    VecMaterialAsset(Vec<MaterialAsset>),
+    VecCamera(Vec<SceneCamera>),
     BooleanPick(BooleanPick),
     Uuid(uuid::Uuid),
     VecUuid(Vec<uuid::Uuid>),
@@ -61,6 +66,69 @@ pub fn picked_material(tree: &DataTree) -> Material {
             }
             material
         }
+    }
+}
+
+pub fn picked_material_id(tree: &DataTree) -> Option<uuid::Uuid> {
+    match tree.get_path("editor.material_id") {
+        ClaydashValue::Uuid(id) => Some(id),
+        _ => None,
+    }
+}
+
+pub fn material_assets(tree: &DataTree) -> Vec<MaterialAsset> {
+    match tree.get_path("scene.materials") {
+        ClaydashValue::VecMaterialAsset(assets) => assets,
+        _ => Vec::new(),
+    }
+}
+
+pub fn set_material_assets(tree: &mut DataTree, assets: Vec<MaterialAsset>) {
+    tree.set_path("scene.materials", ClaydashValue::VecMaterialAsset(assets));
+}
+
+pub fn ensure_material_asset(tree: &mut DataTree, material: Material) -> uuid::Uuid {
+    let mut assets = material_assets(tree);
+    if let Some(asset) = assets.iter().find(|asset| asset.material == material) {
+        return asset.uuid;
+    }
+    let asset = MaterialAsset::new(material);
+    let id = asset.uuid;
+    assets.push(asset);
+    set_material_assets(tree, assets);
+    id
+}
+
+pub fn update_material_asset(tree: &mut DataTree, id: uuid::Uuid, material: Material) {
+    let mut assets = material_assets(tree);
+    if let Some(asset) = assets.iter_mut().find(|asset| asset.uuid == id) {
+        asset.material = material;
+        asset.name = material.kind.label().to_string();
+    } else {
+        assets.push(MaterialAsset {
+            uuid: id,
+            name: material.kind.label().to_string(),
+            material,
+        });
+    }
+    set_material_assets(tree, assets);
+}
+
+pub fn scene_cameras(tree: &DataTree) -> Vec<SceneCamera> {
+    match tree.get_path("scene.cameras") {
+        ClaydashValue::VecCamera(cameras) => cameras,
+        _ => Vec::new(),
+    }
+}
+
+pub fn set_scene_cameras(tree: &mut DataTree, cameras: Vec<SceneCamera>) {
+    tree.set_path("scene.cameras", ClaydashValue::VecCamera(cameras));
+}
+
+pub fn active_camera_id(tree: &DataTree) -> Option<uuid::Uuid> {
+    match tree.get_path("scene.active_camera") {
+        ClaydashValue::Uuid(id) => Some(id),
+        _ => None,
     }
 }
 

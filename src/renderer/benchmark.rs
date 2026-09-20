@@ -202,6 +202,7 @@ impl Renderer {
                 target: camera.target,
                 viewport: camera.viewport,
                 viewport_origin: Vec2::ZERO,
+                up: camera.up,
                 projection_mode: camera.projection_mode,
             };
             // Stationary edits exercise geometry/material and selection cache

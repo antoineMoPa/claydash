@@ -93,17 +93,13 @@ pub(super) fn animation_panel(
                                 .find(|object| object.uuid == track.binding.object)
                                 .map(SdfObject::display_name)
                                 .unwrap_or_else(|| "Missing object".into());
-                            ui.allocate_ui_with_layout(
+                            let label =
+                                format!("{} · {}", object_name, track.binding.property.label());
+                            ui.add_sized(
                                 egui::vec2(label_width, 64.0),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.label(format!(
-                                        "{} · {}",
-                                        object_name,
-                                        track.binding.property.label()
-                                    ));
-                                },
-                            );
+                                egui::Label::new(&label).truncate(),
+                            )
+                            .on_hover_text(label);
                             let width = ui.available_width().max(80.0);
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(width, 64.0),

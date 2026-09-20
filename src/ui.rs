@@ -1,6 +1,8 @@
 mod animation_panel;
 mod animation_widgets;
 mod boolean_overlay;
+mod camera_overlay;
+mod camera_panel;
 mod file_menu;
 mod materials_panel;
 mod object_gizmos;
@@ -15,6 +17,8 @@ mod workspace;
 
 use animation_panel::*;
 use animation_widgets::*;
+pub(crate) use camera_panel::exit_camera_view;
+use camera_panel::{sync_camera_view, toggle_camera_view};
 use file_menu::*;
 use materials_panel::*;
 #[cfg(test)]
@@ -23,6 +27,8 @@ use object_panel::*;
 use scene_panel::*;
 use secondary_panels::*;
 use ui_widgets::*;
+#[cfg(test)]
+use viewport_controls::*;
 use workspace::*;
 
 use egui::{Color32, CornerRadius, RichText, Stroke};
@@ -77,6 +83,7 @@ pub struct UiState {
     viewport_rect: Option<egui::Rect>,
     ghosts: boolean_overlay::Ghosts,
     selection_tools: selection_tools::SelectionTools,
+    insert_keyframe_menu_position: Option<egui::Pos2>,
 }
 
 impl Default for UiState {
@@ -104,11 +111,32 @@ impl Default for UiState {
             viewport_rect: None,
             ghosts: boolean_overlay::Ghosts::default(),
             selection_tools: selection_tools::SelectionTools::default(),
+            insert_keyframe_menu_position: None,
         }
     }
 }
 
 impl UiState {
+    pub fn animation_timeline_open(&self) -> bool {
+        self.layout
+            .find_pane(|pane| *pane == EditorPane::Animation)
+            .is_some()
+    }
+
+    pub fn set_animation_timeline_open(&mut self, open: bool) {
+        let current = self.layout.find_pane(|pane| *pane == EditorPane::Animation);
+        match (open, current) {
+            (true, None) => {
+                self.layout
+                    .add_pane_against_edge(DropSide::Bottom, 0.30, EditorPane::Animation);
+            }
+            (false, Some((pane, _))) => {
+                self.layout.close_pane(pane);
+            }
+            _ => {}
+        }
+    }
+
     pub fn draw(
         &mut self,
         viewport_ui: &mut egui::Ui,
@@ -160,6 +188,7 @@ impl UiState {
         }
         self.layout = layout;
         self.frames = frames;
+        sync_camera_view(tree, camera);
         self.viewport_rect = self
             .layout
             .find_pane(|pane| *pane == EditorPane::Viewport)
@@ -169,9 +198,10 @@ impl UiState {
             camera.viewport_origin = Vec2::new(rect.left(), rect.top()) * scale;
             camera.viewport = Vec2::new(rect.width().max(1.0), rect.height().max(1.0)) * scale;
             self.draw_top_controls(viewport_ui.ctx(), tree, camera);
-            self.draw_view_gizmo(viewport_ui.ctx(), camera);
+            self.draw_view_gizmo(viewport_ui.ctx(), tree, camera);
             viewport_ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
+                self.regions.extend(camera_overlay::draw(ui, tree, camera));
                 self.ghosts = boolean_overlay::draw(ui, tree, camera);
                 if let Some(pick) = scene_actions::pending_boolean(tree) {
                     // Resize handles must not intercept the operand-selection click.
@@ -193,6 +223,7 @@ impl UiState {
                 }
             });
         }
+        self.draw_insert_keyframe_menu(viewport_ui.ctx(), tree);
 
         let open_palette = viewport_ui.ctx().input(|input| {
             input.key_pressed(egui::Key::P) && input.modifiers.command && input.modifiers.shift
@@ -233,10 +264,22 @@ impl UiState {
     pub fn reset_document_gestures(&mut self) {
         self.selection_tools = selection_tools::SelectionTools::default();
         self.ghosts = boolean_overlay::Ghosts::default();
+        self.insert_keyframe_menu_position = None;
     }
 
     pub fn reset_animation(&mut self, tree: &DataTree) {
         self.animation.reset_for_document(tree);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn animation_frame(&self) -> f32 {
+        self.animation.current_frame
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_animation_frame(&mut self, tree: &mut DataTree, frame: f32) {
+        self.animation.playing = false;
+        self.animation.set_frame(tree, frame);
     }
 
     pub fn contains_pointer(&self, physical_position: Vec2, pixels_per_point: f32) -> bool {

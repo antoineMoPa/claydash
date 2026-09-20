@@ -1,16 +1,11 @@
     #[test]
     fn animation_timeline_is_optional_and_starts_closed() {
         let mut ui = UiState::default();
-        assert!(ui
-            .layout
-            .find_pane(|pane| *pane == EditorPane::Animation)
-            .is_none());
-        ui.layout
-            .add_pane_against_edge(DropSide::Bottom, 0.30, EditorPane::Animation);
-        assert!(ui
-            .layout
-            .find_pane(|pane| *pane == EditorPane::Animation)
-            .is_some());
+        assert!(!ui.animation_timeline_open());
+        ui.set_animation_timeline_open(true);
+        assert!(ui.animation_timeline_open());
+        ui.set_animation_timeline_open(false);
+        assert!(!ui.animation_timeline_open());
     }
 
     #[test]
@@ -48,6 +43,52 @@
         let (minimum, maximum) = timeline_value_bounds(&track);
         assert!((minimum + 1.2).abs() < 0.0001);
         assert!((maximum - 11.2).abs() < 0.0001);
+    }
+
+    #[test]
+    fn animation_lanes_share_one_origin_with_truncated_labels() {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
+        object.name = "A deliberately very long animated object name".into();
+        let object_id = object.uuid;
+        set_objects(&mut tree, vec![object]);
+        set_selected(&mut tree, vec![object_id]);
+        for property in [
+            AnimatableProperty::Position(VectorAxis::X),
+            AnimatableProperty::MaterialReflectivity,
+        ] {
+            animation::insert_keyframe(
+                &mut tree,
+                AnimationBinding {
+                    object: object_id,
+                    property,
+                },
+                0,
+                0.0,
+            );
+        }
+        let mut runtime = AnimationRuntime::default();
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(760.0);
+            animation_panel(ui, &mut tree, &mut runtime);
+        });
+        output.textures_delta.clear();
+        let lanes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == Color32::from_rgb(34, 35, 39) => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(lanes.len(), 2);
+        assert!((lanes[0].left() - lanes[1].left()).abs() < 0.01);
+        assert!((lanes[0].width() - lanes[1].width()).abs() < 0.01);
     }
 
     #[test]
@@ -137,6 +178,27 @@
     }
 
     #[test]
+    fn insert_keyframe_menu_is_compact_and_cursor_anchored() {
+        let ctx = egui::Context::default();
+        let mut ui_state = UiState::default();
+        let mut tree = DataTree::default();
+        let cursor = egui::pos2(240.0, 180.0);
+        ui_state.insert_keyframe_menu_position = Some(cursor);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            ui_state.draw_insert_keyframe_menu(&ctx, &mut tree);
+        });
+        output.textures_delta.clear();
+
+        let popup = *ui_state.regions.last().expect("keyframe popup region");
+        assert!(popup.left() >= cursor.x);
+        assert!(popup.top() >= cursor.y);
+        assert!(popup.left() - cursor.x <= 12.0);
+        assert!(popup.top() - cursor.y <= 12.0);
+        assert!(popup.height() < 135.0);
+    }
+
+    #[test]
     fn hovering_a_transform_input_and_pressing_i_inserts_a_keyframe() {
         let ctx = egui::Context::default();
         let mut tree = DataTree::default();
@@ -220,6 +282,90 @@
             AnimatableProperty::Position(VectorAxis::X)
         );
         assert_eq!(data.tracks[0].keyframes[0].frame, 18);
+    }
+
+    #[test]
+    fn transform_keying_menu_inserts_blender_style_location_rotation_scale_sets() {
+        let mut tree = DataTree::default();
+        let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+        object.transform.translation = Vec3::new(1.0, 2.0, 3.0);
+        object.transform.rotation = glam::Quat::from_euler(EulerRot::XYZ, 0.1, 0.2, 0.3);
+        object.transform.scale = Vec3::new(2.0, 3.0, 4.0);
+        let object_id = object.uuid;
+        set_objects(&mut tree, vec![object]);
+        set_selected(&mut tree, vec![object_id]);
+        let mut runtime = AnimationRuntime::default();
+        runtime.current_frame = 14.0;
+
+        insert_transform_keyframes(
+            &mut tree,
+            &mut runtime,
+            TransformKeySet::LocationRotationScale,
+        );
+
+        let data = animation::animation_data(&tree);
+        assert_eq!(data.tracks.len(), 9);
+        assert!(data.tracks.iter().all(|track| {
+            track.binding.object == object_id && track.keyframes[0].frame == 14
+        }));
+    }
+
+    #[test]
+    fn location_keyframes_animate_the_selected_boolean_group_transform() {
+        let mut tree = DataTree::default();
+        let root = SdfObject::create_kind(PrimitiveKind::Box);
+        let root_id = root.uuid;
+        let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+        child.boolean_parent = Some(root_id);
+        set_objects(&mut tree, vec![root, child]);
+        set_selected(&mut tree, vec![root_id]);
+        let mut runtime = AnimationRuntime::default();
+
+        insert_transform_keyframes(
+            &mut tree,
+            &mut runtime,
+            TransformKeySet::Location,
+        );
+        let mut scene = objects(&tree);
+        scene[0].group_transform.translation.y = 3.0;
+        set_objects(&mut tree, scene);
+        runtime.current_frame = 10.0;
+        insert_transform_keyframes(
+            &mut tree,
+            &mut runtime,
+            TransformKeySet::Location,
+        );
+
+        let data = animation::animation_data(&tree);
+        assert_eq!(data.tracks.len(), 3);
+        assert!(data.tracks.iter().all(|track| matches!(
+            track.binding.property,
+            AnimatableProperty::GroupPosition(_)
+        )));
+        assert!(animation::evaluate(&mut tree, 0.0));
+        assert_eq!(objects(&tree)[0].group_transform.translation.y, 0.0);
+        assert!(animation::evaluate(&mut tree, 10.0));
+        assert_eq!(objects(&tree)[0].group_transform.translation.y, 3.0);
+    }
+
+    #[test]
+    fn applying_material_to_a_group_links_every_descendant() {
+        let mut tree = DataTree::default();
+        let root = SdfObject::create_kind(PrimitiveKind::Box);
+        let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+        child.boolean_parent = Some(root.uuid);
+        set_selected(&mut tree, vec![root.uuid]);
+        set_objects(&mut tree, vec![root, child]);
+
+        let material = Material::preset(MaterialKind::Metallic);
+        apply_material(&mut tree, material);
+
+        let scene = objects(&tree);
+        let shared = scene[0].material_id.expect("linked material");
+        assert!(scene.iter().all(|object| {
+            object.material_id == Some(shared) && object.material.kind == MaterialKind::Metallic
+        }));
+        assert_eq!(crate::model::material_assets(&tree).len(), 1);
     }
 
     #[test]
@@ -461,4 +607,3 @@
         undo_redo::redo(&mut tree);
         assert_eq!(objects(&tree)[0].display_name(), "Workbench");
     }
-

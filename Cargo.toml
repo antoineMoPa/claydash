@@ -40,9 +40,12 @@ rfd = "0.17.2"
 wgpu = "30.0.1"
 winit = "0.30.13"
 bytemuck = { version = "1.24.0", features = ["derive"] }
+png = "0.17.16"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.4.0"
+mp4 = "0.14.0"
+openh264 = "0.9.8"
 egui-winit = { version = "0.36.2", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

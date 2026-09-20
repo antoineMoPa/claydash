@@ -15,12 +15,45 @@ pub enum FileMenuAction {
     OpenRecent(PathBuf),
     Save,
     SaveAs,
+    Render(RenderFormat),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderFormat {
+    WebP,
+    Mp4,
+}
+
+impl RenderFormat {
+    pub const ALL: [Self; 2] = [Self::WebP, Self::Mp4];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WebP => "WebP image",
+            Self::Mp4 => "MP4 video",
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::WebP => "webp",
+            Self::Mp4 => "mp4",
+        }
+    }
 }
 
 pub struct DocumentState {
     current_path: Option<PathBuf>,
     recent_paths: Vec<PathBuf>,
+    ui_preferences: UiPreferences,
     error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct UiPreferences {
+    #[serde(default)]
+    animation_timeline_open: bool,
 }
 
 impl Default for DocumentState {
@@ -28,6 +61,7 @@ impl Default for DocumentState {
         Self {
             current_path: None,
             recent_paths: load_recent_paths(),
+            ui_preferences: load_ui_preferences(),
             error: None,
         }
     }
@@ -40,6 +74,18 @@ impl DocumentState {
 
     pub fn recent_paths(&self) -> &[PathBuf] {
         &self.recent_paths
+    }
+
+    pub fn animation_timeline_open(&self) -> bool {
+        self.ui_preferences.animation_timeline_open
+    }
+
+    pub fn set_animation_timeline_open(&mut self, open: bool) {
+        if self.ui_preferences.animation_timeline_open == open {
+            return;
+        }
+        self.ui_preferences.animation_timeline_open = open;
+        save_ui_preferences(self.ui_preferences);
     }
 
     pub fn error(&self) -> Option<&str> {
@@ -116,6 +162,14 @@ pub fn save_dialog() -> Option<PathBuf> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn render_dialog(format: RenderFormat) -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter(format.label(), &[format.extension()])
+        .set_file_name(format!("render.{}", format.extension()))
+        .save_file()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn recent_projects_path() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -141,9 +195,56 @@ fn recent_projects_path() -> Option<PathBuf> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn ui_preferences_path() -> Option<PathBuf> {
+    recent_projects_path().map(|path| path.with_file_name("ui-preferences.json"))
+}
+
 #[cfg(target_arch = "wasm32")]
 fn load_recent_paths() -> Vec<PathBuf> {
     Vec::new()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_ui_preferences() -> UiPreferences {
+    UiPreferences::default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_ui_preferences() -> UiPreferences {
+    let Some(path) = ui_preferences_path() else {
+        return UiPreferences::default();
+    };
+    read_ui_preferences(&path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_ui_preferences(path: &Path) -> UiPreferences {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_ui_preferences(_preferences: UiPreferences) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn save_ui_preferences(preferences: UiPreferences) {
+    let Some(path) = ui_preferences_path() else {
+        return;
+    };
+    let _ = write_ui_preferences(&path, preferences);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_ui_preferences(path: &Path, preferences: UiPreferences) -> Result<(), String> {
+    let Some(parent) = path.parent() else {
+        return Err("preferences path has no parent directory".into());
+    };
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let bytes = serde_json::to_vec_pretty(&preferences).map_err(|error| error.to_string())?;
+    std::fs::write(path, bytes).map_err(|error| error.to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -227,6 +328,46 @@ mod tests {
     }
 
     #[test]
+    fn scene_round_trip_keeps_shared_material_assets() {
+        let mut tree = DataTree::default();
+        let material = crate::model::Material::preset(crate::model::MaterialKind::Wood);
+        let id = crate::model::ensure_material_asset(&mut tree, material);
+        let mut first = SdfObject::create(TYPE_SPHERE);
+        first.material = material;
+        first.material_id = Some(id);
+        let mut second = SdfObject::create(TYPE_SPHERE);
+        second.material = material;
+        second.material_id = Some(id);
+        set_objects(&mut tree, vec![first, second]);
+
+        let bytes = serialize_scene(&tree).unwrap();
+        let scene = deserialize_scene(&bytes).unwrap();
+        let mut restored = DataTree::default();
+        restored.set_tree("scene", scene);
+        assert_eq!(crate::model::material_assets(&restored).len(), 1);
+        assert!(objects(&restored)
+            .iter()
+            .all(|object| object.material_id == Some(id)));
+    }
+
+    #[test]
+    fn scene_round_trip_keeps_camera_objects_and_active_camera() {
+        let mut tree = DataTree::default();
+        let camera =
+            crate::camera::SceneCamera::from_view("Main shot", &crate::camera::Camera::new());
+        let id = camera.uuid;
+        crate::model::set_scene_cameras(&mut tree, vec![camera]);
+        tree.set_path("scene.active_camera", ClaydashValue::Uuid(id));
+
+        let bytes = serialize_scene(&tree).unwrap();
+        let scene = deserialize_scene(&bytes).unwrap();
+        let mut restored = DataTree::default();
+        restored.set_tree("scene", scene);
+        assert_eq!(crate::model::scene_cameras(&restored)[0].uuid, id);
+        assert_eq!(crate::model::active_camera_id(&restored), Some(id));
+    }
+
+    #[test]
     fn recent_projects_are_most_recent_first_and_bounded() {
         let mut paths = Vec::new();
         for index in 0..12 {
@@ -246,6 +387,24 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn animation_timeline_preference_round_trips_between_sessions() {
+        let directory = std::env::temp_dir().join(format!(
+            "claydash-ui-preferences-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("ui-preferences.json");
+        let preferences = UiPreferences {
+            animation_timeline_open: true,
+        };
+
+        write_ui_preferences(&path, preferences).unwrap();
+
+        assert_eq!(read_ui_preferences(&path), preferences);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

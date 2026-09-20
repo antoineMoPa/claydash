@@ -95,9 +95,18 @@ impl MaterialKind {
             Self::Wood => "Wood",
         }
     }
+
+    pub fn gpu_code(self) -> u32 {
+        match self {
+            Self::Solid => 0,
+            Self::Wood => 1,
+            Self::Transparent => 2,
+            Self::Metallic => 3,
+        }
+    }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Material {
     pub kind: MaterialKind,
     pub color: Vec4,
@@ -106,6 +115,23 @@ pub struct Material {
     pub reflectivity: f32,
     pub refractive_index: f32,
     pub opacity: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MaterialAsset {
+    pub uuid: uuid::Uuid,
+    pub name: String,
+    pub material: Material,
+}
+
+impl MaterialAsset {
+    pub fn new(material: Material) -> Self {
+        Self {
+            uuid: uuid::Uuid::new_v4(),
+            name: material.kind.label().to_string(),
+            material,
+        }
+    }
 }
 
 impl Default for Material {
@@ -133,6 +159,7 @@ impl Material {
                 reflectivity: 0.12,
                 refractive_index: 1.52,
                 opacity: 0.22,
+                ..Self::default()
             },
             MaterialKind::Metallic => Self {
                 kind,
@@ -142,6 +169,7 @@ impl Material {
                 reflectivity: 0.82,
                 refractive_index: 1.0,
                 opacity: 1.0,
+                ..Self::default()
             },
             MaterialKind::Solid => Self::default(),
             MaterialKind::Wood => Self {
@@ -240,6 +268,8 @@ pub struct SdfObject {
     #[serde(default)]
     pub material: Material,
     #[serde(default)]
+    pub material_id: Option<uuid::Uuid>,
+    #[serde(default)]
     pub repetition: Repetition,
 }
 
@@ -275,6 +305,7 @@ impl SdfObject {
             boolean_parent: None,
             softness: 0.05,
             material,
+            material_id: None,
             repetition: Repetition::default(),
         }
     }

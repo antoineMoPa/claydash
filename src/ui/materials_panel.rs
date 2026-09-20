@@ -6,21 +6,63 @@ pub(super) fn materials_panel(
     runtime: &mut AnimationRuntime,
 ) {
     ui.label(RichText::new("Material library").strong());
-    ui.horizontal_wrapped(|ui| {
+    let picker_id = ui.id().with("material-filter");
+    let mut filter = ui
+        .ctx()
+        .data(|data| data.get_temp::<String>(picker_id))
+        .unwrap_or_default();
+    let selected_name = crate::model::picked_material_id(tree)
+        .and_then(|id| {
+            crate::model::material_assets(tree)
+                .into_iter()
+                .find(|asset| asset.uuid == id)
+                .map(|asset| asset.name)
+        })
+        .unwrap_or_else(|| "Choose material…".into());
+    ui.menu_button(selected_name, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut filter)
+                .hint_text("Filter materials")
+                .desired_width(190.0),
+        );
+        ui.separator();
         for kind in MaterialKind::ALL {
-            let preset = Material::preset(kind);
-            let response = material_preview(ui, kind, preset);
-            if response.clicked() {
-                apply_material(tree, preset);
+            if (filter.is_empty() || kind.label().contains(&filter))
+                && ui.button(kind.label()).clicked()
+            {
+                apply_material(tree, Material::preset(kind));
+                ui.close();
+            }
+        }
+        let assets = crate::model::material_assets(tree);
+        if !assets.is_empty() {
+            ui.separator();
+            for asset in assets {
+                if (filter.is_empty() || asset.name.contains(&filter))
+                    && ui.button(&asset.name).clicked()
+                {
+                    tree.set_path(
+                        "editor.material_id",
+                        crate::model::ClaydashValue::Uuid(asset.uuid),
+                    );
+                    let selection = commands::effective_selected_ids(tree);
+                    let mut scene = objects(tree);
+                    assign_material(&mut scene, &selection, asset.material, Some(asset.uuid));
+                    set_objects(tree, scene);
+                    tree.set_path(
+                        "editor.material",
+                        crate::model::ClaydashValue::Material(asset.material),
+                    );
+                    tree.make_undo_redo_snapshot();
+                    ui.close();
+                }
             }
         }
     });
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(picker_id, filter));
     ui.separator();
-    if commands::selected_group_id(tree).is_some() {
-        ui.label("Drill into the group to edit a primitive material.");
-        return;
-    }
-    let selection = selected(tree);
+    let selection = commands::effective_selected_ids(tree);
     if selection.is_empty() {
         ui.label("Pick a material for new objects, or select objects to edit their material.");
         return;
@@ -30,8 +72,91 @@ pub(super) fn materials_panel(
         return;
     };
     let first_id = first.uuid;
+    let mut material_id = first.material_id;
     let mut material = first.material;
     material.color = first.color;
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button("Copy")
+            .on_hover_text("Copy this shared material")
+            .clicked()
+        {
+            let was_unlinked = material_id.is_none();
+            let id =
+                material_id.unwrap_or_else(|| crate::model::ensure_material_asset(tree, material));
+            material_id = Some(id);
+            assign_material(&mut scene, &selection, material, Some(id));
+            set_objects(tree, scene.clone());
+            tree.set_path("editor.material_id", crate::model::ClaydashValue::Uuid(id));
+            if was_unlinked {
+                tree.make_undo_redo_snapshot();
+            }
+            tree.set_path(
+                "editor.material_clipboard",
+                crate::model::ClaydashValue::Material(material),
+            );
+            tree.set_path(
+                "editor.material_clipboard_id",
+                crate::model::ClaydashValue::Uuid(id),
+            );
+        }
+        let clipboard = match tree.get_path("editor.material_clipboard") {
+            crate::model::ClaydashValue::Material(value) => Some(value),
+            _ => None,
+        };
+        if ui
+            .add_enabled(clipboard.is_some(), egui::Button::new("Paste"))
+            .clicked()
+        {
+            if let Some(value) = clipboard {
+                let id = match tree.get_path("editor.material_clipboard_id") {
+                    crate::model::ClaydashValue::Uuid(id) => id,
+                    _ => crate::model::ensure_material_asset(tree, value),
+                };
+                assign_material(&mut scene, &selection, value, Some(id));
+                material = value;
+                material_id = Some(id);
+                set_objects(tree, scene.clone());
+                tree.set_path(
+                    "editor.material",
+                    crate::model::ClaydashValue::Material(value),
+                );
+                tree.set_path("editor.material_id", crate::model::ClaydashValue::Uuid(id));
+                tree.make_undo_redo_snapshot();
+            }
+        }
+        if ui
+            .button("Unlink")
+            .on_hover_text("Make a unique copy that no longer changes with the shared material")
+            .clicked()
+        {
+            let asset = crate::model::MaterialAsset::new(material);
+            let unique_id = asset.uuid;
+            material_id = Some(unique_id);
+            let mut assets = crate::model::material_assets(tree);
+            assets.push(asset);
+            crate::model::set_material_assets(tree, assets);
+            assign_material(&mut scene, &selection, material, material_id);
+            set_objects(tree, scene.clone());
+            tree.set_path(
+                "editor.material_id",
+                crate::model::ClaydashValue::Uuid(unique_id),
+            );
+            tree.make_undo_redo_snapshot();
+        }
+    });
+    if commands::selected_group_id(tree).is_some() {
+        ui.weak(format!(
+            "Editing material for all {} objects in this group",
+            selection.len()
+        ));
+    } else if let Some(id) = material_id {
+        let linked = scene
+            .iter()
+            .filter(|object| object.material_id == Some(id))
+            .count();
+        ui.weak(format!("Linked material · {linked} object(s)"));
+    }
     let mut keyframes = Vec::new();
     let mut rgba = material.color.to_array();
     let color_binding = AnimationBinding {
@@ -126,34 +251,49 @@ pub(super) fn materials_panel(
             "editor.material",
             crate::model::ClaydashValue::Material(material),
         );
+        let id = material_id.unwrap_or_else(|| crate::model::ensure_material_asset(tree, material));
+        crate::model::update_material_asset(tree, id, material);
         for object in &mut scene {
-            if selection.contains(&object.uuid) {
+            if object.material_id == Some(id) || selection.contains(&object.uuid) {
+                object.material_id = Some(id);
                 object.material = material;
                 object.color = material.color;
             }
         }
+        tree.set_path("editor.material_id", crate::model::ClaydashValue::Uuid(id));
         set_objects(tree, scene);
     }
     apply_keyframe_requests(tree, runtime, keyframes);
 }
 
 pub(super) fn apply_material(tree: &mut DataTree, material: Material) {
+    let material_id = crate::model::ensure_material_asset(tree, material);
     tree.set_path(
         "editor.material",
         crate::model::ClaydashValue::Material(material),
     );
-    if commands::selected_group_id(tree).is_some() {
-        tree.make_undo_redo_snapshot();
-        return;
-    }
-    let selection = selected(tree);
+    tree.set_path(
+        "editor.material_id",
+        crate::model::ClaydashValue::Uuid(material_id),
+    );
+    let selection = commands::effective_selected_ids(tree);
     let mut scene = objects(tree);
-    for object in &mut scene {
+    assign_material(&mut scene, &selection, material, Some(material_id));
+    set_objects(tree, scene);
+    tree.make_undo_redo_snapshot();
+}
+
+fn assign_material(
+    scene: &mut [SdfObject],
+    selection: &[uuid::Uuid],
+    material: Material,
+    material_id: Option<uuid::Uuid>,
+) {
+    for object in scene {
         if selection.contains(&object.uuid) {
+            object.material_id = material_id;
             object.material = material;
             object.color = material.color;
         }
     }
-    set_objects(tree, scene);
-    tree.make_undo_redo_snapshot();
 }

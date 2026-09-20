@@ -116,7 +116,7 @@ fn shift_drag_pans_camera_without_changing_selection() {
 
     interactions.pointer_down(&camera, &mut tree, Some(selected_id));
     interactions.cursor_moved(interactions.mouse_position + Vec2::new(80.0, 30.0), false);
-    interactions.update(&mut camera, &mut tree);
+    assert!(interactions.update(&mut camera, &mut tree));
     interactions.pointer_up(&camera, &mut tree);
 
     assert_ne!(camera.target, initial_target);

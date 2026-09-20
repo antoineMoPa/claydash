@@ -60,6 +60,7 @@ impl InteractionState {
             camera.cursor_at_depth(self.mouse_position, session.center)
         };
         let mut scene = objects(tree);
+        let mut cameras = crate::model::scene_cameras(tree);
 
         for target in &session.targets {
             let operation = match mode {
@@ -102,6 +103,7 @@ impl InteractionState {
             let (scale, rotation, translation) = local.to_scale_rotation_translation();
             commands::set_transform_target(
                 &mut scene,
+                &mut cameras,
                 target.kind,
                 target.id,
                 crate::model::Transform {
@@ -112,5 +114,6 @@ impl InteractionState {
             );
         }
         set_objects(tree, scene);
+        crate::model::set_scene_cameras(tree, cameras);
     }
 }

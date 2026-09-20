@@ -417,7 +417,6 @@ impl Viewport {
         })
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn is_refined(&self) -> bool {
         self.key.as_ref().is_some_and(|key| {
             self.completed == tile_count(key.size)

@@ -189,7 +189,8 @@ impl InteractionState {
         }
     }
 
-    pub fn update(&mut self, camera: &mut Camera, tree: &mut DataTree) {
+    pub fn update(&mut self, camera: &mut Camera, tree: &mut DataTree) -> bool {
+        let mut camera_moved = false;
         if let Some(session) = &mut self.shift_pan {
             if self.mouse_position.distance(session.start) >= PAN_DRAG_THRESHOLD {
                 if let Some(reference) = session.reference {
@@ -198,6 +199,7 @@ impl InteractionState {
                     camera.pan(self.mouse_position - session.last_applied);
                 }
                 session.last_applied = self.mouse_position;
+                camera_moved = true;
             }
         } else {
             let transforming = matches!(
@@ -209,18 +211,22 @@ impl InteractionState {
             if !transforming
                 && (self.keys.contains(&KeyCode::ControlLeft)
                     || self.keys.contains(&KeyCode::ControlRight))
+                && self.mouse_delta != Vec2::ZERO
             {
                 camera.orbit(self.mouse_delta);
+                camera_moved = true;
             }
-            if self.right_down {
+            if self.right_down && self.mouse_delta != Vec2::ZERO {
                 if let Some(reference) = self.right_pan_reference {
                     camera.pan_to_cursor(self.mouse_position, reference);
                 } else {
                     camera.pan(self.mouse_delta);
                 }
+                camera_moved = true;
             }
         }
         self.mouse_delta = Vec2::ZERO;
         self.update_transformation(camera, tree);
+        camera_moved
     }
 }

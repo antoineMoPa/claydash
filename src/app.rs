@@ -57,6 +57,8 @@ pub struct App {
     interactions: InteractionState,
     ui: UiState,
     document: DocumentState,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_render: Option<PendingRender>,
     window_focused: bool,
     window_occluded: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -73,6 +75,22 @@ pub struct App {
     document_tx: Sender<WebDocumentMessage>,
     #[cfg(target_arch = "wasm32")]
     document_rx: Receiver<WebDocumentMessage>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum PendingRender {
+    Still {
+        path: std::path::PathBuf,
+    },
+    Video {
+        path: std::path::PathBuf,
+        frames_directory: std::path::PathBuf,
+        next_frame: u32,
+        end_frame: u32,
+        output_index: u32,
+        fps: f32,
+        restore_frame: f32,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -142,6 +160,9 @@ impl App {
         let (renderer_tx, renderer_rx) = channel();
         #[cfg(target_arch = "wasm32")]
         let (document_tx, document_rx) = channel();
+        let document = DocumentState::default();
+        let mut ui = UiState::default();
+        ui.set_animation_timeline_open(document.animation_timeline_open());
         Self {
             window: None,
             renderer: None,
@@ -154,8 +175,10 @@ impl App {
             commands,
             camera,
             interactions: InteractionState::default(),
-            ui: UiState::default(),
-            document: DocumentState::default(),
+            ui,
+            document,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_render: None,
             window_focused: true,
             window_occluded: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -196,7 +219,9 @@ impl App {
             self.camera.viewport = renderer.size();
         }
         if !self.ui.selection_gesture_active() {
-            self.interactions.update(&mut self.camera, &mut self.tree);
+            if self.interactions.update(&mut self.camera, &mut self.tree) {
+                crate::ui::exit_camera_view(&mut self.tree);
+            }
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -220,6 +245,8 @@ impl App {
         if let Some(action) = file_action {
             self.handle_file_action(action);
         }
+        self.document
+            .set_animation_timeline_open(self.ui.animation_timeline_open());
         // Toolbar/palette commands run inside the UI pass. Place their new
         // objects before rendering, using the just-updated viewport geometry.
         self.interactions
@@ -229,20 +256,95 @@ impl App {
             egui_state.handle_platform_output(&window, std::mem::take(&mut output.platform_output));
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let effective_selection = if self.pending_render.is_some() {
+            Vec::new()
+        } else {
+            commands::effective_selected_ids(&self.tree)
+        };
+        #[cfg(target_arch = "wasm32")]
         let effective_selection = commands::effective_selected_ids(&self.tree);
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_render = self.pending_render.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let capture_render = false;
         if let Some(renderer) = &mut self.renderer {
+            let export_version = if capture_render { i32::MIN } else { 0 };
             let scene_versions = [
                 self.tree.path_version("scene.sdf_objects"),
-                self.tree.path_version("scene.selected_uuids"),
+                self.tree
+                    .path_version("scene.selected_uuids")
+                    .wrapping_add(export_version),
             ];
-            renderer.render(
+            let captured_frame = renderer.render(
                 &self.camera,
                 objects_ref(&self.tree),
                 &effective_selection,
                 scene_versions,
                 &self.egui,
                 &mut output,
+                capture_render,
             );
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(frame) = captured_frame {
+                if let Some(pending) = self.pending_render.take() {
+                    let frame = crate::render_export::crop_to_viewport(frame, &self.camera);
+                    match pending {
+                        PendingRender::Still { path } => {
+                            if let Err(error) = crate::render_export::write_render(
+                                &path,
+                                crate::document::RenderFormat::WebP,
+                                &frame,
+                            ) {
+                                self.document.set_error("render the scene", error);
+                            }
+                        }
+                        PendingRender::Video {
+                            path,
+                            frames_directory,
+                            next_frame,
+                            end_frame,
+                            output_index,
+                            fps,
+                            restore_frame,
+                        } => {
+                            let write = crate::render_export::write_video_frame(
+                                &frames_directory,
+                                output_index,
+                                &frame,
+                            );
+                            if let Err(error) = write {
+                                self.document.set_error("render the animation", error);
+                                let _ = std::fs::remove_dir_all(&frames_directory);
+                                self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                            } else if next_frame < end_frame {
+                                let next_frame = next_frame + 1;
+                                self.ui
+                                    .set_animation_frame(&mut self.tree, next_frame as f32);
+                                self.pending_render = Some(PendingRender::Video {
+                                    path,
+                                    frames_directory,
+                                    next_frame,
+                                    end_frame,
+                                    output_index: output_index + 1,
+                                    fps,
+                                    restore_frame,
+                                });
+                            } else {
+                                if let Err(error) =
+                                    crate::render_export::write_mp4(&path, &frames_directory, fps)
+                                {
+                                    self.document.set_error("encode the animation", error);
+                                }
+                                let _ = std::fs::remove_dir_all(&frames_directory);
+                                self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                            }
+                        }
+                    }
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = captured_frame;
         }
         self.tree.reset_update_cycle();
     }
@@ -303,6 +405,42 @@ impl App {
                     self.save_path(path);
                 }
             }
+            FileMenuAction::Render(format) => {
+                if let Some(path) = document::render_dialog(format) {
+                    self.pending_render = Some(match format {
+                        crate::document::RenderFormat::WebP => PendingRender::Still { path },
+                        crate::document::RenderFormat::Mp4 => {
+                            let animation = crate::animation::animation_data(&self.tree);
+                            let restore_frame = self.ui.animation_frame();
+                            self.ui
+                                .set_animation_frame(&mut self.tree, animation.start_frame as f32);
+                            if matches!(
+                                self.tree.get_path("editor.camera_view"),
+                                ClaydashValue::Bool(true)
+                            ) {
+                                if let Some(active) = crate::model::active_camera_id(&self.tree) {
+                                    if let Some(camera) = crate::model::scene_cameras(&self.tree)
+                                        .iter()
+                                        .find(|camera| camera.uuid == active)
+                                    {
+                                        camera.apply_to_view(&mut self.camera);
+                                    }
+                                }
+                            }
+                            PendingRender::Video {
+                                path,
+                                frames_directory: std::env::temp_dir()
+                                    .join(format!("claydash-video-{}", uuid::Uuid::new_v4())),
+                                next_frame: animation.start_frame,
+                                end_frame: animation.end_frame.max(animation.start_frame),
+                                output_index: 0,
+                                fps: animation.fps,
+                                restore_frame,
+                            }
+                        }
+                    });
+                }
+            }
         }
     }
 
@@ -358,6 +496,12 @@ impl App {
                 });
             }
             FileMenuAction::OpenRecent(_) => {}
+            FileMenuAction::Render(_) => {
+                self.document.set_error(
+                    "render the scene",
+                    "render export is currently desktop-only",
+                );
+            }
         }
     }
 
@@ -640,8 +784,24 @@ impl ApplicationHandler for App {
                     && !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
             {
                 match delta {
-                    MouseScrollDelta::LineDelta(_, y) => self.camera.zoom(y),
-                    MouseScrollDelta::PixelDelta(delta) => self.camera.zoom(delta.y as f32 / 53.0),
+                    MouseScrollDelta::LineDelta(_, y) if y != 0.0 => {
+                        crate::ui::exit_camera_view(&mut self.tree);
+                        self.camera.zoom(y);
+                    }
+                    MouseScrollDelta::PixelDelta(delta) if delta.y != 0.0 => {
+                        crate::ui::exit_camera_view(&mut self.tree);
+                        self.camera.zoom(delta.y as f32 / 53.0);
+                    }
+                    _ => {}
+                }
+            }
+            WindowEvent::PinchGesture { delta, .. }
+                if !self.ui.selection_gesture_active()
+                    && !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
+            {
+                if delta != 0.0 {
+                    crate::ui::exit_camera_view(&mut self.tree);
+                    self.camera.zoom(delta as f32);
                 }
             }
             WindowEvent::MouseInput {

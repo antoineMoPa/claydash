@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use crate::model::{
-    objects, set_objects_transient, AnimationBinding, AnimationData, AnimationTrack, BezierHandle,
-    ClaydashValue, DataTree, Keyframe, KeyframeInterpolation,
+    objects, scene_cameras, set_objects_transient, AnimationBinding, AnimationData, AnimationTrack,
+    BezierHandle, ClaydashValue, DataTree, Keyframe, KeyframeInterpolation,
 };
 
 const ANIMATION_PATH: &str = "scene.animation";
@@ -468,7 +468,9 @@ pub fn evaluate(tree: &mut DataTree, frame: f32) -> bool {
         return false;
     }
     let mut scene = objects(tree);
+    let mut cameras = scene_cameras(tree);
     let mut applied = false;
+    let mut linked_materials = Vec::new();
     for track in &data.tracks {
         let Some(value) = sample(track, frame) else {
             continue;
@@ -484,12 +486,39 @@ pub fn evaluate(tree: &mut DataTree, frame: f32) -> bool {
                 .is_some_and(|current| current.to_bits() != value.to_bits())
             {
                 track.binding.property.apply(object, value);
+                if track.binding.property.is_material() {
+                    if let Some(material_id) = object.material_id {
+                        linked_materials.push((material_id, object.material));
+                    }
+                }
                 applied = true;
+            }
+        } else if let Some(camera) = cameras
+            .iter_mut()
+            .find(|camera| camera.uuid == track.binding.object)
+        {
+            if track
+                .binding
+                .property
+                .camera_value(camera)
+                .is_some_and(|current| current.to_bits() != value.to_bits())
+            {
+                track.binding.property.apply_camera(camera, value);
+                applied = true;
+            }
+        }
+    }
+    for (material_id, material) in linked_materials {
+        for object in &mut scene {
+            if object.material_id == Some(material_id) {
+                object.material = material;
+                object.color = material.color;
             }
         }
     }
     if applied {
         set_objects_transient(tree, scene);
+        tree.set_transient_path("scene.cameras", ClaydashValue::VecCamera(cameras));
     }
     applied
 }
@@ -658,6 +687,29 @@ mod tests {
         let bytes = serde_json::to_vec(&tree).unwrap();
         let restored: DataTree = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(animation_data(&restored).tracks[0].keyframes.len(), 2);
+    }
+
+    #[test]
+    fn camera_tracks_drive_serialized_scene_cameras() {
+        let mut tree = DataTree::default();
+        let view = crate::camera::Camera::new();
+        let camera = crate::camera::SceneCamera::from_view("Shot", &view);
+        let id = camera.uuid;
+        crate::model::set_scene_cameras(&mut tree, vec![camera]);
+        let binding = AnimationBinding {
+            object: id,
+            property: crate::model::AnimatableProperty::Position(crate::model::VectorAxis::X),
+        };
+        insert_keyframe(&mut tree, binding, 0, -2.0);
+        insert_keyframe(&mut tree, binding, 10, 4.0);
+        evaluate(&mut tree, 10.0);
+        assert_eq!(
+            crate::model::scene_cameras(&tree)[0]
+                .transform
+                .translation
+                .x,
+            4.0
+        );
     }
 
     #[test]

@@ -78,6 +78,13 @@ pub struct Renderer {
     initial_pixel_budget: u32,
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub struct CapturedFrame {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 mod bvh;
 mod initialization;
 mod rendering;
