@@ -15,11 +15,14 @@ https://app.claydash.com/ - note: live version does not always point to main bra
   New primitives and cutters inherit the last picked material, including its edited settings.
 * Create finite, GPU-efficient domain repetitions on any combination of axes.
 * Resize primitives with viewport handles and snap the camera with the orientation gizmo.
+* Animate transform, shape, material, operand, and repetition properties on a real-time,
+  serializable keyframe timeline.
 * Various operations through shortcuts:
-  * Grab: G
+  * Union selection: + or =
   * Scale: S
   * Rotate: R
   * Duplicate: Shift/⌘ + D
+  * Invert selection: Cmd/Ctrl + I
 
 # MVP Roadmap: 
 
@@ -36,7 +39,7 @@ https://app.claydash.com/ - note: live version does not always point to main bra
 - object settings ✅
 - domain warping
 - top bar buttons ✅
-- real time engine
+- real time engine ✅
 - tree view ✅
 - perspective/ortho selection ✅
 
@@ -48,7 +51,8 @@ cargo run
 
 ## Boolean and resize workflow
 
-Select two or more objects and press `+` (or `=`) for Union, `-` for Subtract,
+Select two or more objects and press `+` or `=` for Union. `G` always starts Grab for the current
+object, group, or multi-selection. Press `-` for Subtract,
 or `*` (Shift+8 or numpad multiply) for Intersect to combine them immediately. The first
 selected object is the target; the others become operands, preserving nested groups.
 With just one selected object, the operator arms a pick: click another object in the
@@ -61,6 +65,25 @@ Text entry does not trigger these shortcuts.
 
 Object settings has separate Position and Rotation Reset buttons. They reset only that
 property to zero, preserve scale and the other property, and support Undo.
+
+## Animation workflow
+
+Open **Panels → Animation Timeline** to add the optional bottom animation editor. The panel
+starts closed so the modeling viewport keeps its existing layout. Hover a numeric, color,
+checkbox, or repetition input in the Object, Materials, Operand, or Repeat inspector and press
+`I` to insert a keyframe at the current frame. Color inserts one key for each RGBA channel.
+
+The timeline provides play/pause, stop, looping, frame scrubbing, editable start/end/FPS values,
+and one curve lane per animated property. Space toggles playback from the 3D view; Left and Right
+step continuously while held and pause playback. Hold Shift to step ten frames at a time. Drag a
+diamond horizontally to move its keyframe, or click it to edit its frame, value, and easing.
+Smooth easing is the default for continuous properties, with Ease In, Ease Out, Linear, and
+Constant presets available. Drag a segment's purple control points for a custom Bézier curve;
+discrete properties use constant interpolation. Clicking or dragging elsewhere in a lane scrubs
+the scene. Tracks and keyframes are saved in the project; the current playhead and playback state
+remain local editor state. Runtime evaluation marks the scene dirty for rendering without
+recording each evaluated frame in Undo/Redo. Inspector fields use Blender-style animation colors:
+green when animated and yellow when a key exists at the current frame.
 
 During G/R/S transforms (including the move started by Duplicate), X/Y/Z selects one
 world axis, replacing the previous axis. Press the same axis again to unlock it. Held-key

@@ -257,6 +257,7 @@ impl App {
         self.tree = data_tree_with_scene(scene);
         self.interactions = InteractionState::default();
         self.ui.reset_document_gestures();
+        self.ui.reset_animation(&self.tree);
         if let Some(renderer) = &mut self.renderer {
             renderer.invalidate_scene();
         }

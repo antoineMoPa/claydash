@@ -2,6 +2,7 @@ use command_central::{CommandBuilder, CommandMap};
 use sdf_consts::{TYPE_BOX, TYPE_CYLINDER, TYPE_SPHERE, TYPE_TORUS};
 
 use crate::{
+    animation,
     model::{
         objects, selected, set_objects, set_selected, ClaydashValue, DataTree, EditorState,
         SdfObject,
@@ -38,7 +39,7 @@ pub fn register_all(commands: &mut Commands) {
         "grab",
         "Grab",
         "Move the selection in the current view plane.",
-        "G",
+        "",
         start_grab,
     );
     register(
@@ -56,6 +57,19 @@ pub fn register_all(commands: &mut Commands) {
         "Start rotating selection.",
         "R",
         start_rotate,
+    );
+    register(
+        commands,
+        "union",
+        "Union",
+        "Union the selection, using the first selected object as the target.",
+        "G",
+        |tree| {
+            crate::ui::scene_actions::begin_boolean_pick(
+                tree,
+                crate::model::BooleanOperation::Union,
+            )
+        },
     );
     register(
         commands,
@@ -112,6 +126,14 @@ pub fn register_all(commands: &mut Commands) {
         "Toggle selecting all objects.",
         "Shift+A",
         select_all,
+    );
+    register(
+        commands,
+        "invert_selection",
+        "Invert Selection",
+        "Select every unselected object and deselect every selected object.",
+        "Cmd/Ctrl+I",
+        invert_selection,
     );
     register(
         commands,
@@ -247,6 +269,7 @@ fn finish(tree: &mut DataTree) {
 
 fn delete(tree: &mut DataTree) {
     let selection = effective_selected_ids(tree);
+    animation::remove_tracks_for_objects(tree, &selection);
     set_objects(
         tree,
         objects(tree)
@@ -265,6 +288,16 @@ fn select_all(tree: &mut DataTree) {
     } else {
         set_selected(tree, scene.into_iter().map(|object| object.uuid).collect());
     }
+}
+
+fn invert_selection(tree: &mut DataTree) {
+    let current = selected(tree);
+    let inverted = objects(tree)
+        .into_iter()
+        .filter(|object| !current.contains(&object.uuid))
+        .map(|object| object.uuid)
+        .collect();
+    set_selected(tree, inverted);
 }
 
 fn duplicate(tree: &mut DataTree) {
@@ -289,6 +322,7 @@ fn duplicate(tree: &mut DataTree) {
             copy
         })
         .collect();
+    animation::duplicate_tracks_for_objects(tree, &id_map);
     set_selected(tree, copies.iter().map(|object| object.uuid).collect());
     scene.extend(copies);
     set_objects(tree, scene);
@@ -363,6 +397,22 @@ mod tests {
         set_selected(&mut tree, vec![target.uuid]);
         set_objects(&mut tree, vec![target, cutter]);
         tree
+    }
+
+    #[test]
+    fn invert_selection_selects_only_previously_unselected_objects() {
+        let mut tree = DataTree::default();
+        let scene = vec![
+            SdfObject::create(TYPE_BOX),
+            SdfObject::create(TYPE_SPHERE),
+            SdfObject::create(TYPE_CYLINDER),
+        ];
+        set_selected(&mut tree, vec![scene[1].uuid]);
+        set_objects(&mut tree, scene.clone());
+
+        invert_selection(&mut tree);
+
+        assert_eq!(selected(&tree), vec![scene[0].uuid, scene[2].uuid]);
     }
 
     #[test]

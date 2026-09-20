@@ -1,5 +1,9 @@
 use glam::{Mat4, Quat, Vec2, Vec3};
 
+const DEFAULT_CAMERA_DISTANCE: f32 = 3.8;
+// The showcase view: 34 degrees around Y and 15 degrees above the ground plane.
+const ISOMETRIC_DIRECTION: Vec3 = Vec3::new(0.540_138_84, 0.258_819_04, 0.800_788_8);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectionMode {
     Perspective,
@@ -50,6 +54,21 @@ mod tests {
             assert!((projected.y - cursor.y).abs() < 0.001);
         }
     }
+
+    #[test]
+    fn default_and_isometric_snap_use_the_showcase_view() {
+        let mut camera = Camera::new();
+        let default_offset = camera.position - camera.target;
+        assert!((default_offset.length() - DEFAULT_CAMERA_DISTANCE).abs() < 0.0001);
+        assert!((default_offset / default_offset.length()).distance(ISOMETRIC_DIRECTION) < 0.0001);
+
+        camera.position = Vec3::new(-7.0, 2.0, 4.0);
+        let snap_distance = (camera.position - camera.target).length();
+        camera.snap(ViewAngle::Isometric);
+        let snapped_offset = camera.position - camera.target;
+        assert!((snapped_offset.length() - snap_distance).abs() < 0.0001);
+        assert!((snapped_offset / snapped_offset.length()).distance(ISOMETRIC_DIRECTION) < 0.0001);
+    }
 }
 
 impl ProjectionMode {
@@ -84,7 +103,7 @@ impl Camera {
     pub fn new() -> Self {
         Self {
             target: Vec3::ZERO,
-            position: Vec3::new(-3.3, 0.8, 1.7),
+            position: ISOMETRIC_DIRECTION * DEFAULT_CAMERA_DISTANCE,
             viewport: Vec2::ONE,
             viewport_origin: Vec2::ZERO,
             projection_mode: ProjectionMode::Perspective,
@@ -212,7 +231,7 @@ impl Camera {
             ViewAngle::Right => Vec3::X,
             ViewAngle::Top => Vec3::Y,
             ViewAngle::Bottom => Vec3::NEG_Y,
-            ViewAngle::Isometric => Vec3::new(-1.0, 0.72, 1.0).normalize(),
+            ViewAngle::Isometric => ISOMETRIC_DIRECTION,
         };
         self.position = self.target + direction * radius;
     }

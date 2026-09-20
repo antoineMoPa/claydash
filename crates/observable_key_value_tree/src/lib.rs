@@ -122,6 +122,10 @@ impl<ValueType> Snapshot<ValueType> {
         self.old_values.clear();
         self.version = i32::default();
     }
+
+    fn is_empty(&self) -> bool {
+        self.new_values.is_empty()
+    }
 }
 
 #[derive(Default, Clone, Debug)]
@@ -152,6 +156,7 @@ impl LeafVersionTracker {
     fn clear(&mut self) {
         self.updated = bool::default();
         self.version = i32::default();
+        self.corresponding_previous_version = None;
     }
 }
 
@@ -239,6 +244,20 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     pub fn set_path_without_notifying(&mut self, path: &str, value: ValueType) {
         let parts = path.split(".");
         self.update_snapshot_accumulator(path, value.clone());
+        self.set_path_with_parts(
+            parts.collect(),
+            ObservableKVTree {
+                value,
+                ..ObservableKVTree::default()
+            },
+            false,
+        );
+    }
+
+    /// Set a value produced by a runtime system without adding it to Undo/Redo.
+    /// Update flags, versions, and parent dirty state are still maintained.
+    pub fn set_transient_path(&mut self, path: &str, value: ValueType) {
+        let parts = path.split(".");
         self.set_path_with_parts(
             parts.collect(),
             ObservableKVTree {
@@ -362,6 +381,9 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
         self.update_listeners.clear();
         self.snapshot_change_accumulator.clear();
         self.snapshots.clear();
+        self.last_snapshot_version = i32::default();
+        self.versions.clear();
+        self.current_version_index = None;
     }
 
     ///  ---------------------  SNAPSHOT MANAGEMENT  ---------------------
@@ -529,6 +551,9 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     ///  --------------------- UNDO/REDO ---------------------
 
     pub fn make_undo_redo_snapshot(&mut self) {
+        if self.snapshot_change_accumulator.is_empty() {
+            return;
+        }
         let version = self.make_snapshot();
 
         // Slice, since after an action, we can't redo.
@@ -545,6 +570,9 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     }
 
     pub fn undo(&mut self) {
+        // Inspector edits can span multiple UI frames. Commit their pending
+        // transaction before navigating history so Undo always sees them.
+        self.make_undo_redo_snapshot();
         let mut current_version_index = self.current_version_index.unwrap_or(0);
 
         if current_version_index == 0 {
@@ -567,6 +595,8 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     }
 
     pub fn redo(&mut self) {
+        // A new pending edit creates a branch and invalidates forward history.
+        self.make_undo_redo_snapshot();
         let mut current_version_index = self.current_version_index.unwrap_or(0);
 
         if current_version_index == self.versions.len() as i32 - 1 {
@@ -993,5 +1023,65 @@ mod tests {
             data.get_path("scene.some.deep.property").unwrap_f32(),
             123.4
         );
+    }
+
+    #[test]
+    fn transient_updates_are_dirty_but_stay_out_of_undo_redo() {
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
+        data.set_path("scene.animated", ExampleValueType::from(1.0));
+        data.make_undo_redo_snapshot();
+        let version = data.path_version("scene.animated");
+
+        data.set_transient_path("scene.animated", ExampleValueType::from(9.0));
+        assert!(data.path_version("scene.animated") > version);
+        assert!(data.was_path_updated("scene.animated"));
+
+        data.set_path("scene.authored", ExampleValueType::from(2.0));
+        data.make_undo_redo_snapshot();
+        data.undo();
+
+        assert_eq!(data.get_path("scene.animated").unwrap_f32(), 9.0);
+        assert!(data.get_path("scene.authored").is_none());
+    }
+
+    #[test]
+    fn undo_commits_and_reverts_a_pending_edit() {
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
+        data.set_path("scene.value", ExampleValueType::from(1.0));
+        data.make_undo_redo_snapshot();
+        data.set_path("scene.value", ExampleValueType::from(2.0));
+
+        data.undo();
+        assert_eq!(data.get_path("scene.value").unwrap_f32(), 1.0);
+        data.redo();
+        assert_eq!(data.get_path("scene.value").unwrap_f32(), 2.0);
+    }
+
+    #[test]
+    fn empty_snapshot_boundaries_do_not_add_history_steps() {
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
+        data.set_path("scene.value", ExampleValueType::from(1.0));
+        data.make_undo_redo_snapshot();
+        data.make_undo_redo_snapshot();
+        data.set_path("scene.value", ExampleValueType::from(2.0));
+        data.make_undo_redo_snapshot();
+
+        assert_eq!(data.versions.len(), 2);
+        data.undo();
+        assert_eq!(data.get_path("scene.value").unwrap_f32(), 1.0);
+    }
+
+    #[test]
+    fn clear_resets_undo_redo_history() {
+        let mut data = ObservableKVTree::<ExampleValueType>::default();
+        data.set_path("scene.value", ExampleValueType::from(1.0));
+        data.make_undo_redo_snapshot();
+
+        data.clear();
+
+        assert!(data.snapshots.is_empty());
+        assert!(data.versions.is_empty());
+        assert_eq!(data.current_version_index, None);
+        assert_eq!(data.update_tracker.corresponding_previous_version, None);
     }
 }

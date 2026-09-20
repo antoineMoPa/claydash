@@ -32,6 +32,30 @@ struct ShiftPanSession {
 
 const PAN_DRAG_THRESHOLD: f32 = 3.0;
 
+#[derive(Default)]
+enum NumericRotationInput {
+    #[default]
+    Idle,
+    Editing(String),
+}
+
+fn rotation_input_character(key: KeyCode) -> Option<char> {
+    match key {
+        KeyCode::Digit0 | KeyCode::Numpad0 => Some('0'),
+        KeyCode::Digit1 | KeyCode::Numpad1 => Some('1'),
+        KeyCode::Digit2 | KeyCode::Numpad2 => Some('2'),
+        KeyCode::Digit3 | KeyCode::Numpad3 => Some('3'),
+        KeyCode::Digit4 | KeyCode::Numpad4 => Some('4'),
+        KeyCode::Digit5 | KeyCode::Numpad5 => Some('5'),
+        KeyCode::Digit6 | KeyCode::Numpad6 => Some('6'),
+        KeyCode::Digit7 | KeyCode::Numpad7 => Some('7'),
+        KeyCode::Digit8 | KeyCode::Numpad8 => Some('8'),
+        KeyCode::Digit9 | KeyCode::Numpad9 => Some('9'),
+        KeyCode::Period | KeyCode::NumpadDecimal => Some('.'),
+        _ => None,
+    }
+}
+
 pub struct InteractionState {
     keys: HashSet<KeyCode>,
     pub mouse_position: Vec2,
@@ -40,6 +64,7 @@ pub struct InteractionState {
     right_pan_reference: Option<Vec3>,
     shift_pan: Option<ShiftPanSession>,
     transform_session: Option<TransformSession>,
+    numeric_rotation: NumericRotationInput,
 }
 
 impl Default for InteractionState {
@@ -52,6 +77,7 @@ impl Default for InteractionState {
             right_pan_reference: None,
             shift_pan: None,
             transform_session: None,
+            numeric_rotation: NumericRotationInput::Idle,
         }
     }
 }
@@ -73,6 +99,17 @@ impl InteractionState {
             KeyCode::SuperRight,
             KeyCode::AltLeft,
             KeyCode::AltRight,
+        ]
+        .iter()
+        .any(|key| self.keys.contains(key))
+    }
+
+    fn primary_modifier_down(&self) -> bool {
+        [
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::SuperLeft,
+            KeyCode::SuperRight,
         ]
         .iter()
         .any(|key| self.keys.contains(key))
@@ -103,16 +140,25 @@ impl InteractionState {
             return;
         }
         let has_command_modifier = self.command_modifier_down();
+        let rotating = matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Rotating)
+        );
         if !has_command_modifier {
             let operation = match key {
-                KeyCode::Equal | KeyCode::NumpadAdd => Some(crate::model::BooleanOperation::Union),
-                KeyCode::Minus | KeyCode::NumpadSubtract => {
+                KeyCode::Equal | KeyCode::NumpadAdd if !rotating => {
+                    Some(crate::model::BooleanOperation::Union)
+                }
+                KeyCode::Minus | KeyCode::NumpadSubtract if !rotating => {
                     Some(crate::model::BooleanOperation::Subtract)
                 }
-                KeyCode::NumpadMultiply => Some(crate::model::BooleanOperation::Intersect),
+                KeyCode::NumpadMultiply if !rotating => {
+                    Some(crate::model::BooleanOperation::Intersect)
+                }
                 KeyCode::Digit8
-                    if self.keys.contains(&KeyCode::ShiftLeft)
-                        || self.keys.contains(&KeyCode::ShiftRight) =>
+                    if !rotating
+                        && (self.keys.contains(&KeyCode::ShiftLeft)
+                            || self.keys.contains(&KeyCode::ShiftRight)) =>
                 {
                     Some(crate::model::BooleanOperation::Intersect)
                 }
@@ -133,6 +179,37 @@ impl InteractionState {
                 EditorState::Grabbing | EditorState::Scaling | EditorState::Rotating
             )
         );
+        if rotating && !has_command_modifier {
+            match key {
+                KeyCode::Minus | KeyCode::NumpadSubtract => {
+                    if let NumericRotationInput::Editing(input) = &mut self.numeric_rotation {
+                        if input.starts_with('-') {
+                            input.remove(0);
+                        } else {
+                            input.insert(0, '-');
+                        }
+                    }
+                    return;
+                }
+                KeyCode::Backspace => {
+                    if let NumericRotationInput::Editing(input) = &mut self.numeric_rotation {
+                        input.pop();
+                    }
+                    return;
+                }
+                _ => {
+                    if let Some(character) = rotation_input_character(key) {
+                        if let NumericRotationInput::Editing(input) = &mut self.numeric_rotation {
+                            if character != '.' || !input.contains('.') {
+                                input.push(character);
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        let primary_modifier = self.primary_modifier_down();
         let name = match key {
             KeyCode::KeyG => "grab",
             KeyCode::KeyS => "scale",
@@ -146,6 +223,7 @@ impl InteractionState {
             KeyCode::KeyZ => "constrain_z",
             KeyCode::KeyA if shift => "select_all_or_none",
             KeyCode::KeyD if shift => "duplicate",
+            KeyCode::KeyI if primary_modifier => "invert_selection",
             KeyCode::Escape => "quit",
             KeyCode::Enter => "finish",
             KeyCode::Backspace => "delete",
@@ -153,6 +231,15 @@ impl InteractionState {
         };
         crate::ui::scene_actions::cancel_boolean_pick(tree);
         commands::execute(command_map, name, tree);
+        match name {
+            "rotate" => {
+                self.numeric_rotation = NumericRotationInput::Editing(String::new());
+            }
+            "constrain_x" | "constrain_y" | "constrain_z" => {}
+            _ => {
+                self.numeric_rotation = NumericRotationInput::Idle;
+            }
+        }
     }
 
     pub fn key_released(&mut self, key: KeyCode) {
@@ -233,6 +320,7 @@ impl InteractionState {
                 ClaydashValue::EditorState(EditorState::Start),
             );
             tree.make_undo_redo_snapshot();
+            self.numeric_rotation = NumericRotationInput::Idle;
             return;
         }
         let shift =
@@ -323,6 +411,7 @@ impl InteractionState {
                 ClaydashValue::EditorState(EditorState::Start),
             );
             self.transform_session = None;
+            self.numeric_rotation = NumericRotationInput::Idle;
             tree.make_undo_redo_snapshot();
         }
     }
@@ -397,6 +486,7 @@ impl InteractionState {
         };
         if mode == EditorState::Start {
             self.transform_session = None;
+            self.numeric_rotation = NumericRotationInput::Idle;
             return;
         }
         if self.transform_session.as_ref().is_none_or(|session| {
@@ -467,7 +557,12 @@ impl InteractionState {
                     } else {
                         (camera.target - camera.position).normalize()
                     };
-                    let rotation = Quat::from_axis_angle(axis, -angle);
+                    let numeric_angle = match &self.numeric_rotation {
+                        NumericRotationInput::Editing(input) => input.parse::<f32>().ok(),
+                        NumericRotationInput::Idle => None,
+                    };
+                    let rotation =
+                        Quat::from_axis_angle(axis, numeric_angle.map_or(-angle, f32::to_radians));
                     object.transform.rotation = rotation * initial.rotation;
                     object.transform.translation =
                         session.center + rotation * (initial.translation - session.center);
@@ -829,7 +924,7 @@ mod tests {
         };
         let mut command_map = Commands::new();
         commands::register_all(&mut command_map);
-        interactions.key_pressed(KeyCode::KeyG, false, &command_map, &mut tree);
+        commands::start_grab(&mut tree);
         interactions.update(&mut camera, &mut tree);
 
         interactions.mouse_position.x += 100.0;
@@ -871,7 +966,7 @@ mod tests {
             crate::undo_redo::undo(&mut tree);
             assert!(objects(&tree)[1].boolean_parent.is_none());
             assert!(objects(&tree)[3].boolean_parent.is_none());
-            assert_eq!(selected(&tree), vec![target, group.uuid, third.uuid]);
+            assert_eq!(selected(&tree), vec![target]);
         }
     }
 
@@ -992,6 +1087,27 @@ mod tests {
     }
 
     #[test]
+    fn primary_modifier_i_inverts_selection() {
+        for modifier in [KeyCode::ControlLeft, KeyCode::SuperLeft] {
+            let (mut tree, selected_id) = selected_object();
+            let other = SdfObject::create(TYPE_SPHERE);
+            let other_id = other.uuid;
+            let mut scene = objects(&tree);
+            scene.push(other);
+            set_objects(&mut tree, scene);
+            let mut interactions = InteractionState::default();
+            let mut command_map = Commands::new();
+            commands::register_all(&mut command_map);
+
+            interactions.key_pressed(modifier, false, &command_map, &mut tree);
+            interactions.key_pressed(KeyCode::KeyI, false, &command_map, &mut tree);
+
+            assert_eq!(selected(&tree), vec![other_id]);
+            assert!(!selected(&tree).contains(&selected_id));
+        }
+    }
+
+    #[test]
     fn new_primitives_spawn_under_cursor_and_follow_it_without_an_offset() {
         for mode in [
             crate::camera::ProjectionMode::Perspective,
@@ -1075,6 +1191,45 @@ mod tests {
     }
 
     #[test]
+    fn numeric_rotation_uses_degrees_and_escape_cancels_the_sequence() {
+        let (mut tree, _) = selected_object();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let mut interactions = InteractionState {
+            mouse_position: camera.viewport / 2.0 + Vec2::X * 100.0,
+            ..Default::default()
+        };
+        let mut command_map = Commands::new();
+        commands::register_all(&mut command_map);
+
+        for key in [
+            KeyCode::KeyR,
+            KeyCode::KeyY,
+            KeyCode::Digit9,
+            KeyCode::Digit0,
+        ] {
+            interactions.key_pressed(key, false, &command_map, &mut tree);
+            interactions.key_released(key);
+            interactions.update(&mut camera, &mut tree);
+        }
+
+        let rotated_x = objects(&tree)[0].transform.rotation * Vec3::X;
+        assert!(rotated_x.distance(Vec3::NEG_Z) < 0.0001);
+        assert!(matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Rotating)
+        ));
+
+        interactions.key_pressed(KeyCode::Escape, false, &command_map, &mut tree);
+
+        assert_eq!(objects(&tree)[0].transform.rotation, Quat::IDENTITY);
+        assert!(matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Start)
+        ));
+    }
+
+    #[test]
     fn group_grab_moves_operands_and_escape_restores_them() {
         let (mut tree, target) = selected_object();
         let mut scene = objects(&tree);
@@ -1109,5 +1264,56 @@ mod tests {
                 initial.transform.translation
             );
         }
+    }
+
+    #[test]
+    fn grab_moves_an_exact_object_inside_a_union() {
+        let mut tree = DataTree::default();
+        let root = SdfObject::create(TYPE_BOX);
+        let mut child = SdfObject::create(TYPE_SPHERE);
+        child.boolean_parent = Some(root.uuid);
+        set_objects(&mut tree, vec![root.clone(), child.clone()]);
+        set_selected_exact(&mut tree, vec![child.uuid]);
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let mut interactions = InteractionState {
+            mouse_position: camera.viewport / 2.0,
+            ..Default::default()
+        };
+        let mut command_map = Commands::new();
+        commands::register_all(&mut command_map);
+
+        interactions.key_pressed(KeyCode::KeyG, false, &command_map, &mut tree);
+        interactions.update(&mut camera, &mut tree);
+        interactions.mouse_position.x += 100.0;
+        interactions.update(&mut camera, &mut tree);
+
+        let moved = objects(&tree);
+        assert_eq!(moved[0].transform.translation, root.transform.translation);
+        assert_eq!(moved[0].transform.rotation, root.transform.rotation);
+        assert_eq!(moved[0].transform.scale, root.transform.scale);
+        assert_ne!(moved[1].transform.translation, child.transform.translation);
+    }
+
+    #[test]
+    fn g_grabs_a_multi_selection_without_creating_a_union() {
+        let mut tree = DataTree::default();
+        let first = SdfObject::create(TYPE_BOX);
+        let second = SdfObject::create(TYPE_SPHERE);
+        set_objects(&mut tree, vec![first.clone(), second.clone()]);
+        set_selected(&mut tree, vec![first.uuid, second.uuid]);
+        let mut interactions = InteractionState::default();
+        let mut command_map = Commands::new();
+        commands::register_all(&mut command_map);
+
+        interactions.key_pressed(KeyCode::KeyG, false, &command_map, &mut tree);
+
+        assert!(matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Grabbing)
+        ));
+        assert!(objects(&tree)
+            .iter()
+            .all(|object| object.boolean_parent.is_none()));
     }
 }

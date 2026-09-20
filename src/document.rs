@@ -176,7 +176,12 @@ fn save_recent_paths(paths: &[PathBuf]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{objects, set_objects, SdfObject};
+    use crate::{
+        animation,
+        model::{
+            objects, set_objects, AnimatableProperty, AnimationBinding, SdfObject, VectorAxis,
+        },
+    };
     use sdf_consts::TYPE_SPHERE;
 
     #[test]
@@ -196,6 +201,29 @@ mod tests {
             restored.get_path("editor.color"),
             ClaydashValue::None
         ));
+    }
+
+    #[test]
+    fn scene_round_trip_keeps_animation_tracks() {
+        let mut tree = DataTree::default();
+        let object = SdfObject::create(TYPE_SPHERE);
+        let binding = AnimationBinding {
+            object: object.uuid,
+            property: AnimatableProperty::Position(VectorAxis::X),
+        };
+        set_objects(&mut tree, vec![object]);
+        animation::insert_keyframe(&mut tree, binding, 0, -1.0);
+        animation::insert_keyframe(&mut tree, binding, 12, 2.0);
+
+        let bytes = serialize_scene(&tree).unwrap();
+        let scene = deserialize_scene(&bytes).unwrap();
+        let mut restored = DataTree::default();
+        restored.set_tree("scene", scene);
+
+        let tracks = animation::animation_data(&restored).tracks;
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].binding, binding);
+        assert_eq!(tracks[0].keyframes.len(), 2);
     }
 
     #[test]
@@ -226,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_legacy_scene_still_loads() {
+    fn bundled_default_scene_loads() {
         let scene = deserialize_scene(crate::duck::DEFAULT_DUCK.as_bytes()).unwrap();
         let mut tree = DataTree::default();
         tree.set_tree("scene", scene);

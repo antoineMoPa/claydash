@@ -8,18 +8,21 @@ use egui_frames::{DropSide, Frames, FramesEvent, FramesStyle, Layout, PaneId, Pa
 use glam::{EulerRot, Vec2, Vec3, Vec4};
 
 use crate::{
+    animation::{self, AnimationRuntime, KeyframeDrag, SelectedKeyframe},
     camera::{Camera, ViewAngle},
     commands::{self, Commands},
     document::{DocumentState, FileMenuAction},
     model::{
-        objects, selected, set_objects, set_selected, BooleanOperation, DataTree, Material,
-        MaterialKind, PrimitiveKind, SdfObject, SdfParams,
+        objects, selected, set_objects, set_selected, AnimatableProperty, AnimationBinding,
+        AnimationTrack, BooleanOperation, ColorChannel, DataTree, KeyframeInterpolation, Material,
+        MaterialKind, PrimitiveKind, SdfObject, SdfParams, VectorAxis,
     },
     undo_redo,
 };
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum EditorPane {
+    Animation,
     Scene,
     Viewport,
     Object,
@@ -31,6 +34,7 @@ enum EditorPane {
 impl EditorPane {
     fn title(self) -> &'static str {
         match self {
+            Self::Animation => "Animation",
             Self::Scene => "Scene",
             Self::Viewport => "Viewport",
             Self::Object => "Object",
@@ -42,6 +46,7 @@ impl EditorPane {
 }
 
 pub struct UiState {
+    animation: AnimationRuntime,
     frames: Frames,
     layout: Layout<EditorPane>,
     palette: CommandPalette,
@@ -68,6 +73,7 @@ impl Default for UiState {
         style.active_border = Color32::from_rgb(95, 142, 246);
         style.accent = Color32::from_rgb(95, 142, 246);
         Self {
+            animation: AnimationRuntime::default(),
             frames: Frames::new().with_style(style),
             layout,
             palette: CommandPalette::default(),
@@ -91,10 +97,18 @@ impl UiState {
         self.regions.clear();
         self.ghosts = boolean_overlay::Ghosts::default();
         egui_extras::install_image_loaders(viewport_ui.ctx());
-        let file_action = draw_file_menu(viewport_ui, document);
+        self.handle_animation_shortcuts(viewport_ui.ctx(), tree);
+        self.animation.tick(tree, std::time::Instant::now());
+        if self.animation.playing {
+            viewport_ui.ctx().request_repaint();
+        }
+        let file_action = draw_file_menu(viewport_ui, document, &mut self.layout);
         let mut frames = std::mem::take(&mut self.frames);
         let mut layout = std::mem::take(&mut self.layout);
-        let mut view = WorkspaceView { tree };
+        let mut view = WorkspaceView {
+            tree,
+            animation: &mut self.animation,
+        };
         let events = frames.show(viewport_ui, &mut layout, &mut view);
         for event in events {
             match event {
@@ -182,12 +196,72 @@ impl UiState {
         if let Some(rect) = draw_file_error(viewport_ui.ctx(), document) {
             self.regions.push(rect);
         }
+        let commit_edit = viewport_ui.ctx().input(|input| {
+            input.pointer.any_released()
+                || input.key_pressed(egui::Key::Enter)
+                || input.key_pressed(egui::Key::Tab)
+        });
+        if commit_edit {
+            tree.make_undo_redo_snapshot();
+        }
         file_action
     }
 
     pub fn reset_document_gestures(&mut self) {
         self.selection_tools = selection_tools::SelectionTools::default();
         self.ghosts = boolean_overlay::Ghosts::default();
+    }
+
+    pub fn reset_animation(&mut self, tree: &DataTree) {
+        self.animation.reset_for_document(tree);
+    }
+
+    fn handle_animation_shortcuts(&mut self, ctx: &egui::Context, tree: &mut DataTree) {
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let (toggle, step) = ctx.input(|input| {
+            let toggle = input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::Space,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                        ..
+                    } if modifiers.is_none()
+                )
+            });
+            let step = input.events.iter().find_map(|event| {
+                let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                else {
+                    return None;
+                };
+                if !modifiers.is_none() && *modifiers != egui::Modifiers::SHIFT {
+                    return None;
+                }
+                let direction = match key {
+                    egui::Key::ArrowLeft => -1.0,
+                    egui::Key::ArrowRight => 1.0,
+                    _ => return None,
+                };
+                Some(direction * if modifiers.shift { 10.0 } else { 1.0 })
+            });
+            (toggle, step)
+        });
+        if toggle {
+            self.animation.toggle_playback();
+        } else if let Some(step) = step {
+            self.animation.playing = false;
+            self.animation
+                .set_frame(tree, self.animation.current_frame.round() + step);
+        }
     }
 
     pub fn contains_pointer(&self, physical_position: Vec2, pixels_per_point: f32) -> bool {
@@ -372,7 +446,7 @@ impl UiState {
 
     fn draw_object_gizmos(&mut self, ui: &mut egui::Ui, tree: &mut DataTree, camera: &Camera) {
         let selection = selected(tree);
-        if selection.len() != 1 {
+        if selection.len() != 1 || commands::effective_selected_ids(tree).len() != 1 {
             return;
         }
         let mut scene = objects(tree);
@@ -529,7 +603,11 @@ impl UiState {
     }
 }
 
-fn draw_file_menu(viewport_ui: &mut egui::Ui, document: &DocumentState) -> Option<FileMenuAction> {
+fn draw_file_menu(
+    viewport_ui: &mut egui::Ui,
+    document: &DocumentState,
+    layout: &mut Layout<EditorPane>,
+) -> Option<FileMenuAction> {
     let mut action = None;
     egui::Panel::top("file-menu").show(viewport_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -574,6 +652,21 @@ fn draw_file_menu(viewport_ui: &mut egui::Ui, document: &DocumentState) -> Optio
                 {
                     action = Some(FileMenuAction::SaveAs);
                     ui.close();
+                }
+            });
+            ui.menu_button("Panels", |ui| {
+                let animation_open = layout
+                    .find_pane(|pane| *pane == EditorPane::Animation)
+                    .is_some();
+                if ui
+                    .add_enabled(!animation_open, egui::Button::new("Animation Timeline"))
+                    .clicked()
+                {
+                    layout.add_pane_against_edge(DropSide::Bottom, 0.30, EditorPane::Animation);
+                    ui.close();
+                }
+                if animation_open {
+                    ui.weak("Animation Timeline is open");
                 }
             });
             if let Some(path) = document.current_path() {
@@ -629,6 +722,7 @@ fn draw_file_error(ctx: &egui::Context, document: &mut DocumentState) -> Option<
 
 struct WorkspaceView<'a> {
     tree: &'a mut DataTree,
+    animation: &'a mut AnimationRuntime,
 }
 
 impl PaneView<EditorPane> for WorkspaceView<'_> {
@@ -642,6 +736,10 @@ impl PaneView<EditorPane> for WorkspaceView<'_> {
         }
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, Color32::from_rgb(25, 26, 29));
+        if *pane == EditorPane::Animation {
+            animation_panel(ui, self.tree, self.animation);
+            return;
+        }
         egui::ScrollArea::vertical()
             .id_salt(("editor-pane-scroll", id))
             .show(ui, |ui| {
@@ -654,15 +752,485 @@ impl PaneView<EditorPane> for WorkspaceView<'_> {
                             .slider_width
                             .min((ui.available_width() - 100.0).max(24.0));
                         match pane {
+                            EditorPane::Animation => {}
                             EditorPane::Scene => scene_panel(ui, self.tree),
-                            EditorPane::Object => object_panel(ui, self.tree),
-                            EditorPane::Materials => materials_panel(ui, self.tree),
-                            EditorPane::Repetition => repetition_panel(ui, self.tree),
-                            EditorPane::Operand => operand_panel(ui, self.tree),
+                            EditorPane::Object => object_panel(ui, self.tree, self.animation),
+                            EditorPane::Materials => materials_panel(ui, self.tree, self.animation),
+                            EditorPane::Repetition => {
+                                repetition_panel(ui, self.tree, self.animation)
+                            }
+                            EditorPane::Operand => operand_panel(ui, self.tree, self.animation),
                             EditorPane::Viewport => {}
                         }
                     });
             });
+    }
+}
+
+fn animation_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut AnimationRuntime) {
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            let mut data = animation::animation_data(tree);
+            let mut data_changed = false;
+            let mut requested_frame = None;
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(if runtime.playing { "Pause" } else { "Play" })
+                    .clicked()
+                {
+                    runtime.toggle_playback();
+                }
+                if ui.button("Stop").clicked() {
+                    runtime.stop(tree);
+                }
+                ui.separator();
+                ui.label("Frame");
+                let mut frame = runtime.current_frame;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut frame)
+                            .speed(1.0)
+                            .range(data.start_frame as f32..=data.end_frame as f32),
+                    )
+                    .changed()
+                {
+                    requested_frame = Some(frame);
+                }
+                ui.label("Start");
+                data_changed |= ui
+                    .add(egui::DragValue::new(&mut data.start_frame).range(0..=100_000))
+                    .changed();
+                ui.label("End");
+                data_changed |= ui
+                    .add(egui::DragValue::new(&mut data.end_frame).range(1..=100_000))
+                    .changed();
+                ui.label("FPS");
+                data_changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut data.fps)
+                            .speed(1.0)
+                            .range(1.0..=240.0),
+                    )
+                    .changed();
+                ui.checkbox(&mut runtime.looping, "Loop");
+            });
+            if data.end_frame <= data.start_frame {
+                data.end_frame = data.start_frame.saturating_add(1);
+                data_changed = true;
+            }
+            if data_changed {
+                animation::set_animation_data(tree, data.clone());
+                runtime.current_frame = runtime
+                    .current_frame
+                    .clamp(data.start_frame as f32, data.end_frame as f32);
+                tree.make_undo_redo_snapshot();
+            }
+            if let Some(frame) = requested_frame {
+                runtime.set_frame(tree, frame);
+            }
+
+            ui.separator();
+            let selection = selected(tree);
+            let objects = objects(tree);
+            let tracks: Vec<_> = data
+                .tracks
+                .iter()
+                .filter(|track| selection.is_empty() || selection.contains(&track.binding.object))
+                .cloned()
+                .collect();
+            if tracks.is_empty() {
+                ui.label("No keyframes for the current selection.");
+                ui.weak("Hover an editable property and press I to insert one.");
+                return;
+            }
+
+            let label_width = 155.0_f32.min(ui.available_width() * 0.42);
+            egui::ScrollArea::vertical()
+                .id_salt("animation-tracks")
+                .show(ui, |ui| {
+                    for track in &tracks {
+                        ui.horizontal(|ui| {
+                            let object_name = objects
+                                .iter()
+                                .find(|object| object.uuid == track.binding.object)
+                                .map(SdfObject::display_name)
+                                .unwrap_or_else(|| "Missing object".into());
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(label_width, 64.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.label(format!(
+                                        "{} · {}",
+                                        object_name,
+                                        track.binding.property.label()
+                                    ));
+                                },
+                            );
+                            let width = ui.available_width().max(80.0);
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(width, 64.0),
+                                egui::Sense::click_and_drag(),
+                            );
+                            let painter = ui.painter_at(rect);
+                            painter.rect_filled(rect, 3.0, Color32::from_rgb(34, 35, 39));
+                            painter.line_segment(
+                                [rect.left_center(), rect.right_center()],
+                                Stroke::new(1.0, Color32::from_gray(75)),
+                            );
+                            let frame_span =
+                                data.end_frame.saturating_sub(data.start_frame).max(1) as f32;
+                            let frame_x = |frame: f32| {
+                                rect.left()
+                                    + (frame - data.start_frame as f32) / frame_span * rect.width()
+                            };
+                            let (minimum, maximum) = timeline_value_bounds(track);
+                            let value_span = maximum - minimum;
+                            let value_y = |value: f32| {
+                                rect.bottom()
+                                    - 5.0
+                                    - (value - minimum) / value_span * (rect.height() - 10.0)
+                            };
+                            let value_at_y = |y: f32| {
+                                minimum
+                                    + (rect.bottom() - 5.0 - y) / (rect.height() - 10.0)
+                                        * value_span
+                            };
+                            let frame_at_x = |x: f32| {
+                                data.start_frame as f32
+                                    + (x - rect.left()) / rect.width() * frame_span
+                            };
+                            let mut bezier_handle_active = false;
+                            for pair in track.keyframes.windows(2) {
+                                let left = &pair[0];
+                                let right = &pair[1];
+                                let left_point =
+                                    egui::pos2(frame_x(left.frame as f32), value_y(left.value));
+                                let right_point =
+                                    egui::pos2(frame_x(right.frame as f32), value_y(right.value));
+                                match left.interpolation {
+                                    KeyframeInterpolation::Linear => painter.line_segment(
+                                        [left_point, right_point],
+                                        Stroke::new(1.5, Color32::from_rgb(112, 161, 255)),
+                                    ),
+                                    KeyframeInterpolation::Constant => {
+                                        let corner = egui::pos2(right_point.x, left_point.y);
+                                        painter.line_segment(
+                                            [left_point, corner],
+                                            Stroke::new(1.5, Color32::from_rgb(112, 161, 255)),
+                                        );
+                                        painter.line_segment(
+                                            [corner, right_point],
+                                            Stroke::new(1.5, Color32::from_rgb(112, 161, 255)),
+                                        )
+                                    }
+                                    KeyframeInterpolation::Bezier => {
+                                        let controls =
+                                            animation::bezier_control_points(left, right);
+                                        let mut previous = left_point;
+                                        for step in 1..=24 {
+                                            let point = animation::bezier_point(
+                                                controls,
+                                                step as f32 / 24.0,
+                                            );
+                                            let current =
+                                                egui::pos2(frame_x(point.0), value_y(point.1));
+                                            painter.line_segment(
+                                                [previous, current],
+                                                Stroke::new(1.5, Color32::from_rgb(112, 161, 255)),
+                                            );
+                                            previous = current;
+                                        }
+                                        for (incoming, keyframe, control) in
+                                            [(false, left, controls[1]), (true, right, controls[2])]
+                                        {
+                                            let anchor = egui::pos2(
+                                                frame_x(keyframe.frame as f32),
+                                                value_y(keyframe.value),
+                                            );
+                                            let center =
+                                                egui::pos2(frame_x(control.0), value_y(control.1));
+                                            painter.line_segment(
+                                                [anchor, center],
+                                                Stroke::new(1.0, Color32::from_gray(135)),
+                                            );
+                                            let handle_response = ui.interact(
+                                                egui::Rect::from_center_size(
+                                                    center,
+                                                    egui::vec2(12.0, 12.0),
+                                                ),
+                                                egui::Id::new((
+                                                    "bezier-handle",
+                                                    track.binding,
+                                                    keyframe.frame,
+                                                    incoming,
+                                                )),
+                                                egui::Sense::drag(),
+                                            );
+                                            handle_response
+                                                .clone()
+                                                .on_hover_text("Drag Bézier control point");
+                                            bezier_handle_active |= handle_response.hovered()
+                                                || handle_response.dragged();
+                                            painter.circle_filled(
+                                                center,
+                                                if handle_response.hovered() { 4.5 } else { 3.5 },
+                                                Color32::from_rgb(239, 184, 255),
+                                            );
+                                            if handle_response.drag_started() {
+                                                tree.make_undo_redo_snapshot();
+                                            }
+                                            if handle_response.dragged() {
+                                                if let Some(pointer) =
+                                                    handle_response.interact_pointer_pos()
+                                                {
+                                                    let control_frame = frame_at_x(pointer.x);
+                                                    let control_value =
+                                                        value_at_y(pointer.y.clamp(
+                                                            rect.top() + 5.0,
+                                                            rect.bottom() - 5.0,
+                                                        ));
+                                                    animation::set_bezier_handle(
+                                                        tree,
+                                                        SelectedKeyframe {
+                                                            binding: track.binding,
+                                                            frame: keyframe.frame,
+                                                        },
+                                                        incoming,
+                                                        crate::model::BezierHandle {
+                                                            frame_offset: control_frame
+                                                                - keyframe.frame as f32,
+                                                            value_offset: control_value
+                                                                - keyframe.value,
+                                                        },
+                                                    );
+                                                    runtime.selected_keyframe =
+                                                        Some(SelectedKeyframe {
+                                                            binding: track.binding,
+                                                            frame: keyframe.frame,
+                                                        });
+                                                    runtime.set_frame(tree, runtime.current_frame);
+                                                }
+                                            }
+                                            if handle_response.drag_stopped() {
+                                                tree.make_undo_redo_snapshot();
+                                            }
+                                        }
+                                        painter.line_segment([left_point, left_point], Stroke::NONE)
+                                    }
+                                };
+                            }
+                            let mut keyframe_active = false;
+                            for keyframe in &track.keyframes {
+                                let keyframe_id = SelectedKeyframe {
+                                    binding: track.binding,
+                                    frame: keyframe.frame,
+                                };
+                                let displayed_frame = runtime
+                                    .keyframe_drag
+                                    .filter(|drag| drag.keyframe == keyframe_id)
+                                    .map_or(keyframe.frame, |drag| drag.preview_frame);
+                                let center = egui::pos2(
+                                    frame_x(displayed_frame as f32),
+                                    value_y(keyframe.value),
+                                );
+                                let key_response = ui.interact(
+                                    egui::Rect::from_center_size(center, egui::vec2(14.0, 14.0)),
+                                    egui::Id::new((
+                                        "timeline-keyframe",
+                                        track.binding,
+                                        keyframe.frame,
+                                    )),
+                                    egui::Sense::click_and_drag(),
+                                );
+                                key_response.clone().on_hover_text("Drag to move keyframe");
+                                keyframe_active |= key_response.hovered() || key_response.dragged();
+                                let selected = runtime.selected_keyframe == Some(keyframe_id);
+                                let radius = if selected { 6.0 } else { 4.5 };
+                                painter.add(egui::Shape::convex_polygon(
+                                    vec![
+                                        center + egui::vec2(0.0, -radius),
+                                        center + egui::vec2(radius, 0.0),
+                                        center + egui::vec2(0.0, radius),
+                                        center + egui::vec2(-radius, 0.0),
+                                    ],
+                                    if selected {
+                                        Color32::WHITE
+                                    } else {
+                                        Color32::from_rgb(112, 161, 255)
+                                    },
+                                    Stroke::NONE,
+                                ));
+                                if key_response.clicked() {
+                                    runtime.selected_keyframe = Some(keyframe_id);
+                                    runtime.set_frame(tree, keyframe.frame as f32);
+                                }
+                                if key_response.drag_started() {
+                                    runtime.selected_keyframe = Some(keyframe_id);
+                                    runtime.keyframe_drag = Some(KeyframeDrag {
+                                        keyframe: keyframe_id,
+                                        preview_frame: keyframe.frame,
+                                    });
+                                }
+                                if key_response.dragged() {
+                                    if let Some(pointer) = key_response.interact_pointer_pos() {
+                                        let preview_frame = frame_at_x(pointer.x)
+                                            .round()
+                                            .clamp(data.start_frame as f32, data.end_frame as f32)
+                                            as u32;
+                                        runtime.keyframe_drag = Some(KeyframeDrag {
+                                            keyframe: keyframe_id,
+                                            preview_frame,
+                                        });
+                                    }
+                                }
+                                if key_response.drag_stopped() {
+                                    if let Some(drag) = runtime.keyframe_drag.take() {
+                                        if drag.keyframe == keyframe_id
+                                            && drag.preview_frame != keyframe.frame
+                                        {
+                                            tree.make_undo_redo_snapshot();
+                                            runtime.selected_keyframe =
+                                                Some(animation::update_keyframe(
+                                                    tree,
+                                                    drag.keyframe,
+                                                    drag.preview_frame,
+                                                    keyframe.value,
+                                                    keyframe.interpolation,
+                                                ));
+                                            runtime.set_frame(tree, runtime.current_frame);
+                                            tree.make_undo_redo_snapshot();
+                                        }
+                                    }
+                                }
+                            }
+                            let playhead_x = frame_x(runtime.current_frame);
+                            painter.line_segment(
+                                [
+                                    egui::pos2(playhead_x, rect.top()),
+                                    egui::pos2(playhead_x, rect.bottom()),
+                                ],
+                                Stroke::new(1.5, Color32::from_rgb(255, 118, 107)),
+                            );
+                            if !bezier_handle_active
+                                && !keyframe_active
+                                && (response.clicked() || response.dragged())
+                            {
+                                let Some(pointer) = response.interact_pointer_pos() else {
+                                    return;
+                                };
+                                runtime.set_frame(tree, frame_at_x(pointer.x).round());
+                            }
+                        });
+                    }
+                });
+
+            // Timeline interactions may have authored animation data above.
+            let data = animation::animation_data(tree);
+            let Some(selected_keyframe) = runtime.selected_keyframe else {
+                return;
+            };
+            let Some(keyframe) = data
+                .tracks
+                .iter()
+                .find(|track| track.binding == selected_keyframe.binding)
+                .and_then(|track| {
+                    track
+                        .keyframes
+                        .iter()
+                        .find(|keyframe| keyframe.frame == selected_keyframe.frame)
+                })
+                .cloned()
+            else {
+                runtime.selected_keyframe = None;
+                return;
+            };
+            ui.separator();
+            let mut frame = keyframe.frame;
+            let mut value = keyframe.value;
+            let mut update = false;
+            let mut delete = false;
+            let selected_track = data
+                .tracks
+                .iter()
+                .find(|track| track.binding == selected_keyframe.binding);
+            let easing = selected_track
+                .and_then(|track| animation::easing_preset(track, selected_keyframe.frame));
+            let mut requested_easing = None;
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(selected_keyframe.binding.property.label());
+                ui.label("Frame");
+                update |= ui
+                    .add(egui::DragValue::new(&mut frame).range(data.start_frame..=data.end_frame))
+                    .changed();
+                ui.label("Value");
+                update |= ui
+                    .add(egui::DragValue::new(&mut value).speed(0.01))
+                    .changed();
+                if let Some(easing) = easing {
+                    egui::ComboBox::from_id_salt("keyframe-easing")
+                        .selected_text(easing.label())
+                        .show_ui(ui, |ui| {
+                            for candidate in animation::EasingPreset::EDITABLE {
+                                if ui
+                                    .selectable_label(easing == candidate, candidate.label())
+                                    .clicked()
+                                {
+                                    requested_easing = Some(candidate);
+                                    ui.close();
+                                }
+                            }
+                        });
+                } else {
+                    ui.weak("End key");
+                }
+                delete = ui.button("Delete key").clicked();
+            });
+            if update || requested_easing.is_some() {
+                tree.make_undo_redo_snapshot();
+                let selected_keyframe = if update {
+                    animation::update_keyframe(
+                        tree,
+                        selected_keyframe,
+                        frame,
+                        value,
+                        keyframe.interpolation,
+                    )
+                } else {
+                    selected_keyframe
+                };
+                if let Some(easing) = requested_easing {
+                    animation::apply_easing_preset(tree, selected_keyframe, easing);
+                }
+                runtime.selected_keyframe = Some(selected_keyframe);
+                runtime.set_frame(tree, runtime.current_frame);
+                tree.make_undo_redo_snapshot();
+            } else if delete {
+                tree.make_undo_redo_snapshot();
+                animation::delete_keyframe(tree, selected_keyframe);
+                runtime.selected_keyframe = None;
+                tree.make_undo_redo_snapshot();
+            }
+        });
+}
+
+fn timeline_value_bounds(track: &AnimationTrack) -> (f32, f32) {
+    let minimum = track
+        .keyframes
+        .iter()
+        .map(|keyframe| keyframe.value)
+        .fold(f32::INFINITY, f32::min);
+    let maximum = track
+        .keyframes
+        .iter()
+        .map(|keyframe| keyframe.value)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let span = maximum - minimum;
+    if span.abs() < 0.0001 {
+        (minimum - 0.5, maximum + 0.5)
+    } else {
+        let margin = span * 0.12;
+        (minimum - margin, maximum + margin)
     }
 }
 
@@ -1093,7 +1661,96 @@ fn apply_boolean(tree: &mut DataTree, operation: BooleanOperation) {
     scene_actions::attach(tree, selection[0], &selection[1..], operation);
 }
 
-fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
+#[derive(Clone, Copy)]
+struct KeyframeRequest {
+    binding: AnimationBinding,
+    value: f32,
+}
+
+fn animatable_widget(
+    ui: &mut egui::Ui,
+    tree: &DataTree,
+    runtime: &AnimationRuntime,
+    binding: AnimationBinding,
+    add: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    let state = animation::field_animation_state(tree, binding, runtime.current_frame);
+    ui.scope(|ui| {
+        let fill = match state {
+            animation::FieldAnimationState::NotAnimated => None,
+            animation::FieldAnimationState::Animated => Some(Color32::from_rgb(45, 104, 57)),
+            animation::FieldAnimationState::KeyedAtCurrentFrame => {
+                Some(Color32::from_rgb(168, 116, 17))
+            }
+        };
+        if let Some(fill) = fill {
+            let visuals = &mut ui.style_mut().visuals;
+            visuals.extreme_bg_color = fill;
+            visuals.selection.bg_fill = fill;
+            visuals.widgets.inactive.bg_fill = fill;
+            visuals.widgets.inactive.weak_bg_fill = fill;
+            visuals.widgets.hovered.bg_fill = fill.gamma_multiply(1.16);
+            visuals.widgets.hovered.weak_bg_fill = fill.gamma_multiply(1.16);
+            visuals.widgets.active.bg_fill = fill.gamma_multiply(0.86);
+            visuals.widgets.active.weak_bg_fill = fill.gamma_multiply(0.86);
+            visuals.widgets.open.bg_fill = fill.gamma_multiply(1.08);
+            visuals.widgets.open.weak_bg_fill = fill.gamma_multiply(1.08);
+        }
+        add(ui)
+    })
+    .inner
+}
+
+fn plain_i_pressed(input: &egui::InputState) -> bool {
+    input.events.iter().any(|event| {
+        matches!(
+            event,
+            egui::Event::Key {
+                key: egui::Key::I,
+                pressed: true,
+                repeat: false,
+                modifiers,
+                ..
+            } if modifiers.is_none()
+        )
+    })
+}
+
+fn animatable_response(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    binding: AnimationBinding,
+    value: f32,
+    requests: &mut Vec<KeyframeRequest>,
+) {
+    response
+        .clone()
+        .on_hover_text("Press I to insert a keyframe at the current frame");
+    if response.hovered() && ui.input(plain_i_pressed) {
+        requests.push(KeyframeRequest { binding, value });
+    }
+}
+
+fn apply_keyframe_requests(
+    tree: &mut DataTree,
+    runtime: &mut AnimationRuntime,
+    requests: Vec<KeyframeRequest>,
+) {
+    if requests.is_empty() {
+        return;
+    }
+    let frame = runtime.current_frame.round().max(0.0) as u32;
+    for request in requests {
+        animation::insert_keyframe(tree, request.binding, frame, request.value);
+        runtime.selected_keyframe = Some(SelectedKeyframe {
+            binding: request.binding,
+            frame,
+        });
+    }
+    tree.make_undo_redo_snapshot();
+}
+
+fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut AnimationRuntime) {
     let selection = selected(tree);
     if selection.len() != 1 {
         ui.label("Select one object to edit it.");
@@ -1103,6 +1760,8 @@ fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     let Some(object) = scene.iter_mut().find(|object| object.uuid == selection[0]) else {
         return;
     };
+    let object_id = object.uuid;
+    let mut keyframes = Vec::new();
     let mut changed = false;
     ui.label(RichText::new("Object settings").strong());
     changed |= ui.text_edit_singleline(&mut object.name).changed();
@@ -1123,7 +1782,20 @@ fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
         object.transform.translation = Vec3::ZERO;
         changed = true;
     }
-    changed |= vec3_editor(ui, &mut object.transform.translation, 0.01);
+    changed |= animatable_vec3_editor(
+        ui,
+        tree,
+        runtime,
+        &mut object.transform.translation,
+        0.01,
+        object_id,
+        [
+            AnimatableProperty::Position(VectorAxis::X),
+            AnimatableProperty::Position(VectorAxis::Y),
+            AnimatableProperty::Position(VectorAxis::Z),
+        ],
+        &mut keyframes,
+    );
     let reset_rotation = ui
         .horizontal(|ui| {
             ui.label("Rotation");
@@ -1142,7 +1814,20 @@ fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     }
     let (x, y, z) = object.transform.rotation.to_euler(EulerRot::XYZ);
     let mut degrees = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
-    if vec3_editor(ui, &mut degrees, 1.0) {
+    if animatable_vec3_editor(
+        ui,
+        tree,
+        runtime,
+        &mut degrees,
+        1.0,
+        object_id,
+        [
+            AnimatableProperty::Rotation(VectorAxis::X),
+            AnimatableProperty::Rotation(VectorAxis::Y),
+            AnimatableProperty::Rotation(VectorAxis::Z),
+        ],
+        &mut keyframes,
+    ) {
         object.transform.rotation = glam::Quat::from_euler(
             EulerRot::XYZ,
             degrees.x.to_radians(),
@@ -1152,48 +1837,129 @@ fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
         changed = true;
     }
     ui.label("Scale");
-    changed |= vec3_editor(ui, &mut object.transform.scale, 0.01);
+    changed |= animatable_vec3_editor(
+        ui,
+        tree,
+        runtime,
+        &mut object.transform.scale,
+        0.01,
+        object_id,
+        [
+            AnimatableProperty::Scale(VectorAxis::X),
+            AnimatableProperty::Scale(VectorAxis::Y),
+            AnimatableProperty::Scale(VectorAxis::Z),
+        ],
+        &mut keyframes,
+    );
     ui.separator();
-    changed |= params_editor(ui, &mut object.params);
+    changed |= params_editor(
+        ui,
+        tree,
+        runtime,
+        &mut object.params,
+        object_id,
+        &mut keyframes,
+    );
     if changed {
         set_objects(tree, scene);
         if reset_position || reset_rotation {
             tree.make_undo_redo_snapshot();
         }
     }
+    apply_keyframe_requests(tree, runtime, keyframes);
 }
 
-fn params_editor(ui: &mut egui::Ui, params: &mut SdfParams) -> bool {
+fn params_editor(
+    ui: &mut egui::Ui,
+    tree: &DataTree,
+    runtime: &AnimationRuntime,
+    params: &mut SdfParams,
+    object: uuid::Uuid,
+    keyframes: &mut Vec<KeyframeRequest>,
+) -> bool {
     match params {
-        SdfParams::SphereParams(value) => ui
-            .add(egui::Slider::new(&mut value.radius, 0.01..=4.0).text("Radius"))
-            .changed(),
+        SdfParams::SphereParams(value) => {
+            let binding = AnimationBinding {
+                object,
+                property: AnimatableProperty::SphereRadius,
+            };
+            let response = animatable_widget(ui, tree, runtime, binding, |ui| {
+                ui.add(egui::Slider::new(&mut value.radius, 0.01..=4.0).text("Radius"))
+            });
+            animatable_response(ui, &response, binding, value.radius, keyframes);
+            response.changed()
+        }
         SdfParams::BoxParams(value) => {
             ui.label("Half extents");
-            vec3_editor(ui, &mut value.box_q, 0.01)
+            animatable_vec3_editor(
+                ui,
+                tree,
+                runtime,
+                &mut value.box_q,
+                0.01,
+                object,
+                [
+                    AnimatableProperty::BoxHalfExtent(VectorAxis::X),
+                    AnimatableProperty::BoxHalfExtent(VectorAxis::Y),
+                    AnimatableProperty::BoxHalfExtent(VectorAxis::Z),
+                ],
+                keyframes,
+            )
         }
         SdfParams::CylinderParams {
             radius,
             half_height,
         } => {
-            ui.add(egui::Slider::new(radius, 0.01..=4.0).text("Radius"))
-                .changed()
-                | ui.add(egui::Slider::new(half_height, 0.01..=4.0).text("Half height"))
-                    .changed()
+            let radius_binding = AnimationBinding {
+                object,
+                property: AnimatableProperty::CylinderRadius,
+            };
+            let radius_response = animatable_widget(ui, tree, runtime, radius_binding, |ui| {
+                ui.add(egui::Slider::new(radius, 0.01..=4.0).text("Radius"))
+            });
+            animatable_response(ui, &radius_response, radius_binding, *radius, keyframes);
+            let height_binding = AnimationBinding {
+                object,
+                property: AnimatableProperty::CylinderHalfHeight,
+            };
+            let height_response = animatable_widget(ui, tree, runtime, height_binding, |ui| {
+                ui.add(egui::Slider::new(half_height, 0.01..=4.0).text("Half height"))
+            });
+            animatable_response(
+                ui,
+                &height_response,
+                height_binding,
+                *half_height,
+                keyframes,
+            );
+            radius_response.changed() | height_response.changed()
         }
         SdfParams::TorusParams {
             major_radius,
             minor_radius,
         } => {
-            ui.add(egui::Slider::new(major_radius, 0.02..=4.0).text("Major radius"))
-                .changed()
-                | ui.add(egui::Slider::new(minor_radius, 0.01..=2.0).text("Tube radius"))
-                    .changed()
+            let major_binding = AnimationBinding {
+                object,
+                property: AnimatableProperty::TorusMajorRadius,
+            };
+            let major_response = animatable_widget(ui, tree, runtime, major_binding, |ui| {
+                ui.add(egui::Slider::new(major_radius, 0.02..=4.0).text("Major radius"))
+            });
+            animatable_response(ui, &major_response, major_binding, *major_radius, keyframes);
+            let minor_binding = AnimationBinding {
+                object,
+                property: AnimatableProperty::TorusMinorRadius,
+            };
+            let minor_response = animatable_widget(ui, tree, runtime, minor_binding, |ui| {
+                ui.add(egui::Slider::new(minor_radius, 0.01..=2.0).text("Tube radius"))
+            });
+            animatable_response(ui, &minor_response, minor_binding, *minor_radius, keyframes);
+            major_response.changed() | minor_response.changed()
         }
     }
 }
 
-fn materials_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
+fn materials_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut AnimationRuntime) {
     ui.label(RichText::new("Material library").strong());
     ui.horizontal_wrapped(|ui| {
         for kind in MaterialKind::ALL {
@@ -1214,28 +1980,97 @@ fn materials_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     let Some(first) = scene.iter().find(|object| selection.contains(&object.uuid)) else {
         return;
     };
+    let first_id = first.uuid;
     let mut material = first.material;
     material.color = first.color;
+    let mut keyframes = Vec::new();
     let mut rgba = material.color.to_array();
-    let mut changed = ui.color_edit_button_rgba_unmultiplied(&mut rgba).changed();
+    let color_binding = AnimationBinding {
+        object: first_id,
+        property: AnimatableProperty::MaterialColor(ColorChannel::Red),
+    };
+    let color_response = animatable_widget(ui, tree, runtime, color_binding, |ui| {
+        ui.color_edit_button_rgba_unmultiplied(&mut rgba)
+    });
+    let mut changed = color_response.changed();
     material.color = Vec4::from_array(rgba);
-    for (label, value, range) in [
-        ("Roughness", &mut material.roughness, 0.0..=1.0),
-        ("Metallic", &mut material.metallic, 0.0..=1.0),
-        ("Reflectivity", &mut material.reflectivity, 0.0..=1.0),
+    if color_response.hovered() && ui.input(plain_i_pressed) {
+        for object in scene
+            .iter()
+            .filter(|object| selection.contains(&object.uuid))
+        {
+            for channel in ColorChannel::ALL {
+                keyframes.push(KeyframeRequest {
+                    binding: AnimationBinding {
+                        object: object.uuid,
+                        property: AnimatableProperty::MaterialColor(channel),
+                    },
+                    value: material.color[channel.index()],
+                });
+            }
+        }
+    }
+    color_response.on_hover_text("Press I to keyframe all four color channels");
+    for (label, property, value, range) in [
+        (
+            "Roughness",
+            AnimatableProperty::MaterialRoughness,
+            &mut material.roughness,
+            0.0..=1.0,
+        ),
+        (
+            "Metallic",
+            AnimatableProperty::MaterialMetallic,
+            &mut material.metallic,
+            0.0..=1.0,
+        ),
+        (
+            "Reflectivity",
+            AnimatableProperty::MaterialReflectivity,
+            &mut material.reflectivity,
+            0.0..=1.0,
+        ),
         (
             "Refractive index",
+            AnimatableProperty::MaterialRefractiveIndex,
             &mut material.refractive_index,
             1.0..=2.5,
         ),
-        ("Opacity", &mut material.opacity, 0.02..=1.0),
+        (
+            "Opacity",
+            AnimatableProperty::MaterialOpacity,
+            &mut material.opacity,
+            0.02..=1.0,
+        ),
     ] {
         let label = ui.label(label);
         ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(24.0);
-        changed |= ui
-            .add(egui::Slider::new(value, range))
-            .labelled_by(label.id)
-            .changed();
+        let binding = AnimationBinding {
+            object: first_id,
+            property,
+        };
+        let response = animatable_widget(ui, tree, runtime, binding, |ui| {
+            ui.add(egui::Slider::new(value, range))
+                .labelled_by(label.id)
+        });
+        if response.hovered() && ui.input(plain_i_pressed) {
+            for object in scene
+                .iter()
+                .filter(|object| selection.contains(&object.uuid))
+            {
+                keyframes.push(KeyframeRequest {
+                    binding: AnimationBinding {
+                        object: object.uuid,
+                        property,
+                    },
+                    value: *value,
+                });
+            }
+        }
+        response
+            .clone()
+            .on_hover_text("Press I to insert a keyframe at the current frame");
+        changed |= response.changed();
     }
     if changed {
         tree.set_path(
@@ -1250,6 +2085,7 @@ fn materials_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
         }
         set_objects(tree, scene);
     }
+    apply_keyframe_requests(tree, runtime, keyframes);
 }
 
 fn apply_material(tree: &mut DataTree, material: Material) {
@@ -1269,7 +2105,7 @@ fn apply_material(tree: &mut DataTree, material: Material) {
     tree.make_undo_redo_snapshot();
 }
 
-fn operand_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
+fn operand_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut AnimationRuntime) {
     let selection = selected(tree);
     let mut scene = objects(tree);
     let Some(first) = scene.iter().find(|object| selection.contains(&object.uuid)) else {
@@ -1287,6 +2123,7 @@ fn operand_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     }
     let mut operation = first.operation;
     let mut softness = first.softness;
+    let first_id = first.uuid;
     let mut changed = false;
     egui::ComboBox::from_label("Operation")
         .selected_text(operation.label())
@@ -1301,7 +2138,31 @@ fn operand_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
                     .changed();
             }
         });
-    let response = ui.add(egui::Slider::new(&mut softness, 0.0..=0.5).text("Softness"));
+    let softness_binding = AnimationBinding {
+        object: first_id,
+        property: AnimatableProperty::OperandSoftness,
+    };
+    let response = animatable_widget(ui, tree, runtime, softness_binding, |ui| {
+        ui.add(egui::Slider::new(&mut softness, 0.0..=0.5).text("Softness"))
+    });
+    let mut keyframes = Vec::new();
+    if response.hovered() && ui.input(plain_i_pressed) {
+        for object in scene
+            .iter()
+            .filter(|object| selection.contains(&object.uuid))
+        {
+            keyframes.push(KeyframeRequest {
+                binding: AnimationBinding {
+                    object: object.uuid,
+                    property: AnimatableProperty::OperandSoftness,
+                },
+                value: softness,
+            });
+        }
+    }
+    response
+        .clone()
+        .on_hover_text("Press I to insert a keyframe at the current frame");
     let operation_changed = changed;
     changed |= response.changed();
     ui.label("0 = sharp edges. Softness is measured in world units.");
@@ -1324,9 +2185,10 @@ fn operand_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     if response.drag_stopped() || operation_changed || (changed && !response.dragged()) {
         tree.make_undo_redo_snapshot();
     }
+    apply_keyframe_requests(tree, runtime, keyframes);
 }
 
-fn repetition_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
+fn repetition_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut AnimationRuntime) {
     let selection = selected(tree);
     if selection.is_empty() {
         ui.label("Select objects to repeat.");
@@ -1336,34 +2198,112 @@ fn repetition_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     let Some(first) = scene.iter().find(|object| selection.contains(&object.uuid)) else {
         return;
     };
+    let first_id = first.uuid;
     let mut repetition = first.repetition;
-    let mut changed = ui
-        .checkbox(&mut repetition.enabled, "Enable domain repetition")
-        .changed();
+    let mut keyframes = Vec::new();
+    let enabled_response = animatable_widget(
+        ui,
+        tree,
+        runtime,
+        AnimationBinding {
+            object: first_id,
+            property: AnimatableProperty::RepetitionEnabled,
+        },
+        |ui| ui.checkbox(&mut repetition.enabled, "Enable domain repetition"),
+    );
+    let mut changed = enabled_response.changed();
+    append_selected_keyframes_on_hover(
+        ui,
+        &enabled_response,
+        &scene,
+        &selection,
+        AnimatableProperty::RepetitionEnabled,
+        if repetition.enabled { 1.0 } else { 0.0 },
+        &mut keyframes,
+    );
     ui.label("Axes");
     ui.horizontal(|ui| {
-        changed |= ui.checkbox(&mut repetition.axes[0], "X").changed();
-        changed |= ui.checkbox(&mut repetition.axes[1], "Y").changed();
-        changed |= ui.checkbox(&mut repetition.axes[2], "Z").changed();
+        for axis in VectorAxis::ALL {
+            let index = axis.index();
+            let response = animatable_widget(
+                ui,
+                tree,
+                runtime,
+                AnimationBinding {
+                    object: first_id,
+                    property: AnimatableProperty::RepetitionAxis(axis),
+                },
+                |ui| ui.checkbox(&mut repetition.axes[index], axis.label()),
+            );
+            changed |= response.changed();
+            append_selected_keyframes_on_hover(
+                ui,
+                &response,
+                &scene,
+                &selection,
+                AnimatableProperty::RepetitionAxis(axis),
+                if repetition.axes[index] { 1.0 } else { 0.0 },
+                &mut keyframes,
+            );
+        }
     });
-    for axis in 0..3 {
+    for axis in VectorAxis::ALL {
+        let index = axis.index();
         ui.horizontal_wrapped(|ui| {
-            ui.label(axis_label(axis));
-            changed |= ui
-                .add(
-                    egui::DragValue::new(&mut repetition.count[axis])
-                        .range(1..=32)
-                        .prefix("count "),
-                )
-                .changed();
-            changed |= ui
-                .add(
-                    egui::DragValue::new(&mut repetition.spacing[axis])
-                        .speed(0.02)
-                        .range(0.01..=20.0)
-                        .prefix("spacing "),
-                )
-                .changed();
+            ui.label(axis.label());
+            let count_response = animatable_widget(
+                ui,
+                tree,
+                runtime,
+                AnimationBinding {
+                    object: first_id,
+                    property: AnimatableProperty::RepetitionCount(axis),
+                },
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut repetition.count[index])
+                            .range(1..=32)
+                            .prefix("count "),
+                    )
+                },
+            );
+            changed |= count_response.changed();
+            append_selected_keyframes_on_hover(
+                ui,
+                &count_response,
+                &scene,
+                &selection,
+                AnimatableProperty::RepetitionCount(axis),
+                repetition.count[index] as f32,
+                &mut keyframes,
+            );
+            let spacing_response = animatable_widget(
+                ui,
+                tree,
+                runtime,
+                AnimationBinding {
+                    object: first_id,
+                    property: AnimatableProperty::RepetitionSpacing(axis),
+                },
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut repetition.spacing[index])
+                            .speed(0.02)
+                            .range(0.01..=20.0)
+                            .prefix("spacing "),
+                    )
+                },
+            );
+            changed |= spacing_response.changed();
+            append_selected_keyframes_on_hover(
+                ui,
+                &spacing_response,
+                &scene,
+                &selection,
+                AnimatableProperty::RepetitionSpacing(axis),
+                repetition.spacing[index],
+                &mut keyframes,
+            );
         });
     }
     if changed {
@@ -1374,19 +2314,64 @@ fn repetition_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
         }
         set_objects(tree, scene);
     }
+    apply_keyframe_requests(tree, runtime, keyframes);
 }
 
-fn vec3_editor(ui: &mut egui::Ui, value: &mut Vec3, speed: f64) -> bool {
+fn append_selected_keyframes_on_hover(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    scene: &[SdfObject],
+    selection: &[uuid::Uuid],
+    property: AnimatableProperty,
+    value: f32,
+    keyframes: &mut Vec<KeyframeRequest>,
+) {
+    response
+        .clone()
+        .on_hover_text("Press I to insert a keyframe at the current frame");
+    if !response.hovered() || !ui.input(plain_i_pressed) {
+        return;
+    }
+    for object in scene
+        .iter()
+        .filter(|object| selection.contains(&object.uuid))
+    {
+        keyframes.push(KeyframeRequest {
+            binding: AnimationBinding {
+                object: object.uuid,
+                property,
+            },
+            value,
+        });
+    }
+}
+
+fn animatable_vec3_editor(
+    ui: &mut egui::Ui,
+    tree: &DataTree,
+    runtime: &AnimationRuntime,
+    value: &mut Vec3,
+    speed: f64,
+    object: uuid::Uuid,
+    properties: [AnimatableProperty; 3],
+    keyframes: &mut Vec<KeyframeRequest>,
+) -> bool {
     let mut changed = false;
     ui.horizontal_wrapped(|ui| {
         for axis in 0..3 {
-            changed |= ui
-                .add(
+            let binding = AnimationBinding {
+                object,
+                property: properties[axis],
+            };
+            let response = animatable_widget(ui, tree, runtime, binding, |ui| {
+                ui.add(
                     egui::DragValue::new(&mut value[axis])
                         .speed(speed)
                         .prefix(format!("{} ", axis_label(axis))),
                 )
-                .changed();
+            });
+            animatable_response(ui, &response, binding, value[axis], keyframes);
+            changed |= response.changed();
         }
     });
     changed
@@ -1686,6 +2671,230 @@ mod tests {
     use super::*;
 
     #[test]
+    fn animation_timeline_is_optional_and_starts_closed() {
+        let mut ui = UiState::default();
+        assert!(ui
+            .layout
+            .find_pane(|pane| *pane == EditorPane::Animation)
+            .is_none());
+        ui.layout
+            .add_pane_against_edge(DropSide::Bottom, 0.30, EditorPane::Animation);
+        assert!(ui
+            .layout
+            .find_pane(|pane| *pane == EditorPane::Animation)
+            .is_some());
+    }
+
+    #[test]
+    fn bezier_handles_do_not_change_timeline_value_bounds() {
+        let object = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let track = AnimationTrack {
+            binding: AnimationBinding {
+                object: object.uuid,
+                property: AnimatableProperty::Position(VectorAxis::Y),
+            },
+            keyframes: vec![
+                crate::model::Keyframe {
+                    frame: 0,
+                    value: 0.0,
+                    interpolation: KeyframeInterpolation::Bezier,
+                    incoming_handle: None,
+                    outgoing_handle: Some(crate::model::BezierHandle {
+                        frame_offset: 3.0,
+                        value_offset: 10_000.0,
+                    }),
+                },
+                crate::model::Keyframe {
+                    frame: 10,
+                    value: 10.0,
+                    interpolation: KeyframeInterpolation::Bezier,
+                    incoming_handle: Some(crate::model::BezierHandle {
+                        frame_offset: -3.0,
+                        value_offset: -10_000.0,
+                    }),
+                    outgoing_handle: None,
+                },
+            ],
+        };
+
+        let (minimum, maximum) = timeline_value_bounds(&track);
+        assert!((minimum + 1.2).abs() < 0.0001);
+        assert!((maximum - 11.2).abs() < 0.0001);
+    }
+
+    #[test]
+    fn viewport_animation_shortcuts_toggle_and_step_playback() {
+        let ctx = egui::Context::default();
+        let mut ui_state = UiState::default();
+        let mut tree = DataTree::default();
+        ui_state.animation.current_frame = 5.0;
+        fn press(
+            ctx: &egui::Context,
+            ui_state: &mut UiState,
+            tree: &mut DataTree,
+            key: egui::Key,
+            repeat: bool,
+            modifiers: egui::Modifiers,
+        ) {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |_ui| ui_state.handle_animation_shortcuts(ctx, tree),
+            );
+            output.textures_delta.clear();
+        }
+        press(
+            &ctx,
+            &mut ui_state,
+            &mut tree,
+            egui::Key::Space,
+            false,
+            egui::Modifiers::NONE,
+        );
+        assert!(ui_state.animation.playing);
+        press(
+            &ctx,
+            &mut ui_state,
+            &mut tree,
+            egui::Key::Space,
+            true,
+            egui::Modifiers::NONE,
+        );
+        assert!(ui_state.animation.playing);
+        press(
+            &ctx,
+            &mut ui_state,
+            &mut tree,
+            egui::Key::ArrowLeft,
+            false,
+            egui::Modifiers::NONE,
+        );
+        assert!(!ui_state.animation.playing);
+        assert_eq!(ui_state.animation.current_frame, 4.0);
+        press(
+            &ctx,
+            &mut ui_state,
+            &mut tree,
+            egui::Key::ArrowRight,
+            true,
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(ui_state.animation.current_frame, 5.0);
+        press(
+            &ctx,
+            &mut ui_state,
+            &mut tree,
+            egui::Key::ArrowRight,
+            false,
+            egui::Modifiers::SHIFT,
+        );
+        assert_eq!(ui_state.animation.current_frame, 15.0);
+        press(
+            &ctx,
+            &mut ui_state,
+            &mut tree,
+            egui::Key::ArrowLeft,
+            true,
+            egui::Modifiers::SHIFT,
+        );
+        assert_eq!(ui_state.animation.current_frame, 5.0);
+    }
+
+    #[test]
+    fn hovering_a_transform_input_and_pressing_i_inserts_a_keyframe() {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::Box);
+        let object_id = object.uuid;
+        set_selected(&mut tree, vec![object_id]);
+        set_objects(&mut tree, vec![object]);
+        tree.make_undo_redo_snapshot();
+        let mut runtime = AnimationRuntime::default();
+        runtime.current_frame = 18.0;
+        let frame = |tree: &mut DataTree, runtime: &mut AnimationRuntime, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_width(350.0);
+                    object_panel(ui, tree, runtime);
+                },
+            );
+            output.textures_delta.clear();
+            output.shapes
+        };
+        let shapes = frame(&mut tree, &mut runtime, vec![]);
+        let position = shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with("X ") => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("position X input");
+        frame(
+            &mut tree,
+            &mut runtime,
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::Key {
+                    key: egui::Key::I,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+            ],
+        );
+        assert!(animation::animation_data(&tree).tracks.is_empty());
+        frame(
+            &mut tree,
+            &mut runtime,
+            vec![egui::Event::Key {
+                key: egui::Key::I,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }],
+        );
+        frame(
+            &mut tree,
+            &mut runtime,
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::Key {
+                    key: egui::Key::I,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+
+        let data = animation::animation_data(&tree);
+        assert_eq!(data.tracks.len(), 1);
+        assert_eq!(data.tracks[0].binding.object, object_id);
+        assert_eq!(
+            data.tracks[0].binding.property,
+            AnimatableProperty::Position(VectorAxis::X)
+        );
+        assert_eq!(data.tracks[0].keyframes[0].frame, 18);
+    }
+
+    #[test]
     fn keyboard_then_tree_click_combines_whole_groups_and_undoes() {
         use winit::keyboard::KeyCode;
         for (key, operation) in [
@@ -1744,13 +2953,14 @@ mod tests {
             set_selected(&mut tree, vec![object.uuid]);
             set_objects(&mut tree, vec![object.clone()]);
             tree.make_undo_redo_snapshot();
+            let mut animation = AnimationRuntime::default();
             let mut frame = |events| {
                 let mut output = ctx.run_ui(
                     egui::RawInput {
                         events,
                         ..Default::default()
                     },
-                    |ui| object_panel(ui, &mut tree),
+                    |ui| object_panel(ui, &mut tree, &mut animation),
                 );
                 output.textures_delta.clear();
                 output.shapes
@@ -1831,6 +3041,7 @@ mod tests {
         set_selected(&mut tree, vec![operand.uuid]);
         set_objects(&mut tree, vec![target, operand]);
         tree.make_undo_redo_snapshot();
+        let mut animation = AnimationRuntime::default();
         let mut frame = |events| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
@@ -1839,7 +3050,7 @@ mod tests {
                 },
                 |ui| {
                     ui.set_width(350.0);
-                    operand_panel(ui, &mut tree);
+                    operand_panel(ui, &mut tree, &mut animation);
                 },
             );
             output.textures_delta.clear();
@@ -2540,6 +3751,37 @@ mod tests {
             }
         }
         assert!(painted > 0, "test must render actual handles");
+    }
+
+    #[test]
+    fn group_selection_hides_primitive_resize_gizmos() {
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(500.0, 400.0));
+        let mut camera = Camera::new();
+        camera.viewport_origin = Vec2::new(viewport.left(), viewport.top());
+        camera.viewport = Vec2::new(viewport.width(), viewport.height());
+        let mut state = UiState::default();
+        let mut tree = DataTree::default();
+        let root = SdfObject::create(sdf_consts::TYPE_BOX);
+        let mut child = SdfObject::create(sdf_consts::TYPE_SPHERE);
+        child.boolean_parent = Some(root.uuid);
+        set_objects(&mut tree, vec![root.clone(), child]);
+        set_selected(&mut tree, vec![root.uuid]);
+
+        let draw = |state: &mut UiState, tree: &mut DataTree| {
+            state.regions.clear();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_clip_rect(viewport);
+                state.draw_object_gizmos(ui, tree, &camera);
+            });
+            output.textures_delta.clear();
+        };
+        draw(&mut state, &mut tree);
+        assert!(state.regions.is_empty());
+
+        crate::model::set_selected_exact(&mut tree, vec![root.uuid]);
+        draw(&mut state, &mut tree);
+        assert!(!state.regions.is_empty());
     }
 }
 
