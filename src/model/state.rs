@@ -1,0 +1,147 @@
+use glam::{Vec2, Vec4};
+use observable_key_value_tree::{CanBeNone, ObservableKVTree};
+use serde::{Deserialize, Serialize};
+
+use super::{AnimationData, BooleanOperation, EditorState, Material, SdfObject, Transform};
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum ClaydashValue {
+    Animation(AnimationData),
+    Material(Material),
+    BooleanPick(BooleanPick),
+    Uuid(uuid::Uuid),
+    VecUuid(Vec<uuid::Uuid>),
+    F32(f32),
+    Vec2(Vec2),
+    Vec4(Vec4),
+    Transform(Transform),
+    VecSDFObject(Vec<SdfObject>),
+    EditorState(EditorState),
+    SelectionScope(SelectionScope),
+    Bool(bool),
+    #[serde(skip)]
+    Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelectionScope {
+    #[default]
+    Group,
+    Exact,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct BooleanPick {
+    pub target: uuid::Uuid,
+    pub operation: BooleanOperation,
+}
+
+impl Default for ClaydashValue {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl CanBeNone<ClaydashValue> for ClaydashValue {
+    fn none() -> Self {
+        Self::None
+    }
+}
+
+pub type DataTree = ObservableKVTree<ClaydashValue>;
+
+pub fn picked_material(tree: &DataTree) -> Material {
+    match tree.get_path("editor.material") {
+        ClaydashValue::Material(material) => material,
+        _ => {
+            let mut material = Material::default();
+            if let ClaydashValue::Vec4(color) = tree.get_path("editor.color") {
+                material.color = color;
+            }
+            material
+        }
+    }
+}
+
+pub fn boolean_distance(a: f32, b: f32, operation: BooleanOperation, softness: f32) -> f32 {
+    let b = if operation == BooleanOperation::Subtract {
+        -b
+    } else {
+        b
+    };
+    let hard = if operation == BooleanOperation::Union {
+        a.min(b)
+    } else {
+        a.max(b)
+    };
+    if softness <= 0.0 {
+        return hard;
+    }
+    let h = (softness - (a - b).abs()).max(0.0) / softness;
+    let blend = softness * h * h * 0.25;
+    if operation == BooleanOperation::Union {
+        hard - blend
+    } else {
+        hard + blend
+    }
+}
+
+pub fn objects(tree: &DataTree) -> Vec<SdfObject> {
+    match tree.get_path("scene.sdf_objects") {
+        ClaydashValue::VecSDFObject(value) => value,
+        _ => vec![],
+    }
+}
+
+pub fn selected(tree: &DataTree) -> Vec<uuid::Uuid> {
+    match tree.get_path("scene.selected_uuids") {
+        ClaydashValue::VecUuid(value) => value,
+        _ => vec![],
+    }
+}
+
+pub fn objects_ref(tree: &DataTree) -> &[SdfObject] {
+    match tree.get_path_ref("scene.sdf_objects") {
+        Some(ClaydashValue::VecSDFObject(value)) => value,
+        _ => &[],
+    }
+}
+
+pub fn selected_ref(tree: &DataTree) -> &[uuid::Uuid] {
+    match tree.get_path_ref("scene.selected_uuids") {
+        Some(ClaydashValue::VecUuid(value)) => value,
+        _ => &[],
+    }
+}
+
+pub fn selection_scope(tree: &DataTree) -> SelectionScope {
+    match tree.get_path("scene.selection_scope") {
+        ClaydashValue::SelectionScope(scope) => scope,
+        _ => SelectionScope::Group,
+    }
+}
+
+pub fn set_objects(tree: &mut DataTree, value: Vec<SdfObject>) {
+    tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
+}
+
+pub fn set_objects_transient(tree: &mut DataTree, value: Vec<SdfObject>) {
+    tree.set_transient_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
+}
+
+pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    tree.set_transient_path(
+        "scene.selection_scope",
+        ClaydashValue::SelectionScope(SelectionScope::Group),
+    );
+    tree.set_transient_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+}
+
+pub fn set_selected_exact(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    tree.set_transient_path(
+        "scene.selection_scope",
+        ClaydashValue::SelectionScope(SelectionScope::Exact),
+    );
+    tree.set_transient_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+}
