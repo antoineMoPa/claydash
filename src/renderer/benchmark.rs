@@ -25,7 +25,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: self.config.format,
+            format: self.render_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -177,7 +177,7 @@ impl Renderer {
         use std::time::{Duration, Instant};
         self.viewport = crate::viewport::Viewport::new(
             &self.device,
-            self.config.format,
+            self.render_format,
             self.device
                 .features()
                 .contains(wgpu::Features::TIMESTAMP_QUERY),

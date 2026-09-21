@@ -49,7 +49,10 @@ impl Renderer {
                 return None;
             }
         };
-        let view = frame.texture.create_view(&Default::default());
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.render_format),
+            ..Default::default()
+        });
         let work = self.viewport.prepare(
             &self.device,
             crate::viewport::ViewKey {

@@ -274,7 +274,7 @@ impl Renderer {
                     &self.device,
                     &self.shader_source,
                     &self.pipeline_layout,
-                    self.config.format,
+                    self.render_format,
                     self.use_bvh,
                     capacity,
                 ),

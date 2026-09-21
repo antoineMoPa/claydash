@@ -128,13 +128,13 @@ fn touch_phase(phase: TouchPhase) -> egui::TouchPhase {
 }
 
 fn egui_modifiers(modifiers: ModifiersState) -> Modifiers {
-    let command = modifiers.super_key();
+    let mac_cmd = modifiers.super_key();
     Modifiers {
         alt: modifiers.alt_key(),
         ctrl: modifiers.control_key(),
         shift: modifiers.shift_key(),
-        mac_cmd: command,
-        command,
+        mac_cmd,
+        command: mac_cmd || modifiers.control_key(),
     }
 }
 

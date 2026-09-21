@@ -16,6 +16,14 @@ const MAX_OBJECTS: usize = 1024;
 const MAX_BVH_NODES: usize = MAX_OBJECTS * 2 - 1;
 const BVH_LEAF: u32 = u32::MAX;
 
+fn render_format_for_surface(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
+    match format {
+        wgpu::TextureFormat::Bgra8Unorm => wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm => wgpu::TextureFormat::Rgba8UnormSrgb,
+        format => format,
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuCamera {
@@ -61,6 +69,7 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    render_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,
     shader_source: String,
@@ -100,3 +109,22 @@ mod scene_tests;
 
 #[cfg(test)]
 mod bvh_tests;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn presentation_formats_use_srgb_views_when_available() {
+        assert_eq!(
+            super::render_format_for_surface(wgpu::TextureFormat::Bgra8Unorm),
+            wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+        assert_eq!(
+            super::render_format_for_surface(wgpu::TextureFormat::Rgba8Unorm),
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        );
+        assert_eq!(
+            super::render_format_for_surface(wgpu::TextureFormat::Bgra8UnormSrgb),
+            wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+    }
+}

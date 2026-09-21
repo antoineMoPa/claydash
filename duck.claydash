@@ -172,9 +172,9 @@
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
+                0.9607843,
+                0.47058824,
                 0.0,
-                0.3,
                 1.0
               ],
               "roughness": 0.55,
@@ -265,16 +265,16 @@
                 "radius": 0.2
               }
             },
-            "name": "",
+            "name": "Head",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
+                0.9607843,
+                0.47058824,
                 0.0,
-                0.3,
                 1.0
               ],
               "roughness": 0.55,
@@ -365,16 +365,16 @@
                 "radius": 0.2
               }
             },
-            "name": "",
+            "name": "Bill",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.96862745,
+                0.09019608,
+                0.003921569,
                 1.0
               ],
               "roughness": 0.55,
@@ -465,16 +465,16 @@
                 "radius": 0.2
               }
             },
-            "name": "",
+            "name": "Left eye",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.99215686,
+                0.98039216,
+                1.0,
                 1.0
               ],
               "roughness": 0.55,
@@ -565,16 +565,16 @@
                 "radius": 0.2
               }
             },
-            "name": "",
+            "name": "Right eye",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.99215686,
+                0.98039216,
+                1.0,
                 1.0
               ],
               "roughness": 0.55,
@@ -665,16 +665,16 @@
                 "radius": 0.2
               }
             },
-            "name": "",
+            "name": "Left pupil",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.22745098,
+                0.3019608,
+                0.9882353,
                 1.0
               ],
               "roughness": 0.55,
@@ -765,16 +765,16 @@
                 "radius": 0.2
               }
             },
-            "name": "",
+            "name": "Right pupil",
             "operation": "Union",
             "boolean_parent": "6183084e-b025-4c72-bb5c-071eadf939e4",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.22745098,
+                0.3019608,
+                0.9882353,
                 1.0
               ],
               "roughness": 0.55,
@@ -869,7 +869,7 @@
                 ]
               }
             },
-            "name": "",
+            "name": "Cube 1",
             "operation": "Union",
             "boolean_parent": null,
             "softness": 0.0,
@@ -973,7 +973,7 @@
                 ]
               }
             },
-            "name": "",
+            "name": "Cube 2",
             "operation": "Union",
             "boolean_parent": null,
             "softness": 0.0,
@@ -1077,7 +1077,7 @@
                 ]
               }
             },
-            "name": "",
+            "name": "Cube 3",
             "operation": "Union",
             "boolean_parent": null,
             "softness": 0.0,

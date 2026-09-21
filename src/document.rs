@@ -420,6 +420,10 @@ mod tests {
 
         let objects = objects(&tree);
         assert!(!objects.is_empty());
+        assert!(objects.iter().all(|object| !object.name.is_empty()));
+        assert!(objects
+            .iter()
+            .all(|object| object.color == object.material.color));
         let group = objects
             .iter()
             .find(|candidate| {

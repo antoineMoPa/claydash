@@ -41,6 +41,10 @@ impl Renderer {
             .copied()
             .find(|format| format.is_srgb())
             .unwrap_or(capabilities.formats[0]);
+        // Browser canvases generally expose an unorm surface even though the
+        // page is displayed in sRGB. Render through the compatible sRGB view
+        // so WebGPU applies the same linear-to-sRGB conversion as native.
+        let render_format = render_format_for_surface(format);
         let present_mode = if uncapped {
             capabilities
                 .present_modes
@@ -62,7 +66,10 @@ impl Renderer {
             height: size.height.max(1),
             present_mode,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
+            view_formats: (render_format != format)
+                .then_some(render_format)
+                .into_iter()
+                .collect(),
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
@@ -157,13 +164,16 @@ impl Renderer {
             &device,
             &shader_source,
             &pipeline_layout,
-            format,
+            render_format,
             use_bvh,
             1,
         );
-        let egui_renderer =
-            egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
-        let viewport = crate::viewport::Viewport::new(&device, format, timestamps);
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &device,
+            render_format,
+            egui_wgpu::RendererOptions::default(),
+        );
+        let viewport = crate::viewport::Viewport::new(&device, render_format, timestamps);
         Self {
             viewport,
             initial_pixel_budget: 48 * 1024,
@@ -171,6 +181,7 @@ impl Renderer {
             device,
             queue,
             config,
+            render_format,
             pipeline,
             boolean_pipeline: None,
             shader_source,

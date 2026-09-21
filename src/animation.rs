@@ -1,4 +1,4 @@
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::model::{
     objects, scene_cameras, set_objects_transient, AnimationBinding, AnimationData, AnimationTrack,

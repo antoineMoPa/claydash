@@ -39,6 +39,7 @@ egui-wgpu = "0.36.2"
 rfd = "0.17.2"
 wgpu = "30.0.1"
 winit = "0.30.13"
+web-time = "1.1.0"
 bytemuck = { version = "1.24.0", features = ["derive"] }
 png = "0.17.16"
 

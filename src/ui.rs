@@ -149,7 +149,7 @@ impl UiState {
         self.ghosts = boolean_overlay::Ghosts::default();
         egui_extras::install_image_loaders(viewport_ui.ctx());
         self.handle_animation_shortcuts(viewport_ui.ctx(), tree);
-        self.animation.tick(tree, std::time::Instant::now());
+        self.animation.tick(tree, web_time::Instant::now());
         if self.animation.playing {
             viewport_ui.ctx().request_repaint();
         }

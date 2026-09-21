@@ -4,10 +4,10 @@ build:
 	cargo build --release --target wasm32-unknown-unknown
 	wasm-bindgen --out-name app \
 	  --out-dir www/target \
-	  --target web target/wasm32-unknown-unknown/release/main.wasm
+	  --target web target/wasm32-unknown-unknown/release/claydash.wasm
 
 deploy:
-	du -h target/wasm32-unknown-unknown/release/main.wasm
+	du -h target/wasm32-unknown-unknown/release/claydash.wasm
 	cp -r www/* claydash-ship/
 
 
