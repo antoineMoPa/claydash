@@ -216,9 +216,15 @@ impl UiState {
                         Color32::WHITE,
                     );
                 } else {
+                    let object_gizmo_blocker_count = self.regions.len();
                     self.draw_selection_tools(ui, tree, camera);
                     if !self.selection_tools.box_mode() && !self.selection_tools.active() {
-                        self.draw_object_gizmos(ui, tree, camera);
+                        self.draw_object_gizmos_avoiding(
+                            ui,
+                            tree,
+                            camera,
+                            object_gizmo_blocker_count,
+                        );
                     }
                 }
             });

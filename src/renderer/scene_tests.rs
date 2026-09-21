@@ -39,7 +39,7 @@ fn postorder_gpu_contract_matches_recursive_boolean_evaluation() {
                             values[parent],
                             values[index],
                             object.operation,
-                            object.softness,
+                            ordered[parent].softness,
                         );
                     } else {
                         closest = closest.min(values[index]);
@@ -99,9 +99,9 @@ fn soft_union_bounds_account_for_nonuniform_scale_and_nested_blends() {
         [0.0, 2.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
     ];
-    operand.component[2] = 0.2_f32.to_bits();
     let mut root = operand;
     root.meta[3] = -1;
+    root.component[2] = 0.2_f32.to_bits();
     let bound = ObjectBound {
         center: Vec3::ZERO,
         radius: 1.0,

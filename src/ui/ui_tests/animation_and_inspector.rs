@@ -564,14 +564,16 @@
     }
 
     #[test]
-    fn operand_softness_slider_changes_geometry_and_undoes() {
+    fn operand_softness_is_editable_on_a_selected_nested_group_and_undoes() {
         let ctx = egui::Context::default();
         let mut tree = DataTree::default();
         let target = SdfObject::create_kind(PrimitiveKind::Box);
         let mut operand = SdfObject::create_kind(PrimitiveKind::Sphere);
         operand.boolean_parent = Some(target.uuid);
+        let mut nested = SdfObject::create_kind(PrimitiveKind::Box);
+        nested.boolean_parent = Some(operand.uuid);
         set_selected(&mut tree, vec![operand.uuid]);
-        set_objects(&mut tree, vec![target, operand]);
+        set_objects(&mut tree, vec![target, operand, nested]);
         tree.make_undo_redo_snapshot();
         let mut animation = AnimationRuntime::default();
         let mut frame = |events| {
@@ -592,7 +594,7 @@
         let label = shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "Softness" => Some(text.pos),
+                egui::Shape::Text(text) if text.galley.text() == "Group softness" => Some(text.pos),
                 _ => None,
             })
             .expect("softness control");
@@ -610,6 +612,7 @@
             ]);
         }
         assert!(objects(&tree)[1].softness > 0.1);
+        assert_eq!(objects(&tree)[2].softness, 0.05);
         undo_redo::undo(&mut tree);
         assert_eq!(objects(&tree)[1].softness, 0.05);
     }

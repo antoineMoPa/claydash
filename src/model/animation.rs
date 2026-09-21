@@ -110,7 +110,7 @@ impl AnimatableProperty {
             Self::MaterialReflectivity => "Reflectivity".into(),
             Self::MaterialRefractiveIndex => "Refractive index".into(),
             Self::MaterialOpacity => "Opacity".into(),
-            Self::OperandSoftness => "Softness".into(),
+            Self::OperandSoftness => "Group softness".into(),
             Self::RepetitionEnabled => "Repetition enabled".into(),
             Self::RepetitionAxis(axis) => format!("Repeat {}", axis.label()),
             Self::RepetitionCount(axis) => format!("Count {}", axis.label()),

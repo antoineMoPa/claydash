@@ -7,6 +7,17 @@ impl UiState {
         tree: &mut DataTree,
         camera: &Camera,
     ) {
+        let blocker_count = self.regions.len();
+        self.draw_object_gizmos_avoiding(ui, tree, camera, blocker_count);
+    }
+
+    pub(super) fn draw_object_gizmos_avoiding(
+        &mut self,
+        ui: &mut egui::Ui,
+        tree: &mut DataTree,
+        camera: &Camera,
+        blocker_count: usize,
+    ) {
         let selection = selected(tree);
         if selection.len() != 1 || commands::effective_selected_ids(tree).len() != 1 {
             return;
@@ -19,12 +30,17 @@ impl UiState {
         let handles = resize_handles_with_matrix(object, matrix, camera);
         let mut changed = false;
         let mut finished = false;
-        for (index, handle) in handles.iter().enumerate() {
+        for handle in &handles {
+            let id = egui::Id::new(("resize", object.uuid, handle.id));
+            let captured = ui.ctx().is_being_dragged(id) || ui.ctx().drag_stopped_id() == Some(id);
             let Some(center) = camera.project(handle.world, ui.ctx().pixels_per_point()) else {
                 continue;
             };
-            if !ui.clip_rect().contains(center)
-                || self.regions.iter().any(|rect| rect.contains(center))
+            if !captured
+                && (!ui.clip_rect().contains(center)
+                    || self.regions[..blocker_count.min(self.regions.len())]
+                        .iter()
+                        .any(|rect| rect.contains(center)))
             {
                 continue;
             }
@@ -34,9 +50,18 @@ impl UiState {
             ) else {
                 continue;
             };
-            let projected_axis = (ahead - center) * 10.0;
+            let mut projected_axis = (ahead - center) * 10.0;
             if projected_axis.length_sq() < 4.0 {
-                continue;
+                let screen_up = camera.view().inverse().y_axis.truncate();
+                let Some(fallback) =
+                    camera.project(handle.world + screen_up * 0.1, ui.ctx().pixels_per_point())
+                else {
+                    continue;
+                };
+                projected_axis = (fallback - center) * 10.0;
+                if projected_axis.length_sq() < 0.0001 {
+                    continue;
+                }
             }
             let axis = projected_axis / projected_axis.length();
             let tip = center + axis * 28.0;
@@ -54,16 +79,18 @@ impl UiState {
             }
             hit = hit.intersect(ui.clip_rect());
             self.regions.push(hit);
-            let response = ui
-                .interact(
-                    hit,
-                    egui::Id::new(("resize", object.uuid, index)),
-                    egui::Sense::drag(),
-                )
-                .on_hover_text(format!(
+            let response = ui.interact(hit, id, egui::Sense::drag());
+            let response = if matches!(&object.params, SdfParams::BoxParams(_)) {
+                response.on_hover_text(format!(
+                    "Drag to resize {}. Hold Shift to resize from the center. Release to finish.",
+                    handle.label
+                ))
+            } else {
+                response.on_hover_text(format!(
                     "Drag to resize {}. Release to finish.",
                     handle.label
-                ));
+                ))
+            };
             let stroke = Stroke::new(
                 if response.hovered() || response.dragged() {
                     2.5
@@ -113,10 +140,23 @@ impl UiState {
             if response.dragged() {
                 let delta = ui.input(|input| input.pointer.delta());
                 let amount = delta.dot(projected_axis) / projected_axis.length_sq();
+                let resize_from_center = ui.input(|input| input.modifiers.shift);
                 match &mut object.params {
                     SdfParams::BoxParams(params) => {
-                        params.box_q[handle.parameter] =
-                            (params.box_q[handle.parameter] + amount).max(0.01)
+                        let half_size = &mut params.box_q[handle.parameter];
+                        let old_half_size = *half_size;
+                        let half_size_delta = if resize_from_center {
+                            amount
+                        } else {
+                            amount * 0.5
+                        };
+                        *half_size = (*half_size + half_size_delta).max(0.01);
+                        if !resize_from_center {
+                            let local_offset =
+                                handle.local_direction * (*half_size - old_half_size);
+                            object.transform.translation +=
+                                object.transform.matrix().transform_vector3(local_offset);
+                        }
                     }
                     SdfParams::SphereParams(params) => {
                         // Keep the base radius and other axes unchanged. The
@@ -205,10 +245,10 @@ pub(super) fn resize_handles_with_matrix(
                 for sign in [-1.0, 1.0] {
                     let mut local = Vec3::ZERO;
                     local[axis] = params.box_q[axis] * sign;
-                    let mut direction = Vec3::ZERO;
-                    direction[axis] = sign;
+                    let mut local_direction = Vec3::ZERO;
+                    local_direction[axis] = sign;
                     let world = matrix.transform_point3(local);
-                    let direction = matrix.transform_vector3(direction);
+                    let direction = matrix.transform_vector3(local_direction);
                     if direction.dot(camera.position - world) <= 0.0 {
                         continue;
                     }
@@ -224,9 +264,14 @@ pub(super) fn resize_handles_with_matrix(
                         })
                         .collect();
                     handles.push(ResizeHandle {
+                        id: ResizeHandleId::BoxFace {
+                            axis,
+                            positive: sign > 0.0,
+                        },
                         world,
                         guide_origin: origin,
                         direction,
+                        local_direction,
                         patch,
                         label: format!("Resize {}", axis_label(axis)),
                         color: axis_color(axis),
@@ -253,9 +298,11 @@ pub(super) fn resize_handles_with_matrix(
                 };
                 let direction = axis_direction * side;
                 handles.push(ResizeHandle {
+                    id: ResizeHandleId::SphereAxis(axis),
                     world: matrix.transform_point3(local_axis * params.radius * side),
                     guide_origin: origin,
                     direction,
+                    local_direction: local_axis * side,
                     patch: vec![],
                     label: format!("Radius {}", axis_label(axis)),
                     color: axis_color(axis),
@@ -271,9 +318,15 @@ pub(super) fn resize_handles_with_matrix(
             for (axis, value, label) in [(0, *radius, "Radius"), (1, *half_height, "Height")] {
                 let direction = if axis == 0 { Vec3::X } else { Vec3::Y };
                 handles.push(ResizeHandle {
+                    id: if axis == 0 {
+                        ResizeHandleId::CylinderRadius
+                    } else {
+                        ResizeHandleId::CylinderHeight
+                    },
                     world: matrix.transform_point3(direction * value),
                     guide_origin: origin,
                     direction: matrix.transform_vector3(direction),
+                    local_direction: direction,
                     patch: vec![],
                     label: label.into(),
                     color: axis_color(axis),
@@ -303,6 +356,11 @@ pub(super) fn resize_handles_with_matrix(
                 ),
             ] {
                 handles.push(ResizeHandle {
+                    id: if parameter == 0 {
+                        ResizeHandleId::TorusMajorRadius
+                    } else {
+                        ResizeHandleId::TorusMinorRadius
+                    },
                     world: matrix.transform_point3(local),
                     guide_origin: matrix.transform_point3(if parameter == 1 {
                         Vec3::X * *major_radius
@@ -310,6 +368,7 @@ pub(super) fn resize_handles_with_matrix(
                         Vec3::ZERO
                     }),
                     direction: matrix.transform_vector3(direction),
+                    local_direction: direction,
                     patch: vec![],
                     label: label.into(),
                     color: axis_color(parameter),

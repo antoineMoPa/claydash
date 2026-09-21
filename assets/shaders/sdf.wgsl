@@ -64,8 +64,8 @@ fn object_distance(point: vec3<f32>, object: Object) -> f32 {
     return distance * object.params.w;
 }
 
-fn combine_operand(value: vec2<f32>, child: vec2<f32>, object: Object) -> vec2<f32> {
-    let operation = object.state.z;
+fn combine_operand(value: vec2<f32>, child: vec2<f32>, operand: Object, group: Object) -> vec2<f32> {
+    let operation = operand.state.z;
     let b = select(child.x, -child.x, operation == 1);
     var result = value;
     if operation == 0 {
@@ -74,7 +74,7 @@ fn combine_operand(value: vec2<f32>, child: vec2<f32>, object: Object) -> vec2<f
         result.x = max(value.x, b);
         if operation == 2 && b > value.x { result.y = child.y; }
     }
-    let softness = bitcast<f32>(object.component.z);
+    let softness = bitcast<f32>(group.component.z);
     if softness > 0.0 {
         let h = max(softness - abs(value.x - b), 0.0) / softness;
         let blend = softness * h * h * 0.25;
@@ -92,7 +92,7 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     if CSG_SIZE == 2u {
         let child = vec2(object_distance(point, objects[start]), f32(start));
         var value = vec2(object_distance(point, objects[root]), f32(root));
-        value = combine_operand(value, child, objects[start]);
+        value = combine_operand(value, child, objects[start], objects[root]);
         return value;
     }
     var values: array<vec2<f32>, CSG_SIZE>;
@@ -103,7 +103,7 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
         let parent = u32(objects[i].state.w) - start;
         let child = values[i - start];
         var value = values[parent];
-        value = combine_operand(value, child, objects[i]);
+        value = combine_operand(value, child, objects[i], objects[parent + start]);
         values[parent] = value;
     }
     return values[root - start];

@@ -1,3 +1,77 @@
+    fn primitive_gizmo_frame(
+        ctx: &egui::Context,
+        state: &mut UiState,
+        tree: &mut DataTree,
+        camera: &Camera,
+        viewport: egui::Rect,
+        mut events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) {
+        events.insert(0, egui::Event::ModifiersChanged(modifiers));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                state.regions.clear();
+                ui.set_clip_rect(viewport);
+                state.draw_object_gizmos(ui, tree, camera);
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    fn drag_primitive_handle(
+        object: SdfObject,
+        handle_index: usize,
+        modifiers: egui::Modifiers,
+    ) -> SdfObject {
+        let ctx = egui::Context::default();
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0));
+        let mut camera = Camera::new();
+        camera.viewport_origin = Vec2::new(100.0, 40.0);
+        camera.viewport = Vec2::new(600.0, 500.0);
+        let handle = &resize_handles(&object, &camera)[handle_index];
+        let start = camera.project(handle.world, 1.0).unwrap();
+        let end = camera
+            .project(handle.world + handle.direction * 0.2, 1.0)
+            .unwrap();
+        let mut state = UiState::default();
+        let mut tree = DataTree::default();
+        set_selected(&mut tree, vec![object.uuid]);
+        set_objects(&mut tree, vec![object]);
+        let mut frame = |events| {
+            primitive_gizmo_frame(
+                &ctx, &mut state, &mut tree, &camera, viewport, events, modifiers,
+            );
+        };
+        frame(vec![]);
+        frame(vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers,
+            },
+        ]);
+        frame(vec![egui::Event::PointerMoved(start.lerp(end, 0.5))]);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers,
+        }]);
+        objects(&tree).remove(0)
+    }
+
     #[test]
     fn dragging_each_primitive_handle_outward_increases_its_dimension() {
         for (kind, handle_index) in PrimitiveKind::ALL.into_iter().flat_map(|kind| {
@@ -90,6 +164,196 @@
                 "{kind:?}: outward drag should increase dimension ({before} -> {after})"
             );
         }
+    }
+
+    #[test]
+    fn dragging_a_box_face_keeps_the_opposite_face_fixed() {
+        let mut original = SdfObject::create_kind(PrimitiveKind::Box);
+        original.transform.translation = Vec3::new(0.1, -0.2, 0.05);
+        original.transform.rotation = glam::Quat::from_rotation_z(0.35);
+        original.transform.scale = Vec3::new(1.4, 0.8, 1.1);
+        let camera = Camera::new();
+        let handle = &resize_handles(&original, &camera)[0];
+        let axis = handle.parameter;
+        let sign = handle.local_direction[axis];
+        let SdfParams::BoxParams(params) = &original.params else {
+            unreachable!()
+        };
+        let mut opposite_local = Vec3::ZERO;
+        opposite_local[axis] = -sign * params.box_q[axis];
+        let opposite_before = original
+            .transform
+            .matrix()
+            .transform_point3(opposite_local);
+        let center_before = original.transform.translation;
+
+        let resized = drag_primitive_handle(original, 0, egui::Modifiers::NONE);
+        let SdfParams::BoxParams(params) = &resized.params else {
+            unreachable!()
+        };
+        opposite_local[axis] = -sign * params.box_q[axis];
+        let opposite_after = resized
+            .transform
+            .matrix()
+            .transform_point3(opposite_local);
+
+        assert!(opposite_after.distance(opposite_before) < 0.0001);
+        assert!(resized.transform.translation.distance(center_before) > 0.01);
+    }
+
+    #[test]
+    fn shift_dragging_a_box_face_resizes_around_its_center() {
+        let mut original = SdfObject::create_kind(PrimitiveKind::Box);
+        original.transform.translation = Vec3::new(0.1, -0.2, 0.05);
+        original.transform.rotation = glam::Quat::from_rotation_z(0.35);
+        original.transform.scale = Vec3::new(1.4, 0.8, 1.1);
+        let center_before = original.transform.translation;
+        let SdfParams::BoxParams(params) = &original.params else {
+            unreachable!()
+        };
+        let size_before = params.box_q;
+
+        let resized = drag_primitive_handle(original, 0, egui::Modifiers::SHIFT);
+        let SdfParams::BoxParams(params) = &resized.params else {
+            unreachable!()
+        };
+
+        assert_eq!(resized.transform.translation, center_before);
+        assert!(params.box_q.distance(size_before) > 0.01);
+    }
+
+    #[test]
+    fn view_aligned_box_face_keeps_a_resize_gizmo() {
+        let ctx = egui::Context::default();
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0));
+        let mut camera = Camera::new();
+        camera.snap(ViewAngle::Front);
+        camera.projection_mode = crate::camera::ProjectionMode::Orthographic;
+        camera.viewport_origin = Vec2::new(viewport.left(), viewport.top());
+        camera.viewport = Vec2::new(viewport.width(), viewport.height());
+        let mut state = UiState::default();
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::Box);
+        set_selected(&mut tree, vec![object.uuid]);
+        set_objects(&mut tree, vec![object]);
+
+        primitive_gizmo_frame(
+            &ctx,
+            &mut state,
+            &mut tree,
+            &camera,
+            viewport,
+            vec![],
+            egui::Modifiers::NONE,
+        );
+
+        assert_eq!(state.regions.len(), 1);
+    }
+
+    #[test]
+    fn transform_gizmo_regions_do_not_hide_oblique_face_gizmos() {
+        let ctx = egui::Context::default();
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0));
+        let mut camera = Camera::new();
+        camera.viewport_origin = Vec2::new(viewport.left(), viewport.top());
+        camera.viewport = Vec2::new(viewport.width(), viewport.height());
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::Box);
+        let transform_regions: Vec<_> = resize_handles(&object, &camera)
+            .into_iter()
+            .map(|handle| {
+                egui::Rect::from_center_size(
+                    camera.project(handle.world, 1.0).unwrap(),
+                    egui::Vec2::splat(30.0),
+                )
+            })
+            .collect();
+        set_selected(&mut tree, vec![object.uuid]);
+        set_objects(&mut tree, vec![object]);
+        let mut state = UiState::default();
+        state.regions = transform_regions;
+        let transform_region_count = state.regions.len();
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(viewport);
+            state.draw_object_gizmos_avoiding(ui, &mut tree, &camera, 0);
+        });
+        output.textures_delta.clear();
+
+        assert!(state.regions.len() > transform_region_count);
+    }
+
+    #[test]
+    fn active_box_face_drag_survives_its_handle_moving_outside_the_viewport() {
+        let ctx = egui::Context::default();
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(300.0, 250.0));
+        let mut camera = Camera::new();
+        camera.snap(ViewAngle::Front);
+        camera.projection_mode = crate::camera::ProjectionMode::Orthographic;
+        camera.viewport_origin = Vec2::new(viewport.left(), viewport.top());
+        camera.viewport = Vec2::new(viewport.width(), viewport.height());
+        let mut state = UiState::default();
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::Box);
+        let handle = &resize_handles(&object, &camera)[0];
+        let handle_id = egui::Id::new(("resize", object.uuid, handle.id));
+        let start = camera.project(handle.world, 1.0).unwrap();
+        let screen_up = camera.view().inverse().y_axis.truncate();
+        let drag_direction = (camera
+            .project(handle.world + screen_up * 0.1, 1.0)
+            .unwrap()
+            - start)
+            .normalized();
+        set_selected(&mut tree, vec![object.uuid]);
+        set_objects(&mut tree, vec![object]);
+
+        let mut frame = |tree: &mut DataTree, events| {
+            primitive_gizmo_frame(
+                &ctx,
+                &mut state,
+                tree,
+                &camera,
+                viewport,
+                events,
+                egui::Modifiers::NONE,
+            );
+        };
+        frame(&mut tree, vec![]);
+        frame(
+            &mut tree,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let first = start + drag_direction * 12.0;
+        frame(&mut tree, vec![egui::Event::PointerMoved(first)]);
+        assert!(ctx.is_being_dragged(handle_id));
+
+        let mut scene = objects(&tree);
+        scene[0].transform.translation.x = 10.0;
+        set_objects(&mut tree, scene);
+        let SdfParams::BoxParams(params) = &objects(&tree)[0].params else {
+            unreachable!()
+        };
+        let size_before_second_move = params.box_q;
+
+        frame(
+            &mut tree,
+            vec![egui::Event::PointerMoved(first + drag_direction * 12.0)],
+        );
+        let SdfParams::BoxParams(params) = &objects(&tree)[0].params else {
+            unreachable!()
+        };
+        assert!(params.box_q.distance(size_before_second_move) > 0.001);
     }
 
     #[test]

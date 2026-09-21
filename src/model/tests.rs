@@ -101,6 +101,27 @@ fn softness_blends_all_operations_and_zero_preserves_hard_edges() {
 }
 
 #[test]
+fn boolean_group_owns_the_softness_used_for_its_operands() {
+    let mut group = SdfObject::create(TYPE_SPHERE);
+    group.softness = 0.2;
+    let mut operand = SdfObject::create(TYPE_SPHERE);
+    operand.boolean_parent = Some(group.uuid);
+    operand.transform.translation.x = 0.5;
+    operand.softness = 0.0;
+    let join = Vec3::X * 0.25;
+
+    let soft = scene_sample(join, &[group.clone(), operand.clone()])
+        .unwrap()
+        .0;
+    assert!((soft + 0.05).abs() < 0.0001);
+
+    group.softness = 0.0;
+    operand.softness = 0.2;
+    let hard = scene_sample(join, &[group, operand]).unwrap().0;
+    assert!(hard.abs() < 0.0001);
+}
+
+#[test]
 fn new_objects_are_soft_but_old_documents_keep_their_geometry() {
     let object = SdfObject::create_kind(PrimitiveKind::Sphere);
     assert_eq!(object.softness, 0.05);

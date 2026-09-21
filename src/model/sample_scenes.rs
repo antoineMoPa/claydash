@@ -81,7 +81,8 @@ pub fn scene_sample(point: Vec3, scene: &[SdfObject]) -> Option<(f32, uuid::Uuid
                 continue;
             }
             let candidate = subtree(point, scene, child_index, depth + 1);
-            let distance = boolean_distance(result.0, candidate.0, child.operation, child.softness);
+            let distance =
+                boolean_distance(result.0, candidate.0, child.operation, object.softness);
             match child.operation {
                 BooleanOperation::Union if candidate.0 < result.0 => result = candidate,
                 BooleanOperation::Subtract => result.0 = result.0.max(-candidate.0),

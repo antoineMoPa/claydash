@@ -262,7 +262,8 @@ pub struct SdfObject {
     pub operation: BooleanOperation,
     #[serde(default)]
     pub boolean_parent: Option<uuid::Uuid>,
-    /// World-space blend width. Older documents retain their hard edges.
+    /// World-space blend width for combining this object's direct children.
+    /// Older documents retain their hard edges.
     #[serde(default)]
     pub softness: f32,
     #[serde(default)]

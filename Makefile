@@ -5,6 +5,7 @@ build:
 	wasm-bindgen --out-name app \
 	  --out-dir www/target \
 	  --target web target/wasm32-unknown-unknown/release/claydash.wasm
+	cp assets/icons/lucide/loader-circle.svg www/target/loader-circle.svg
 
 deploy:
 	du -h target/wasm32-unknown-unknown/release/claydash.wasm

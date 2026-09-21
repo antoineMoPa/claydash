@@ -6,6 +6,8 @@
       body, html {
           margin: 0;
           padding: 0;
+          width: 100%;
+          height: 100%;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -13,13 +15,6 @@
       body {
           background: linear-gradient(188deg, #540d8e, #0c0312, #741683);
           background-size: 600% 600%;
-
-          animation: GradientAnimation 2s ease infinite;
-      }
-      @keyframes GradientAnimation {
-          0%{background-position:4% 0%}
-          50%{background-position:97% 100%}
-          100%{background-position:4% 0%}
       }
       canvas {
           background-color: white;
@@ -34,22 +29,29 @@
           color: #ffffff;
           font-family: sans-serif;
           text-align: center;
+          display: flex;
+          align-items: center;
+      }
+      .loading-spinner {
+          width: 1em;
+          height: 1em;
+          animation: SpinnerRotation 1s linear infinite;
+      }
+      @keyframes SpinnerRotation {
+          to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+          .loading-spinner {
+              animation: none;
+          }
       }
     </style>
   </head>
   <!-- Fix orbit camera -->
   <body oncontextmenu="return false">
-    <p class="loading-message">
-      Loading
+    <p class="loading-message" role="status" aria-label="Loading">
+      <img class="loading-spinner" src="./target/loader-circle.svg" alt="" />
     </p>
-    <script>
-      for (let i = 0; i < 3; i++) {
-          setTimeout(() => {
-              let loadingMessage = document.querySelectorAll(".loading-message")[0];
-              loadingMessage.innerText += ".";
-          }, 1500 * (i + 1));
-      }
-    </script>
     <script type="module">
       import init from './target/app.js'
       init().catch(error => {

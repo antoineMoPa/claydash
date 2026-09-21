@@ -1,7 +1,7 @@
 use super::*;
 
-// Smooth unions lower distance by at most k/4 per operand. Expand all primitive
-// bounds in a component by that total, accounting for anisotropic distance scale.
+// Smooth unions lower distance by at most k/4 per operand. Softness belongs to
+// the parent group, so every union edge reads the same value as evaluation.
 pub(super) fn expand_soft_bounds(objects: &[GpuObject], bounds: &mut [ObjectBound]) {
     let mut start = 0;
     for (root, object) in objects.iter().enumerate() {
@@ -11,8 +11,11 @@ pub(super) fn expand_soft_bounds(objects: &[GpuObject], bounds: &mut [ObjectBoun
         let group = &objects[start..=root];
         let blend: f32 = group
             .iter()
-            .filter(|o| o.meta[3] >= 0 && o.meta[2] == 0)
-            .map(|o| f32::from_bits(o.component[2]).max(0.0) * 0.25)
+            .filter_map(|o| {
+                (o.meta[3] >= 0 && o.meta[2] == 0).then(|| {
+                    f32::from_bits(objects[o.meta[3] as usize].component[2]).max(0.0) * 0.25
+                })
+            })
             .sum();
         if blend > 0.0 {
             let ratio = group
