@@ -6,6 +6,15 @@ pub(super) fn materials_panel(
     runtime: &mut AnimationRuntime,
 ) {
     ui.label(RichText::new("Material library").strong());
+    ui.horizontal_wrapped(|ui| {
+        for kind in MaterialKind::ALL {
+            let preset = Material::preset(kind);
+            if material_preview(ui, kind, preset).clicked() {
+                apply_material(tree, preset);
+            }
+        }
+    });
+    ui.add_space(4.0);
     let picker_id = ui.id().with("material-filter");
     let mut filter = ui
         .ctx()
@@ -75,6 +84,27 @@ pub(super) fn materials_panel(
     let mut material_id = first.material_id;
     let mut material = first.material;
     material.color = first.color;
+    if let Some(id) = material_id {
+        if let Some(asset) = crate::model::material_assets(tree)
+            .into_iter()
+            .find(|asset| asset.uuid == id)
+        {
+            let mut name = asset.name;
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut name)
+                            .desired_width(ui.available_width().max(48.0)),
+                    )
+                    .on_hover_text("Rename this scene material")
+                    .changed()
+                {
+                    crate::model::rename_material_asset(tree, id, name);
+                }
+            });
+        }
+    }
     ui.horizontal_wrapped(|ui| {
         if ui
             .button("Copy")
@@ -130,12 +160,9 @@ pub(super) fn materials_panel(
             .on_hover_text("Make a unique copy that no longer changes with the shared material")
             .clicked()
         {
-            let asset = crate::model::MaterialAsset::new(material);
-            let unique_id = asset.uuid;
+            let unique_id =
+                crate::model::create_unlinked_material_asset(tree, material_id, material);
             material_id = Some(unique_id);
-            let mut assets = crate::model::material_assets(tree);
-            assets.push(asset);
-            crate::model::set_material_assets(tree, assets);
             assign_material(&mut scene, &selection, material, material_id);
             set_objects(tree, scene.clone());
             tree.set_path(

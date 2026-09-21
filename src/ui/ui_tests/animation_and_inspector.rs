@@ -369,6 +369,29 @@
     }
 
     #[test]
+    fn material_library_keeps_the_visual_preset_cards() {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let mut runtime = AnimationRuntime::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(380.0);
+            materials_panel(ui, &mut tree, &mut runtime);
+        });
+        output.textures_delta.clear();
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        for kind in MaterialKind::ALL {
+            assert!(labels.iter().any(|label| label == kind.label()));
+        }
+    }
+
+    #[test]
     fn keyboard_then_tree_click_combines_whole_groups_and_undoes() {
         use winit::keyboard::KeyCode;
         for (key, operation) in [

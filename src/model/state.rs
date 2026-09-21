@@ -103,7 +103,6 @@ pub fn update_material_asset(tree: &mut DataTree, id: uuid::Uuid, material: Mate
     let mut assets = material_assets(tree);
     if let Some(asset) = assets.iter_mut().find(|asset| asset.uuid == id) {
         asset.material = material;
-        asset.name = material.kind.label().to_string();
     } else {
         assets.push(MaterialAsset {
             uuid: id,
@@ -112,6 +111,41 @@ pub fn update_material_asset(tree: &mut DataTree, id: uuid::Uuid, material: Mate
         });
     }
     set_material_assets(tree, assets);
+}
+
+pub fn rename_material_asset(tree: &mut DataTree, id: uuid::Uuid, name: String) -> bool {
+    let mut assets = material_assets(tree);
+    let Some(asset) = assets.iter_mut().find(|asset| asset.uuid == id) else {
+        return false;
+    };
+    if asset.name == name {
+        return false;
+    }
+    asset.name = name;
+    set_material_assets(tree, assets);
+    true
+}
+
+pub fn create_unlinked_material_asset(
+    tree: &mut DataTree,
+    source_id: Option<uuid::Uuid>,
+    material: Material,
+) -> uuid::Uuid {
+    let mut assets = material_assets(tree);
+    let source_name = source_id
+        .and_then(|id| {
+            assets
+                .iter()
+                .find(|asset| asset.uuid == id)
+                .map(|asset| asset.name.clone())
+        })
+        .unwrap_or_else(|| material.kind.label().to_owned());
+    let mut asset = MaterialAsset::new(material);
+    asset.name = format!("{source_name} copy");
+    let id = asset.uuid;
+    assets.push(asset);
+    set_material_assets(tree, assets);
+    id
 }
 
 pub fn scene_cameras(tree: &DataTree) -> Vec<SceneCamera> {

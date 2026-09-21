@@ -33,6 +33,45 @@ fn material_presets_expose_distinct_surface_properties() {
 }
 
 #[test]
+fn renamed_material_asset_keeps_its_name_when_edited() {
+    let mut tree = DataTree::default();
+    let mut material = Material::preset(MaterialKind::Metallic);
+    let id = ensure_material_asset(&mut tree, material);
+
+    assert!(rename_material_asset(&mut tree, id, "Brushed steel".into()));
+    material.roughness = 0.4;
+    update_material_asset(&mut tree, id, material);
+
+    let asset = material_assets(&tree)
+        .into_iter()
+        .find(|asset| asset.uuid == id)
+        .unwrap();
+    assert_eq!(asset.name, "Brushed steel");
+    assert_eq!(asset.material.roughness, 0.4);
+}
+
+#[test]
+fn unlinking_material_creates_an_independently_named_copy() {
+    let mut tree = DataTree::default();
+    let material = Material::preset(MaterialKind::Wood);
+    let source_id = ensure_material_asset(&mut tree, material);
+    rename_material_asset(&mut tree, source_id, "Walnut".into());
+
+    let copy_id = create_unlinked_material_asset(&mut tree, Some(source_id), material);
+    assert_ne!(copy_id, source_id);
+    let assets = material_assets(&tree);
+    assert_eq!(assets.len(), 2);
+    assert_eq!(
+        assets
+            .iter()
+            .find(|asset| asset.uuid == copy_id)
+            .unwrap()
+            .name,
+        "Walnut copy"
+    );
+}
+
+#[test]
 fn softness_blends_all_operations_and_zero_preserves_hard_edges() {
     assert_eq!(
         boolean_distance(0.0, 0.0, BooleanOperation::Union, 0.2),

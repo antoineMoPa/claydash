@@ -144,3 +144,80 @@ pub(super) fn axis_color(axis: usize) -> Color32 {
         _ => Color32::from_rgb(86, 149, 255),
     }
 }
+
+pub(super) fn color32(color: Vec4) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        (color.x * 255.0) as u8,
+        (color.y * 255.0) as u8,
+        (color.z * 255.0) as u8,
+        (color.w * 255.0) as u8,
+    )
+}
+
+pub(super) fn material_preview(
+    ui: &mut egui::Ui,
+    kind: MaterialKind,
+    material: Material,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(82.0, 70.0), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    ui.painter().rect(
+        rect,
+        5.0,
+        visuals.weak_bg_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let preview = egui::Rect::from_min_max(
+        rect.min + egui::vec2(7.0, 6.0),
+        egui::pos2(rect.max.x - 7.0, rect.max.y - 22.0),
+    );
+    if kind == MaterialKind::Transparent {
+        let size = 8.0;
+        for row in 0..5 {
+            for column in 0..9 {
+                let tile = egui::Rect::from_min_size(
+                    preview.min + egui::vec2(column as f32 * size, row as f32 * size),
+                    egui::vec2(size, size),
+                )
+                .intersect(preview);
+                let fill = if (row + column) % 2 == 0 {
+                    Color32::from_gray(75)
+                } else {
+                    Color32::from_gray(42)
+                };
+                ui.painter().rect_filled(tile, 0.0, fill);
+            }
+        }
+    }
+    let center = preview.center();
+    let radius = preview.height().min(preview.width()) * 0.37;
+    ui.painter()
+        .circle_filled(center, radius, color32(material.color));
+    if kind == MaterialKind::Wood {
+        for offset in -5..=5 {
+            let x = offset as f32 * radius / 6.0;
+            let height = (radius * radius - x * x).sqrt();
+            ui.painter().line_segment(
+                [
+                    center + egui::vec2(x, -height),
+                    center + egui::vec2(x, height),
+                ],
+                Stroke::new(1.2, Color32::from_black_alpha(65)),
+            );
+        }
+    }
+    ui.painter().circle_filled(
+        center - egui::vec2(radius * 0.28, radius * 0.32),
+        radius * (0.18 + material.reflectivity * 0.12),
+        Color32::from_white_alpha((100.0 + material.reflectivity * 155.0) as u8),
+    );
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.max.y - 10.0),
+        egui::Align2::CENTER_CENTER,
+        kind.label(),
+        egui::FontId::proportional(11.0),
+        visuals.text_color(),
+    );
+    response
+}
