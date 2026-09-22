@@ -94,7 +94,10 @@ impl InteractionState {
         let transforming = matches!(
             tree.get_path("editor.state"),
             ClaydashValue::EditorState(
-                EditorState::Grabbing | EditorState::Scaling | EditorState::Rotating
+                EditorState::Grabbing
+                    | EditorState::Scaling
+                    | EditorState::Rotating
+                    | EditorState::Extruding
             )
         );
         if rotating && !has_command_modifier {
@@ -132,6 +135,7 @@ impl InteractionState {
             KeyCode::KeyG => "grab",
             KeyCode::KeyS => "scale",
             KeyCode::KeyR => "rotate",
+            KeyCode::KeyE if !transforming => "extrude",
             KeyCode::KeyX => "constrain_x",
             KeyCode::KeyY if transforming => "constrain_y",
             KeyCode::KeyZ if transforming => "constrain_z",
@@ -205,7 +209,10 @@ impl InteractionState {
             let transforming = matches!(
                 tree.get_path("editor.state"),
                 ClaydashValue::EditorState(
-                    EditorState::Grabbing | EditorState::Scaling | EditorState::Rotating
+                    EditorState::Grabbing
+                        | EditorState::Scaling
+                        | EditorState::Rotating
+                        | EditorState::Extruding
                 )
             );
             if !transforming

@@ -39,8 +39,6 @@ enum WebDocumentMessage {
         name: std::path::PathBuf,
         bytes: Vec<u8>,
     },
-    Saved(std::path::PathBuf),
-    Error(String),
 }
 
 pub struct App {
@@ -462,39 +460,15 @@ impl App {
                 });
             }
             FileMenuAction::Save | FileMenuAction::SaveAs => {
-                let bytes = match crate::document::serialize_scene(&self.tree) {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        self.document.set_error("save the project", error);
-                        return;
-                    }
-                };
                 let file_name = self
                     .document
                     .current_path()
                     .and_then(std::path::Path::file_name)
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "untitled.claydash".to_string());
-                let tx = self.document_tx.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    let file = rfd::AsyncFileDialog::new()
-                        .add_filter("Claydash project", &["claydash"])
-                        .set_file_name(&file_name)
-                        .save_file()
-                        .await;
-                    if let Some(file) = file {
-                        let name = std::path::PathBuf::from(file.file_name());
-                        match file.write(&bytes).await {
-                            Ok(()) => {
-                                let _ = tx.send(WebDocumentMessage::Saved(name));
-                            }
-                            Err(error) => {
-                                let _ = tx.send(WebDocumentMessage::Error(format!("{error:?}")));
-                            }
-                        }
-                    }
-                });
+                self.download_web_project(file_name);
             }
+            FileMenuAction::SaveNamed(file_name) => self.download_web_project(file_name),
             FileMenuAction::OpenRecent(_) => {}
             FileMenuAction::Render(_) => {
                 self.document.set_error(
@@ -502,6 +476,23 @@ impl App {
                     "render export is currently desktop-only",
                 );
             }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn download_web_project(&mut self, file_name: String) {
+        let bytes = match crate::document::serialize_scene(&self.tree) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.document.set_error("save the project", error);
+                return;
+            }
+        };
+        match crate::document::download_bytes(&file_name, &bytes) {
+            Ok(()) => self
+                .document
+                .mark_saved(std::path::PathBuf::from(file_name)),
+            Err(error) => self.document.set_error("save the project", error),
         }
     }
 
@@ -517,10 +508,6 @@ impl App {
                         }
                         Err(error) => self.document.set_error("open the project", error),
                     }
-                }
-                WebDocumentMessage::Saved(name) => self.document.mark_saved(name),
-                WebDocumentMessage::Error(error) => {
-                    self.document.set_error("save the project", error)
                 }
             }
         }
@@ -850,11 +837,25 @@ impl ApplicationHandler for App {
                         && !self.ui.selection_gesture_active()
                     {
                         let wants_keyboard = self.egui.egui_wants_keyboard_input();
+                        let timeline_shortcut = matches!(
+                            key,
+                            winit::keyboard::KeyCode::KeyG
+                                | winit::keyboard::KeyCode::Backspace
+                                | winit::keyboard::KeyCode::Delete
+                        ) && self.ui.animation_timeline_contains_pointer(
+                            self.interactions.mouse_position,
+                            self.egui.pixels_per_point(),
+                        );
                         let entered_box_selection = key == winit::keyboard::KeyCode::KeyB
                             && !wants_keyboard
                             && !self.interactions.command_modifier_down()
-                            && self.ui.enter_box_selection_mode(&self.tree);
-                        if !entered_box_selection {
+                            && self.ui.begin_box_selection(
+                                &self.tree,
+                                self.interactions.mouse_position,
+                                self.egui.pixels_per_point(),
+                                self.egui.input(|input| input.modifiers.shift),
+                            );
+                        if !entered_box_selection && !timeline_shortcut {
                             self.interactions.key_pressed(
                                 key,
                                 wants_keyboard,

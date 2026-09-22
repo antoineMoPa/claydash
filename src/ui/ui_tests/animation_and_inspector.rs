@@ -46,6 +46,254 @@
     }
 
     #[test]
+    fn timeline_scroll_modifiers_choose_time_and_vertical_zoom_explicitly() {
+        let modifiers = |command, ctrl, shift| egui::Modifiers {
+            command,
+            ctrl,
+            shift,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            timeline_scroll_zoom(modifiers(false, false, false)),
+            TimelineScrollZoom::None
+        );
+        assert_eq!(
+            timeline_scroll_zoom(modifiers(true, false, false)),
+            TimelineScrollZoom::Time
+        );
+        assert_eq!(
+            timeline_scroll_zoom(modifiers(false, true, false)),
+            TimelineScrollZoom::Time
+        );
+        assert_eq!(
+            timeline_scroll_zoom(modifiers(false, false, true)),
+            TimelineScrollZoom::Vertical
+        );
+        assert_eq!(
+            timeline_scroll_zoom(modifiers(true, false, true)),
+            TimelineScrollZoom::Both
+        );
+    }
+
+    #[test]
+    fn timeline_scroll_snaps_to_its_dominant_axis() {
+        assert_eq!(
+            dominant_timeline_scroll_axis(egui::vec2(24.0, 6.0)),
+            Some(TimelineScrollAxis::Horizontal)
+        );
+        assert_eq!(
+            dominant_timeline_scroll_axis(egui::vec2(4.0, -18.0)),
+            Some(TimelineScrollAxis::Vertical)
+        );
+        assert_eq!(
+            dominant_timeline_scroll_axis(egui::Vec2::ZERO),
+            None
+        );
+    }
+
+    #[test]
+    fn timeline_zoom_keeps_the_frame_under_the_pointer_anchored() {
+        let mut runtime = AnimationRuntime::default();
+        apply_timeline_zoom(
+            &mut runtime,
+            0,
+            100,
+            0.25,
+            50.0,
+            TimelineScrollZoom::Time,
+        );
+        let (start, end) = timeline_time_bounds(&runtime, 0, 100);
+
+        assert!((start + (end - start) * 0.25 - 25.0).abs() < 0.001);
+        assert!(end - start < 100.0);
+        assert_eq!(runtime.timeline_track_height, 64.0);
+
+        apply_timeline_zoom(
+            &mut runtime,
+            0,
+            100,
+            0.5,
+            -30.0,
+            TimelineScrollZoom::Vertical,
+        );
+        assert!(runtime.timeline_track_height < 64.0);
+    }
+
+    #[test]
+    fn timeline_accepts_ctrl_wheel_as_an_egui_zoom_gesture() {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let object_id = object.uuid;
+        set_objects(&mut tree, vec![object]);
+        set_selected(&mut tree, vec![object_id]);
+        animation::insert_keyframe(
+            &mut tree,
+            AnimationBinding {
+                object: object_id,
+                property: AnimatableProperty::Position(VectorAxis::X),
+            },
+            0,
+            0.0,
+        );
+        let modifiers = egui::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        let mut runtime = AnimationRuntime::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 500.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
+                    egui::Event::ModifiersChanged(modifiers),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 30.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(800.0);
+                ui.set_height(500.0);
+                animation_panel(ui, &mut tree, &mut runtime);
+            },
+        );
+        output.textures_delta.clear();
+
+        assert!(runtime.timeline_time_scale < 1.0);
+        let (start, end) = timeline_time_bounds(&runtime, 0, 250);
+        assert!(end - start > 250.0);
+
+        runtime.timeline_time_scale = 1.0;
+        runtime.timeline_time_center = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 500.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
+                    egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+                    egui::Event::Zoom(1.25),
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(800.0);
+                ui.set_height(500.0);
+                animation_panel(ui, &mut tree, &mut runtime);
+            },
+        );
+        output.textures_delta.clear();
+
+        assert!(runtime.timeline_time_scale > 1.0);
+
+        runtime.timeline_time_scale = 2.0;
+        runtime.timeline_time_center = Some(125.0);
+        let (before_start, _) = timeline_time_bounds(&runtime, 0, 250);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 500.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(40.0, 8.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(800.0);
+                ui.set_height(500.0);
+                animation_panel(ui, &mut tree, &mut runtime);
+            },
+        );
+        output.textures_delta.clear();
+        let (after_start, _) = timeline_time_bounds(&runtime, 0, 250);
+
+        assert!(after_start < before_start);
+    }
+
+    #[test]
+    fn timeline_time_zoom_can_extend_far_beyond_the_animation_range() {
+        let mut runtime = AnimationRuntime::default();
+        for _ in 0..20 {
+            apply_timeline_zoom(
+                &mut runtime,
+                0,
+                250,
+                0.5,
+                -50.0,
+                TimelineScrollZoom::Time,
+            );
+        }
+        let (start, end) = timeline_time_bounds(&runtime, 0, 250);
+
+        assert!(start < -100_000.0);
+        assert!(end > 100_000.0);
+    }
+
+    #[test]
+    fn touchpad_horizontal_scroll_pans_time_without_changing_zoom() {
+        let mut runtime = AnimationRuntime::default();
+        apply_timeline_zoom(
+            &mut runtime,
+            0,
+            100,
+            0.5,
+            40.0,
+            TimelineScrollZoom::Time,
+        );
+        let scale = runtime.timeline_time_scale;
+        let (before_start, before_end) = timeline_time_bounds(&runtime, 0, 100);
+
+        pan_timeline_time(&mut runtime, 0, 100, 80.0, 400.0);
+
+        let (after_start, after_end) = timeline_time_bounds(&runtime, 0, 100);
+        assert!(after_start < before_start);
+        assert!(after_end < before_end);
+        assert_eq!(runtime.timeline_time_scale, scale);
+        assert!((after_end - after_start - (before_end - before_start)).abs() < 0.001);
+    }
+
+    #[test]
+    fn moving_keyframes_previews_their_curve_anchors_at_the_dragged_frame() {
+        let object = SdfObject::create_kind(PrimitiveKind::Box);
+        let selected = SelectedKeyframe {
+            binding: AnimationBinding {
+                object: object.uuid,
+                property: AnimatableProperty::Position(VectorAxis::X),
+            },
+            frame: 12,
+        };
+        let drag = KeyframeDrag {
+            anchor: selected,
+            keyframes: vec![selected],
+            preview_delta: 7,
+            start_pointer_x: 0.0,
+            pixels_per_frame: 1.0,
+            keyboard_initiated: false,
+        };
+
+        assert_eq!(displayed_keyframe_frame(selected, Some(&drag)), 19);
+    }
+
+    #[test]
     fn animation_lanes_share_one_origin_with_truncated_labels() {
         let ctx = egui::Context::default();
         let mut tree = DataTree::default();

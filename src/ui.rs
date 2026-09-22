@@ -37,7 +37,10 @@ use egui_frames::{DropSide, Frames, FramesEvent, FramesStyle, Layout, PaneId, Pa
 use glam::{EulerRot, Vec2, Vec3, Vec4};
 
 use crate::{
-    animation::{self, AnimationRuntime, KeyframeDrag, SelectedKeyframe},
+    animation::{
+        self, AnimationRuntime, KeyframeDrag, SelectedKeyframe, TimelineBoxSelection,
+        TimelineScrollAxis,
+    },
     camera::{Camera, ViewAngle},
     commands::{self, Commands},
     document::{DocumentState, FileMenuAction},
@@ -84,6 +87,8 @@ pub struct UiState {
     ghosts: boolean_overlay::Ghosts,
     selection_tools: selection_tools::SelectionTools,
     insert_keyframe_menu_position: Option<egui::Pos2>,
+    #[cfg(target_arch = "wasm32")]
+    web_save_name: Option<String>,
 }
 
 impl Default for UiState {
@@ -112,11 +117,29 @@ impl Default for UiState {
             ghosts: boolean_overlay::Ghosts::default(),
             selection_tools: selection_tools::SelectionTools::default(),
             insert_keyframe_menu_position: None,
+            #[cfg(target_arch = "wasm32")]
+            web_save_name: None,
         }
     }
 }
 
 impl UiState {
+    pub fn animation_timeline_contains_pointer(
+        &self,
+        physical_pointer: Vec2,
+        pixels_per_point: f32,
+    ) -> bool {
+        let Some((pane, _)) = self.layout.find_pane(|pane| *pane == EditorPane::Animation) else {
+            return false;
+        };
+        self.frames.pane_rect(pane).is_some_and(|rect| {
+            rect.contains(egui::pos2(
+                physical_pointer.x / pixels_per_point,
+                physical_pointer.y / pixels_per_point,
+            ))
+        })
+    }
+
     pub fn animation_timeline_open(&self) -> bool {
         self.layout
             .find_pane(|pane| *pane == EditorPane::Animation)
@@ -154,6 +177,27 @@ impl UiState {
             viewport_ui.ctx().request_repaint();
         }
         let file_action = draw_file_menu(viewport_ui, document, &mut self.layout);
+        #[cfg(target_arch = "wasm32")]
+        let file_action = {
+            let mut file_action = file_action;
+            if matches!(
+                file_action,
+                Some(FileMenuAction::Save | FileMenuAction::SaveAs)
+            ) {
+                self.web_save_name = Some(
+                    document
+                        .current_path()
+                        .and_then(std::path::Path::file_name)
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "untitled.claydash".into()),
+                );
+                file_action = None;
+            }
+            if let Some(action) = draw_web_save_dialog(viewport_ui.ctx(), &mut self.web_save_name) {
+                file_action = Some(action);
+            }
+            file_action
+        };
         let mut frames = std::mem::take(&mut self.frames);
         let mut layout = std::mem::take(&mut self.layout);
         let mut view = WorkspaceView {
@@ -203,7 +247,18 @@ impl UiState {
                 ui.set_clip_rect(rect);
                 self.regions.extend(camera_overlay::draw(ui, tree, camera));
                 self.ghosts = boolean_overlay::draw(ui, tree, camera);
-                if let Some(pick) = scene_actions::pending_boolean(tree) {
+                if matches!(
+                    tree.get_path("editor.state"),
+                    crate::model::ClaydashValue::EditorState(crate::model::EditorState::Extruding)
+                ) {
+                    ui.painter().text(
+                        rect.center_bottom() - egui::vec2(0.0, 16.0),
+                        egui::Align2::CENTER_BOTTOM,
+                        "Extrude face: move mouse · click or Enter confirms · Esc cancels",
+                        egui::FontId::proportional(13.0),
+                        Color32::WHITE,
+                    );
+                } else if let Some(pick) = scene_actions::pending_boolean(tree) {
                     // Resize handles must not intercept the operand-selection click.
                     ui.painter().text(
                         rect.center_bottom() - egui::vec2(0.0, 16.0),

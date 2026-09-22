@@ -12,6 +12,8 @@ use crate::{
 
 pub type Commands = CommandMap<ClaydashValue>;
 
+pub(crate) const EXTRUSION_INITIAL_HALF_EXTENT: f32 = 0.01;
+
 fn register(
     commands: &mut Commands,
     name: &str,
@@ -57,6 +59,14 @@ pub fn register_all(commands: &mut Commands) {
         "Start rotating selection.",
         "R",
         start_rotate,
+    );
+    register(
+        commands,
+        "extrude",
+        "Extrude selected face",
+        "Create an adjacent box from the selected box face.",
+        "E",
+        extrude_selected_face,
     );
     register(
         commands,
@@ -240,6 +250,30 @@ fn toggle_constraint(tree: &mut DataTree, path: &str) {
 }
 
 fn cancel(tree: &mut DataTree) {
+    if matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::Extruding)
+    ) {
+        if let ClaydashValue::Uuid(extrusion) = tree.get_path("editor.extrusion_object") {
+            let scene = objects(tree)
+                .into_iter()
+                .filter(|object| object.uuid != extrusion)
+                .collect();
+            set_objects(tree, scene);
+        }
+        if let ClaydashValue::BoxFaceSelection(face) = tree.get_path("editor.extrusion_source_face")
+        {
+            crate::model::set_selected_exact(tree, vec![face.object]);
+            crate::model::set_selected_box_face(tree, Some(face));
+        }
+        tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
+        tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
+        tree.set_path(
+            "editor.state",
+            ClaydashValue::EditorState(EditorState::Start),
+        );
+        return;
+    }
     let targets = transform_targets(tree);
     let mut scene = objects(tree);
     let mut cameras = crate::model::scene_cameras(tree);
@@ -263,6 +297,8 @@ fn cancel(tree: &mut DataTree) {
 }
 
 fn finish(tree: &mut DataTree) {
+    tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
+    tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
     tree.set_path(
         "editor.state",
         ClaydashValue::EditorState(EditorState::Start),
@@ -372,6 +408,62 @@ fn duplicate(tree: &mut DataTree) {
     set_objects(tree, scene);
     crate::model::set_scene_cameras(tree, cameras);
     start_grab(tree);
+}
+
+pub fn extrude_selected_face(tree: &mut DataTree) {
+    let Some(face) = crate::model::selected_box_face(tree) else {
+        return;
+    };
+    if !selected(tree).contains(&face.object) {
+        return;
+    }
+    let mut scene = objects(tree);
+    if crate::model::has_boolean_children(&scene, face.object) {
+        return;
+    }
+    let Some(source) = scene
+        .iter()
+        .find(|object| object.uuid == face.object)
+        .cloned()
+    else {
+        return;
+    };
+    let crate::model::SdfParams::BoxParams(params) = &source.params else {
+        return;
+    };
+    let axis = face.axis.index();
+    let source_half_extent = params.box_q[axis];
+    let mut local_offset = glam::Vec3::ZERO;
+    local_offset[axis] = (source_half_extent + EXTRUSION_INITIAL_HALF_EXTENT)
+        * if face.positive { 1.0 } else { -1.0 };
+    let mut extrusion = source.duplicate();
+    extrusion.name = format!("{} extrusion", source.display_name());
+    extrusion.transform.translation += source.transform.matrix().transform_vector3(local_offset);
+    let crate::model::SdfParams::BoxParams(extrusion_params) = &mut extrusion.params else {
+        unreachable!()
+    };
+    extrusion_params.box_q[axis] = EXTRUSION_INITIAL_HALF_EXTENT;
+    let extrusion_id = extrusion.uuid;
+    scene.push(extrusion);
+    set_objects(tree, scene);
+    crate::model::set_selected_exact(tree, vec![extrusion_id]);
+    crate::model::set_selected_box_face(
+        tree,
+        Some(crate::model::BoxFaceSelection {
+            object: extrusion_id,
+            axis: face.axis,
+            positive: face.positive,
+        }),
+    );
+    tree.set_transient_path("editor.extrusion_object", ClaydashValue::Uuid(extrusion_id));
+    tree.set_transient_path(
+        "editor.extrusion_source_face",
+        ClaydashValue::BoxFaceSelection(face),
+    );
+    tree.set_path(
+        "editor.state",
+        ClaydashValue::EditorState(EditorState::Extruding),
+    );
 }
 
 pub fn duplicate_object(tree: &mut DataTree, id: uuid::Uuid) {
@@ -635,6 +727,65 @@ mod tests {
         );
 
         assert_eq!(cameras[0].transform, transform);
+    }
+
+    #[test]
+    fn extruding_a_box_face_creates_an_adjacent_selected_box() {
+        let mut tree = DataTree::default();
+        let mut source = SdfObject::create(TYPE_BOX);
+        source.transform.translation = glam::Vec3::new(1.0, 2.0, 3.0);
+        source.transform.rotation = glam::Quat::from_rotation_z(0.4);
+        source.transform.scale = glam::Vec3::new(1.5, 0.8, 1.2);
+        let source_id = source.uuid;
+        let expected_offset = source
+            .transform
+            .matrix()
+            .transform_vector3(glam::Vec3::X * (0.3 + EXTRUSION_INITIAL_HALF_EXTENT));
+        set_objects(&mut tree, vec![source.clone()]);
+        crate::model::set_selected_exact(&mut tree, vec![source_id]);
+        crate::model::set_selected_box_face(
+            &mut tree,
+            Some(crate::model::BoxFaceSelection {
+                object: source_id,
+                axis: crate::model::VectorAxis::X,
+                positive: true,
+            }),
+        );
+
+        extrude_selected_face(&mut tree);
+
+        let scene = objects(&tree);
+        assert_eq!(scene.len(), 2);
+        let (
+            crate::model::SdfParams::BoxParams(source_params),
+            crate::model::SdfParams::BoxParams(extrusion_params),
+        ) = (&source.params, &scene[1].params)
+        else {
+            unreachable!()
+        };
+        assert_eq!(extrusion_params.box_q.y, source_params.box_q.y);
+        assert_eq!(extrusion_params.box_q.z, source_params.box_q.z);
+        assert_eq!(extrusion_params.box_q.x, EXTRUSION_INITIAL_HALF_EXTENT);
+        assert!(
+            scene[1]
+                .transform
+                .translation
+                .distance(source.transform.translation + expected_offset)
+                < 0.0001
+        );
+        assert_eq!(selected(&tree), vec![scene[1].uuid]);
+        assert!(matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Extruding)
+        ));
+        assert_eq!(
+            crate::model::selected_box_face(&tree),
+            Some(crate::model::BoxFaceSelection {
+                object: scene[1].uuid,
+                axis: crate::model::VectorAxis::X,
+                positive: true,
+            })
+        );
     }
 }
 

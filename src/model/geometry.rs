@@ -8,6 +8,14 @@ pub enum EditorState {
     Grabbing,
     Scaling,
     Rotating,
+    Extruding,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoxFaceSelection {
+    pub object: uuid::Uuid,
+    pub axis: crate::model::VectorAxis,
+    pub positive: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,6 +429,36 @@ pub fn object_world_matrix(scene: &[SdfObject], id: uuid::Uuid) -> Mat4 {
         return Mat4::IDENTITY;
     };
     group_world_matrix(scene, id) * object.transform.matrix()
+}
+
+pub fn box_face_at_world_position(
+    scene: &[SdfObject],
+    id: uuid::Uuid,
+    world_position: Vec3,
+) -> Option<BoxFaceSelection> {
+    if has_boolean_children(scene, id) {
+        return None;
+    }
+    let object = scene.iter().find(|object| object.uuid == id)?;
+    let SdfParams::BoxParams(params) = &object.params else {
+        return None;
+    };
+    let local = object_world_matrix(scene, id)
+        .inverse()
+        .transform_point3(world_position);
+    let relative = local.abs() / params.box_q.max(Vec3::splat(0.0001));
+    let axis = if relative.x >= relative.y && relative.x >= relative.z {
+        crate::model::VectorAxis::X
+    } else if relative.y >= relative.z {
+        crate::model::VectorAxis::Y
+    } else {
+        crate::model::VectorAxis::Z
+    };
+    Some(BoxFaceSelection {
+        object: id,
+        axis,
+        positive: local[axis.index()] >= 0.0,
+    })
 }
 
 pub fn map_leaf_group_transforms_to_primitives(scene: &mut [SdfObject]) {

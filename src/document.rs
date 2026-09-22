@@ -15,6 +15,8 @@ pub enum FileMenuAction {
     OpenRecent(PathBuf),
     Save,
     SaveAs,
+    #[cfg(target_arch = "wasm32")]
+    SaveNamed(String),
     Render(RenderFormat),
 }
 
@@ -132,6 +134,43 @@ pub fn serialize_scene(tree: &DataTree) -> Result<Vec<u8>, String> {
 
 pub fn deserialize_scene(bytes: &[u8]) -> Result<ObservableKVTree<ClaydashValue>, String> {
     serde_json::from_slice(bytes).map_err(|error| error.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn download_bytes(file_name: &str, bytes: &[u8]) -> Result<(), String> {
+    use wasm_bindgen::JsCast;
+
+    let byte_array = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::new();
+    parts.push(&byte_array.buffer());
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)
+        .map_err(|error| format!("could not create download: {error:?}"))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|error| format!("could not create download URL: {error:?}"))?;
+    let window = web_sys::window().ok_or_else(|| "browser window is unavailable".to_string())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "browser document is unavailable".to_string())?;
+    let anchor = document
+        .create_element("a")
+        .map_err(|error| format!("could not create download link: {error:?}"))?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "could not prepare download link".to_string())?;
+    anchor.set_href(&url);
+    anchor.set_download(file_name);
+    anchor
+        .style()
+        .set_property("display", "none")
+        .map_err(|error| format!("could not hide download link: {error:?}"))?;
+    let body = document
+        .body()
+        .ok_or_else(|| "browser document body is unavailable".to_string())?;
+    body.append_child(&anchor)
+        .map_err(|error| format!("could not attach download link: {error:?}"))?;
+    anchor.click();
+    let _ = body.remove_child(&anchor);
+    let _ = web_sys::Url::revoke_object_url(&url);
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

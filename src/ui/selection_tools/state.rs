@@ -28,6 +28,28 @@ impl UiState {
         true
     }
 
+    pub fn begin_box_selection(
+        &mut self,
+        tree: &DataTree,
+        physical_pointer: Vec2,
+        pixels_per_point: f32,
+        additive: bool,
+    ) -> bool {
+        if !self.enter_box_selection_mode(tree) {
+            return false;
+        }
+        let point = egui::pos2(
+            physical_pointer.x / pixels_per_point,
+            physical_pointer.y / pixels_per_point,
+        );
+        self.selection_tools.gesture = Some(Gesture::Box {
+            start: point,
+            end: point,
+            additive,
+        });
+        true
+    }
+
     pub(in crate::ui) fn draw_selection_toolbar(
         &mut self,
         ctx: &egui::Context,

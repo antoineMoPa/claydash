@@ -128,6 +128,28 @@ mod tests {
     }
 
     #[test]
+    fn quaternion_orbit_crosses_camera_poles_without_a_singularity() {
+        let mut camera = Camera::new();
+        let radius = camera.position.distance(camera.target);
+        for _ in 0..1_000 {
+            camera.orbit(Vec2::new(1.7, 3.1));
+            let view = camera.view();
+            assert!(camera.position.is_finite());
+            assert!(camera.up.is_finite());
+            assert!(view.is_finite());
+            assert!((camera.position.distance(camera.target) - radius).abs() < 0.001);
+            assert!((camera.up.length() - 1.0).abs() < 0.001);
+            assert!(
+                camera
+                    .up
+                    .dot((camera.target - camera.position).normalize())
+                    .abs()
+                    < 0.001
+            );
+        }
+    }
+
+    #[test]
     fn scene_camera_view_preserves_roll() {
         let rotation = Quat::from_rotation_y(0.4) * Quat::from_rotation_z(0.7);
         let scene_camera = SceneCamera {
@@ -272,15 +294,26 @@ impl Camera {
     }
 
     pub fn orbit(&mut self, delta: Vec2) {
-        let mut offset = self.position - self.target;
-        offset = Quat::from_rotation_y(-delta.x * 0.003) * offset;
-        let pitch =
-            Quat::from_axis_angle(self.view().inverse().x_axis.truncate(), -delta.y * 0.003)
-                * offset;
-        if pitch.normalize().dot(Vec3::Y).abs() < 0.995 {
-            offset = pitch;
+        let offset = self.position - self.target;
+        let forward = -offset.normalize_or_zero();
+        let up = self.up.normalize_or_zero();
+        let right = forward.cross(up).normalize_or_zero();
+        if right.length_squared() < 0.0001 {
+            return;
         }
-        self.position = self.target + offset;
+
+        // Rotate the complete camera frame. Keeping `up` in the quaternion
+        // rotation removes the pole singularity of yaw/pitch Euler cameras and
+        // lets an orbit pass smoothly over the top or bottom of the subject.
+        let yaw = Quat::from_axis_angle(up, -delta.x * 0.003);
+        let pitch = Quat::from_axis_angle(right, -delta.y * 0.003);
+        let rotation = yaw * pitch;
+        let rotated_offset = rotation * offset;
+        let rotated_up = rotation * up;
+        let rotated_forward = -rotated_offset.normalize_or_zero();
+        let orthogonal_right = rotated_forward.cross(rotated_up).normalize_or_zero();
+        self.position = self.target + rotated_offset;
+        self.up = orthogonal_right.cross(rotated_forward).normalize_or_zero();
     }
 
     pub fn pan(&mut self, delta: Vec2) {

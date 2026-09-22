@@ -344,8 +344,11 @@ pub(super) struct ResizeHandle {
     pub(super) direction: Vec3,
     pub(super) local_direction: Vec3,
     pub(super) patch: Vec<Vec3>,
+    pub(super) full_patch: Vec<Vec3>,
     pub(super) label: String,
     pub(super) color: Color32,
     pub(super) parameter: usize,
     pub(super) value: f32,
+    pub(super) camera_facing: bool,
+    pub(super) edge_on: bool,
 }

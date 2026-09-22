@@ -22,6 +22,25 @@ fn box_selection_shortcut_enters_mode_only_while_idle() {
 }
 
 #[test]
+fn box_selection_shortcut_starts_at_the_current_pointer() {
+    let mut state = UiState::default();
+    let tree = DataTree::default();
+
+    assert!(state.begin_box_selection(&tree, Vec2::new(420.0, 260.0), 2.0, true));
+    let Some(Gesture::Box {
+        start,
+        end,
+        additive,
+    }) = state.selection_tools.gesture
+    else {
+        panic!("B should begin the box gesture immediately");
+    };
+    assert_eq!(start, egui::pos2(210.0, 130.0));
+    assert_eq!(end, start);
+    assert!(additive);
+}
+
+#[test]
 fn box_select_handles_scale_direction_groups_and_hidden_origins() {
     let mut camera = camera();
     let root = SdfObject::create(sdf_consts::TYPE_BOX);

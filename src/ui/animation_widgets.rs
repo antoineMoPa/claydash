@@ -81,10 +81,10 @@ pub(super) fn apply_keyframe_requests(
     let frame = runtime.current_frame.round().max(0.0) as u32;
     for request in requests {
         animation::insert_keyframe(tree, request.binding, frame, request.value);
-        runtime.selected_keyframe = Some(SelectedKeyframe {
+        runtime.selected_keyframes = vec![SelectedKeyframe {
             binding: request.binding,
             frame,
-        });
+        }];
     }
     tree.make_undo_redo_snapshot();
 }

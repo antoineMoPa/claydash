@@ -278,6 +278,7 @@ dependencies = [
  "egui_extras",
  "egui_frames",
  "glam",
+ "js-sys",
  "mp4",
  "observable_key_value_tree",
  "openh264",

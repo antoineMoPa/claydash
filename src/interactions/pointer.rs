@@ -13,6 +13,21 @@ impl InteractionState {
         ) {
             return; // A grab commits on release, not on press.
         }
+        if matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Extruding)
+        ) {
+            self.update_transformation(camera, tree);
+            tree.set_path(
+                "editor.state",
+                ClaydashValue::EditorState(EditorState::Start),
+            );
+            tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
+            tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
+            self.extrusion_session = None;
+            tree.make_undo_redo_snapshot();
+            return;
+        }
         if !matches!(
             tree.get_path("editor.state"),
             ClaydashValue::EditorState(EditorState::Start) | ClaydashValue::None
@@ -71,7 +86,8 @@ impl InteractionState {
             }
             return;
         }
-        let Some(hit) = ghost.or_else(|| raymarch(origin, direction, &scene)) else {
+        let marched = raymarch_hit(origin, direction, &scene);
+        let Some(hit) = ghost.or_else(|| marched.map(|hit| hit.object)) else {
             set_selected(tree, vec![]);
             return;
         };
@@ -90,6 +106,12 @@ impl InteractionState {
                 set_selected_exact(tree, vec![target.id]);
             } else {
                 set_selected(tree, vec![target.id]);
+            }
+            if ghost.is_none() && target.id == hit {
+                if let Some(position) = marched.map(|hit| hit.position) {
+                    let face = crate::model::box_face_at_world_position(&scene, hit, position);
+                    crate::model::set_selected_box_face(tree, face);
+                }
             }
             return;
         }

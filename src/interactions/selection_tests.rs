@@ -36,6 +36,99 @@ fn raymarch_hit_includes_visible_surface_position() {
 }
 
 #[test]
+fn clicking_a_box_surface_selects_its_face() {
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let object = SdfObject::create(TYPE_BOX);
+    let id = object.uuid;
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![object]);
+
+    InteractionState::select_at(&camera, &mut tree, camera.viewport / 2.0, None, false);
+
+    let face = crate::model::selected_box_face(&tree).expect("box face selection");
+    assert_eq!(face.object, id);
+}
+
+#[test]
+fn e_extrudes_the_selected_box_face() {
+    let (mut tree, object) = selected_object();
+    crate::model::set_selected_box_face(
+        &mut tree,
+        Some(crate::model::BoxFaceSelection {
+            object,
+            axis: crate::model::VectorAxis::Z,
+            positive: true,
+        }),
+    );
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut interactions = InteractionState {
+        mouse_position: camera.viewport / 2.0,
+        ..Default::default()
+    };
+
+    interactions.key_pressed(KeyCode::KeyE, false, &commands, &mut tree);
+
+    assert_eq!(objects(&tree).len(), 2);
+    assert_ne!(selected(&tree), vec![object]);
+    interactions.update(&mut camera, &mut tree);
+    let session = interactions
+        .extrusion_session
+        .as_ref()
+        .expect("active extrusion drag")
+        .clone();
+    interactions.cursor_moved(
+        interactions.mouse_position + session.projected_axis.normalize() * 80.0,
+        false,
+    );
+    interactions.update(&mut camera, &mut tree);
+    let extrusion = objects(&tree)
+        .into_iter()
+        .find(|candidate| candidate.uuid == session.object)
+        .unwrap();
+    let crate::model::SdfParams::BoxParams(params) = extrusion.params else {
+        unreachable!()
+    };
+    assert!(params.box_q.z > commands::EXTRUSION_INITIAL_HALF_EXTENT);
+
+    interactions.pointer_down(&camera, &mut tree, None);
+
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::Start)
+    ));
+}
+
+#[test]
+fn escape_cancels_an_in_progress_extrusion() {
+    let (mut tree, object) = selected_object();
+    let source_face = crate::model::BoxFaceSelection {
+        object,
+        axis: crate::model::VectorAxis::X,
+        positive: false,
+    };
+    crate::model::set_selected_box_face(&mut tree, Some(source_face));
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interactions = InteractionState::default();
+
+    interactions.key_pressed(KeyCode::KeyE, false, &commands, &mut tree);
+    interactions.key_released(KeyCode::KeyE);
+    interactions.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
+
+    assert_eq!(objects(&tree).len(), 1);
+    assert_eq!(selected(&tree), vec![object]);
+    assert_eq!(crate::model::selected_box_face(&tree), Some(source_face));
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::Start)
+    ));
+}
+
+#[test]
 fn background_click_clears_selection() {
     let (mut tree, _) = selected_object();
     let mut camera = Camera::new();

@@ -362,7 +362,7 @@ pub(super) fn insert_transform_keyframes(
                     property,
                 };
                 animation::insert_keyframe(tree, binding, frame, value);
-                runtime.selected_keyframe = Some(SelectedKeyframe { binding, frame });
+                runtime.selected_keyframes = vec![SelectedKeyframe { binding, frame }];
             }
         }
     }

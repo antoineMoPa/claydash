@@ -1,5 +1,115 @@
 use super::*;
 
+const MIN_TIMELINE_TRACK_HEIGHT: f32 = 28.0;
+const MAX_TIMELINE_TRACK_HEIGHT: f32 = 220.0;
+const MIN_TIMELINE_TIME_SCALE: f32 = 0.0001;
+const MAX_TIMELINE_TIME_SCALE: f32 = 10_000.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TimelineScrollZoom {
+    None,
+    Time,
+    Vertical,
+    Both,
+}
+
+pub(super) fn timeline_scroll_zoom(modifiers: egui::Modifiers) -> TimelineScrollZoom {
+    let time = modifiers.command || modifiers.ctrl;
+    match (time, modifiers.shift) {
+        (true, true) => TimelineScrollZoom::Both,
+        (true, false) => TimelineScrollZoom::Time,
+        (false, true) => TimelineScrollZoom::Vertical,
+        (false, false) => TimelineScrollZoom::None,
+    }
+}
+
+pub(super) fn dominant_timeline_scroll_axis(delta: egui::Vec2) -> Option<TimelineScrollAxis> {
+    if delta == egui::Vec2::ZERO {
+        None
+    } else if delta.x.abs() > delta.y.abs() {
+        Some(TimelineScrollAxis::Horizontal)
+    } else {
+        Some(TimelineScrollAxis::Vertical)
+    }
+}
+
+pub(super) fn timeline_time_bounds(
+    runtime: &AnimationRuntime,
+    start_frame: u32,
+    end_frame: u32,
+) -> (f32, f32) {
+    let full_start = start_frame as f32;
+    let full_end = end_frame.max(start_frame.saturating_add(1)) as f32;
+    let full_span = full_end - full_start;
+    let visible_span = full_span
+        / runtime
+            .timeline_time_scale
+            .clamp(MIN_TIMELINE_TIME_SCALE, MAX_TIMELINE_TIME_SCALE);
+    let center = runtime
+        .timeline_time_center
+        .unwrap_or((full_start + full_end) * 0.5);
+    let view_start = center - visible_span * 0.5;
+    (view_start, view_start + visible_span)
+}
+
+pub(super) fn apply_timeline_zoom(
+    runtime: &mut AnimationRuntime,
+    start_frame: u32,
+    end_frame: u32,
+    pointer_fraction: f32,
+    scroll_amount: f32,
+    axes: TimelineScrollZoom,
+) {
+    let factor = (scroll_amount * 0.01).exp();
+    if matches!(axes, TimelineScrollZoom::Time | TimelineScrollZoom::Both) {
+        let (old_start, old_end) = timeline_time_bounds(runtime, start_frame, end_frame);
+        let fraction = pointer_fraction.clamp(0.0, 1.0);
+        let anchor = old_start + (old_end - old_start) * fraction;
+        runtime.timeline_time_scale = (runtime.timeline_time_scale * factor)
+            .clamp(MIN_TIMELINE_TIME_SCALE, MAX_TIMELINE_TIME_SCALE);
+        let full_start = start_frame as f32;
+        let full_end = end_frame.max(start_frame.saturating_add(1)) as f32;
+        let visible_span =
+            (full_end - full_start) / runtime.timeline_time_scale.max(MIN_TIMELINE_TIME_SCALE);
+        let view_start = anchor - visible_span * fraction;
+        runtime.timeline_time_center = Some(view_start + visible_span * 0.5);
+    }
+    if matches!(
+        axes,
+        TimelineScrollZoom::Vertical | TimelineScrollZoom::Both
+    ) {
+        runtime.timeline_track_height = (runtime.timeline_track_height * factor)
+            .clamp(MIN_TIMELINE_TRACK_HEIGHT, MAX_TIMELINE_TRACK_HEIGHT);
+    }
+}
+
+pub(super) fn pan_timeline_time(
+    runtime: &mut AnimationRuntime,
+    start_frame: u32,
+    end_frame: u32,
+    horizontal_scroll: f32,
+    chart_width: f32,
+) {
+    let (view_start, view_end) = timeline_time_bounds(runtime, start_frame, end_frame);
+    let visible_span = view_end - view_start;
+    let center = (view_start + view_end) * 0.5;
+    runtime.timeline_time_center =
+        Some(center - horizontal_scroll / chart_width.max(1.0) * visible_span);
+}
+
+pub(super) fn displayed_keyframe_frame(
+    keyframe: SelectedKeyframe,
+    drag: Option<&KeyframeDrag>,
+) -> u32 {
+    drag.map_or(keyframe.frame, |drag| {
+        if drag.keyframes.contains(&keyframe) {
+            (keyframe.frame as i64 + drag.preview_delta as i64).max(0) as u32
+        } else {
+            keyframe.frame
+        }
+    })
+}
+
 pub(super) fn animation_panel(
     ui: &mut egui::Ui,
     tree: &mut DataTree,
@@ -82,7 +192,146 @@ pub(super) fn animation_panel(
                 return;
             }
 
+            let timeline_hovered = ui.rect_contains_pointer(ui.max_rect());
+            let delete_pressed = timeline_hovered
+                && ui.input_mut(|input| {
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+                        || input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                });
+            if delete_pressed && !runtime.selected_keyframes.is_empty() {
+                tree.make_undo_redo_snapshot();
+                animation::delete_keyframes(tree, &runtime.selected_keyframes);
+                runtime.selected_keyframes.clear();
+                runtime.keyframe_drag = None;
+                runtime.set_frame(tree, runtime.current_frame);
+                tree.make_undo_redo_snapshot();
+                return;
+            }
+            let start_keyboard_grab = timeline_hovered
+                && !runtime.selected_keyframes.is_empty()
+                && runtime.keyframe_drag.is_none()
+                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::G));
+
             let label_width = 155.0_f32.min(ui.available_width() * 0.42);
+            let timeline_area = ui.available_rect_before_wrap();
+            let chart_left = timeline_area.left() + label_width + ui.spacing().item_spacing.x;
+            let chart_width = (timeline_area.right() - chart_left).max(1.0);
+            let (zoom_request, horizontal_pan) = ui.input_mut(|input| {
+                if !input.is_scrolling() {
+                    runtime.timeline_scroll_axis = None;
+                }
+                let modifier_axes = timeline_scroll_zoom(input.modifiers);
+                let modifier_wheel = input.raw.events.iter().rev().find_map(|event| {
+                    let egui::Event::MouseWheel {
+                        delta, modifiers, ..
+                    } = event
+                    else {
+                        return None;
+                    };
+                    let axes = timeline_scroll_zoom(*modifiers);
+                    (axes != TimelineScrollZoom::None).then_some((axes, *delta))
+                });
+                let gesture_zoom = input.zoom_delta_2d();
+                let gesture_changed =
+                    (gesture_zoom.x - 1.0).abs() > 0.0001 || (gesture_zoom.y - 1.0).abs() > 0.0001;
+                let scroll_delta = input.smooth_scroll_delta;
+                let request = if let Some((axes, delta)) = modifier_wheel {
+                    input.smooth_scroll_delta = egui::Vec2::ZERO;
+                    let amount = if delta.y.abs() >= delta.x.abs() {
+                        delta.y
+                    } else {
+                        delta.x
+                    };
+                    // Wheel deltas describe content motion, so invert them for
+                    // the expected view-scale direction.
+                    Some((axes, -amount))
+                } else if gesture_changed {
+                    // egui turns Ctrl/Cmd-wheel into a zoom gesture before widgets see
+                    // the scroll delta. Native trackpad pinches arrive through this path too.
+                    let axes = if modifier_axes == TimelineScrollZoom::None {
+                        TimelineScrollZoom::Time
+                    } else {
+                        modifier_axes
+                    };
+                    let factor = match axes {
+                        TimelineScrollZoom::Time => gesture_zoom.x,
+                        TimelineScrollZoom::Vertical => gesture_zoom.y,
+                        TimelineScrollZoom::Both => (gesture_zoom.x * gesture_zoom.y).sqrt(),
+                        TimelineScrollZoom::None => 1.0,
+                    }
+                    .max(0.001);
+                    Some((axes, factor.ln() / 0.01))
+                } else if modifier_axes != TimelineScrollZoom::None
+                    && scroll_delta != egui::Vec2::ZERO
+                {
+                    input.smooth_scroll_delta = egui::Vec2::ZERO;
+                    let amount = if scroll_delta.y.abs() >= scroll_delta.x.abs() {
+                        scroll_delta.y
+                    } else {
+                        scroll_delta.x
+                    };
+                    Some((modifier_axes, -amount))
+                } else {
+                    None
+                };
+                if timeline_hovered {
+                    let zoom = request.map(|(axes, amount)| {
+                        let fraction = input
+                            .pointer
+                            .hover_pos()
+                            .map_or(0.5, |pointer| (pointer.x - chart_left) / chart_width);
+                        (axes, amount, fraction)
+                    });
+                    let pan = if zoom.is_none() && modifier_axes == TimelineScrollZoom::None {
+                        if runtime.timeline_scroll_axis.is_none() {
+                            runtime.timeline_scroll_axis =
+                                dominant_timeline_scroll_axis(input.smooth_scroll_delta);
+                        }
+                        match runtime.timeline_scroll_axis {
+                            Some(TimelineScrollAxis::Horizontal) => {
+                                let horizontal = input.smooth_scroll_delta.x;
+                                // Consume both components so diagonal noise cannot also
+                                // move the vertical trace list.
+                                input.smooth_scroll_delta = egui::Vec2::ZERO;
+                                Some(horizontal)
+                            }
+                            Some(TimelineScrollAxis::Vertical) => {
+                                input.smooth_scroll_delta.x = 0.0;
+                                None
+                            }
+                            None => None,
+                        }
+                    } else {
+                        None
+                    };
+                    (zoom, pan)
+                } else {
+                    (None, None)
+                }
+            });
+            if let Some((axes, amount, fraction)) = zoom_request {
+                apply_timeline_zoom(
+                    runtime,
+                    data.start_frame,
+                    data.end_frame,
+                    fraction,
+                    amount,
+                    axes,
+                );
+            }
+            if let Some(horizontal) = horizontal_pan {
+                pan_timeline_time(
+                    runtime,
+                    data.start_frame,
+                    data.end_frame,
+                    horizontal,
+                    chart_width,
+                );
+            }
+            let (view_start_frame, view_end_frame) =
+                timeline_time_bounds(runtime, data.start_frame, data.end_frame);
+            let mut visible_keyframes = Vec::new();
+            let mut box_start = None;
             egui::ScrollArea::vertical()
                 .id_salt("animation-tracks")
                 .show(ui, |ui| {
@@ -96,14 +345,17 @@ pub(super) fn animation_panel(
                             let label =
                                 format!("{} · {}", object_name, track.binding.property.label());
                             ui.add_sized(
-                                egui::vec2(label_width, 64.0),
+                                egui::vec2(label_width, runtime.timeline_track_height),
                                 egui::Label::new(&label).truncate(),
                             )
                             .on_hover_text(label);
                             let width = ui.available_width().max(80.0);
                             let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(width, 64.0),
+                                egui::vec2(width, runtime.timeline_track_height),
                                 egui::Sense::click_and_drag(),
+                            );
+                            response.clone().on_hover_text(
+                                "Two-finger horizontal: pan time · Ctrl/Cmd + scroll: time zoom · Shift + scroll: vertical zoom",
                             );
                             let painter = ui.painter_at(rect);
                             painter.rect_filled(rect, 3.0, Color32::from_rgb(34, 35, 39));
@@ -111,11 +363,23 @@ pub(super) fn animation_panel(
                                 [rect.left_center(), rect.right_center()],
                                 Stroke::new(1.0, Color32::from_gray(75)),
                             );
-                            let frame_span =
-                                data.end_frame.saturating_sub(data.start_frame).max(1) as f32;
+                            let frame_span = view_end_frame - view_start_frame;
+                            if start_keyboard_grab && runtime.keyframe_drag.is_none() {
+                                if let Some(pointer) =
+                                    ui.input(|input| input.pointer.interact_pos())
+                                {
+                                    runtime.keyframe_drag = Some(KeyframeDrag {
+                                        anchor: runtime.selected_keyframes[0],
+                                        keyframes: runtime.selected_keyframes.clone(),
+                                        preview_delta: 0,
+                                        start_pointer_x: pointer.x,
+                                        pixels_per_frame: rect.width() / frame_span,
+                                        keyboard_initiated: true,
+                                    });
+                                }
+                            }
                             let frame_x = |frame: f32| {
-                                rect.left()
-                                    + (frame - data.start_frame as f32) / frame_span * rect.width()
+                                rect.left() + (frame - view_start_frame) / frame_span * rect.width()
                             };
                             let (minimum, maximum) = timeline_value_bounds(track);
                             let value_span = maximum - minimum;
@@ -130,13 +394,28 @@ pub(super) fn animation_panel(
                                         * value_span
                             };
                             let frame_at_x = |x: f32| {
-                                data.start_frame as f32
-                                    + (x - rect.left()) / rect.width() * frame_span
+                                view_start_frame + (x - rect.left()) / rect.width() * frame_span
                             };
                             let mut bezier_handle_active = false;
                             for pair in track.keyframes.windows(2) {
-                                let left = &pair[0];
-                                let right = &pair[1];
+                                let left_source = &pair[0];
+                                let right_source = &pair[1];
+                                let mut left = left_source.clone();
+                                let mut right = right_source.clone();
+                                left.frame = displayed_keyframe_frame(
+                                    SelectedKeyframe {
+                                        binding: track.binding,
+                                        frame: left_source.frame,
+                                    },
+                                    runtime.keyframe_drag.as_ref(),
+                                );
+                                right.frame = displayed_keyframe_frame(
+                                    SelectedKeyframe {
+                                        binding: track.binding,
+                                        frame: right_source.frame,
+                                    },
+                                    runtime.keyframe_drag.as_ref(),
+                                );
                                 let left_point =
                                     egui::pos2(frame_x(left.frame as f32), value_y(left.value));
                                 let right_point =
@@ -159,7 +438,7 @@ pub(super) fn animation_panel(
                                     }
                                     KeyframeInterpolation::Bezier => {
                                         let controls =
-                                            animation::bezier_control_points(left, right);
+                                            animation::bezier_control_points(&left, &right);
                                         let mut previous = left_point;
                                         for step in 1..=24 {
                                             let point = animation::bezier_point(
@@ -174,12 +453,13 @@ pub(super) fn animation_panel(
                                             );
                                             previous = current;
                                         }
-                                        for (incoming, keyframe, control) in
-                                            [(false, left, controls[1]), (true, right, controls[2])]
-                                        {
+                                        for (incoming, source, displayed, control) in [
+                                            (false, left_source, &left, controls[1]),
+                                            (true, right_source, &right, controls[2]),
+                                        ] {
                                             let anchor = egui::pos2(
-                                                frame_x(keyframe.frame as f32),
-                                                value_y(keyframe.value),
+                                                frame_x(displayed.frame as f32),
+                                                value_y(displayed.value),
                                             );
                                             let center =
                                                 egui::pos2(frame_x(control.0), value_y(control.1));
@@ -187,17 +467,23 @@ pub(super) fn animation_panel(
                                                 [anchor, center],
                                                 Stroke::new(1.0, Color32::from_gray(135)),
                                             );
+                                            let handle_id = egui::Id::new((
+                                                "bezier-handle",
+                                                track.binding,
+                                                source.frame,
+                                                incoming,
+                                            ));
+                                            let captured = ui.ctx().is_being_dragged(handle_id)
+                                                || ui.ctx().drag_stopped_id() == Some(handle_id);
+                                            if !captured && !rect.expand(6.0).contains(center) {
+                                                continue;
+                                            }
                                             let handle_response = ui.interact(
                                                 egui::Rect::from_center_size(
                                                     center,
                                                     egui::vec2(12.0, 12.0),
                                                 ),
-                                                egui::Id::new((
-                                                    "bezier-handle",
-                                                    track.binding,
-                                                    keyframe.frame,
-                                                    incoming,
-                                                )),
+                                                handle_id,
                                                 egui::Sense::drag(),
                                             );
                                             handle_response
@@ -227,21 +513,21 @@ pub(super) fn animation_panel(
                                                         tree,
                                                         SelectedKeyframe {
                                                             binding: track.binding,
-                                                            frame: keyframe.frame,
+                                                            frame: source.frame,
                                                         },
                                                         incoming,
                                                         crate::model::BezierHandle {
                                                             frame_offset: control_frame
-                                                                - keyframe.frame as f32,
+                                                                - displayed.frame as f32,
                                                             value_offset: control_value
-                                                                - keyframe.value,
+                                                                - displayed.value,
                                                         },
                                                     );
-                                                    runtime.selected_keyframe =
-                                                        Some(SelectedKeyframe {
+                                                    runtime.selected_keyframes =
+                                                        vec![SelectedKeyframe {
                                                             binding: track.binding,
-                                                            frame: keyframe.frame,
-                                                        });
+                                                            frame: source.frame,
+                                                        }];
                                                     runtime.set_frame(tree, runtime.current_frame);
                                                 }
                                             }
@@ -259,26 +545,33 @@ pub(super) fn animation_panel(
                                     binding: track.binding,
                                     frame: keyframe.frame,
                                 };
-                                let displayed_frame = runtime
-                                    .keyframe_drag
-                                    .filter(|drag| drag.keyframe == keyframe_id)
-                                    .map_or(keyframe.frame, |drag| drag.preview_frame);
+                                let displayed_frame = displayed_keyframe_frame(
+                                    keyframe_id,
+                                    runtime.keyframe_drag.as_ref(),
+                                );
                                 let center = egui::pos2(
                                     frame_x(displayed_frame as f32),
                                     value_y(keyframe.value),
                                 );
+                                let key_id = egui::Id::new((
+                                    "timeline-keyframe",
+                                    track.binding,
+                                    keyframe.frame,
+                                ));
+                                let captured = ui.ctx().is_being_dragged(key_id)
+                                    || ui.ctx().drag_stopped_id() == Some(key_id);
+                                if !captured && !rect.expand(7.0).contains(center) {
+                                    continue;
+                                }
+                                visible_keyframes.push((keyframe_id, center));
                                 let key_response = ui.interact(
                                     egui::Rect::from_center_size(center, egui::vec2(14.0, 14.0)),
-                                    egui::Id::new((
-                                        "timeline-keyframe",
-                                        track.binding,
-                                        keyframe.frame,
-                                    )),
+                                    key_id,
                                     egui::Sense::click_and_drag(),
                                 );
                                 key_response.clone().on_hover_text("Drag to move keyframe");
                                 keyframe_active |= key_response.hovered() || key_response.dragged();
-                                let selected = runtime.selected_keyframe == Some(keyframe_id);
+                                let selected = runtime.selected_keyframes.contains(&keyframe_id);
                                 let radius = if selected { 6.0 } else { 4.5 };
                                 painter.add(egui::Shape::convex_polygon(
                                     vec![
@@ -295,42 +588,63 @@ pub(super) fn animation_panel(
                                     Stroke::NONE,
                                 ));
                                 if key_response.clicked() {
-                                    runtime.selected_keyframe = Some(keyframe_id);
+                                    key_response.request_focus();
+                                    if ui.input(|input| input.modifiers.shift) {
+                                        if selected {
+                                            runtime
+                                                .selected_keyframes
+                                                .retain(|selected| *selected != keyframe_id);
+                                        } else {
+                                            runtime.selected_keyframes.push(keyframe_id);
+                                        }
+                                    } else {
+                                        runtime.selected_keyframes = vec![keyframe_id];
+                                    }
                                     runtime.set_frame(tree, keyframe.frame as f32);
                                 }
                                 if key_response.drag_started() {
-                                    runtime.selected_keyframe = Some(keyframe_id);
+                                    if !runtime.selected_keyframes.contains(&keyframe_id) {
+                                        runtime.selected_keyframes = vec![keyframe_id];
+                                    }
                                     runtime.keyframe_drag = Some(KeyframeDrag {
-                                        keyframe: keyframe_id,
-                                        preview_frame: keyframe.frame,
+                                        anchor: keyframe_id,
+                                        keyframes: runtime.selected_keyframes.clone(),
+                                        preview_delta: 0,
+                                        start_pointer_x: ui.input(|input| {
+                                            input
+                                                .pointer
+                                                .press_origin()
+                                                .map_or(center.x, |pointer| pointer.x)
+                                        }),
+                                        pixels_per_frame: rect.width() / frame_span,
+                                        keyboard_initiated: false,
                                     });
                                 }
                                 if key_response.dragged() {
                                     if let Some(pointer) = key_response.interact_pointer_pos() {
-                                        let preview_frame = frame_at_x(pointer.x)
+                                        if let Some(drag) = &mut runtime.keyframe_drag {
+                                            let requested = ((pointer.x - drag.start_pointer_x)
+                                                / drag.pixels_per_frame.max(0.001))
                                             .round()
-                                            .clamp(data.start_frame as f32, data.end_frame as f32)
-                                            as u32;
-                                        runtime.keyframe_drag = Some(KeyframeDrag {
-                                            keyframe: keyframe_id,
-                                            preview_frame,
-                                        });
+                                                as i32;
+                                            drag.preview_delta = clamp_keyframe_delta(
+                                                &drag.keyframes,
+                                                requested,
+                                                data.start_frame,
+                                                data.end_frame,
+                                            );
+                                        }
                                     }
                                 }
                                 if key_response.drag_stopped() {
                                     if let Some(drag) = runtime.keyframe_drag.take() {
-                                        if drag.keyframe == keyframe_id
-                                            && drag.preview_frame != keyframe.frame
-                                        {
+                                        if drag.anchor == keyframe_id && drag.preview_delta != 0 {
                                             tree.make_undo_redo_snapshot();
-                                            runtime.selected_keyframe =
-                                                Some(animation::update_keyframe(
-                                                    tree,
-                                                    drag.keyframe,
-                                                    drag.preview_frame,
-                                                    keyframe.value,
-                                                    keyframe.interpolation,
-                                                ));
+                                            runtime.selected_keyframes = animation::move_keyframes(
+                                                tree,
+                                                &drag.keyframes,
+                                                drag.preview_delta,
+                                            );
                                             runtime.set_frame(tree, runtime.current_frame);
                                             tree.make_undo_redo_snapshot();
                                         }
@@ -345,22 +659,128 @@ pub(super) fn animation_panel(
                                 ],
                                 Stroke::new(1.5, Color32::from_rgb(255, 118, 107)),
                             );
-                            if !bezier_handle_active
-                                && !keyframe_active
-                                && (response.clicked() || response.dragged())
-                            {
+                            if !bezier_handle_active && !keyframe_active && response.clicked() {
                                 let Some(pointer) = response.interact_pointer_pos() else {
                                     return;
                                 };
                                 runtime.set_frame(tree, frame_at_x(pointer.x).round());
                             }
+                            if !bezier_handle_active && !keyframe_active && response.drag_started()
+                            {
+                                response.request_focus();
+                                if let Some(pointer) = ui.input(|input| {
+                                    input
+                                        .pointer
+                                        .press_origin()
+                                        .or_else(|| response.interact_pointer_pos())
+                                }) {
+                                    box_start =
+                                        Some((pointer, ui.input(|input| input.modifiers.shift)));
+                                }
+                            }
                         });
                     }
                 });
 
+            if let Some((start, additive)) = box_start {
+                runtime.timeline_box_selection = Some(TimelineBoxSelection {
+                    start,
+                    end: start,
+                    initial: runtime.selected_keyframes.clone(),
+                    additive,
+                });
+            }
+            let pointer = ui.input(|input| input.pointer.interact_pos());
+            let released = ui.input(|input| input.pointer.primary_released());
+            if let Some(selection_box) = &mut runtime.timeline_box_selection {
+                if let Some(pointer) = pointer {
+                    selection_box.end = pointer;
+                }
+                let rect = egui::Rect::from_two_pos(selection_box.start, selection_box.end);
+                let mut selected = if selection_box.additive {
+                    selection_box.initial.clone()
+                } else {
+                    Vec::new()
+                };
+                for (keyframe, position) in &visible_keyframes {
+                    if rect.contains(*position) && !selected.contains(keyframe) {
+                        selected.push(*keyframe);
+                    }
+                }
+                runtime.selected_keyframes = selected;
+                let color = ui.visuals().selection.bg_fill;
+                ui.painter()
+                    .rect_filled(rect, 0.0, color.gamma_multiply(0.15));
+                ui.painter().rect_stroke(
+                    rect,
+                    0.0,
+                    Stroke::new(1.0, color),
+                    egui::StrokeKind::Inside,
+                );
+                if released {
+                    runtime.timeline_box_selection = None;
+                }
+            }
+
+            let cancel_keyboard_drag = ui.input(|input| input.key_pressed(egui::Key::Escape));
+            let commit_keyboard_drag = ui.input(|input| input.pointer.primary_clicked());
+            if let Some(drag) = &mut runtime.keyframe_drag {
+                if drag.keyboard_initiated {
+                    if let Some(pointer) = pointer {
+                        let requested = ((pointer.x - drag.start_pointer_x)
+                            / drag.pixels_per_frame.max(0.001))
+                        .round() as i32;
+                        drag.preview_delta = clamp_keyframe_delta(
+                            &drag.keyframes,
+                            requested,
+                            data.start_frame,
+                            data.end_frame,
+                        );
+                    }
+                }
+            }
+            if cancel_keyboard_drag
+                && runtime
+                    .keyframe_drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.keyboard_initiated)
+            {
+                runtime.keyframe_drag = None;
+            } else if commit_keyboard_drag
+                && runtime
+                    .keyframe_drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.keyboard_initiated)
+            {
+                let drag = runtime.keyframe_drag.take().expect("checked keyboard drag");
+                if drag.preview_delta != 0 {
+                    tree.make_undo_redo_snapshot();
+                    runtime.selected_keyframes =
+                        animation::move_keyframes(tree, &drag.keyframes, drag.preview_delta);
+                    runtime.set_frame(tree, runtime.current_frame);
+                    tree.make_undo_redo_snapshot();
+                }
+            }
+
             // Timeline interactions may have authored animation data above.
             let data = animation::animation_data(tree);
-            let Some(selected_keyframe) = runtime.selected_keyframe else {
+            if runtime.selected_keyframes.len() > 1 {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.strong(format!(
+                        "{} keyframes selected",
+                        runtime.selected_keyframes.len()
+                    ));
+                    if ui.button("Delete selected").clicked() {
+                        tree.make_undo_redo_snapshot();
+                        animation::delete_keyframes(tree, &runtime.selected_keyframes);
+                        runtime.selected_keyframes.clear();
+                        tree.make_undo_redo_snapshot();
+                    }
+                });
+                return;
+            }
+            let Some(selected_keyframe) = runtime.selected_keyframes.first().copied() else {
                 return;
             };
             let Some(keyframe) = data
@@ -375,7 +795,7 @@ pub(super) fn animation_panel(
                 })
                 .cloned()
             else {
-                runtime.selected_keyframe = None;
+                runtime.selected_keyframes.clear();
                 return;
             };
             ui.separator();
@@ -435,13 +855,13 @@ pub(super) fn animation_panel(
                 if let Some(easing) = requested_easing {
                     animation::apply_easing_preset(tree, selected_keyframe, easing);
                 }
-                runtime.selected_keyframe = Some(selected_keyframe);
+                runtime.selected_keyframes = vec![selected_keyframe];
                 runtime.set_frame(tree, runtime.current_frame);
                 tree.make_undo_redo_snapshot();
             } else if delete {
                 tree.make_undo_redo_snapshot();
                 animation::delete_keyframe(tree, selected_keyframe);
-                runtime.selected_keyframe = None;
+                runtime.selected_keyframes.clear();
                 tree.make_undo_redo_snapshot();
             }
         });
@@ -465,4 +885,25 @@ pub(super) fn timeline_value_bounds(track: &AnimationTrack) -> (f32, f32) {
         let margin = span * 0.12;
         (minimum - margin, maximum + margin)
     }
+}
+
+fn clamp_keyframe_delta(
+    keyframes: &[SelectedKeyframe],
+    requested: i32,
+    start_frame: u32,
+    end_frame: u32,
+) -> i32 {
+    let Some(minimum) = keyframes.iter().map(|keyframe| keyframe.frame).min() else {
+        return 0;
+    };
+    let maximum = keyframes
+        .iter()
+        .map(|keyframe| keyframe.frame)
+        .max()
+        .unwrap_or(minimum);
+    let minimum_delta =
+        (start_frame as i64 - minimum as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    let maximum_delta =
+        (end_frame as i64 - maximum as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    requested.clamp(minimum_delta, maximum_delta)
 }

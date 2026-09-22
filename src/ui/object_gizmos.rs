@@ -1,6 +1,9 @@
 use super::*;
 
+const EDGE_ON_FACE_DOT_LIMIT: f32 = 0.25;
+
 impl UiState {
+    #[cfg(test)]
     pub(super) fn draw_object_gizmos(
         &mut self,
         ui: &mut egui::Ui,
@@ -27,12 +30,19 @@ impl UiState {
         let Some(object) = scene.iter_mut().find(|object| object.uuid == selection[0]) else {
             return;
         };
-        let handles = resize_handles_with_matrix(object, matrix, camera);
+        // Keep back-facing box handles in the list while drawing. An egui drag
+        // owns its handle id, so the captured handle must continue to exist if
+        // resizing moves that face behind another face or past the camera.
+        let handles = resize_handles_with_matrix_including_hidden(object, matrix, camera);
+        let selected_face = crate::model::selected_box_face(tree);
         let mut changed = false;
         let mut finished = false;
         for handle in &handles {
             let id = egui::Id::new(("resize", object.uuid, handle.id));
             let captured = ui.ctx().is_being_dragged(id) || ui.ctx().drag_stopped_id() == Some(id);
+            if !captured && !handle.camera_facing && !handle.edge_on {
+                continue;
+            }
             let Some(center) = camera.project(handle.world, ui.ctx().pixels_per_point()) else {
                 continue;
             };
@@ -65,14 +75,25 @@ impl UiState {
             }
             let axis = projected_axis / projected_axis.length();
             let tip = center + axis * 28.0;
-            let mut hit = egui::Rect::from_center_size(center, egui::vec2(22.0, 22.0))
-                .union(egui::Rect::from_center_size(tip, egui::vec2(14.0, 14.0)));
             let patch: Vec<_> = handle
                 .patch
                 .iter()
                 .filter_map(|point| camera.project(*point, ui.ctx().pixels_per_point()))
                 .collect();
-            if patch.len() == 4 {
+            let full_patch: Vec<_> = handle
+                .full_patch
+                .iter()
+                .filter_map(|point| camera.project(*point, ui.ctx().pixels_per_point()))
+                .collect();
+            let edge_segment = handle
+                .edge_on
+                .then(|| longest_projected_segment(&patch))
+                .flatten();
+            let mut hit = egui::Rect::from_center_size(center, egui::vec2(22.0, 22.0))
+                .union(egui::Rect::from_center_size(tip, egui::vec2(14.0, 14.0)));
+            if let Some([start, end]) = edge_segment {
+                hit = hit.union(egui::Rect::from_two_pos(start, end).expand(7.0));
+            } else if patch.len() == 4 {
                 for point in &patch {
                     hit.extend_with(*point);
                 }
@@ -80,9 +101,14 @@ impl UiState {
             hit = hit.intersect(ui.clip_rect());
             self.regions.push(hit);
             let response = ui.interact(hit, id, egui::Sense::drag());
-            let response = if matches!(&object.params, SdfParams::BoxParams(_)) {
+            let response = if handle.edge_on {
                 response.on_hover_text(format!(
-                    "Drag to resize {}. Hold Shift to resize from the center. Release to finish.",
+                    "Drag this edge to resize {}. Hold Shift to resize from the center. Release to finish.",
+                    axis_label(handle.parameter)
+                ))
+            } else if matches!(&object.params, SdfParams::BoxParams(_)) {
+                response.on_hover_text(format!(
+                    "Click to select this face. Drag to resize {}. Hold Shift to resize from the center.",
                     handle.label
                 ))
             } else {
@@ -91,15 +117,48 @@ impl UiState {
                     handle.label
                 ))
             };
+            let face_selected = match handle.id {
+                ResizeHandleId::BoxFace { axis, positive } => selected_face.is_some_and(|face| {
+                    face.object == object.uuid
+                        && face.axis == vector_axis(axis)
+                        && face.positive == positive
+                }),
+                _ => false,
+            };
             let stroke = Stroke::new(
-                if response.hovered() || response.dragged() {
+                if response.hovered() || response.dragged() || face_selected {
                     2.5
                 } else {
                     1.5
                 },
                 handle.color,
             );
-            if patch.len() == 4 {
+            if face_selected && full_patch.len() == 4 {
+                ui.painter().add(egui::Shape::convex_polygon(
+                    full_patch,
+                    Color32::WHITE.gamma_multiply(0.14),
+                    Stroke::new(3.0, Color32::WHITE),
+                ));
+            }
+            if let Some([start, end]) = edge_segment {
+                ui.painter().line_segment(
+                    [start, end],
+                    Stroke::new(
+                        if response.hovered() || response.dragged() {
+                            4.0
+                        } else if face_selected {
+                            3.5
+                        } else {
+                            2.5
+                        },
+                        if face_selected {
+                            Color32::WHITE
+                        } else {
+                            handle.color
+                        },
+                    ),
+                );
+            } else if patch.len() == 4 {
                 ui.painter().add(egui::Shape::convex_polygon(
                     patch,
                     handle.color.gamma_multiply(0.18),
@@ -195,6 +254,18 @@ impl UiState {
                 }
                 changed = true;
             }
+            if response.clicked() || response.drag_started() {
+                if let ResizeHandleId::BoxFace { axis, positive } = handle.id {
+                    crate::model::set_selected_box_face(
+                        tree,
+                        Some(crate::model::BoxFaceSelection {
+                            object: object.uuid,
+                            axis: vector_axis(axis),
+                            positive,
+                        }),
+                    );
+                }
+            }
             finished |= response.drag_stopped();
         }
         if changed {
@@ -203,6 +274,32 @@ impl UiState {
         if finished {
             tree.make_undo_redo_snapshot();
         }
+    }
+}
+
+fn longest_projected_segment(points: &[egui::Pos2]) -> Option<[egui::Pos2; 2]> {
+    if points.len() < 2 {
+        return None;
+    }
+    let mut longest = None;
+    let mut longest_length = 0.0;
+    for index in 0..points.len() {
+        let start = points[index];
+        let end = points[(index + 1) % points.len()];
+        let length = start.distance_sq(end);
+        if length > longest_length {
+            longest = Some([start, end]);
+            longest_length = length;
+        }
+    }
+    longest
+}
+
+fn vector_axis(axis: usize) -> crate::model::VectorAxis {
+    match axis {
+        0 => crate::model::VectorAxis::X,
+        1 => crate::model::VectorAxis::Y,
+        _ => crate::model::VectorAxis::Z,
     }
 }
 
@@ -232,10 +329,28 @@ pub(super) fn resize_handles(object: &SdfObject, camera: &Camera) -> Vec<ResizeH
     resize_handles_with_matrix(object, object.transform.matrix(), camera)
 }
 
+#[cfg(test)]
 pub(super) fn resize_handles_with_matrix(
     object: &SdfObject,
     matrix: glam::Mat4,
     camera: &Camera,
+) -> Vec<ResizeHandle> {
+    resize_handles_with_matrix_impl(object, matrix, camera, false)
+}
+
+fn resize_handles_with_matrix_including_hidden(
+    object: &SdfObject,
+    matrix: glam::Mat4,
+    camera: &Camera,
+) -> Vec<ResizeHandle> {
+    resize_handles_with_matrix_impl(object, matrix, camera, true)
+}
+
+fn resize_handles_with_matrix_impl(
+    object: &SdfObject,
+    matrix: glam::Mat4,
+    camera: &Camera,
+    include_hidden_box_faces: bool,
 ) -> Vec<ResizeHandle> {
     let mut handles = Vec::new();
     let origin = matrix.transform_point3(Vec3::ZERO);
@@ -249,17 +364,32 @@ pub(super) fn resize_handles_with_matrix(
                     local_direction[axis] = sign;
                     let world = matrix.transform_point3(local);
                     let direction = matrix.transform_vector3(local_direction);
-                    if direction.dot(camera.position - world) <= 0.0 {
+                    let camera_facing = direction.dot(camera.position - world) > 0.0;
+                    let view_to_camera = (camera.position - camera.target).normalize_or_zero();
+                    let edge_on = direction.normalize_or_zero().dot(view_to_camera).abs()
+                        <= EDGE_ON_FACE_DOT_LIMIT;
+                    if !camera_facing && !edge_on && !include_hidden_box_faces {
                         continue;
                     }
                     let u = (axis + 1) % 3;
                     let v = (axis + 2) % 3;
-                    let patch = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                    let patch_scale = if edge_on { 1.0 } else { 0.3 };
+                    let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+                    let patch = corners
                         .into_iter()
                         .map(|(a, b)| {
                             let mut point = local;
-                            point[u] = params.box_q[u] * 0.3 * a;
-                            point[v] = params.box_q[v] * 0.3 * b;
+                            point[u] = params.box_q[u] * patch_scale * a;
+                            point[v] = params.box_q[v] * patch_scale * b;
+                            matrix.transform_point3(point)
+                        })
+                        .collect();
+                    let full_patch = corners
+                        .into_iter()
+                        .map(|(a, b)| {
+                            let mut point = local;
+                            point[u] = params.box_q[u] * a;
+                            point[v] = params.box_q[v] * b;
                             matrix.transform_point3(point)
                         })
                         .collect();
@@ -273,10 +403,13 @@ pub(super) fn resize_handles_with_matrix(
                         direction,
                         local_direction,
                         patch,
+                        full_patch,
                         label: format!("Resize {}", axis_label(axis)),
                         color: axis_color(axis),
                         parameter: axis,
                         value: params.box_q[axis] * 2.0,
+                        camera_facing,
+                        edge_on,
                     });
                 }
             }
@@ -304,10 +437,13 @@ pub(super) fn resize_handles_with_matrix(
                     direction,
                     local_direction: local_axis * side,
                     patch: vec![],
+                    full_patch: vec![],
                     label: format!("Radius {}", axis_label(axis)),
                     color: axis_color(axis),
                     parameter: axis,
                     value: params.radius * matrix.transform_vector3(local_axis).length(),
+                    camera_facing: true,
+                    edge_on: false,
                 });
             }
         }
@@ -328,10 +464,13 @@ pub(super) fn resize_handles_with_matrix(
                     direction: matrix.transform_vector3(direction),
                     local_direction: direction,
                     patch: vec![],
+                    full_patch: vec![],
                     label: label.into(),
                     color: axis_color(axis),
                     parameter: axis,
                     value: if axis == 1 { value * 2.0 } else { value },
+                    camera_facing: true,
+                    edge_on: false,
                 });
             }
         }
@@ -370,10 +509,13 @@ pub(super) fn resize_handles_with_matrix(
                     direction: matrix.transform_vector3(direction),
                     local_direction: direction,
                     patch: vec![],
+                    full_patch: vec![],
                     label: label.into(),
                     color: axis_color(parameter),
                     parameter,
                     value,
+                    camera_facing: true,
+                    edge_on: false,
                 });
             }
         }

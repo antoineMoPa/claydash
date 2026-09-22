@@ -137,6 +137,57 @@ pub(super) fn draw_file_error(
     response.map(|response| response.response.rect)
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(super) fn draw_web_save_dialog(
+    ctx: &egui::Context,
+    file_name: &mut Option<String>,
+) -> Option<FileMenuAction> {
+    let mut action = None;
+    let Some(name) = file_name.as_mut() else {
+        return None;
+    };
+    let mut cancel = false;
+    let modal = egui::Modal::new("web-project-download".into()).show(ctx, |ui| {
+        ui.set_width(340.0);
+        ui.heading("Download project");
+        ui.label("Choose a name for the Claydash project.");
+        let response = ui.add(
+            egui::TextEdit::singleline(name)
+                .desired_width(f32::INFINITY)
+                .hint_text("untitled.claydash"),
+        );
+        if !response.has_focus() {
+            response.request_focus();
+        }
+        let confirm = ui.input(|input| input.key_pressed(egui::Key::Enter));
+        ui.horizontal(|ui| {
+            cancel = ui.button("Cancel").clicked();
+            let valid = !name.trim().is_empty();
+            if ui
+                .add_enabled(valid, egui::Button::new("Download"))
+                .clicked()
+                || (valid && confirm)
+            {
+                action = Some(FileMenuAction::SaveNamed(project_download_name(name)));
+            }
+        });
+    });
+    if cancel || modal.should_close() || action.is_some() {
+        *file_name = None;
+    }
+    action
+}
+
+#[cfg(target_arch = "wasm32")]
+fn project_download_name(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.to_ascii_lowercase().ends_with(".claydash") {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}.claydash")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

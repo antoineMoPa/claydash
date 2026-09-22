@@ -7,6 +7,13 @@ impl InteractionState {
             ClaydashValue::EditorState(mode) => mode,
             _ => EditorState::Start,
         };
+        if mode == EditorState::Extruding {
+            self.transform_session = None;
+            self.numeric_rotation = NumericRotationInput::Idle;
+            self.update_extrusion(camera, tree);
+            return;
+        }
+        self.extrusion_session = None;
         if mode == EditorState::Start {
             self.transform_session = None;
             self.numeric_rotation = NumericRotationInput::Idle;
@@ -97,7 +104,7 @@ impl InteractionState {
                         * Mat4::from_quat(rotation)
                         * Mat4::from_translation(-session.center)
                 }
-                EditorState::Start => Mat4::IDENTITY,
+                EditorState::Start | EditorState::Extruding => Mat4::IDENTITY,
             };
             let local = target.parent_world.inverse() * operation * target.world;
             let (scale, rotation, translation) = local.to_scale_rotation_translation();
@@ -115,5 +122,87 @@ impl InteractionState {
         }
         set_objects(tree, scene);
         crate::model::set_scene_cameras(tree, cameras);
+    }
+
+    fn update_extrusion(&mut self, camera: &Camera, tree: &mut DataTree) {
+        let Some(face) = crate::model::selected_box_face(tree) else {
+            tree.set_path(
+                "editor.state",
+                ClaydashValue::EditorState(EditorState::Start),
+            );
+            self.extrusion_session = None;
+            return;
+        };
+        if self
+            .extrusion_session
+            .as_ref()
+            .is_none_or(|session| session.object != face.object)
+        {
+            let scene = objects(tree);
+            let Some(object) = scene.iter().find(|object| object.uuid == face.object) else {
+                return;
+            };
+            let crate::model::SdfParams::BoxParams(params) = &object.params else {
+                return;
+            };
+            let axis = face.axis.index();
+            let mut local_direction = Vec3::ZERO;
+            local_direction[axis] = if face.positive { 1.0 } else { -1.0 };
+            let matrix = crate::model::object_world_matrix(&scene, face.object);
+            let outer = matrix.transform_point3(local_direction * params.box_q[axis]);
+            let direction = matrix.transform_vector3(local_direction);
+            let Some(center) = camera.project(outer, 1.0) else {
+                return;
+            };
+            let Some(ahead) = camera.project(outer + direction * 0.1, 1.0) else {
+                return;
+            };
+            let mut projected_axis = Vec2::new(ahead.x - center.x, ahead.y - center.y) * 10.0;
+            if projected_axis.length_squared() < 4.0 {
+                let screen_up = camera.view().inverse().y_axis.truncate();
+                if let Some(fallback) = camera.project(outer + screen_up * 0.1, 1.0) {
+                    projected_axis = Vec2::new(fallback.x - center.x, fallback.y - center.y) * 10.0;
+                }
+            }
+            if projected_axis.length_squared() < 0.0001 {
+                return;
+            }
+            self.extrusion_session = Some(ExtrusionSession {
+                object: face.object,
+                axis: face.axis,
+                positive: face.positive,
+                start_mouse_position: self.mouse_position,
+                projected_axis,
+                initial_transform: object.transform,
+                initial_half_extent: params.box_q[axis],
+            });
+        }
+        let Some(session) = self.extrusion_session.clone() else {
+            return;
+        };
+        let amount = (self.mouse_position - session.start_mouse_position)
+            .dot(session.projected_axis)
+            / session.projected_axis.length_squared();
+        let half_extent = (session.initial_half_extent + amount * 0.5).max(0.01);
+        let half_extent_delta = half_extent - session.initial_half_extent;
+        let mut local_direction = Vec3::ZERO;
+        local_direction[session.axis.index()] = if session.positive { 1.0 } else { -1.0 };
+        let mut scene = objects(tree);
+        let Some(object) = scene
+            .iter_mut()
+            .find(|object| object.uuid == session.object)
+        else {
+            return;
+        };
+        let crate::model::SdfParams::BoxParams(params) = &mut object.params else {
+            return;
+        };
+        params.box_q[session.axis.index()] = half_extent;
+        object.transform = session.initial_transform;
+        object.transform.translation += session
+            .initial_transform
+            .matrix()
+            .transform_vector3(local_direction * half_extent_delta);
+        set_objects(tree, scene);
     }
 }

@@ -3,7 +3,8 @@ use observable_key_value_tree::{CanBeNone, ObservableKVTree};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AnimationData, BooleanOperation, EditorState, Material, MaterialAsset, SdfObject, Transform,
+    AnimationData, BooleanOperation, BoxFaceSelection, EditorState, Material, MaterialAsset,
+    SdfObject, Transform,
 };
 use crate::camera::SceneCamera;
 
@@ -14,6 +15,7 @@ pub enum ClaydashValue {
     VecMaterialAsset(Vec<MaterialAsset>),
     VecCamera(Vec<SceneCamera>),
     BooleanPick(BooleanPick),
+    BoxFaceSelection(BoxFaceSelection),
     Uuid(uuid::Uuid),
     VecUuid(Vec<uuid::Uuid>),
     F32(f32),
@@ -224,6 +226,20 @@ pub fn selection_scope(tree: &DataTree) -> SelectionScope {
     }
 }
 
+pub fn selected_box_face(tree: &DataTree) -> Option<BoxFaceSelection> {
+    match tree.get_path("editor.selected_box_face") {
+        ClaydashValue::BoxFaceSelection(face) => Some(face),
+        _ => None,
+    }
+}
+
+pub fn set_selected_box_face(tree: &mut DataTree, face: Option<BoxFaceSelection>) {
+    tree.set_transient_path(
+        "editor.selected_box_face",
+        face.map_or(ClaydashValue::None, ClaydashValue::BoxFaceSelection),
+    );
+}
+
 pub fn set_objects(tree: &mut DataTree, value: Vec<SdfObject>) {
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
 }
@@ -233,6 +249,7 @@ pub fn set_objects_transient(tree: &mut DataTree, value: Vec<SdfObject>) {
 }
 
 pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    set_selected_box_face(tree, None);
     tree.set_transient_path(
         "scene.selection_scope",
         ClaydashValue::SelectionScope(SelectionScope::Group),
@@ -241,6 +258,7 @@ pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
 }
 
 pub fn set_selected_exact(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    set_selected_box_face(tree, None);
     tree.set_transient_path(
         "scene.selection_scope",
         ClaydashValue::SelectionScope(SelectionScope::Exact),

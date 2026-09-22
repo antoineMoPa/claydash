@@ -7,16 +7,34 @@ use crate::model::{
 
 const ANIMATION_PATH: &str = "scene.animation";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct SelectedKeyframe {
     pub binding: AnimationBinding,
     pub frame: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct KeyframeDrag {
-    pub keyframe: SelectedKeyframe,
-    pub preview_frame: u32,
+    pub anchor: SelectedKeyframe,
+    pub keyframes: Vec<SelectedKeyframe>,
+    pub preview_delta: i32,
+    pub start_pointer_x: f32,
+    pub pixels_per_frame: f32,
+    pub keyboard_initiated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimelineBoxSelection {
+    pub start: egui::Pos2,
+    pub end: egui::Pos2,
+    pub initial: Vec<SelectedKeyframe>,
+    pub additive: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimelineScrollAxis {
+    Horizontal,
+    Vertical,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,8 +79,13 @@ pub struct AnimationRuntime {
     pub current_frame: f32,
     pub playing: bool,
     pub looping: bool,
-    pub selected_keyframe: Option<SelectedKeyframe>,
+    pub selected_keyframes: Vec<SelectedKeyframe>,
     pub keyframe_drag: Option<KeyframeDrag>,
+    pub timeline_box_selection: Option<TimelineBoxSelection>,
+    pub timeline_time_scale: f32,
+    pub timeline_time_center: Option<f32>,
+    pub timeline_track_height: f32,
+    pub timeline_scroll_axis: Option<TimelineScrollAxis>,
     last_tick: Option<Instant>,
 }
 
@@ -72,8 +95,13 @@ impl Default for AnimationRuntime {
             current_frame: 0.0,
             playing: false,
             looping: true,
-            selected_keyframe: None,
+            selected_keyframes: Vec::new(),
             keyframe_drag: None,
+            timeline_box_selection: None,
+            timeline_time_scale: 1.0,
+            timeline_time_center: None,
+            timeline_track_height: 64.0,
+            timeline_scroll_axis: None,
             last_tick: None,
         }
     }
@@ -129,8 +157,13 @@ impl AnimationRuntime {
     pub fn reset_for_document(&mut self, tree: &DataTree) {
         self.playing = false;
         self.last_tick = None;
-        self.selected_keyframe = None;
+        self.selected_keyframes.clear();
         self.keyframe_drag = None;
+        self.timeline_box_selection = None;
+        self.timeline_time_scale = 1.0;
+        self.timeline_time_center = None;
+        self.timeline_track_height = 64.0;
+        self.timeline_scroll_axis = None;
         self.current_frame = animation_data(tree).start_frame as f32;
     }
 }
@@ -422,18 +455,67 @@ pub fn bezier_point(points: [(f32, f32); 4], amount: f32) -> (f32, f32) {
 }
 
 pub fn delete_keyframe(tree: &mut DataTree, selected: SelectedKeyframe) {
+    delete_keyframes(tree, &[selected]);
+}
+
+pub fn delete_keyframes(tree: &mut DataTree, selected: &[SelectedKeyframe]) {
     let mut data = animation_data(tree);
-    if let Some(track) = data
-        .tracks
-        .iter_mut()
-        .find(|track| track.binding == selected.binding)
-    {
-        track
-            .keyframes
-            .retain(|keyframe| keyframe.frame != selected.frame);
+    for track in &mut data.tracks {
+        track.keyframes.retain(|keyframe| {
+            !selected.iter().any(|selected| {
+                selected.binding == track.binding && selected.frame == keyframe.frame
+            })
+        });
     }
     data.tracks.retain(|track| !track.keyframes.is_empty());
     set_animation_data(tree, data);
+}
+
+pub fn move_keyframes(
+    tree: &mut DataTree,
+    selected: &[SelectedKeyframe],
+    frame_delta: i32,
+) -> Vec<SelectedKeyframe> {
+    if frame_delta == 0 || selected.is_empty() {
+        return selected.to_vec();
+    }
+    let mut data = animation_data(tree);
+    let mut moved = Vec::new();
+    for track in &mut data.tracks {
+        let track_selection: Vec<_> = selected
+            .iter()
+            .copied()
+            .filter(|selected| selected.binding == track.binding)
+            .collect();
+        if track_selection.is_empty() {
+            continue;
+        }
+        let mut moving = Vec::new();
+        track.keyframes.retain(|keyframe| {
+            if track_selection
+                .iter()
+                .any(|selected| selected.frame == keyframe.frame)
+            {
+                moving.push(keyframe.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for mut keyframe in moving {
+            let frame = (keyframe.frame as i64 + frame_delta as i64).max(0) as u32;
+            keyframe.frame = frame;
+            track.keyframes.retain(|existing| existing.frame != frame);
+            track.keyframes.push(keyframe);
+            moved.push(SelectedKeyframe {
+                binding: track.binding,
+                frame,
+            });
+        }
+        track.keyframes.sort_by_key(|keyframe| keyframe.frame);
+    }
+    set_animation_data(tree, data);
+    moved
 }
 
 pub fn remove_tracks_for_objects(tree: &mut DataTree, objects: &[uuid::Uuid]) {
@@ -796,5 +878,82 @@ mod tests {
         assert!(runtime.tick(&mut tree, start + std::time::Duration::from_millis(250)));
         assert_eq!(runtime.current_frame, 6.0);
         assert!((objects(&tree)[0].transform.translation.x - 3.75).abs() < 0.0001);
+    }
+
+    #[test]
+    fn moving_and_deleting_multiple_keyframes_is_atomic_across_tracks() {
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::Box);
+        let x = AnimationBinding {
+            object: object.uuid,
+            property: AnimatableProperty::Position(VectorAxis::X),
+        };
+        let y = AnimationBinding {
+            object: object.uuid,
+            property: AnimatableProperty::Position(VectorAxis::Y),
+        };
+        insert_keyframe(&mut tree, x, 3, 1.0);
+        insert_keyframe(&mut tree, x, 9, 2.0);
+        insert_keyframe(&mut tree, y, 5, 3.0);
+        let outgoing_handle = BezierHandle {
+            frame_offset: 2.0,
+            value_offset: 0.75,
+        };
+        set_bezier_handle(
+            &mut tree,
+            SelectedKeyframe {
+                binding: x,
+                frame: 3,
+            },
+            false,
+            outgoing_handle,
+        );
+        let selected = [
+            SelectedKeyframe {
+                binding: x,
+                frame: 3,
+            },
+            SelectedKeyframe {
+                binding: y,
+                frame: 5,
+            },
+        ];
+
+        let moved = move_keyframes(&mut tree, &selected, 4);
+
+        assert_eq!(
+            moved,
+            vec![
+                SelectedKeyframe {
+                    binding: x,
+                    frame: 7,
+                },
+                SelectedKeyframe {
+                    binding: y,
+                    frame: 9,
+                },
+            ]
+        );
+        let data = animation_data(&tree);
+        assert_eq!(
+            data.tracks[0]
+                .keyframes
+                .iter()
+                .map(|key| key.frame)
+                .collect::<Vec<_>>(),
+            vec![7, 9]
+        );
+        assert_eq!(data.tracks[1].keyframes[0].frame, 9);
+        let moved_handle = data.tracks[0].keyframes[0]
+            .outgoing_handle
+            .expect("moved key keeps its outgoing handle");
+        assert_eq!(moved_handle.frame_offset, outgoing_handle.frame_offset);
+        assert_eq!(moved_handle.value_offset, outgoing_handle.value_offset);
+
+        delete_keyframes(&mut tree, &moved);
+
+        let data = animation_data(&tree);
+        assert_eq!(data.tracks.len(), 1);
+        assert_eq!(data.tracks[0].keyframes[0].frame, 9);
     }
 }

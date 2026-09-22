@@ -223,7 +223,7 @@
     }
 
     #[test]
-    fn view_aligned_box_face_keeps_a_resize_gizmo() {
+    fn view_aligned_box_face_exposes_its_four_silhouette_edges() {
         let ctx = egui::Context::default();
         let viewport =
             egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0));
@@ -248,7 +248,98 @@
             egui::Modifiers::NONE,
         );
 
-        assert_eq!(state.regions.len(), 1);
+        let handles = resize_handles(&objects(&tree)[0], &camera);
+        assert_eq!(handles.iter().filter(|handle| handle.edge_on).count(), 4);
+        assert_eq!(handles.iter().filter(|handle| handle.camera_facing).count(), 1);
+        assert_eq!(state.regions.len(), 5);
+    }
+
+    #[test]
+    fn top_view_silhouette_edge_resizes_the_box_without_moving_the_camera() {
+        let ctx = egui::Context::default();
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0));
+        let mut camera = Camera::new();
+        camera.snap(ViewAngle::Top);
+        camera.projection_mode = crate::camera::ProjectionMode::Orthographic;
+        camera.viewport_origin = Vec2::new(viewport.left(), viewport.top());
+        camera.viewport = Vec2::new(viewport.width(), viewport.height());
+        let camera_position = camera.position;
+        let object = SdfObject::create_kind(PrimitiveKind::Box);
+        let object_id = object.uuid;
+        let handle = resize_handles(&object, &camera)
+            .into_iter()
+            .find(|handle| {
+                handle.id
+                    == ResizeHandleId::BoxFace {
+                        axis: 0,
+                        positive: true,
+                    }
+            })
+            .expect("right silhouette edge");
+        assert!(handle.edge_on);
+        let initial_half_width = match &object.params {
+            SdfParams::BoxParams(params) => params.box_q.x,
+            _ => unreachable!(),
+        };
+        let start = camera.project(handle.world, 1.0).unwrap();
+        let end = camera
+            .project(handle.world + handle.direction * 0.25, 1.0)
+            .unwrap();
+        let mut state = UiState::default();
+        let mut tree = DataTree::default();
+        set_selected(&mut tree, vec![object.uuid]);
+        set_objects(&mut tree, vec![object]);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut frame = |tree: &mut DataTree, events| {
+            primitive_gizmo_frame(
+                &ctx,
+                &mut state,
+                tree,
+                &camera,
+                viewport,
+                events,
+                egui::Modifiers::NONE,
+            );
+        };
+        frame(&mut tree, vec![]);
+        frame(
+            &mut tree,
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+        );
+        frame(
+            &mut tree,
+            vec![egui::Event::PointerMoved(start.lerp(end, 0.5))],
+        );
+        assert!(ctx.is_being_dragged(egui::Id::new((
+            "resize",
+            object_id,
+            handle.id,
+        ))));
+        assert_eq!(
+            crate::model::selected_box_face(&tree),
+            Some(crate::model::BoxFaceSelection {
+                object: object_id,
+                axis: crate::model::VectorAxis::X,
+                positive: true,
+            })
+        );
+        frame(&mut tree, vec![egui::Event::PointerMoved(end)]);
+        frame(&mut tree, vec![button(end, false)]);
+        let SdfParams::BoxParams(params) = &objects(&tree)[0].params else {
+            unreachable!()
+        };
+        assert!(
+            params.box_q.x > initial_half_width,
+            "resized half-width: {} (started at {initial_half_width})",
+            params.box_q.x
+        );
+        assert_eq!(camera.position, camera_position);
     }
 
     #[test]
@@ -298,7 +389,10 @@
         let mut state = UiState::default();
         let mut tree = DataTree::default();
         let object = SdfObject::create_kind(PrimitiveKind::Box);
-        let handle = &resize_handles(&object, &camera)[0];
+        let handle = resize_handles(&object, &camera)
+            .into_iter()
+            .find(|handle| handle.camera_facing && !handle.edge_on)
+            .expect("front face handle");
         let handle_id = egui::Id::new(("resize", object.uuid, handle.id));
         let start = camera.project(handle.world, 1.0).unwrap();
         let screen_up = camera.view().inverse().y_axis.truncate();

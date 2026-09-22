@@ -25,6 +25,17 @@ struct TransformSession {
     targets: Vec<commands::TransformTarget>,
 }
 
+#[derive(Clone)]
+struct ExtrusionSession {
+    object: uuid::Uuid,
+    axis: crate::model::VectorAxis,
+    positive: bool,
+    start_mouse_position: Vec2,
+    projected_axis: Vec2,
+    initial_transform: crate::model::Transform,
+    initial_half_extent: f32,
+}
+
 struct ShiftPanSession {
     start: Vec2,
     last_applied: Vec2,
@@ -87,6 +98,7 @@ pub struct InteractionState {
     right_pan_reference: Option<Vec3>,
     shift_pan: Option<ShiftPanSession>,
     transform_session: Option<TransformSession>,
+    extrusion_session: Option<ExtrusionSession>,
     numeric_rotation: NumericRotationInput,
 }
 
@@ -100,6 +112,7 @@ impl Default for InteractionState {
             right_pan_reference: None,
             shift_pan: None,
             transform_session: None,
+            extrusion_session: None,
             numeric_rotation: NumericRotationInput::Idle,
         }
     }
