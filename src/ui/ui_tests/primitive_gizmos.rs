@@ -596,7 +596,14 @@
                         ..Default::default()
                     },
                     |ui| {
-                        state.draw(ui, &mut tree, &mut commands, &mut camera, &mut document);
+                        state.draw(
+                            ui,
+                            &mut tree,
+                            &mut commands,
+                            &mut camera,
+                            &mut document,
+                            None,
+                        );
                     },
                 );
                 output.textures_delta.clear(); // Headless test has no GPU texture consumer.

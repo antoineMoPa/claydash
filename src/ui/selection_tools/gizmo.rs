@@ -215,18 +215,27 @@ impl UiState {
         camera: &Camera,
     ) {
         let scale = ui.ctx().pixels_per_point();
-        let (pointer, pressed, released, cancel, additive, navigating, ctrl_snap_rotation) = ui
-            .input(|i| {
-                (
-                    i.pointer.interact_pos(),
-                    i.pointer.primary_pressed(),
-                    i.pointer.primary_released(),
-                    i.key_pressed(egui::Key::Escape) || !i.focused,
-                    i.modifiers.shift,
-                    i.modifiers.ctrl || i.pointer.secondary_down(),
-                    i.modifiers.ctrl,
-                )
-            });
+        let (
+            pointer,
+            pressed,
+            released,
+            cancel,
+            additive,
+            navigating,
+            ctrl_snap_rotation,
+            bypass_guides,
+        ) = ui.input(|i| {
+            (
+                i.pointer.interact_pos(),
+                i.pointer.primary_pressed(),
+                i.pointer.primary_released(),
+                i.key_pressed(egui::Key::Escape) || !i.focused,
+                i.modifiers.shift,
+                i.modifiers.ctrl || i.pointer.secondary_down(),
+                i.modifiers.ctrl,
+                i.modifiers.alt,
+            )
+        });
         let snap_rotation = match &mut self.selection_tools.gesture {
             Some(Gesture::Transform(session))
                 if matches!(
@@ -313,6 +322,14 @@ impl UiState {
                             ),
                             _ => None,
                         };
+                        let excluded = commands::effective_selected_ids(tree);
+                        let mut anchors = crate::guides::object_anchors(&scene, &excluded);
+                        for target in &transform_targets {
+                            if !scene.iter().any(|object| object.uuid == target.id) {
+                                anchors.push(target.world.transform_point3(Vec3::ZERO));
+                            }
+                        }
+                        let guides = crate::guides::face_center_guides(&scene, &excluded);
                         self.selection_tools.gesture = Some(Gesture::Transform(TransformGesture {
                             action,
                             start: camera.cursor_on_plane(physical, center),
@@ -326,6 +343,9 @@ impl UiState {
                             world_units_per_point: geometry.world_units_per_point,
                             rotation_snap_active: snap_rotation,
                             targets: transform_targets.clone(),
+                            anchors,
+                            guides,
+                            active_guide: None,
                         }));
                     }
                 }
@@ -352,7 +372,7 @@ impl UiState {
                 if let Some(p) = pointer {
                     let mut scene = scene.clone();
                     let mut cameras = crate::model::scene_cameras(tree);
-                    let operation = match session.action {
+                    let mut operation = match session.action {
                         GizmoAction::MoveFree => {
                             let physical = Vec2::new(p.x, p.y) * scale;
                             let delta =
@@ -425,6 +445,43 @@ impl UiState {
                                 * glam::Mat4::from_translation(-session.center)
                         }
                     };
+                    let move_snap = match session.action {
+                        GizmoAction::MoveFree if !bypass_guides => {
+                            let raw_anchors: Vec<_> = session
+                                .anchors
+                                .iter()
+                                .map(|anchor| operation.transform_point3(*anchor))
+                                .collect();
+                            crate::guides::snap_in_view_plane(
+                                camera,
+                                &raw_anchors,
+                                &session.guides,
+                                scale,
+                                session.active_guide,
+                            )
+                        }
+                        GizmoAction::MoveAxis(axis) if !bypass_guides => {
+                            let raw_anchors: Vec<_> = session
+                                .anchors
+                                .iter()
+                                .map(|anchor| operation.transform_point3(*anchor))
+                                .collect();
+                            crate::guides::snap_along_line(
+                                camera,
+                                &raw_anchors,
+                                world_axis(axis),
+                                &session.guides,
+                                scale,
+                                session.active_guide,
+                            )
+                        }
+                        _ => None,
+                    };
+                    session.active_guide = move_snap.map(|snap| snap.active);
+                    self.active_guide = session.active_guide;
+                    if let Some(snap) = move_snap {
+                        operation = glam::Mat4::from_translation(snap.correction) * operation;
+                    }
                     for target in &session.targets {
                         let local = target.parent_world.inverse() * operation * target.world;
                         let (scale, rotation, translation) = local.to_scale_rotation_translation();

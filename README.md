@@ -109,6 +109,12 @@ During G/R/S transforms (including the move started by Duplicate), X/Y/Z selects
 world axis, replacing the previous axis. Press the same axis again to unlock it. Held-key
 repeat is ignored; axis keys take priority over Shift/⌘ undo/redo while transforming.
 
+Moving objects, resizing box faces, and extruding box faces snap to infinite guides through the
+face centers of other boxes. Each face contributes its normal and two tangent directions; the
+active guide is drawn in the viewport. Snapping preserves view-plane, world-axis, and face-normal
+constraints. Free object movement can hold two independent alignments against features from two
+different objects, drawing both active guides. Hold Alt while dragging to bypass guides temporarily.
+
 The **Operand** inspector tab controls the selected object's boolean operation and softness.
 New objects default to a 0.05 world-unit blend for smooth unions, cuts, and intersections;
 set Softness to 0 for sharp edges. Existing saved objects without this property retain

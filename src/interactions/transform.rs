@@ -16,6 +16,7 @@ impl InteractionState {
         self.extrusion_session = None;
         if mode == EditorState::Start {
             self.transform_session = None;
+            self.active_guide = None;
             self.numeric_rotation = NumericRotationInput::Idle;
             return;
         }
@@ -66,14 +67,48 @@ impl InteractionState {
         } else {
             camera.cursor_at_depth(self.mouse_position, session.center)
         };
+        let grab_operation = if mode == EditorState::Grabbing {
+            let raw_translation = (current_cursor - session.initial_cursor) * mask;
+            let raw_anchors: Vec<_> = session
+                .anchors
+                .iter()
+                .map(|anchor| *anchor + raw_translation)
+                .collect();
+            let bypass_guides =
+                self.keys.contains(&KeyCode::AltLeft) || self.keys.contains(&KeyCode::AltRight);
+            let snap = if bypass_guides {
+                None
+            } else if constrained {
+                crate::guides::snap_along_line(
+                    camera,
+                    &raw_anchors,
+                    mask,
+                    &session.guides,
+                    1.0,
+                    self.active_guide,
+                )
+            } else {
+                crate::guides::snap_in_view_plane(
+                    camera,
+                    &raw_anchors,
+                    &session.guides,
+                    1.0,
+                    self.active_guide,
+                )
+            };
+            self.active_guide = snap.map(|snap| snap.active);
+            let correction = snap.map_or(Vec3::ZERO, |snap| snap.correction);
+            Some(Mat4::from_translation(raw_translation + correction))
+        } else {
+            self.active_guide = None;
+            None
+        };
         let mut scene = objects(tree);
         let mut cameras = crate::model::scene_cameras(tree);
 
         for target in &session.targets {
             let operation = match mode {
-                EditorState::Grabbing => {
-                    Mat4::from_translation((current_cursor - session.initial_cursor) * mask)
-                }
+                EditorState::Grabbing => grab_operation.unwrap_or(Mat4::IDENTITY),
                 EditorState::Scaling => {
                     let factor = (current_cursor.distance(session.center) / session.initial_radius)
                         .max(0.001);
@@ -131,6 +166,7 @@ impl InteractionState {
                 ClaydashValue::EditorState(EditorState::Start),
             );
             self.extrusion_session = None;
+            self.active_guide = None;
             return;
         };
         if self
@@ -167,6 +203,13 @@ impl InteractionState {
             if projected_axis.length_squared() < 0.0001 {
                 return;
             }
+            let mut excluded = vec![face.object];
+            if let ClaydashValue::BoxFaceSelection(source) =
+                tree.get_path("editor.extrusion_source_face")
+            {
+                excluded.push(source.object);
+            }
+            let guides = crate::guides::face_center_guides(&scene, &excluded);
             self.extrusion_session = Some(ExtrusionSession {
                 object: face.object,
                 axis: face.axis,
@@ -175,14 +218,41 @@ impl InteractionState {
                 projected_axis,
                 initial_transform: object.transform,
                 initial_half_extent: params.box_q[axis],
+                initial_face_center: outer,
+                world_direction_per_unit: direction,
+                guides,
             });
         }
         let Some(session) = self.extrusion_session.clone() else {
             return;
         };
-        let amount = (self.mouse_position - session.start_mouse_position)
+        let mut amount = (self.mouse_position - session.start_mouse_position)
             .dot(session.projected_axis)
             / session.projected_axis.length_squared();
+        let bypass_guides =
+            self.keys.contains(&KeyCode::AltLeft) || self.keys.contains(&KeyCode::AltRight);
+        let raw_face_center =
+            session.initial_face_center + session.world_direction_per_unit * amount;
+        let snap = if bypass_guides {
+            None
+        } else {
+            crate::guides::snap_along_line(
+                camera,
+                &[raw_face_center],
+                session.world_direction_per_unit,
+                &session.guides,
+                1.0,
+                self.active_guide,
+            )
+        };
+        self.active_guide = snap.map(|snap| snap.active);
+        if let Some(snap) = snap {
+            let direction_length = session.world_direction_per_unit.length().max(0.0001);
+            amount += snap
+                .correction
+                .dot(session.world_direction_per_unit / direction_length)
+                / direction_length;
+        }
         let half_extent = (session.initial_half_extent + amount * 0.5).max(0.01);
         let half_extent_delta = half_extent - session.initial_half_extent;
         let mut local_direction = Vec3::ZERO;

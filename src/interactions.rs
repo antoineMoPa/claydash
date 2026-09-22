@@ -23,6 +23,8 @@ struct TransformSession {
     last_mouse_position: Vec2,
     rotation_snap_active: bool,
     targets: Vec<commands::TransformTarget>,
+    anchors: Vec<Vec3>,
+    guides: Vec<crate::guides::FaceGuide>,
 }
 
 #[derive(Clone)]
@@ -34,6 +36,9 @@ struct ExtrusionSession {
     projected_axis: Vec2,
     initial_transform: crate::model::Transform,
     initial_half_extent: f32,
+    initial_face_center: Vec3,
+    world_direction_per_unit: Vec3,
+    guides: Vec<crate::guides::FaceGuide>,
 }
 
 struct ShiftPanSession {
@@ -99,6 +104,7 @@ pub struct InteractionState {
     shift_pan: Option<ShiftPanSession>,
     transform_session: Option<TransformSession>,
     extrusion_session: Option<ExtrusionSession>,
+    active_guide: Option<crate::guides::ActiveGuideSet>,
     numeric_rotation: NumericRotationInput,
 }
 
@@ -113,8 +119,15 @@ impl Default for InteractionState {
             shift_pan: None,
             transform_session: None,
             extrusion_session: None,
+            active_guide: None,
             numeric_rotation: NumericRotationInput::Idle,
         }
+    }
+}
+
+impl InteractionState {
+    pub(crate) fn active_guide(&self) -> Option<crate::guides::ActiveGuideSet> {
+        self.active_guide
     }
 }
 

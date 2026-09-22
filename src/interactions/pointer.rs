@@ -176,6 +176,15 @@ impl InteractionState {
         } else {
             camera.cursor_at_depth(self.mouse_position, center)
         };
+        let scene = objects(tree);
+        let excluded = commands::effective_selected_ids(tree);
+        let mut anchors = crate::guides::object_anchors(&scene, &excluded);
+        for target in &targets {
+            if !scene.iter().any(|object| object.uuid == target.id) {
+                anchors.push(target.world.transform_point3(Vec3::ZERO));
+            }
+        }
+        let guides = crate::guides::face_center_guides(&scene, &excluded);
         self.transform_session = Some(TransformSession {
             mode,
             selection: selected(tree),
@@ -187,6 +196,8 @@ impl InteractionState {
             rotation_snap_active: self.keys.contains(&KeyCode::ControlLeft)
                 || self.keys.contains(&KeyCode::ControlRight),
             targets,
+            anchors,
+            guides,
         });
     }
 

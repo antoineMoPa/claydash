@@ -26,6 +26,8 @@ impl UiState {
             return;
         }
         let mut scene = objects(tree);
+        let excluded = commands::effective_selected_ids(tree);
+        let guide_candidates = crate::guides::face_center_guides(&scene, &excluded);
         let matrix = crate::model::object_world_matrix(&scene, selection[0]);
         let Some(object) = scene.iter_mut().find(|object| object.uuid == selection[0]) else {
             return;
@@ -103,12 +105,12 @@ impl UiState {
             let response = ui.interact(hit, id, egui::Sense::drag());
             let response = if handle.edge_on {
                 response.on_hover_text(format!(
-                    "Drag this edge to resize {}. Hold Shift to resize from the center. Release to finish.",
+                    "Drag this edge to resize {}. Hold Shift to resize from the center; Alt bypasses guides. Release to finish.",
                     axis_label(handle.parameter)
                 ))
             } else if matches!(&object.params, SdfParams::BoxParams(_)) {
                 response.on_hover_text(format!(
-                    "Click to select this face. Drag to resize {}. Hold Shift to resize from the center.",
+                    "Click to select this face. Drag to resize {}. Hold Shift to resize from the center; Alt bypasses guides.",
                     handle.label
                 ))
             } else {
@@ -125,6 +127,24 @@ impl UiState {
                 }),
                 _ => false,
             };
+            if response.drag_started() {
+                if let ResizeHandleId::BoxFace { .. } = handle.id {
+                    if let SdfParams::BoxParams(params) = &object.params {
+                        self.resize_guide_drag = Some(ResizeGuideDrag {
+                            object: object.uuid,
+                            handle: handle.id,
+                            initial_transform: object.transform,
+                            initial_half_extent: params.box_q[handle.parameter],
+                            initial_face_center: handle.world,
+                            world_direction_per_unit: handle.direction,
+                            projected_axis,
+                            raw_amount: 0.0,
+                            guides: guide_candidates.clone(),
+                            active_guide: None,
+                        });
+                    }
+                }
+            }
             let stroke = Stroke::new(
                 if response.hovered() || response.dragged() || face_selected {
                     2.5
@@ -202,19 +222,79 @@ impl UiState {
                 let resize_from_center = ui.input(|input| input.modifiers.shift);
                 match &mut object.params {
                     SdfParams::BoxParams(params) => {
-                        let half_size = &mut params.box_q[handle.parameter];
-                        let old_half_size = *half_size;
-                        let half_size_delta = if resize_from_center {
-                            amount
+                        if let Some(session) = self.resize_guide_drag.as_mut().filter(|session| {
+                            session.object == object.uuid && session.handle == handle.id
+                        }) {
+                            session.raw_amount += delta.dot(session.projected_axis)
+                                / session.projected_axis.length_sq();
+                            let raw_amount = session.raw_amount;
+                            let raw_half_delta = if resize_from_center {
+                                raw_amount
+                            } else {
+                                raw_amount * 0.5
+                            };
+                            let raw_half_extent =
+                                (session.initial_half_extent + raw_half_delta).max(0.01);
+                            let mut face_movement = if resize_from_center {
+                                raw_half_extent - session.initial_half_extent
+                            } else {
+                                (raw_half_extent - session.initial_half_extent) * 2.0
+                            };
+                            let raw_face_center = session.initial_face_center
+                                + session.world_direction_per_unit * face_movement;
+                            let bypass_guides = ui.input(|input| input.modifiers.alt);
+                            let snap = if bypass_guides {
+                                None
+                            } else {
+                                crate::guides::snap_along_line(
+                                    camera,
+                                    &[raw_face_center],
+                                    session.world_direction_per_unit,
+                                    &session.guides,
+                                    ui.ctx().pixels_per_point(),
+                                    session.active_guide,
+                                )
+                            };
+                            session.active_guide = snap.map(|snap| snap.active);
+                            self.active_guide = session.active_guide;
+                            if let Some(snap) = snap {
+                                let direction_length =
+                                    session.world_direction_per_unit.length().max(0.0001);
+                                face_movement += snap
+                                    .correction
+                                    .dot(session.world_direction_per_unit / direction_length)
+                                    / direction_length;
+                            }
+                            let half_delta = if resize_from_center {
+                                face_movement
+                            } else {
+                                face_movement * 0.5
+                            };
+                            params.box_q[handle.parameter] =
+                                (session.initial_half_extent + half_delta).max(0.01);
+                            object.transform = session.initial_transform;
+                            if !resize_from_center {
+                                let applied_delta =
+                                    params.box_q[handle.parameter] - session.initial_half_extent;
+                                let local_offset = handle.local_direction * applied_delta;
+                                object.transform.translation +=
+                                    object.transform.matrix().transform_vector3(local_offset);
+                            }
                         } else {
-                            amount * 0.5
-                        };
-                        *half_size = (*half_size + half_size_delta).max(0.01);
-                        if !resize_from_center {
-                            let local_offset =
-                                handle.local_direction * (*half_size - old_half_size);
-                            object.transform.translation +=
-                                object.transform.matrix().transform_vector3(local_offset);
+                            let half_size = &mut params.box_q[handle.parameter];
+                            let old_half_size = *half_size;
+                            let half_size_delta = if resize_from_center {
+                                amount
+                            } else {
+                                amount * 0.5
+                            };
+                            *half_size = (*half_size + half_size_delta).max(0.01);
+                            if !resize_from_center {
+                                let local_offset =
+                                    handle.local_direction * (*half_size - old_half_size);
+                                object.transform.translation +=
+                                    object.transform.matrix().transform_vector3(local_offset);
+                            }
                         }
                     }
                     SdfParams::SphereParams(params) => {
@@ -272,6 +352,7 @@ impl UiState {
             set_objects(tree, scene);
         }
         if finished {
+            self.resize_guide_drag = None;
             tree.make_undo_redo_snapshot();
         }
     }

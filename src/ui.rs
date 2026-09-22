@@ -86,6 +86,8 @@ pub struct UiState {
     viewport_rect: Option<egui::Rect>,
     ghosts: boolean_overlay::Ghosts,
     selection_tools: selection_tools::SelectionTools,
+    active_guide: Option<crate::guides::ActiveGuideSet>,
+    resize_guide_drag: Option<ResizeGuideDrag>,
     insert_keyframe_menu_position: Option<egui::Pos2>,
     #[cfg(target_arch = "wasm32")]
     web_save_name: Option<String>,
@@ -116,6 +118,8 @@ impl Default for UiState {
             viewport_rect: None,
             ghosts: boolean_overlay::Ghosts::default(),
             selection_tools: selection_tools::SelectionTools::default(),
+            active_guide: None,
+            resize_guide_drag: None,
             insert_keyframe_menu_position: None,
             #[cfg(target_arch = "wasm32")]
             web_save_name: None,
@@ -167,8 +171,10 @@ impl UiState {
         command_map: &mut Commands,
         camera: &mut Camera,
         document: &mut DocumentState,
+        interaction_guide: Option<crate::guides::ActiveGuideSet>,
     ) -> Option<FileMenuAction> {
         self.regions.clear();
+        self.active_guide = None;
         self.ghosts = boolean_overlay::Ghosts::default();
         egui_extras::install_image_loaders(viewport_ui.ctx());
         self.handle_animation_shortcuts(viewport_ui.ctx(), tree);
@@ -254,7 +260,7 @@ impl UiState {
                     ui.painter().text(
                         rect.center_bottom() - egui::vec2(0.0, 16.0),
                         egui::Align2::CENTER_BOTTOM,
-                        "Extrude face: move mouse · click or Enter confirms · Esc cancels",
+                        "Extrude face: move mouse · Alt bypasses guides · click or Enter confirms · Esc cancels",
                         egui::FontId::proportional(13.0),
                         Color32::WHITE,
                     );
@@ -281,6 +287,9 @@ impl UiState {
                             object_gizmo_blocker_count,
                         );
                     }
+                }
+                if let Some(active) = self.active_guide.or(interaction_guide) {
+                    draw_active_guides(ui, camera, active);
                 }
             });
         }
@@ -325,6 +334,8 @@ impl UiState {
     pub fn reset_document_gestures(&mut self) {
         self.selection_tools = selection_tools::SelectionTools::default();
         self.ghosts = boolean_overlay::Ghosts::default();
+        self.active_guide = None;
+        self.resize_guide_drag = None;
         self.insert_keyframe_menu_position = None;
     }
 
@@ -365,6 +376,37 @@ impl UiState {
             position.x / pixels_per_point,
             position.y / pixels_per_point,
         ))
+    }
+}
+
+struct ResizeGuideDrag {
+    object: uuid::Uuid,
+    handle: ResizeHandleId,
+    initial_transform: crate::model::Transform,
+    initial_half_extent: f32,
+    initial_face_center: Vec3,
+    world_direction_per_unit: Vec3,
+    projected_axis: egui::Vec2,
+    raw_amount: f32,
+    guides: Vec<crate::guides::FaceGuide>,
+    active_guide: Option<crate::guides::ActiveGuideSet>,
+}
+
+fn draw_active_guides(ui: &mut egui::Ui, camera: &Camera, active: crate::guides::ActiveGuideSet) {
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let color = Color32::from_rgb(94, 203, 255);
+    for guide in active.iter() {
+        if let Some([start, end]) =
+            crate::guides::screen_segment(camera, guide.guide, pixels_per_point, ui.clip_rect())
+        {
+            ui.painter()
+                .line_segment([start, end], Stroke::new(1.75, color));
+        }
+        if let Some(anchor) = camera.project(guide.anchor, pixels_per_point) {
+            ui.painter().circle_filled(anchor, 4.0, color);
+            ui.painter()
+                .circle_stroke(anchor, 6.0, Stroke::new(1.25, Color32::WHITE));
+        }
     }
 }
 

@@ -21,6 +21,9 @@ struct TransformGesture {
     world_units_per_point: f32,
     rotation_snap_active: bool,
     targets: Vec<commands::TransformTarget>,
+    anchors: Vec<Vec3>,
+    guides: Vec<crate::guides::FaceGuide>,
+    active_guide: Option<crate::guides::ActiveGuideSet>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -36,9 +39,14 @@ enum GizmoAction {
 impl GizmoAction {
     fn tooltip(self) -> String {
         match self {
-            Self::MoveFree => "Drag to move in the view plane · Esc cancels".into(),
+            Self::MoveFree => {
+                "Drag to move in the view plane · Alt bypasses guides · Esc cancels".into()
+            }
             Self::MoveAxis(axis) => {
-                format!("Drag to move on {} · Esc cancels", axis_label(axis))
+                format!(
+                    "Drag to move on {} · Alt bypasses guides · Esc cancels",
+                    axis_label(axis)
+                )
             }
             Self::ScaleUniform => "Drag to scale uniformly · Esc cancels".into(),
             Self::ScaleAxis(axis) => {

@@ -4,6 +4,7 @@ mod camera;
 mod commands;
 mod document;
 mod duck;
+mod guides;
 mod interactions;
 mod model;
 #[cfg(not(target_arch = "wasm32"))]

@@ -231,6 +231,7 @@ impl App {
         let input = self.egui_state.take(&window);
         let egui = self.egui.clone();
         let mut file_action = None;
+        let interaction_guide = self.interactions.active_guide();
         let mut output = egui.run_ui(input, |ui| {
             file_action = self.ui.draw(
                 ui,
@@ -238,6 +239,7 @@ impl App {
                 &mut self.commands,
                 &mut self.camera,
                 &mut self.document,
+                interaction_guide,
             );
         });
         if let Some(action) = file_action {
