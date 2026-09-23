@@ -192,7 +192,7 @@ fn new_primitives_spawn_under_cursor_and_follow_it_without_an_offset() {
         crate::camera::ProjectionMode::Perspective,
         crate::camera::ProjectionMode::Orthographic,
     ] {
-        for kind in crate::model::PrimitiveKind::ALL {
+        for kind in crate::model::PrimitiveKind::SPAWNABLE {
             let mut tree = DataTree::default();
             let mut camera = Camera::new();
             camera.viewport_origin = Vec2::new(220.0, 60.0);

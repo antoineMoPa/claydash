@@ -54,6 +54,7 @@ impl UiState {
         &mut self,
         ctx: &egui::Context,
         viewport: egui::Rect,
+        tree: &mut DataTree,
     ) {
         let area = egui::Area::new("selection-tools".into())
             .order(egui::Order::Foreground)
@@ -61,11 +62,11 @@ impl UiState {
             .fixed_pos(viewport.right_bottom() - egui::vec2(6.0, 6.0))
             .show(ctx, |ui| {
                 ui.set_clip_rect(viewport);
-                ui.add_enabled_ui(!self.selection_tools.active(), |ui| {
+                ui.add_enabled_ui(self.selection_tools.gesture.is_none(), |ui| {
                     ui.horizontal(|ui| {
                         ui.set_height(26.0);
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for (tool, source, tooltip) in [
+                        let mut tools = vec![
                             (
                                 SelectionTool::Select,
                                 egui::include_image!(
@@ -78,7 +79,17 @@ impl UiState {
                                 egui::include_image!("../../../assets/icons/lucide/scan.svg"),
                                 "Box select (B) · drag a rectangle · Shift adds",
                             ),
-                        ] {
+                        ];
+                        if crate::model::selected_modeling_face(tree).is_some()
+                            || self.selection_tools.face_cut_mode()
+                        {
+                            tools.push((
+                                SelectionTool::FaceCut,
+                                egui::include_image!("../../../assets/icons/lucide/scissors.svg"),
+                                "Draw a shape on the selected box face",
+                            ));
+                        }
+                        for (tool, source, tooltip) in tools {
                             if selectable_view_button(
                                 ui,
                                 source,
@@ -87,7 +98,15 @@ impl UiState {
                             )
                             .clicked()
                             {
-                                self.selection_tools.tool = tool;
+                                if self.selection_tools.tool == tool {
+                                    self.cancel_face_cut(tree);
+                                    self.selection_tools.tool = SelectionTool::Select;
+                                } else if tool != SelectionTool::FaceCut
+                                    || crate::model::selected_modeling_face(tree).is_some()
+                                {
+                                    self.cancel_face_cut(tree);
+                                    self.selection_tools.tool = tool;
+                                }
                             }
                         }
                     });

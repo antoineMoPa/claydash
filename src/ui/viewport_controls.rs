@@ -135,7 +135,7 @@ impl UiState {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     ui.horizontal_wrapped(|ui| {
                         if viewport.width() >= 400.0 {
-                            for kind in PrimitiveKind::ALL {
+                            for kind in PrimitiveKind::SPAWNABLE {
                                 if view_button(
                                     ui,
                                     primitive_icon_source(kind),
@@ -154,7 +154,7 @@ impl UiState {
                                     false,
                                 ))
                                 .ui(ui, |ui| {
-                                    for kind in PrimitiveKind::ALL {
+                                    for kind in PrimitiveKind::SPAWNABLE {
                                         if ui
                                             .add(egui::Button::image_and_text(
                                                 icon_image(
@@ -264,7 +264,7 @@ impl UiState {
                 });
             });
         self.regions.push(right.response.rect);
-        self.draw_selection_toolbar(ctx, viewport);
+        self.draw_selection_toolbar(ctx, viewport, tree);
     }
 
     pub(super) fn draw_view_gizmo(

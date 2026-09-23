@@ -224,6 +224,19 @@ fn primitive_segments(params: &SdfParams) -> Vec<[Vec3; 2]> {
                 );
             }
         }
+        SdfParams::PolygonPrismParams(polygon) => {
+            for index in 0..polygon.vertices.len() {
+                let a = polygon.vertices[index];
+                let b = polygon.vertices[(index + 1) % polygon.vertices.len()];
+                for z in [-polygon.half_depth, polygon.half_depth] {
+                    result.push([Vec3::new(a.x, a.y, z), Vec3::new(b.x, b.y, z)]);
+                }
+                result.push([
+                    Vec3::new(a.x, a.y, -polygon.half_depth),
+                    Vec3::new(a.x, a.y, polygon.half_depth),
+                ]);
+            }
+        }
     }
     result
 }
@@ -360,7 +373,7 @@ mod tests {
 
     #[test]
     fn primitive_guide_vertices_follow_rotated_scaled_surfaces() {
-        for kind in PrimitiveKind::ALL {
+        for kind in PrimitiveKind::SPAWNABLE {
             let mut object = SdfObject::create_kind(kind);
             object.transform.translation = Vec3::new(1.0, 2.0, -1.0);
             object.transform.scale = Vec3::new(0.6, 1.8, 1.2);

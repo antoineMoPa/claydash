@@ -214,6 +214,10 @@ impl UiState {
         tree: &mut DataTree,
         camera: &Camera,
     ) {
+        if self.selection_tools.face_cut_mode() {
+            self.draw_face_cut(ui, tree, camera);
+            return;
+        }
         let scale = ui.ctx().pixels_per_point();
         let (
             pointer,

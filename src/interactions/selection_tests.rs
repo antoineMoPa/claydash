@@ -51,6 +51,29 @@ fn clicking_a_box_surface_selects_its_face() {
 }
 
 #[test]
+fn clicking_an_extruded_polygon_selects_its_face_even_inside_a_group() {
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut root = SdfObject::create(TYPE_SPHERE);
+    root.transform.translation = Vec3::X * 10.0;
+    let mut extrusion = SdfObject::create_kind(crate::model::PrimitiveKind::PolygonPrism);
+    extrusion.boolean_parent = Some(root.uuid);
+    let extrusion_id = extrusion.uuid;
+    let root_id = root.uuid;
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![root, extrusion]);
+
+    InteractionState::select_at(&camera, &mut tree, camera.viewport / 2.0, None, false);
+
+    assert_eq!(selected(&tree), vec![root_id]);
+    assert!(matches!(
+        crate::model::selected_modeling_face(&tree),
+        Some(crate::model::ModelingFaceSelection::PolygonPrism(face))
+            if face.object == extrusion_id
+    ));
+}
+
+#[test]
 fn e_extrudes_the_selected_box_face() {
     let (mut tree, object) = selected_object();
     crate::model::set_selected_box_face(

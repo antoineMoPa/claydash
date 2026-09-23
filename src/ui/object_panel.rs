@@ -522,5 +522,8 @@ pub(super) fn params_editor(
             animatable_response(ui, &minor_response, minor_binding, *minor_radius, keyframes);
             major_response.changed() | minor_response.changed()
         }
+        SdfParams::PolygonPrismParams(value) => ui
+            .add(egui::Slider::new(&mut value.half_depth, 0.005..=4.0).text("Half depth"))
+            .changed(),
     }
 }

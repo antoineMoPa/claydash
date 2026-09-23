@@ -14,6 +14,7 @@ struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> objects: array<Object>;
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
+@group(0) @binding(5) var<storage, read> polygon_points: array<vec2<f32>>;
 override USE_BVH: bool = true;
 override HAS_BOOLEANS: bool = false;
 override TRANSPARENT_BACKGROUND: bool = false;
@@ -34,6 +35,31 @@ fn repeated_axis(value: f32, spacing: f32, count: i32) -> f32 {
     let half = f32(count - 1) * 0.5;
     let cell = clamp(round(value / safe_spacing), -half, half);
     return value - cell * safe_spacing;
+}
+
+fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
+    if count < 3u { return 100.0; }
+    var distance_squared = 1e20;
+    var inside = false;
+    for (var index = 0u; index < 32u; index++) {
+        if index >= count { break; }
+        let next = select(index + 1u, 0u, index + 1u == count);
+        let a = polygon_points[offset + index];
+        let b = polygon_points[offset + next];
+        let edge = b - a;
+        let relative = point - a;
+        let edge_length_squared = dot(edge, edge);
+        if edge_length_squared > 0.0000001 {
+            let closest = a + edge * clamp(dot(relative, edge) / edge_length_squared, 0.0, 1.0);
+            let delta = point - closest;
+            distance_squared = min(distance_squared, dot(delta, delta));
+        }
+        if (a.y > point.y) != (b.y > point.y) {
+            let crossing_x = a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y);
+            if point.x < crossing_x { inside = !inside; }
+        }
+    }
+    return sqrt(distance_squared) * select(1.0, -1.0, inside);
 }
 
 fn object_distance(point: vec3<f32>, object: Object) -> f32 {
@@ -62,6 +88,15 @@ fn object_distance(point: vec3<f32>, object: Object) -> f32 {
     } else if object.state.y == 4 {
         let q = vec2(length(local.xz) - object.params.x, local.y);
         distance = length(q) - object.params.y;
+    } else if object.state.y == 5 {
+        let polygon = polygon_distance(
+            local.xy,
+            bitcast<u32>(object.params.y),
+            bitcast<u32>(object.params.z)
+        );
+        let depth = abs(local.z) - object.params.x;
+        let outside = length(max(vec2(polygon, depth), vec2(0.0)));
+        distance = outside + min(max(polygon, depth), 0.0);
     }
     return distance * object.params.w;
 }

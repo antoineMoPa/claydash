@@ -21,6 +21,7 @@ impl UiState {
         camera: &Camera,
         blocker_count: usize,
     ) {
+        draw_selected_polygon_face_overlay(ui, tree, camera);
         let selection = selected(tree);
         if selection.len() != 1 || commands::effective_selected_ids(tree).len() != 1 {
             return;
@@ -331,6 +332,7 @@ impl UiState {
                         };
                         *value = (*value + amount).max(0.01);
                     }
+                    SdfParams::PolygonPrismParams(_) => {}
                 }
                 changed = true;
             }
@@ -356,6 +358,152 @@ impl UiState {
             tree.make_undo_redo_snapshot();
         }
     }
+}
+
+pub(super) fn selected_polygon_face_vertices(
+    scene: &[SdfObject],
+    selection: crate::model::PolygonPrismFaceSelection,
+) -> Option<(Vec<Vec2>, Vec<Vec3>)> {
+    let object = scene
+        .iter()
+        .find(|object| object.uuid == selection.object)?;
+    let SdfParams::PolygonPrismParams(params) = &object.params else {
+        return None;
+    };
+    let (planar, local) = match selection.face {
+        crate::model::PolygonPrismFace::Cap { positive } => (
+            params.vertices.clone(),
+            params
+                .vertices
+                .iter()
+                .map(|point| {
+                    Vec3::new(
+                        point.x,
+                        point.y,
+                        params.half_depth * if positive { 1.0 } else { -1.0 },
+                    )
+                })
+                .collect(),
+        ),
+        crate::model::PolygonPrismFace::Side { edge } => {
+            let a = params.vertices.get(edge).copied()?;
+            let b = params
+                .vertices
+                .get((edge + 1) % params.vertices.len())
+                .copied()?;
+            (
+                vec![
+                    Vec2::new(-1.0, -1.0),
+                    Vec2::new(1.0, -1.0),
+                    Vec2::new(1.0, 1.0),
+                    Vec2::new(-1.0, 1.0),
+                ],
+                vec![
+                    Vec3::new(a.x, a.y, -params.half_depth),
+                    Vec3::new(b.x, b.y, -params.half_depth),
+                    Vec3::new(b.x, b.y, params.half_depth),
+                    Vec3::new(a.x, a.y, params.half_depth),
+                ],
+            )
+        }
+    };
+    Some((planar, local))
+}
+
+pub(super) fn polygon_overlay_triangles(vertices: &[Vec2]) -> Vec<[usize; 3]> {
+    if vertices.len() < 3 {
+        return Vec::new();
+    }
+    let area = vertices
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            let next = vertices[(index + 1) % vertices.len()];
+            point.x * next.y - next.x * point.y
+        })
+        .sum::<f32>();
+    let mut remaining: Vec<_> = if area >= 0.0 {
+        (0..vertices.len()).collect()
+    } else {
+        (0..vertices.len()).rev().collect()
+    };
+    let mut triangles = Vec::with_capacity(vertices.len().saturating_sub(2));
+    while remaining.len() > 3 {
+        let mut clipped = false;
+        for cursor in 0..remaining.len() {
+            let previous = remaining[(cursor + remaining.len() - 1) % remaining.len()];
+            let current = remaining[cursor];
+            let next = remaining[(cursor + 1) % remaining.len()];
+            let a = vertices[previous];
+            let b = vertices[current];
+            let c = vertices[next];
+            let ab = b - a;
+            let bc = c - b;
+            if ab.x * bc.y - ab.y * bc.x <= 0.000_001 {
+                continue;
+            }
+            let contains_point = remaining.iter().copied().any(|candidate| {
+                if candidate == previous || candidate == current || candidate == next {
+                    return false;
+                }
+                let point = vertices[candidate];
+                let side = |start: Vec2, end: Vec2| {
+                    let edge = end - start;
+                    let relative = point - start;
+                    edge.x * relative.y - edge.y * relative.x
+                };
+                side(a, b) >= -0.000_001 && side(b, c) >= -0.000_001 && side(c, a) >= -0.000_001
+            });
+            if contains_point {
+                continue;
+            }
+            triangles.push([previous, current, next]);
+            remaining.remove(cursor);
+            clipped = true;
+            break;
+        }
+        if !clipped {
+            return Vec::new();
+        }
+    }
+    if remaining.len() == 3 {
+        triangles.push([remaining[0], remaining[1], remaining[2]]);
+    }
+    triangles
+}
+
+fn draw_selected_polygon_face_overlay(ui: &egui::Ui, tree: &DataTree, camera: &Camera) {
+    let Some(crate::model::ModelingFaceSelection::PolygonPrism(selection)) =
+        crate::model::selected_modeling_face(tree)
+    else {
+        return;
+    };
+    let scene = objects(tree);
+    let Some((planar, local)) = selected_polygon_face_vertices(&scene, selection) else {
+        return;
+    };
+    let matrix = crate::model::object_world_matrix(&scene, selection.object);
+    let screen: Vec<_> = local
+        .iter()
+        .filter_map(|point| {
+            camera.project(matrix.transform_point3(*point), ui.ctx().pixels_per_point())
+        })
+        .collect();
+    if screen.len() != local.len() || screen.len() < 3 {
+        return;
+    }
+    let fill = Color32::from_rgb(255, 190, 72).gamma_multiply(0.22);
+    for triangle in polygon_overlay_triangles(&planar) {
+        ui.painter().add(egui::Shape::convex_polygon(
+            triangle.map(|index| screen[index]).to_vec(),
+            fill,
+            Stroke::NONE,
+        ));
+    }
+    ui.painter().add(egui::Shape::closed_line(
+        screen,
+        Stroke::new(3.0, Color32::WHITE),
+    ));
 }
 
 fn longest_projected_segment(points: &[egui::Pos2]) -> Option<[egui::Pos2; 2]> {
@@ -600,6 +748,7 @@ fn resize_handles_with_matrix_impl(
                 });
             }
         }
+        SdfParams::PolygonPrismParams(_) => {}
     }
     handles
 }

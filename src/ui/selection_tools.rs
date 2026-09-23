@@ -6,6 +6,22 @@ enum SelectionTool {
     #[default]
     Select,
     Box,
+    FaceCut,
+}
+
+struct FaceCutDraft {
+    face: crate::model::ModelingFaceSelection,
+    vertices: Vec<Vec2>,
+    phase: FaceCutPhase,
+}
+
+enum FaceCutPhase {
+    Outline,
+    Depth {
+        object: uuid::Uuid,
+        start_pointer: egui::Pos2,
+        projected_axis: egui::Vec2,
+    },
 }
 
 struct TransformGesture {
@@ -381,14 +397,19 @@ enum Gesture {
 pub(super) struct SelectionTools {
     tool: SelectionTool,
     gesture: Option<Gesture>,
+    face_cut: Option<FaceCutDraft>,
 }
 
 impl SelectionTools {
     pub fn active(&self) -> bool {
-        self.gesture.is_some()
+        self.gesture.is_some() || self.tool == SelectionTool::FaceCut
     }
     pub fn box_mode(&self) -> bool {
         self.tool == SelectionTool::Box
+    }
+
+    pub fn face_cut_mode(&self) -> bool {
+        self.tool == SelectionTool::FaceCut
     }
 }
 
@@ -421,6 +442,8 @@ fn box_selection(
 mod state;
 
 mod gizmo;
+
+mod face_cut;
 
 #[cfg(test)]
 mod tests;

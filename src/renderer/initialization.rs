@@ -104,9 +104,15 @@ impl Renderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let polygon_points_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("polygon points"),
+            size: (MAX_POLYGON_POINTS * std::mem::size_of::<GpuPolygonPoint>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene layout"),
-            entries: &(0..5)
+            entries: &(0..6)
                 .map(|binding| wgpu::BindGroupLayoutEntry {
                     binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -146,6 +152,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: material_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: polygon_points_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -200,6 +210,7 @@ impl Renderer {
             bvh_buffer,
             material_headers_buffer,
             material_params_buffer,
+            polygon_points_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
             egui_renderer,
             material_preview_ids: None,

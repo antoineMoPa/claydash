@@ -55,6 +55,9 @@ pub(super) fn primitive_icon_source(kind: PrimitiveKind) -> egui::ImageSource<'s
         PrimitiveKind::Box => egui::include_image!("../../assets/icons/lucide/box.svg"),
         PrimitiveKind::Cylinder => egui::include_image!("../../assets/icons/lucide/cylinder.svg"),
         PrimitiveKind::Torus => egui::include_image!("../../assets/icons/lucide/torus.svg"),
+        PrimitiveKind::PolygonPrism => {
+            egui::include_image!("../../assets/icons/lucide/square.svg")
+        }
     }
 }
 

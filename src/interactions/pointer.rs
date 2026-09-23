@@ -107,10 +107,10 @@ impl InteractionState {
             } else {
                 set_selected(tree, vec![target.id]);
             }
-            if ghost.is_none() && target.id == hit {
+            if ghost.is_none() {
                 if let Some(position) = marched.map(|hit| hit.position) {
-                    let face = crate::model::box_face_at_world_position(&scene, hit, position);
-                    crate::model::set_selected_box_face(tree, face);
+                    let face = crate::model::modeling_face_at_world_position(&scene, hit, position);
+                    crate::model::set_selected_modeling_face(tree, face);
                 }
             }
             return;

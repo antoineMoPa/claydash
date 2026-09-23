@@ -56,6 +56,7 @@ impl Renderer {
 
         let mut bounds = Vec::with_capacity(objects.len().min(MAX_OBJECTS));
         let mut materials = material_gpu::PackedMaterials::default();
+        let mut polygon_points = Vec::new();
         let mut gpu_objects: Vec<GpuObject> = objects
             .iter()
             .take(MAX_OBJECTS)
@@ -96,6 +97,34 @@ impl Renderer {
                         [major_radius, minor_radius, 0.0, distance_scale],
                         (major_radius + minor_radius) * abs_scale.max_element(),
                     ),
+                    SdfParams::PolygonPrismParams(ref polygon) => {
+                        let offset = polygon_points.len() as u32;
+                        polygon_points.extend(
+                            polygon
+                                .vertices
+                                .iter()
+                                .take(crate::model::MAX_POLYGON_PRISM_VERTICES)
+                                .map(|point| GpuPolygonPoint {
+                                    position: point.to_array(),
+                                }),
+                        );
+                        let count = polygon_points.len() as u32 - offset;
+                        let planar_radius = polygon
+                            .vertices
+                            .iter()
+                            .map(|point| point.length())
+                            .fold(0.0_f32, f32::max);
+                        (
+                            [
+                                polygon.half_depth,
+                                f32::from_bits(offset),
+                                f32::from_bits(count),
+                                distance_scale,
+                            ],
+                            Vec2::new(planar_radius, polygon.half_depth).length()
+                                * abs_scale.max_element(),
+                        )
+                    }
                 };
                 let repeated_radius = if object.repetition.enabled {
                     let extent = Vec3::from_array([
@@ -140,6 +169,13 @@ impl Renderer {
                         minor_radius,
                         major_radius + minor_radius,
                     ),
+                    SdfParams::PolygonPrismParams(ref polygon) => {
+                        let planar = polygon
+                            .vertices
+                            .iter()
+                            .fold(Vec2::ZERO, |extent, point| extent.max(point.abs()));
+                        Vec3::new(planar.x, planar.y, polygon.half_depth)
+                    }
                 };
                 let mut repeated_extent = local_extent;
                 if object.repetition.enabled {
@@ -294,6 +330,13 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&materials.params),
             );
+            if !polygon_points.is_empty() {
+                self.queue.write_buffer(
+                    &self.polygon_points_buffer,
+                    0,
+                    bytemuck::cast_slice(&polygon_points),
+                );
+            }
             self.queue
                 .write_buffer(&self.objects_buffer, 0, bytemuck::cast_slice(&gpu_objects));
             self.queue

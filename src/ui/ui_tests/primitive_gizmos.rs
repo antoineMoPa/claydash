@@ -74,7 +74,7 @@
 
     #[test]
     fn dragging_each_primitive_handle_outward_increases_its_dimension() {
-        for (kind, handle_index) in PrimitiveKind::ALL.into_iter().flat_map(|kind| {
+        for (kind, handle_index) in PrimitiveKind::SPAWNABLE.into_iter().flat_map(|kind| {
             let count = if kind == PrimitiveKind::Sphere { 3 } else { 1 };
             (0..count).map(move |index| (kind, index))
         }) {
@@ -639,6 +639,43 @@
             }
         }
         assert!(painted > 0, "test must render actual handles");
+    }
+
+    #[test]
+    fn polygon_face_overlay_covers_caps_sides_and_concave_outlines() {
+        let mut object = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+        object.params = SdfParams::PolygonPrismParams(crate::model::PolygonPrismParams {
+            vertices: vec![
+                Vec2::new(-1.0, -1.0),
+                Vec2::new(1.0, -1.0),
+                Vec2::ZERO,
+                Vec2::new(1.0, 1.0),
+                Vec2::new(-1.0, 1.0),
+            ],
+            half_depth: 0.25,
+        });
+        let scene = [object.clone()];
+        let cap = selected_polygon_face_vertices(
+            &scene,
+            crate::model::PolygonPrismFaceSelection {
+                object: object.uuid,
+                face: crate::model::PolygonPrismFace::Cap { positive: true },
+            },
+        )
+        .unwrap();
+        let side = selected_polygon_face_vertices(
+            &scene,
+            crate::model::PolygonPrismFaceSelection {
+                object: object.uuid,
+                face: crate::model::PolygonPrismFace::Side { edge: 0 },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(cap.1.len(), 5);
+        assert_eq!(polygon_overlay_triangles(&cap.0).len(), 3);
+        assert_eq!(side.1.len(), 4);
+        assert_eq!(polygon_overlay_triangles(&side.0).len(), 2);
     }
 
     #[test]

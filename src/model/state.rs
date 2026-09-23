@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AnimationData, BooleanOperation, BoxFaceSelection, EditorState, Material, MaterialAsset,
-    SdfObject, Transform,
+    ModelingFaceSelection, SdfObject, Transform,
 };
 use crate::camera::SceneCamera;
 
@@ -16,6 +16,7 @@ pub enum ClaydashValue {
     VecCamera(Vec<SceneCamera>),
     BooleanPick(BooleanPick),
     BoxFaceSelection(BoxFaceSelection),
+    ModelingFaceSelection(ModelingFaceSelection),
     Uuid(uuid::Uuid),
     VecUuid(Vec<uuid::Uuid>),
     F32(f32),
@@ -233,11 +234,29 @@ pub fn selected_box_face(tree: &DataTree) -> Option<BoxFaceSelection> {
     }
 }
 
-pub fn set_selected_box_face(tree: &mut DataTree, face: Option<BoxFaceSelection>) {
+pub fn selected_modeling_face(tree: &DataTree) -> Option<ModelingFaceSelection> {
+    match tree.get_path("editor.selected_modeling_face") {
+        ClaydashValue::ModelingFaceSelection(face) => Some(face),
+        _ => selected_box_face(tree).map(ModelingFaceSelection::Box),
+    }
+}
+
+pub fn set_selected_modeling_face(tree: &mut DataTree, face: Option<ModelingFaceSelection>) {
+    tree.set_transient_path(
+        "editor.selected_modeling_face",
+        face.map_or(ClaydashValue::None, ClaydashValue::ModelingFaceSelection),
+    );
     tree.set_transient_path(
         "editor.selected_box_face",
-        face.map_or(ClaydashValue::None, ClaydashValue::BoxFaceSelection),
+        match face {
+            Some(ModelingFaceSelection::Box(face)) => ClaydashValue::BoxFaceSelection(face),
+            _ => ClaydashValue::None,
+        },
     );
+}
+
+pub fn set_selected_box_face(tree: &mut DataTree, face: Option<BoxFaceSelection>) {
+    set_selected_modeling_face(tree, face.map(ModelingFaceSelection::Box));
 }
 
 pub fn set_objects(tree: &mut DataTree, value: Vec<SdfObject>) {
@@ -249,7 +268,7 @@ pub fn set_objects_transient(tree: &mut DataTree, value: Vec<SdfObject>) {
 }
 
 pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
-    set_selected_box_face(tree, None);
+    set_selected_modeling_face(tree, None);
     tree.set_transient_path(
         "scene.selection_scope",
         ClaydashValue::SelectionScope(SelectionScope::Group),
@@ -258,7 +277,7 @@ pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
 }
 
 pub fn set_selected_exact(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
-    set_selected_box_face(tree, None);
+    set_selected_modeling_face(tree, None);
     tree.set_transient_path(
         "scene.selection_scope",
         ClaydashValue::SelectionScope(SelectionScope::Exact),

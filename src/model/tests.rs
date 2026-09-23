@@ -1,5 +1,5 @@
 use super::*;
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 #[test]
@@ -7,6 +7,79 @@ fn primitive_kind_maps_every_gpu_type_explicitly() {
     for kind in PrimitiveKind::ALL {
         assert_eq!(PrimitiveKind::from_object_type(kind.object_type()), kind);
     }
+}
+
+#[test]
+fn polygon_prism_distance_covers_sides_caps_and_concavity() {
+    let mut prism = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+    prism.params = SdfParams::PolygonPrismParams(PolygonPrismParams {
+        vertices: vec![
+            Vec2::new(-1.0, -1.0),
+            Vec2::new(1.0, -1.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(-1.0, 1.0),
+        ],
+        half_depth: 0.25,
+    });
+    assert!(prism.distance(Vec3::new(-0.5, 0.0, 0.0)) < 0.0);
+    assert!(prism.distance(Vec3::new(0.8, 0.0, 0.0)) > 0.0);
+    assert!(prism.distance(Vec3::new(-0.5, 0.0, 0.5)) > 0.0);
+}
+
+#[test]
+fn box_faces_remain_selectable_after_boolean_cuts() {
+    let source = SdfObject::create_kind(PrimitiveKind::Box);
+    let mut cutter = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+    cutter.boolean_parent = Some(source.uuid);
+    cutter.operation = BooleanOperation::Subtract;
+    let source_id = source.uuid;
+    let scene = [source, cutter];
+
+    let face = box_face_at_world_position(&scene, source_id, Vec3::new(0.0, 0.0, 0.3));
+    assert_eq!(
+        face,
+        Some(BoxFaceSelection {
+            object: source_id,
+            axis: VectorAxis::Z,
+            positive: true,
+        })
+    );
+    assert_eq!(
+        box_face_at_world_position(&scene, source_id, Vec3::new(0.0, 0.0, 0.1)),
+        None,
+        "an interior cut wall must not masquerade as an original box face"
+    );
+}
+
+#[test]
+fn polygon_prism_caps_and_sides_are_explicitly_selectable() {
+    let prism = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+    let id = prism.uuid;
+    let scene = [prism];
+
+    assert_eq!(
+        modeling_face_at_world_position(&scene, id, Vec3::new(0.0, -0.1, 0.1)),
+        Some(ModelingFaceSelection::PolygonPrism(
+            PolygonPrismFaceSelection {
+                object: id,
+                face: PolygonPrismFace::Cap { positive: true },
+            }
+        ))
+    );
+    assert_eq!(
+        modeling_face_at_world_position(&scene, id, Vec3::new(0.0, -0.2, 0.0)),
+        Some(ModelingFaceSelection::PolygonPrism(
+            PolygonPrismFaceSelection {
+                object: id,
+                face: PolygonPrismFace::Side { edge: 0 },
+            }
+        ))
+    );
+    assert_eq!(
+        modeling_face_at_world_position(&scene, id, Vec3::ZERO),
+        None
+    );
 }
 
 #[test]

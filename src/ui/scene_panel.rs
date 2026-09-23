@@ -106,7 +106,7 @@ pub(super) fn operand_shape_menu(
     target: uuid::Uuid,
     operation: BooleanOperation,
 ) {
-    for kind in PrimitiveKind::ALL {
+    for kind in PrimitiveKind::SPAWNABLE {
         if ui
             .add(egui::Button::image_and_text(
                 icon_image(primitive_icon_source(kind), ui.visuals().text_color()),

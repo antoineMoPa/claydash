@@ -149,6 +149,16 @@ Drag along the arrow, then release to record the resize for undo. Gizmos and the
 clipped to the viewport. Toolbar icons are bundled Lucide SVGs; attribution is in
 `assets/icons/lucide/`.
 
+Select a box or generated extrusion face, then choose the scissors **Face Cut** tool in the
+bottom-right viewport toolbar
+to try polygonal face cutting. Click polygon corners on the face and click the first corner (or
+press Enter) to close the outline. Move the pointer away from the face for a raised union, or
+through the face for a subtractive cut, then click or press Enter to confirm. Backspace removes
+the latest outline point and Escape cancels the draft. This first version supports up to 32 points
+and intentionally keeps the committed outline fixed; the resulting prism can still be transformed,
+duplicated, assigned materials, edited as a normal Boolean operand, and cut again on either cap
+or any extruded side.
+
 ## Visual verification scene
 
 ```sh

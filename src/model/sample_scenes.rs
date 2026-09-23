@@ -208,7 +208,9 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     }
     let mut mixed = renderer_stress_scene();
     for (i, object) in mixed.iter_mut().enumerate() {
-        let template = SdfObject::create(PrimitiveKind::ALL[i % 4].object_type());
+        let template = SdfObject::create(
+            PrimitiveKind::SPAWNABLE[i % PrimitiveKind::SPAWNABLE.len()].object_type(),
+        );
         object.object_type = template.object_type;
         object.params = template.params;
         object.material = Material::preset(MaterialKind::ALL[i % MaterialKind::ALL.len()]);
@@ -233,7 +235,9 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     cases.push(("nested".into(), mixed));
     let mut repeated: Vec<_> = renderer_stress_scene().into_iter().take(64).collect();
     for (i, object) in repeated.iter_mut().enumerate() {
-        let template = SdfObject::create(PrimitiveKind::ALL[i % 4].object_type());
+        let template = SdfObject::create(
+            PrimitiveKind::SPAWNABLE[i % PrimitiveKind::SPAWNABLE.len()].object_type(),
+        );
         object.object_type = template.object_type;
         object.params = template.params;
         object.material = Material::preset(MaterialKind::ALL[i % MaterialKind::ALL.len()]);

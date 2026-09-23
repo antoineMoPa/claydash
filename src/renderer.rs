@@ -14,6 +14,7 @@ mod benchmark;
 
 const MAX_OBJECTS: usize = 1024;
 const MAX_BVH_NODES: usize = MAX_OBJECTS * 2 - 1;
+const MAX_POLYGON_POINTS: usize = MAX_OBJECTS * crate::model::MAX_POLYGON_PRISM_VERTICES;
 const BVH_LEAF: u32 = u32::MAX;
 
 fn render_format_for_surface(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
@@ -57,6 +58,12 @@ struct GpuBvhNode {
     aabb_max: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuPolygonPoint {
+    position: [f32; 2],
+}
+
 #[derive(Clone, Copy)]
 struct ObjectBound {
     center: Vec3,
@@ -84,6 +91,7 @@ pub struct Renderer {
     bvh_buffer: wgpu::Buffer,
     material_headers_buffer: wgpu::Buffer,
     material_params_buffer: wgpu::Buffer,
+    polygon_points_buffer: wgpu::Buffer,
     uploaded_scene_versions: [i32; 2],
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,

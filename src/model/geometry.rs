@@ -1,5 +1,5 @@
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
-use sdf_consts::{TYPE_BOX, TYPE_CYLINDER, TYPE_SPHERE, TYPE_TORUS};
+use sdf_consts::{TYPE_BOX, TYPE_CYLINDER, TYPE_POLYGON_PRISM, TYPE_SPHERE, TYPE_TORUS};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,16 +18,51 @@ pub struct BoxFaceSelection {
     pub positive: bool,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PolygonPrismFace {
+    Cap { positive: bool },
+    Side { edge: usize },
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolygonPrismFaceSelection {
+    pub object: uuid::Uuid,
+    pub face: PolygonPrismFace,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelingFaceSelection {
+    Box(BoxFaceSelection),
+    PolygonPrism(PolygonPrismFaceSelection),
+}
+
+impl ModelingFaceSelection {
+    pub fn object(self) -> uuid::Uuid {
+        match self {
+            Self::Box(face) => face.object,
+            Self::PolygonPrism(face) => face.object,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrimitiveKind {
     Sphere,
     Box,
     Cylinder,
     Torus,
+    PolygonPrism,
 }
 
 impl PrimitiveKind {
-    pub const ALL: [Self; 4] = [Self::Sphere, Self::Box, Self::Cylinder, Self::Torus];
+    pub const ALL: [Self; 5] = [
+        Self::Sphere,
+        Self::Box,
+        Self::Cylinder,
+        Self::Torus,
+        Self::PolygonPrism,
+    ];
+    pub const SPAWNABLE: [Self; 4] = [Self::Sphere, Self::Box, Self::Cylinder, Self::Torus];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -35,6 +70,7 @@ impl PrimitiveKind {
             Self::Box => "Box",
             Self::Cylinder => "Cylinder",
             Self::Torus => "Torus",
+            Self::PolygonPrism => "Face shape",
         }
     }
 
@@ -44,6 +80,7 @@ impl PrimitiveKind {
             Self::Box => TYPE_BOX,
             Self::Cylinder => TYPE_CYLINDER,
             Self::Torus => TYPE_TORUS,
+            Self::PolygonPrism => TYPE_POLYGON_PRISM,
         }
     }
 
@@ -52,6 +89,7 @@ impl PrimitiveKind {
             TYPE_BOX => Self::Box,
             TYPE_CYLINDER => Self::Cylinder,
             TYPE_TORUS => Self::Torus,
+            TYPE_POLYGON_PRISM => Self::PolygonPrism,
             _ => Self::Sphere,
         }
     }
@@ -401,6 +439,14 @@ pub struct SphereParams {
     pub radius: f32,
 }
 
+pub const MAX_POLYGON_PRISM_VERTICES: usize = 32;
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PolygonPrismParams {
+    pub vertices: Vec<Vec2>,
+    pub half_depth: f32,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum SdfParams {
     BoxParams(BoxParams),
@@ -413,6 +459,7 @@ pub enum SdfParams {
         major_radius: f32,
         minor_radius: f32,
     },
+    PolygonPrismParams(PolygonPrismParams),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -467,6 +514,14 @@ impl SdfObject {
                     major_radius: 0.3,
                     minor_radius: 0.1,
                 },
+                PrimitiveKind::PolygonPrism => SdfParams::PolygonPrismParams(PolygonPrismParams {
+                    vertices: vec![
+                        Vec2::new(-0.25, -0.2),
+                        Vec2::new(0.25, -0.2),
+                        Vec2::new(0.0, 0.25),
+                    ],
+                    half_depth: 0.1,
+                }),
             },
             name: kind.label().to_string(),
             operation: BooleanOperation::Union,
@@ -523,6 +578,12 @@ impl SdfObject {
                 Vec2::new(Vec2::new(local.x, local.z).length() - major_radius, local.y).length()
                     - minor_radius
             }
+            SdfParams::PolygonPrismParams(ref params) => {
+                let polygon = polygon_distance(local.truncate(), &params.vertices);
+                let depth = local.z.abs() - params.half_depth;
+                let outside = Vec2::new(polygon.max(0.0), depth.max(0.0)).length();
+                outside + polygon.max(depth).min(0.0)
+            }
         };
         let scale = Vec3::new(
             matrix.x_axis.truncate().length(),
@@ -547,6 +608,32 @@ impl SdfObject {
         }
         local
     }
+}
+
+pub fn polygon_distance(point: Vec2, vertices: &[Vec2]) -> f32 {
+    if vertices.len() < 3 {
+        return f32::INFINITY;
+    }
+    let mut distance_squared = f32::INFINITY;
+    let mut inside = false;
+    for index in 0..vertices.len() {
+        let a = vertices[index];
+        let b = vertices[(index + 1) % vertices.len()];
+        let edge = b - a;
+        let relative = point - a;
+        let edge_length_squared = edge.length_squared();
+        if edge_length_squared > 0.000_000_1 {
+            let closest = a + edge * (relative.dot(edge) / edge_length_squared).clamp(0.0, 1.0);
+            distance_squared = distance_squared.min(point.distance_squared(closest));
+        }
+        if (a.y > point.y) != (b.y > point.y) {
+            let crossing_x = a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y);
+            if point.x < crossing_x {
+                inside = !inside;
+            }
+        }
+    }
+    distance_squared.sqrt() * if inside { -1.0 } else { 1.0 }
 }
 
 pub fn has_boolean_children(scene: &[SdfObject], id: uuid::Uuid) -> bool {
@@ -595,9 +682,6 @@ pub fn box_face_at_world_position(
     id: uuid::Uuid,
     world_position: Vec3,
 ) -> Option<BoxFaceSelection> {
-    if has_boolean_children(scene, id) {
-        return None;
-    }
     let object = scene.iter().find(|object| object.uuid == id)?;
     let SdfParams::BoxParams(params) = &object.params else {
         return None;
@@ -613,11 +697,76 @@ pub fn box_face_at_world_position(
     } else {
         crate::model::VectorAxis::Z
     };
+    let axis_index = axis.index();
+    let face_distance = (local[axis_index].abs() - params.box_q[axis_index]).abs();
+    if face_distance > params.box_q[axis_index].max(0.0001) * 0.08 + 0.015 {
+        return None;
+    }
     Some(BoxFaceSelection {
         object: id,
         axis,
-        positive: local[axis.index()] >= 0.0,
+        positive: local[axis_index] >= 0.0,
     })
+}
+
+pub fn modeling_face_at_world_position(
+    scene: &[SdfObject],
+    id: uuid::Uuid,
+    world_position: Vec3,
+) -> Option<ModelingFaceSelection> {
+    let object = scene.iter().find(|object| object.uuid == id)?;
+    match &object.params {
+        SdfParams::BoxParams(_) => {
+            box_face_at_world_position(scene, id, world_position).map(ModelingFaceSelection::Box)
+        }
+        SdfParams::PolygonPrismParams(params) => {
+            if params.vertices.len() < 3 {
+                return None;
+            }
+            let local = object_world_matrix(scene, id)
+                .inverse()
+                .transform_point3(world_position);
+            let planar_extent = params
+                .vertices
+                .iter()
+                .map(|point| point.abs().max_element())
+                .fold(0.0_f32, f32::max);
+            let tolerance = planar_extent.max(params.half_depth).max(0.01) * 0.08 + 0.015;
+            let cap_distance = (local.z.abs() - params.half_depth).abs();
+            let on_cap = polygon_distance(local.truncate(), &params.vertices) <= tolerance;
+            let mut best = on_cap.then_some((
+                cap_distance,
+                PolygonPrismFace::Cap {
+                    positive: local.z >= 0.0,
+                },
+            ));
+            if local.z.abs() <= params.half_depth + tolerance {
+                for edge in 0..params.vertices.len() {
+                    let a = params.vertices[edge];
+                    let b = params.vertices[(edge + 1) % params.vertices.len()];
+                    let segment = b - a;
+                    let length_squared = segment.length_squared();
+                    if length_squared <= 0.000_000_1 {
+                        continue;
+                    }
+                    let closest = a + segment
+                        * ((local.truncate() - a).dot(segment) / length_squared).clamp(0.0, 1.0);
+                    let distance = local.truncate().distance(closest);
+                    if best.is_none_or(|(current, _)| distance < current) {
+                        best = Some((distance, PolygonPrismFace::Side { edge }));
+                    }
+                }
+            }
+            best.filter(|(distance, _)| *distance <= tolerance)
+                .map(|(_, face)| {
+                    ModelingFaceSelection::PolygonPrism(PolygonPrismFaceSelection {
+                        object: id,
+                        face,
+                    })
+                })
+        }
+        _ => None,
+    }
 }
 
 pub fn map_leaf_group_transforms_to_primitives(scene: &mut [SdfObject]) {
