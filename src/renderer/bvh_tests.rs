@@ -3,10 +3,10 @@ use glam::Vec4;
 
 #[test]
 fn material_and_boolean_shader_validates() {
-    let source = include_str!("../../assets/shaders/sdf.wgsl");
+    let source = material_gpu::shader_source();
     let mut sources: Vec<_> = [1, 2, 4, 8, 16, 256, 1024]
         .into_iter()
-        .map(|capacity| specialized_shader_source(source, capacity))
+        .map(|capacity| specialized_shader_source(&source, capacity))
         .collect();
     sources.push(include_str!("../../assets/shaders/viewport.wgsl").into());
     for source in sources {

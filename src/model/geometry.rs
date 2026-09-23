@@ -90,6 +90,7 @@ pub enum MaterialKind {
     #[default]
     Solid,
     Wood,
+    Diagnostic,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,7 +215,13 @@ impl WoodSettings {
 }
 
 impl MaterialKind {
-    pub const ALL: [Self; 4] = [Self::Transparent, Self::Metallic, Self::Solid, Self::Wood];
+    pub const ALL: [Self; 5] = [
+        Self::Transparent,
+        Self::Metallic,
+        Self::Solid,
+        Self::Wood,
+        Self::Diagnostic,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -222,6 +229,7 @@ impl MaterialKind {
             Self::Metallic => "Metallic",
             Self::Solid => "Solid",
             Self::Wood => "Wood",
+            Self::Diagnostic => "Diagnostic",
         }
     }
 
@@ -231,6 +239,7 @@ impl MaterialKind {
             Self::Wood => 1,
             Self::Transparent => 2,
             Self::Metallic => 3,
+            Self::Diagnostic => 4,
         }
     }
 }
@@ -311,6 +320,11 @@ impl Material {
                 ..Self::default()
             },
             MaterialKind::Solid => Self::default(),
+            MaterialKind::Diagnostic => Self {
+                kind,
+                color: Vec4::new(0.2, 0.65, 0.9, 1.0),
+                ..Self::default()
+            },
             MaterialKind::Wood => Self {
                 kind,
                 color: Vec4::new(0.64, 0.39, 0.20, 1.0),

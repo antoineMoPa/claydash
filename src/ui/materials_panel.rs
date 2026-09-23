@@ -11,6 +11,7 @@ pub(super) fn materials_panel(
             MaterialKind::Transparent,
             MaterialKind::Metallic,
             MaterialKind::Solid,
+            MaterialKind::Diagnostic,
         ] {
             let preset = Material::preset(kind);
             if material_preview(ui, kind.label(), kind, preset).clicked() {
@@ -49,6 +50,7 @@ pub(super) fn materials_panel(
             MaterialKind::Transparent,
             MaterialKind::Metallic,
             MaterialKind::Solid,
+            MaterialKind::Diagnostic,
         ] {
             if (filter.is_empty() || kind.label().contains(&filter))
                 && ui.button(kind.label()).clicked()

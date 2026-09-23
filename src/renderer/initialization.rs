@@ -92,40 +92,36 @@ impl Renderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let material_headers_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("material headers"),
+            size: (MAX_OBJECTS * std::mem::size_of::<material_gpu::GpuMaterialHeader>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let material_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("material parameters"),
+            size: (MAX_OBJECTS * material_gpu::MAX_PARAM_SLOTS * 16) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+            entries: &(0..5)
+                .map(|binding| wgpu::BindGroupLayoutEntry {
+                    binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: if binding == 0 {
+                            wgpu::BufferBindingType::Uniform
+                        } else {
+                            wgpu::BufferBindingType::Storage { read_only: true }
+                        },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+                })
+                .collect::<Vec<_>>(),
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("scene bind group"),
@@ -143,9 +139,17 @@ impl Renderer {
                     binding: 2,
                     resource: bvh_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: material_headers_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: material_params_buffer.as_entire_binding(),
+                },
             ],
         });
-        let shader_source = include_str!("../../assets/shaders/sdf.wgsl").to_owned();
+        let shader_source = super::material_gpu::shader_source();
         #[cfg(not(target_arch = "wasm32"))]
         let shader_source = if uncapped {
             std::env::args()
@@ -193,6 +197,8 @@ impl Renderer {
             camera_buffer,
             objects_buffer,
             bvh_buffer,
+            material_headers_buffer,
+            material_params_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
             egui_renderer,
             material_preview_ids: None,

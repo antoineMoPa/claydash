@@ -55,6 +55,7 @@ impl Renderer {
             .collect();
 
         let mut bounds = Vec::with_capacity(objects.len().min(MAX_OBJECTS));
+        let mut materials = material_gpu::PackedMaterials::default();
         let mut gpu_objects: Vec<GpuObject> = objects
             .iter()
             .take(MAX_OBJECTS)
@@ -160,45 +161,11 @@ impl Renderer {
                     radius: repeated_radius,
                     object_index: index as u32,
                 });
+                let material_index = materials.insert(object.material);
                 GpuObject {
-                    // Spare component lanes carry blend width and material kind.
-                    component: [
-                        0,
-                        0,
-                        object.softness.to_bits(),
-                        object.material.kind.gpu_code(),
-                    ],
-                    wood: [
-                        object.material.wood.ring_spacing,
-                        object.material.wood.ring_contrast,
-                        object.material.wood.pores,
-                        object.material.wood.figure,
-                    ],
-                    wood_scale: abs_scale.extend(object.material.wood.coat_amber).to_array(),
-                    wood_growth: [
-                        object.material.wood.cut_angle,
-                        object.material.wood.ring_relief,
-                        object.material.wood.ring_variation,
-                        object.material.wood.bump,
-                    ],
-                    wood_fiber: [
-                        object.material.wood.fiber_relief,
-                        object.material.wood.fiber_pigment,
-                        object.material.wood.fiber_directionality,
-                        object.material.wood.scale_falloff,
-                    ],
-                    wood_damage: [
-                        object.material.wood.sanding_grit,
-                        object.material.wood.sanding_angle,
-                        object.material.wood.knots,
-                        object.material.wood.end_checks,
-                    ],
-                    wood_finish: [
-                        object.material.wood.stain_color.gpu_code(),
-                        object.material.wood.stain_load,
-                        object.material.wood.coat,
-                        object.material.wood.coat_sheen,
-                    ],
+                    // Spare component lanes carry blend width and material index.
+                    component: [0, 0, object.softness.to_bits(), material_index],
+                    scale: abs_scale.extend(0.0).to_array(),
                     meta: [
                         i32::from(selected_ids.contains(&object.uuid)),
                         object.object_type,
@@ -211,17 +178,7 @@ impl Renderer {
                     color: object.color.to_array(),
                     inverse_rows: inverse_affine_rows(matrix.inverse()),
                     params,
-                    material: [
-                        object.material.roughness,
-                        object.material.metallic,
-                        object.material.reflectivity,
-                        object.material.opacity,
-                    ],
-                    repeat_spacing: object
-                        .repetition
-                        .spacing
-                        .extend(object.material.refractive_index)
-                        .to_array(),
+                    repeat_spacing: object.repetition.spacing.extend(0.0).to_array(),
                     repeat_count: if object.repetition.enabled {
                         [
                             if object.repetition.axes[0] {
@@ -285,7 +242,10 @@ impl Renderer {
         self.has_booleans = capacity > 1;
         let transmitted_instances: u64 = gpu_objects
             .iter()
-            .filter(|object| object.material[3] < 0.999 && object.material[1] < 0.999)
+            .filter(|object| {
+                let material = materials.materials[object.component[3] as usize];
+                material.opacity < 0.999 && material.metallic < 0.999
+            })
             .map(|object| {
                 object.repeat_count[..3]
                     .iter()
@@ -323,6 +283,16 @@ impl Renderer {
             ));
         }
         if !gpu_objects.is_empty() {
+            self.queue.write_buffer(
+                &self.material_headers_buffer,
+                0,
+                bytemuck::cast_slice(&materials.headers),
+            );
+            self.queue.write_buffer(
+                &self.material_params_buffer,
+                0,
+                bytemuck::cast_slice(&materials.params),
+            );
             self.queue
                 .write_buffer(&self.objects_buffer, 0, bytemuck::cast_slice(&gpu_objects));
             self.queue

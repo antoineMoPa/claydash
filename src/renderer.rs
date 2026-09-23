@@ -40,16 +40,10 @@ struct GpuObject {
     color: [f32; 4],
     inverse_rows: [[f32; 4]; 3],
     params: [f32; 4],
-    material: [f32; 4],
     repeat_spacing: [f32; 4],
     repeat_count: [i32; 4],
     component: [u32; 4],
-    wood: [f32; 4],
-    wood_scale: [f32; 4],
-    wood_growth: [f32; 4],
-    wood_fiber: [f32; 4],
-    wood_damage: [f32; 4],
-    wood_finish: [f32; 4],
+    scale: [f32; 4],
 }
 
 #[repr(C)]
@@ -88,6 +82,8 @@ pub struct Renderer {
     camera_buffer: wgpu::Buffer,
     objects_buffer: wgpu::Buffer,
     bvh_buffer: wgpu::Buffer,
+    material_headers_buffer: wgpu::Buffer,
+    material_params_buffer: wgpu::Buffer,
     uploaded_scene_versions: [i32; 2],
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,
@@ -110,6 +106,7 @@ pub(crate) struct MaterialPreviewIds {
     pub transparent: egui::TextureId,
     pub metallic: egui::TextureId,
     pub solid: egui::TextureId,
+    pub diagnostic: egui::TextureId,
     pub oak: egui::TextureId,
     pub walnut: egui::TextureId,
     pub pine: egui::TextureId,
@@ -127,6 +124,7 @@ impl MaterialPreviewIds {
             MaterialKind::Transparent => self.transparent,
             MaterialKind::Metallic => self.metallic,
             MaterialKind::Solid => self.solid,
+            MaterialKind::Diagnostic => self.diagnostic,
             MaterialKind::Wood => match material.wood.species {
                 WoodSpecies::Oak => self.oak,
                 WoodSpecies::Walnut => self.walnut,
@@ -152,6 +150,7 @@ pub struct CapturedFrame {
 
 mod bvh;
 mod initialization;
+mod material_gpu;
 mod material_previews;
 mod rendering;
 mod scene_bounds;

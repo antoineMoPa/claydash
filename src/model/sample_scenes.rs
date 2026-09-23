@@ -193,7 +193,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
         let mut scene = renderer_stress_scene();
         for object in &mut scene {
             object.material = Material::preset(kind);
-            if kind == MaterialKind::Wood {
+            if kind == MaterialKind::Wood || kind == MaterialKind::Diagnostic {
                 object.color = object.material.color;
             }
         }
@@ -202,6 +202,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
             MaterialKind::Metallic => "metallic",
             MaterialKind::Solid => "solid",
             MaterialKind::Wood => "wood",
+            MaterialKind::Diagnostic => "diagnostic",
         };
         cases.push((name.into(), scene));
     }
@@ -210,7 +211,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
         let template = SdfObject::create(PrimitiveKind::ALL[i % 4].object_type());
         object.object_type = template.object_type;
         object.params = template.params;
-        object.material = Material::preset(MaterialKind::ALL[i % 3]);
+        object.material = Material::preset(MaterialKind::ALL[i % MaterialKind::ALL.len()]);
     }
     cases.push(("mixed".into(), mixed.clone()));
     for pair in mixed.chunks_mut(2) {
@@ -235,7 +236,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
         let template = SdfObject::create(PrimitiveKind::ALL[i % 4].object_type());
         object.object_type = template.object_type;
         object.params = template.params;
-        object.material = Material::preset(MaterialKind::ALL[i % 3]);
+        object.material = Material::preset(MaterialKind::ALL[i % MaterialKind::ALL.len()]);
         object.repetition.enabled = true;
         object.repetition.axes = [true; 3];
         object.repetition.count = [3; 3];

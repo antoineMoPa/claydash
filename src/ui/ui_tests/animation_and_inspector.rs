@@ -626,6 +626,7 @@
                     transparent: egui::TextureId::User(1),
                     metallic: egui::TextureId::User(2),
                     solid: egui::TextureId::User(3),
+                    diagnostic: egui::TextureId::User(8),
                     oak: egui::TextureId::User(4),
                     walnut: egui::TextureId::User(5),
                     pine: egui::TextureId::User(6),
