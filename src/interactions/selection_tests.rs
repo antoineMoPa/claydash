@@ -74,6 +74,98 @@ fn clicking_an_extruded_polygon_selects_its_face_even_inside_a_group() {
 }
 
 #[test]
+fn cylinder_caps_are_selected_but_the_curved_side_is_not() {
+    let cylinder = SdfObject::create_kind(crate::model::PrimitiveKind::Cylinder);
+    let scene = [cylinder.clone()];
+    for (y, positive) in [(0.35, true), (-0.35, false)] {
+        assert_eq!(
+            crate::model::modeling_face_at_world_position(&scene, cylinder.uuid, Vec3::Y * y),
+            Some(crate::model::ModelingFaceSelection::CylinderCap(
+                crate::model::CylinderCapSelection {
+                    object: cylinder.uuid,
+                    positive
+                },
+            )),
+        );
+    }
+    assert_eq!(
+        crate::model::modeling_face_at_world_position(&scene, cylinder.uuid, Vec3::X * 0.25),
+        None,
+    );
+}
+
+#[test]
+fn clicking_cylinder_top_and_bottom_selects_the_visible_cap() {
+    for (view, positive) in [
+        (crate::camera::ViewAngle::Top, true),
+        (crate::camera::ViewAngle::Bottom, false),
+    ] {
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        camera.snap(view);
+        let cylinder = SdfObject::create_kind(crate::model::PrimitiveKind::Cylinder);
+        let mut tree = DataTree::default();
+        set_objects(&mut tree, vec![cylinder.clone()]);
+        InteractionState::select_at(&camera, &mut tree, camera.viewport / 2.0, None, false);
+        assert_eq!(
+            crate::model::selected_modeling_face(&tree),
+            Some(crate::model::ModelingFaceSelection::CylinderCap(
+                crate::model::CylinderCapSelection {
+                    object: cylinder.uuid,
+                    positive
+                },
+            )),
+        );
+    }
+}
+
+#[test]
+fn cylinder_cap_extrusion_drags_and_escape_restores_the_source() {
+    let mut tree = DataTree::default();
+    let cylinder = SdfObject::create_kind(crate::model::PrimitiveKind::Cylinder);
+    let source = cylinder.uuid;
+    set_objects(&mut tree, vec![cylinder]);
+    set_selected(&mut tree, vec![source]);
+    let cap =
+        crate::model::ModelingFaceSelection::CylinderCap(crate::model::CylinderCapSelection {
+            object: source,
+            positive: true,
+        });
+    crate::model::set_selected_modeling_face(&mut tree, Some(cap));
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut interactions = InteractionState {
+        mouse_position: camera.viewport / 2.0,
+        ..Default::default()
+    };
+    interactions.key_pressed(KeyCode::KeyE, false, &commands, &mut tree);
+    assert_eq!(objects(&tree).len(), 2);
+    interactions.update(&mut camera, &mut tree);
+    let session = interactions.extrusion_session.as_ref().unwrap().clone();
+    interactions.cursor_moved(
+        interactions.mouse_position
+            + session.projected_axis / session.projected_axis.length() * 80.0,
+        false,
+    );
+    interactions.update(&mut camera, &mut tree);
+    let extrusion = objects(&tree)
+        .into_iter()
+        .find(|object| object.uuid == session.object)
+        .unwrap();
+    let crate::model::SdfParams::CylinderParams { half_height, .. } = extrusion.params else {
+        unreachable!()
+    };
+    assert!(half_height > commands::EXTRUSION_INITIAL_HALF_EXTENT);
+    interactions.key_released(KeyCode::KeyE);
+    interactions.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
+    assert_eq!(objects(&tree).len(), 1);
+    assert_eq!(selected(&tree), vec![source]);
+    assert_eq!(crate::model::selected_modeling_face(&tree), Some(cap));
+}
+
+#[test]
 fn e_extrudes_the_selected_box_face() {
     let (mut tree, object) = selected_object();
     crate::model::set_selected_box_face(

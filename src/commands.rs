@@ -64,7 +64,7 @@ pub fn register_all(commands: &mut Commands) {
         commands,
         "extrude",
         "Extrude selected face",
-        "Create an adjacent box from the selected box face.",
+        "Create an adjacent box or cylinder from the selected planar face.",
         "E",
         extrude_selected_face,
     );
@@ -265,6 +265,11 @@ fn cancel(tree: &mut DataTree) {
         {
             crate::model::set_selected_exact(tree, vec![face.object]);
             crate::model::set_selected_box_face(tree, Some(face));
+        } else if let ClaydashValue::ModelingFaceSelection(face) =
+            tree.get_path("editor.extrusion_source_face")
+        {
+            crate::model::set_selected_exact(tree, vec![face.object()]);
+            crate::model::set_selected_modeling_face(tree, Some(face));
         }
         tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
         tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
@@ -411,6 +416,12 @@ fn duplicate(tree: &mut DataTree) {
 }
 
 pub fn extrude_selected_face(tree: &mut DataTree) {
+    if let Some(crate::model::ModelingFaceSelection::CylinderCap(face)) =
+        crate::model::selected_modeling_face(tree)
+    {
+        extrude_cylinder_cap(tree, face);
+        return;
+    }
     let Some(face) = crate::model::selected_box_face(tree) else {
         return;
     };
@@ -459,6 +470,61 @@ pub fn extrude_selected_face(tree: &mut DataTree) {
     tree.set_transient_path(
         "editor.extrusion_source_face",
         ClaydashValue::BoxFaceSelection(face),
+    );
+    tree.set_path(
+        "editor.state",
+        ClaydashValue::EditorState(EditorState::Extruding),
+    );
+}
+
+fn extrude_cylinder_cap(tree: &mut DataTree, face: crate::model::CylinderCapSelection) {
+    if !selected(tree).contains(&face.object) {
+        return;
+    }
+    let mut scene = objects(tree);
+    if crate::model::has_boolean_children(&scene, face.object) {
+        return;
+    }
+    let Some(source) = scene
+        .iter()
+        .find(|object| object.uuid == face.object)
+        .cloned()
+    else {
+        return;
+    };
+    let crate::model::SdfParams::CylinderParams { half_height, .. } = source.params else {
+        return;
+    };
+    let sign = if face.positive { 1.0 } else { -1.0 };
+    let mut extrusion = source.duplicate();
+    extrusion.name = format!("{} extrusion", source.display_name());
+    extrusion.transform.translation += source
+        .transform
+        .matrix()
+        .transform_vector3(glam::Vec3::Y * (half_height + EXTRUSION_INITIAL_HALF_EXTENT) * sign);
+    let crate::model::SdfParams::CylinderParams { half_height, .. } = &mut extrusion.params else {
+        unreachable!()
+    };
+    *half_height = EXTRUSION_INITIAL_HALF_EXTENT;
+    let extrusion_id = extrusion.uuid;
+    scene.push(extrusion);
+    set_objects(tree, scene);
+    crate::model::set_selected_exact(tree, vec![extrusion_id]);
+    crate::model::set_selected_modeling_face(
+        tree,
+        Some(crate::model::ModelingFaceSelection::CylinderCap(
+            crate::model::CylinderCapSelection {
+                object: extrusion_id,
+                positive: face.positive,
+            },
+        )),
+    );
+    tree.set_transient_path("editor.extrusion_object", ClaydashValue::Uuid(extrusion_id));
+    tree.set_transient_path(
+        "editor.extrusion_source_face",
+        ClaydashValue::ModelingFaceSelection(crate::model::ModelingFaceSelection::CylinderCap(
+            face,
+        )),
     );
     tree.set_path(
         "editor.state",
@@ -786,6 +852,38 @@ mod tests {
                 positive: true,
             })
         );
+    }
+
+    #[test]
+    fn extruding_the_bottom_cylinder_cap_creates_a_matching_adjacent_cylinder() {
+        let mut tree = DataTree::default();
+        let source = SdfObject::create(TYPE_CYLINDER);
+        let source_id = source.uuid;
+        set_objects(&mut tree, vec![source]);
+        set_selected(&mut tree, vec![source_id]);
+        crate::model::set_selected_modeling_face(
+            &mut tree,
+            Some(crate::model::ModelingFaceSelection::CylinderCap(
+                crate::model::CylinderCapSelection {
+                    object: source_id,
+                    positive: false,
+                },
+            )),
+        );
+        extrude_selected_face(&mut tree);
+        let scene = objects(&tree);
+        assert_eq!(scene.len(), 2);
+        let crate::model::SdfParams::CylinderParams {
+            radius,
+            half_height,
+        } = scene[1].params
+        else {
+            unreachable!()
+        };
+        assert_eq!(radius, 0.25);
+        assert_eq!(half_height, EXTRUSION_INITIAL_HALF_EXTENT);
+        assert!((scene[1].transform.translation.y + 0.35 + half_height).abs() < 0.0001);
+        assert_eq!(selected(&tree), vec![scene[1].uuid]);
     }
 }
 

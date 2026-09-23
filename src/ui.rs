@@ -11,6 +11,7 @@ pub(crate) mod scene_actions;
 mod scene_panel;
 mod secondary_panels;
 mod selection_tools;
+mod status_bar;
 mod ui_widgets;
 mod viewport_controls;
 mod workspace;
@@ -88,6 +89,7 @@ pub struct UiState {
     selection_tools: selection_tools::SelectionTools,
     active_guide: Option<crate::guides::ActiveGuideSet>,
     resize_guide_drag: Option<ResizeGuideDrag>,
+    polygon_cap_drag: Option<PolygonCapDrag>,
     insert_keyframe_menu_position: Option<egui::Pos2>,
     #[cfg(target_arch = "wasm32")]
     web_save_name: Option<String>,
@@ -120,6 +122,7 @@ impl Default for UiState {
             selection_tools: selection_tools::SelectionTools::default(),
             active_guide: None,
             resize_guide_drag: None,
+            polygon_cap_drag: None,
             insert_keyframe_menu_position: None,
             #[cfg(target_arch = "wasm32")]
             web_save_name: None,
@@ -204,6 +207,7 @@ impl UiState {
             }
             file_action
         };
+        self.draw_status_bar(viewport_ui, tree);
         let mut frames = std::mem::take(&mut self.frames);
         let mut layout = std::mem::take(&mut self.layout);
         let mut view = WorkspaceView {
@@ -253,30 +257,12 @@ impl UiState {
                 ui.set_clip_rect(rect);
                 self.regions.extend(camera_overlay::draw(ui, tree, camera));
                 self.ghosts = boolean_overlay::draw(ui, tree, camera);
-                if matches!(
+                // Resize handles must not intercept extrusion or operand-selection clicks.
+                if !matches!(
                     tree.get_path("editor.state"),
                     crate::model::ClaydashValue::EditorState(crate::model::EditorState::Extruding)
-                ) {
-                    ui.painter().text(
-                        rect.center_bottom() - egui::vec2(0.0, 16.0),
-                        egui::Align2::CENTER_BOTTOM,
-                        "Extrude face: move mouse · Alt bypasses guides · click or Enter confirms · Esc cancels",
-                        egui::FontId::proportional(13.0),
-                        Color32::WHITE,
-                    );
-                } else if let Some(pick) = scene_actions::pending_boolean(tree) {
-                    // Resize handles must not intercept the operand-selection click.
-                    ui.painter().text(
-                        rect.center_bottom() - egui::vec2(0.0, 16.0),
-                        egui::Align2::CENTER_BOTTOM,
-                        format!(
-                            "{}: click another object · Esc cancels",
-                            pick.operation.label()
-                        ),
-                        egui::FontId::proportional(13.0),
-                        Color32::WHITE,
-                    );
-                } else {
+                ) && scene_actions::pending_boolean(tree).is_none()
+                {
                     let object_gizmo_blocker_count = self.regions.len();
                     self.draw_selection_tools(ui, tree, camera);
                     if !self.selection_tools.box_mode() && !self.selection_tools.active() {
@@ -390,6 +376,15 @@ struct ResizeGuideDrag {
     raw_amount: f32,
     guides: Vec<crate::guides::FaceGuide>,
     active_guide: Option<crate::guides::ActiveGuideSet>,
+}
+
+struct PolygonCapDrag {
+    object: uuid::Uuid,
+    positive: bool,
+    initial_transform: crate::model::Transform,
+    initial_half_depth: f32,
+    projected_axis: egui::Vec2,
+    raw_amount: f32,
 }
 
 fn draw_active_guides(ui: &mut egui::Ui, camera: &Camera, active: crate::guides::ActiveGuideSet) {

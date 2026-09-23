@@ -22,7 +22,22 @@ impl UiState {
         blocker_count: usize,
     ) {
         draw_selected_polygon_face_overlay(ui, tree, camera);
+        draw_selected_cylinder_cap_overlay(ui, tree, camera);
         let selection = selected(tree);
+        if let Some(crate::model::ModelingFaceSelection::PolygonPrism(face)) =
+            crate::model::selected_modeling_face(tree)
+        {
+            let scene = objects(tree);
+            if selection.len() == 1
+                && (face.object == selection[0]
+                    || crate::ui::scene_actions::viewport_group_root(&scene, face.object)
+                        == selection[0])
+                && matches!(face.face, crate::model::PolygonPrismFace::Cap { .. })
+            {
+                self.draw_polygon_cap_handle(ui, tree, camera, face, blocker_count);
+                return;
+            }
+        }
         if selection.len() != 1 || commands::effective_selected_ids(tree).len() != 1 {
             return;
         }
@@ -358,6 +373,104 @@ impl UiState {
             tree.make_undo_redo_snapshot();
         }
     }
+
+    fn draw_polygon_cap_handle(
+        &mut self,
+        ui: &mut egui::Ui,
+        tree: &mut DataTree,
+        camera: &Camera,
+        face: crate::model::PolygonPrismFaceSelection,
+        blocker_count: usize,
+    ) {
+        let crate::model::PolygonPrismFace::Cap { positive } = face.face else {
+            return;
+        };
+        let mut scene = objects(tree);
+        let matrix = crate::model::object_world_matrix(&scene, face.object);
+        let Some(object) = scene.iter_mut().find(|object| object.uuid == face.object) else {
+            return;
+        };
+        let SdfParams::PolygonPrismParams(params) = &object.params else {
+            return;
+        };
+        let sign = if positive { 1.0 } else { -1.0 };
+        let center_local =
+            params.vertices.iter().copied().sum::<Vec2>() / params.vertices.len().max(1) as f32;
+        let center_world = matrix.transform_point3(center_local.extend(sign * params.half_depth));
+        let direction = matrix.transform_vector3(Vec3::Z * sign);
+        let scale = ui.ctx().pixels_per_point();
+        let (Some(center), Some(ahead)) = (
+            camera.project(center_world, scale),
+            camera.project(center_world + direction * 0.1, scale),
+        ) else {
+            return;
+        };
+        let mut projected_axis = (ahead - center) * 10.0;
+        if projected_axis.length_sq() < 4.0 {
+            let screen_up = camera.view().inverse().y_axis.truncate();
+            if let Some(fallback) = camera.project(center_world + screen_up * 0.1, scale) {
+                projected_axis = (fallback - center) * 10.0;
+            }
+        }
+        if projected_axis.length_sq() < 0.0001 {
+            return;
+        }
+        let tip = center + projected_axis / projected_axis.length() * 28.0;
+        let id = egui::Id::new(("polygon-cap-depth", face.object, positive));
+        let captured = ui.ctx().is_being_dragged(id) || ui.ctx().drag_stopped_id() == Some(id);
+        let hit =
+            egui::Rect::from_center_size(center, egui::vec2(24.0, 24.0)).intersect(ui.clip_rect());
+        if !captured
+            && (hit.is_negative()
+                || self.regions[..blocker_count.min(self.regions.len())]
+                    .iter()
+                    .any(|rect| rect.contains(center)))
+        {
+            return;
+        }
+        self.regions.push(hit);
+        let response = ui
+            .interact(hit, id, egui::Sense::drag())
+            .on_hover_text("Drag to slide this face and change its depth. Release to finish.");
+        ui.painter()
+            .arrow(center, tip - center, Stroke::new(2.0, Color32::WHITE));
+        ui.painter().circle_filled(center, 5.0, Color32::WHITE);
+        if response.drag_started() {
+            self.polygon_cap_drag = Some(PolygonCapDrag {
+                object: face.object,
+                positive,
+                initial_transform: object.transform,
+                initial_half_depth: params.half_depth,
+                projected_axis,
+                raw_amount: 0.0,
+            });
+        }
+        if response.dragged() {
+            if let Some(session) = self
+                .polygon_cap_drag
+                .as_mut()
+                .filter(|session| session.object == face.object && session.positive == positive)
+            {
+                let delta = ui.input(|input| input.pointer.delta());
+                session.raw_amount +=
+                    delta.dot(session.projected_axis) / session.projected_axis.length_sq();
+                let half_delta = session.raw_amount * 0.5;
+                let SdfParams::PolygonPrismParams(params) = &mut object.params else {
+                    return;
+                };
+                params.half_depth = (session.initial_half_depth + half_delta).max(0.01);
+                object.transform = session.initial_transform;
+                object.transform.translation += object.transform.matrix().transform_vector3(
+                    Vec3::Z * sign * (params.half_depth - session.initial_half_depth),
+                );
+                set_objects(tree, scene);
+            }
+        }
+        if response.drag_stopped() {
+            self.polygon_cap_drag = None;
+            tree.make_undo_redo_snapshot();
+        }
+    }
 }
 
 pub(super) fn selected_polygon_face_vertices(
@@ -502,6 +615,42 @@ fn draw_selected_polygon_face_overlay(ui: &egui::Ui, tree: &DataTree, camera: &C
     }
     ui.painter().add(egui::Shape::closed_line(
         screen,
+        Stroke::new(3.0, Color32::WHITE),
+    ));
+}
+
+fn draw_selected_cylinder_cap_overlay(ui: &egui::Ui, tree: &DataTree, camera: &Camera) {
+    let Some(crate::model::ModelingFaceSelection::CylinderCap(face)) =
+        crate::model::selected_modeling_face(tree)
+    else {
+        return;
+    };
+    let scene = objects(tree);
+    let Some(object) = scene.iter().find(|object| object.uuid == face.object) else {
+        return;
+    };
+    let SdfParams::CylinderParams {
+        radius,
+        half_height,
+    } = object.params
+    else {
+        return;
+    };
+    let matrix = crate::model::object_world_matrix(&scene, face.object);
+    let y = half_height * if face.positive { 1.0 } else { -1.0 };
+    let screen: Vec<_> = (0..48)
+        .filter_map(|index| {
+            let angle = index as f32 * std::f32::consts::TAU / 48.0;
+            let local = Vec3::new(radius * angle.cos(), y, radius * angle.sin());
+            camera.project(matrix.transform_point3(local), ui.ctx().pixels_per_point())
+        })
+        .collect();
+    if screen.len() != 48 {
+        return;
+    }
+    ui.painter().add(egui::Shape::convex_polygon(
+        screen,
+        Color32::from_rgb(255, 190, 72).gamma_multiply(0.22),
         Stroke::new(3.0, Color32::WHITE),
     ));
 }

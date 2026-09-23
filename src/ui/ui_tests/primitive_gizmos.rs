@@ -679,6 +679,57 @@
     }
 
     #[test]
+    fn reselected_polygon_cap_slides_while_opposite_cap_stays_fixed() {
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0));
+        let mut camera = Camera::new();
+        camera.viewport_origin = Vec2::new(100.0, 40.0);
+        camera.viewport = Vec2::new(600.0, 500.0);
+        let mut root = SdfObject::create_kind(PrimitiveKind::Box);
+        root.transform.translation = Vec3::X * 10.0;
+        let mut prism = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+        prism.boolean_parent = Some(root.uuid);
+        let half_depth = match &prism.params {
+            SdfParams::PolygonPrismParams(params) => params.half_depth,
+            _ => unreachable!(),
+        };
+        let original_back = prism.transform.matrix().transform_point3(Vec3::Z * -half_depth);
+        let center = camera.project(Vec3::Z * half_depth, 1.0).unwrap();
+        let ahead = camera.project(Vec3::Z * (half_depth + 0.1), 1.0).unwrap();
+        let axis = (ahead - center) * 10.0;
+        let start = center;
+        let end = start + axis * 0.2;
+        let mut tree = DataTree::default();
+        set_objects(&mut tree, vec![root.clone(), prism.clone()]);
+        set_selected(&mut tree, vec![root.uuid]);
+        crate::model::set_selected_modeling_face(&mut tree, Some(
+            crate::model::ModelingFaceSelection::PolygonPrism(
+                crate::model::PolygonPrismFaceSelection {
+                    object: prism.uuid,
+                    face: crate::model::PolygonPrismFace::Cap { positive: true },
+                },
+            ),
+        ));
+        let mut state = UiState::default();
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos, button: egui::PointerButton::Primary, pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut frame = |events| primitive_gizmo_frame(
+            &ctx, &mut state, &mut tree, &camera, viewport, events, egui::Modifiers::NONE,
+        );
+        frame(vec![]);
+        frame(vec![egui::Event::PointerMoved(start), button(start, true)]);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        frame(vec![button(end, false)]);
+        prism = objects(&tree).into_iter().find(|object| object.uuid == prism.uuid).unwrap();
+        let SdfParams::PolygonPrismParams(params) = &prism.params else { unreachable!() };
+        assert!(params.half_depth > half_depth);
+        let new_back = prism.transform.matrix().transform_point3(Vec3::Z * -params.half_depth);
+        assert!(new_back.distance(original_back) < 0.0001);
+    }
+
+    #[test]
     fn group_selection_hides_primitive_resize_gizmos() {
         let ctx = egui::Context::default();
         let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(500.0, 400.0));

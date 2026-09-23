@@ -86,7 +86,7 @@ impl UiState {
                             tools.push((
                                 SelectionTool::FaceCut,
                                 egui::include_image!("../../../assets/icons/lucide/scissors.svg"),
-                                "Draw a shape on the selected box face",
+                                "Draw a shape on the selected face",
                             ));
                         }
                         for (tool, source, tooltip) in tools {

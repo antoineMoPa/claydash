@@ -160,7 +160,7 @@ impl InteractionState {
     }
 
     fn update_extrusion(&mut self, camera: &Camera, tree: &mut DataTree) {
-        let Some(face) = crate::model::selected_box_face(tree) else {
+        let Some(face) = crate::model::selected_modeling_face(tree) else {
             tree.set_path(
                 "editor.state",
                 ClaydashValue::EditorState(EditorState::Start),
@@ -169,23 +169,37 @@ impl InteractionState {
             self.active_guide = None;
             return;
         };
+        let (axis, positive) = match face {
+            crate::model::ModelingFaceSelection::Box(face) => (face.axis, face.positive),
+            crate::model::ModelingFaceSelection::CylinderCap(face) => {
+                (crate::model::VectorAxis::Y, face.positive)
+            }
+            crate::model::ModelingFaceSelection::PolygonPrism(_) => return,
+        };
         if self
             .extrusion_session
             .as_ref()
-            .is_none_or(|session| session.object != face.object)
+            .is_none_or(|session| session.object != face.object())
         {
             let scene = objects(tree);
-            let Some(object) = scene.iter().find(|object| object.uuid == face.object) else {
+            let Some(object) = scene.iter().find(|object| object.uuid == face.object()) else {
                 return;
             };
-            let crate::model::SdfParams::BoxParams(params) = &object.params else {
-                return;
+            let initial_half_extent = match (face, &object.params) {
+                (
+                    crate::model::ModelingFaceSelection::Box(_),
+                    crate::model::SdfParams::BoxParams(params),
+                ) => params.box_q[axis.index()],
+                (
+                    crate::model::ModelingFaceSelection::CylinderCap(_),
+                    crate::model::SdfParams::CylinderParams { half_height, .. },
+                ) => *half_height,
+                _ => return,
             };
-            let axis = face.axis.index();
             let mut local_direction = Vec3::ZERO;
-            local_direction[axis] = if face.positive { 1.0 } else { -1.0 };
-            let matrix = crate::model::object_world_matrix(&scene, face.object);
-            let outer = matrix.transform_point3(local_direction * params.box_q[axis]);
+            local_direction[axis.index()] = if positive { 1.0 } else { -1.0 };
+            let matrix = crate::model::object_world_matrix(&scene, face.object());
+            let outer = matrix.transform_point3(local_direction * initial_half_extent);
             let direction = matrix.transform_vector3(local_direction);
             let Some(center) = camera.project(outer, 1.0) else {
                 return;
@@ -203,21 +217,21 @@ impl InteractionState {
             if projected_axis.length_squared() < 0.0001 {
                 return;
             }
-            let mut excluded = vec![face.object];
-            if let ClaydashValue::BoxFaceSelection(source) =
-                tree.get_path("editor.extrusion_source_face")
-            {
-                excluded.push(source.object);
+            let mut excluded = vec![face.object()];
+            match tree.get_path("editor.extrusion_source_face") {
+                ClaydashValue::BoxFaceSelection(source) => excluded.push(source.object),
+                ClaydashValue::ModelingFaceSelection(source) => excluded.push(source.object()),
+                _ => {}
             }
             let guides = crate::guides::face_center_guides(&scene, &excluded);
             self.extrusion_session = Some(ExtrusionSession {
-                object: face.object,
-                axis: face.axis,
-                positive: face.positive,
+                object: face.object(),
+                axis,
+                positive,
                 start_mouse_position: self.mouse_position,
                 projected_axis,
                 initial_transform: object.transform,
-                initial_half_extent: params.box_q[axis],
+                initial_half_extent,
                 initial_face_center: outer,
                 world_direction_per_unit: direction,
                 guides,
@@ -264,10 +278,17 @@ impl InteractionState {
         else {
             return;
         };
-        let crate::model::SdfParams::BoxParams(params) = &mut object.params else {
-            return;
-        };
-        params.box_q[session.axis.index()] = half_extent;
+        match &mut object.params {
+            crate::model::SdfParams::BoxParams(params) => {
+                params.box_q[session.axis.index()] = half_extent;
+            }
+            crate::model::SdfParams::CylinderParams { half_height, .. }
+                if session.axis == crate::model::VectorAxis::Y =>
+            {
+                *half_height = half_extent;
+            }
+            _ => return,
+        }
         object.transform = session.initial_transform;
         object.transform.translation += session
             .initial_transform

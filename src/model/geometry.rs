@@ -19,6 +19,12 @@ pub struct BoxFaceSelection {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CylinderCapSelection {
+    pub object: uuid::Uuid,
+    pub positive: bool,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolygonPrismFace {
     Cap { positive: bool },
     Side { edge: usize },
@@ -33,6 +39,7 @@ pub struct PolygonPrismFaceSelection {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelingFaceSelection {
     Box(BoxFaceSelection),
+    CylinderCap(CylinderCapSelection),
     PolygonPrism(PolygonPrismFaceSelection),
 }
 
@@ -40,6 +47,7 @@ impl ModelingFaceSelection {
     pub fn object(self) -> uuid::Uuid {
         match self {
             Self::Box(face) => face.object,
+            Self::CylinderCap(face) => face.object,
             Self::PolygonPrism(face) => face.object,
         }
     }
@@ -718,6 +726,21 @@ pub fn modeling_face_at_world_position(
     match &object.params {
         SdfParams::BoxParams(_) => {
             box_face_at_world_position(scene, id, world_position).map(ModelingFaceSelection::Box)
+        }
+        SdfParams::CylinderParams {
+            radius,
+            half_height,
+        } => {
+            let local = object_world_matrix(scene, id)
+                .inverse()
+                .transform_point3(world_position);
+            let tolerance = radius.max(*half_height).max(0.01) * 0.08 + 0.015;
+            let radial = Vec2::new(local.x, local.z).length();
+            ((local.y.abs() - *half_height).abs() <= tolerance && radial <= *radius + tolerance)
+                .then_some(ModelingFaceSelection::CylinderCap(CylinderCapSelection {
+                    object: id,
+                    positive: local.y >= 0.0,
+                }))
         }
         SdfParams::PolygonPrismParams(params) => {
             if params.vertices.len() < 3 {
