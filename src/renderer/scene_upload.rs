@@ -279,6 +279,7 @@ impl Renderer {
                     self.render_format,
                     self.use_bvh,
                     capacity,
+                    false,
                 ),
             ));
         }

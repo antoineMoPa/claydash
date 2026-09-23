@@ -162,11 +162,20 @@ pub(super) fn material_preview(
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(82.0, 70.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
+    let highlighted = response.hovered() || response.has_focus();
     ui.painter().rect(
         rect,
         5.0,
-        visuals.weak_bg_fill,
-        visuals.bg_stroke,
+        if highlighted {
+            visuals.weak_bg_fill
+        } else {
+            Color32::TRANSPARENT
+        },
+        if highlighted {
+            visuals.bg_stroke
+        } else {
+            Stroke::NONE
+        },
         egui::StrokeKind::Inside,
     );
     let preview = egui::Rect::from_min_max(

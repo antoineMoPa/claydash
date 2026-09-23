@@ -171,6 +171,7 @@ impl Renderer {
             render_format,
             use_bvh,
             1,
+            false,
         );
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,

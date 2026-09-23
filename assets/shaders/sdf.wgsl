@@ -16,6 +16,7 @@ struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
 override USE_BVH: bool = true;
 override HAS_BOOLEANS: bool = false;
+override TRANSPARENT_BACKGROUND: bool = false;
 const CSG_SIZE: u32 = 256u;
 
 struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) clip: vec2<f32> }
@@ -333,8 +334,10 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             point = ray_origin + ray * travel;
         }
     }
-    let sky = background(ray);
-    if !hit { return vec4(sky, 1.0); }
+    if !hit {
+        if TRANSPARENT_BACKGROUND { return vec4(0.0); }
+        return vec4(background(ray), 1.0);
+    }
 
     var direction = ray;
     var throughput = vec3(1.0);

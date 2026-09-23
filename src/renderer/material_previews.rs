@@ -67,6 +67,7 @@ impl Renderer {
             wgpu::TextureFormat::Rgba8UnormSrgb,
             self.use_bvh,
             1,
+            true,
         );
         let presets = [
             Material::preset(MaterialKind::Transparent),
@@ -143,7 +144,7 @@ impl Renderer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
