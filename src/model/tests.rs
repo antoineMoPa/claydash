@@ -33,6 +33,32 @@ fn material_presets_expose_distinct_surface_properties() {
 }
 
 #[test]
+fn wood_species_are_distinct_and_old_materials_load_with_default_grain() {
+    let oak = Material::wood_preset(WoodSpecies::Oak);
+    let walnut = Material::wood_preset(WoodSpecies::Walnut);
+    let pine = Material::wood_preset(WoodSpecies::Pine);
+    assert_ne!(oak.color, walnut.color);
+    assert_ne!(oak.wood.ring_spacing, pine.wood.ring_spacing);
+    assert_eq!(MaterialAsset::new(oak).name, "Oak");
+
+    let mut legacy = serde_json::to_value(oak).unwrap();
+    legacy.as_object_mut().unwrap().remove("wood");
+    let restored: Material = serde_json::from_value(legacy).unwrap();
+    assert_eq!(restored.wood, WoodSettings::default());
+
+    let mut finished = walnut;
+    finished.wood.cut_angle = 0.7;
+    finished.wood.fiber_pigment = 0.9;
+    finished.wood.stain_color = WoodStain::Smoked;
+    finished.wood.stain_load = 0.6;
+    finished.wood.coat = 0.8;
+    assert_eq!(
+        serde_json::from_str::<Material>(&serde_json::to_string(&finished).unwrap()).unwrap(),
+        finished
+    );
+}
+
+#[test]
 fn renamed_material_asset_keeps_its_name_when_edited() {
     let mut tree = DataTree::default();
     let mut material = Material::preset(MaterialKind::Metallic);

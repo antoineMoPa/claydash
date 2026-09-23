@@ -81,7 +81,8 @@ cargo check --target wasm32-unknown-unknown
 ```
 
 `--benchmark-case=` accepts `solid`, `metallic`, `transparent`, `wood`, `mixed`, `booleans`,
-`nested`, `repeated`, and `preview`. The repeated fixture contains 64 objects with 27
+`nested`, `repeated`, `preview`, `wood-gallery`, and `wood-cut`. The wood gallery shows
+Pine, Oak, and Walnut blocks; the wood cut drills an Oak block. The repeated fixture contains 64 objects with 27
 instances each. The other stress fixtures contain 256 objects, or 1,024 with
 `--benchmark-1024`; the preview contains 10. Mixed fixtures cover all four primitives,
 rotations, and nonuniform scale.

@@ -6,7 +6,7 @@ use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
     camera::{Camera, ProjectionMode},
-    model::{SdfObject, SdfParams},
+    model::{Material, MaterialAsset, MaterialKind, SdfObject, SdfParams, WoodSpecies},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,6 +28,7 @@ fn render_format_for_surface(format: wgpu::TextureFormat) -> wgpu::TextureFormat
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuCamera {
     inverse_view_projection: [[f32; 4]; 4],
+    // xyz is the camera position; w is the display exposure.
     position: [f32; 4],
     count: [u32; 4],
 }
@@ -43,6 +44,12 @@ struct GpuObject {
     repeat_spacing: [f32; 4],
     repeat_count: [i32; 4],
     component: [u32; 4],
+    wood: [f32; 4],
+    wood_scale: [f32; 4],
+    wood_growth: [f32; 4],
+    wood_fiber: [f32; 4],
+    wood_damage: [f32; 4],
+    wood_finish: [f32; 4],
 }
 
 #[repr(C)]
@@ -85,6 +92,55 @@ pub struct Renderer {
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,
     initial_pixel_budget: u32,
+    material_preview_ids: Option<MaterialPreviewIds>,
+    material_preview_pipeline: Option<wgpu::RenderPipeline>,
+    material_preview_textures: Vec<wgpu::Texture>,
+    material_asset_previews: Vec<MaterialAssetPreview>,
+}
+
+struct MaterialAssetPreview {
+    uuid: uuid::Uuid,
+    material: Material,
+    id: egui::TextureId,
+    _texture: wgpu::Texture,
+}
+
+#[derive(Clone)]
+pub(crate) struct MaterialPreviewIds {
+    pub transparent: egui::TextureId,
+    pub metallic: egui::TextureId,
+    pub solid: egui::TextureId,
+    pub oak: egui::TextureId,
+    pub walnut: egui::TextureId,
+    pub pine: egui::TextureId,
+    pub maple: egui::TextureId,
+    pub assets: Vec<(uuid::Uuid, egui::TextureId)>,
+}
+
+impl MaterialPreviewIds {
+    pub fn egui_id() -> egui::Id {
+        egui::Id::new("material-preview-ids")
+    }
+
+    pub fn for_material(&self, material: Material) -> egui::TextureId {
+        match material.kind {
+            MaterialKind::Transparent => self.transparent,
+            MaterialKind::Metallic => self.metallic,
+            MaterialKind::Solid => self.solid,
+            MaterialKind::Wood => match material.wood.species {
+                WoodSpecies::Oak => self.oak,
+                WoodSpecies::Walnut => self.walnut,
+                WoodSpecies::Pine => self.pine,
+                WoodSpecies::Maple => self.maple,
+            },
+        }
+    }
+
+    pub fn for_asset(&self, id: uuid::Uuid) -> Option<egui::TextureId> {
+        self.assets
+            .iter()
+            .find_map(|(asset_id, texture)| (*asset_id == id).then_some(*texture))
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -96,6 +152,7 @@ pub struct CapturedFrame {
 
 mod bvh;
 mod initialization;
+mod material_previews;
 mod rendering;
 mod scene_bounds;
 mod scene_upload;

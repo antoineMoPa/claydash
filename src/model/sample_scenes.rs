@@ -3,7 +3,7 @@ use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 use super::{
     boolean_distance, object_world_matrix, BooleanOperation, BoxParams, Material, MaterialKind,
-    PrimitiveKind, SdfObject, SdfParams, SphereParams,
+    PrimitiveKind, SdfObject, SdfParams, SphereParams, WoodSpecies,
 };
 
 /// Deterministic visual QA scene: materials above, boolean operations below.
@@ -153,6 +153,42 @@ pub fn renderer_stress_scene() -> Vec<SdfObject> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     let mut cases = Vec::new();
+    let mut wood_gallery = Vec::new();
+    for (index, species) in [WoodSpecies::Pine, WoodSpecies::Oak, WoodSpecies::Walnut]
+        .into_iter()
+        .enumerate()
+    {
+        let mut block = SdfObject::create_kind(PrimitiveKind::Box);
+        block.name = species.label().into();
+        block.params = SdfParams::BoxParams(BoxParams {
+            box_q: Vec3::splat(0.46),
+        });
+        block.transform.translation = Vec3::new((index as f32 - 1.0) * 1.12, 0.0, 0.0);
+        block.material = Material::wood_preset(species);
+        block.material.wood.cut_angle = (index as f32 - 1.0) * 0.58;
+        block.color = block.material.color;
+        wood_gallery.push(block);
+    }
+    cases.push(("wood-gallery".into(), wood_gallery));
+    let mut cut_block = SdfObject::create_kind(PrimitiveKind::Box);
+    cut_block.name = "Oak with drilled hole".into();
+    cut_block.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(0.55),
+    });
+    cut_block.material = Material::wood_preset(WoodSpecies::Oak);
+    cut_block.color = cut_block.material.color;
+    let mut drill = SdfObject::create_kind(PrimitiveKind::Cylinder);
+    drill.params = SdfParams::CylinderParams {
+        radius: 0.25,
+        half_height: 0.75,
+    };
+    drill.transform.translation = Vec3::new(0.12, 0.04, 0.0);
+    drill.transform.rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    drill.boolean_parent = Some(cut_block.uuid);
+    drill.operation = BooleanOperation::Subtract;
+    drill.material = cut_block.material;
+    drill.color = cut_block.color;
+    cases.push(("wood-cut".into(), vec![cut_block, drill]));
     for kind in MaterialKind::ALL {
         let mut scene = renderer_stress_scene();
         for object in &mut scene {

@@ -7,9 +7,19 @@ pub(super) fn materials_panel(
 ) {
     ui.label(RichText::new("Material library").strong());
     ui.horizontal_wrapped(|ui| {
-        for kind in MaterialKind::ALL {
+        for kind in [
+            MaterialKind::Transparent,
+            MaterialKind::Metallic,
+            MaterialKind::Solid,
+        ] {
             let preset = Material::preset(kind);
-            if material_preview(ui, kind, preset).clicked() {
+            if material_preview(ui, kind.label(), kind, preset).clicked() {
+                apply_material(tree, preset);
+            }
+        }
+        for species in WoodSpecies::ALL {
+            let preset = Material::wood_preset(species);
+            if material_preview(ui, species.label(), MaterialKind::Wood, preset).clicked() {
                 apply_material(tree, preset);
             }
         }
@@ -35,7 +45,11 @@ pub(super) fn materials_panel(
                 .desired_width(190.0),
         );
         ui.separator();
-        for kind in MaterialKind::ALL {
+        for kind in [
+            MaterialKind::Transparent,
+            MaterialKind::Metallic,
+            MaterialKind::Solid,
+        ] {
             if (filter.is_empty() || kind.label().contains(&filter))
                 && ui.button(kind.label()).clicked()
             {
@@ -43,13 +57,37 @@ pub(super) fn materials_panel(
                 ui.close();
             }
         }
+        for species in WoodSpecies::ALL {
+            if (filter.is_empty() || species.label().contains(&filter))
+                && ui.button(species.label()).clicked()
+            {
+                apply_material(tree, Material::wood_preset(species));
+                ui.close();
+            }
+        }
         let assets = crate::model::material_assets(tree);
         if !assets.is_empty() {
             ui.separator();
+            let previews = ui.ctx().data(|data| {
+                data.get_temp::<crate::renderer::MaterialPreviewIds>(
+                    crate::renderer::MaterialPreviewIds::egui_id(),
+                )
+            });
             for asset in assets {
-                if (filter.is_empty() || asset.name.contains(&filter))
-                    && ui.button(&asset.name).clicked()
-                {
+                if !filter.is_empty() && !asset.name.contains(&filter) {
+                    continue;
+                }
+                let clicked = ui
+                    .horizontal(|ui| {
+                        if let Some(texture) =
+                            previews.as_ref().and_then(|ids| ids.for_asset(asset.uuid))
+                        {
+                            ui.add(egui::Image::new((texture, egui::vec2(32.0, 21.0))));
+                        }
+                        ui.button(&asset.name).clicked()
+                    })
+                    .inner;
+                if clicked {
                     tree.set_path(
                         "editor.material_id",
                         crate::model::ClaydashValue::Uuid(asset.uuid),
@@ -212,6 +250,138 @@ pub(super) fn materials_panel(
         }
     }
     color_response.on_hover_text("Press I to keyframe all four color channels");
+    if material.kind == MaterialKind::Wood {
+        ui.separator();
+        ui.label(RichText::new("Wood grain").strong());
+        ui.horizontal(|ui| {
+            ui.label("Species");
+            egui::ComboBox::from_id_salt("wood-species")
+                .selected_text(material.wood.species.label())
+                .show_ui(ui, |ui| {
+                    for species in WoodSpecies::ALL {
+                        if ui
+                            .selectable_label(material.wood.species == species, species.label())
+                            .clicked()
+                        {
+                            let previous_species = material.wood.species;
+                            let preset = Material::wood_preset(species);
+                            material.color = preset.color;
+                            material.wood = preset.wood;
+                            if let Some(id) = material_id {
+                                if crate::model::material_assets(tree).iter().any(|asset| {
+                                    asset.uuid == id && asset.name == previous_species.label()
+                                }) {
+                                    crate::model::rename_material_asset(
+                                        tree,
+                                        id,
+                                        species.label().into(),
+                                    );
+                                }
+                            }
+                            changed = true;
+                        }
+                    }
+                });
+        });
+        egui::CollapsingHeader::new("Growth and cut")
+            .default_open(true)
+            .show(ui, |ui| {
+                let mut cut_degrees = material.wood.cut_angle.to_degrees();
+                changed |= ui
+                    .add(egui::Slider::new(&mut cut_degrees, -72.0..=72.0).text("Cut angle °"))
+                    .changed();
+                material.wood.cut_angle = cut_degrees.to_radians();
+                let mut ring_millimeters = material.wood.ring_spacing * 100.0;
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut ring_millimeters, 1.0..=15.0)
+                            .text("Mean ring width (mm)"),
+                    )
+                    .changed();
+                material.wood.ring_spacing = ring_millimeters / 100.0;
+                for (label, value, range) in [
+                    ("Ring color", &mut material.wood.ring_contrast, 0.0..=1.0),
+                    ("Ring ridge", &mut material.wood.ring_relief, 0.0..=1.0),
+                    (
+                        "Ring variation",
+                        &mut material.wood.ring_variation,
+                        0.0..=1.0,
+                    ),
+                    ("Knots", &mut material.wood.knots, 0.0..=1.0),
+                    ("End checks", &mut material.wood.end_checks, 0.0..=1.0),
+                ] {
+                    changed |= ui
+                        .add(egui::Slider::new(value, range).text(label))
+                        .changed();
+                }
+            });
+        ui.collapsing("Fiber and pores", |ui| {
+            for (label, value, range) in [
+                ("Bump", &mut material.wood.bump, 0.0..=1.6),
+                ("Fiber relief", &mut material.wood.fiber_relief, 0.0..=1.0),
+                ("Fiber pigment", &mut material.wood.fiber_pigment, 0.0..=1.0),
+                (
+                    "Directionality",
+                    &mut material.wood.fiber_directionality,
+                    2.0..=20.0,
+                ),
+                (
+                    "Scale falloff",
+                    &mut material.wood.scale_falloff,
+                    0.35..=1.55,
+                ),
+                ("Vessel pores", &mut material.wood.pores, 0.0..=1.0),
+                ("Figure", &mut material.wood.figure, 0.0..=1.0),
+            ] {
+                changed |= ui
+                    .add(egui::Slider::new(value, range).text(label))
+                    .changed();
+            }
+        });
+        ui.collapsing("Surface and finish", |ui| {
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut material.wood.sanding_grit, 0.0..=1.0)
+                        .text("Sanding grit"),
+                )
+                .changed();
+            let mut sanding_degrees = material.wood.sanding_angle.to_degrees();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut sanding_degrees, -90.0..=90.0)
+                        .text("Sanding direction °"),
+                )
+                .changed();
+            material.wood.sanding_angle = sanding_degrees.to_radians();
+            ui.horizontal(|ui| {
+                ui.label("Stain color");
+                egui::ComboBox::from_id_salt("wood-stain")
+                    .selected_text(material.wood.stain_color.label())
+                    .show_ui(ui, |ui| {
+                        for stain in WoodStain::ALL {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut material.wood.stain_color,
+                                    stain,
+                                    stain.label(),
+                                )
+                                .changed();
+                        }
+                    });
+            });
+            for (label, value) in [
+                ("Stain load", &mut material.wood.stain_load),
+                ("Poly build", &mut material.wood.coat),
+                ("Poly sheen", &mut material.wood.coat_sheen),
+                ("Poly amber", &mut material.wood.coat_amber),
+            ] {
+                changed |= ui
+                    .add(egui::Slider::new(value, 0.0..=1.0).text(label))
+                    .changed();
+            }
+        });
+        ui.separator();
+    }
     for (label, property, value, range) in [
         (
             "Roughness",

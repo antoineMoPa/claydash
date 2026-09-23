@@ -108,7 +108,7 @@ pub fn update_material_asset(tree: &mut DataTree, id: uuid::Uuid, material: Mate
     } else {
         assets.push(MaterialAsset {
             uuid: id,
-            name: material.kind.label().to_string(),
+            name: material.display_name().to_string(),
             material,
         });
     }
@@ -141,7 +141,7 @@ pub fn create_unlinked_material_asset(
                 .find(|asset| asset.uuid == id)
                 .map(|asset| asset.name.clone())
         })
-        .unwrap_or_else(|| material.kind.label().to_owned());
+        .unwrap_or_else(|| material.display_name().to_owned());
     let mut asset = MaterialAsset::new(material);
     asset.name = format!("{source_name} copy");
     let id = asset.uuid;

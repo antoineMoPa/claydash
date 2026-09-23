@@ -210,9 +210,10 @@ impl App {
         let Some(window) = self.window.clone() else {
             return;
         };
-        let Some(renderer) = &self.renderer else {
+        let Some(renderer) = &mut self.renderer else {
             return;
         };
+        renderer.sync_material_asset_previews(&crate::model::material_assets(&self.tree));
         if self.camera.viewport == Vec2::ONE {
             self.camera.viewport = renderer.size();
         }
@@ -230,6 +231,11 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let input = self.egui_state.take(&window);
         let egui = self.egui.clone();
+        if let Some(ids) = renderer.material_preview_ids() {
+            egui.data_mut(|data| {
+                data.insert_temp(crate::renderer::MaterialPreviewIds::egui_id(), ids)
+            });
+        }
         let mut file_action = None;
         let interaction_guide = self.interactions.active_guide();
         let mut output = egui.run_ui(input, |ui| {

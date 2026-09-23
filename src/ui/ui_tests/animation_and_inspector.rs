@@ -619,6 +619,21 @@
     #[test]
     fn material_library_keeps_the_visual_preset_cards() {
         let ctx = egui::Context::default();
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                crate::renderer::MaterialPreviewIds::egui_id(),
+                crate::renderer::MaterialPreviewIds {
+                    transparent: egui::TextureId::User(1),
+                    metallic: egui::TextureId::User(2),
+                    solid: egui::TextureId::User(3),
+                    oak: egui::TextureId::User(4),
+                    walnut: egui::TextureId::User(5),
+                    pine: egui::TextureId::User(6),
+                    maple: egui::TextureId::User(7),
+                    assets: Vec::new(),
+                },
+            );
+        });
         let mut tree = DataTree::default();
         let mut runtime = AnimationRuntime::default();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -634,9 +649,22 @@
                 _ => None,
             })
             .collect();
-        for kind in MaterialKind::ALL {
+        for kind in [MaterialKind::Transparent, MaterialKind::Metallic, MaterialKind::Solid] {
             assert!(labels.iter().any(|label| label == kind.label()));
         }
+        for species in WoodSpecies::ALL {
+            assert!(labels.iter().any(|label| label == species.label()));
+        }
+        let preview_images = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
+                _ => None,
+            })
+            .filter(|id| matches!(id, egui::TextureId::User(1..=7)))
+            .count();
+        assert_eq!(preview_images, 7);
     }
 
     #[test]

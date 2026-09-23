@@ -8,12 +8,23 @@ impl Renderer {
         selected: &[uuid::Uuid],
         scene_versions: [i32; 2],
     ) {
+        self.upload_scene_with_exposure(camera, objects, selected, scene_versions, 1.0);
+    }
+
+    pub(super) fn upload_scene_with_exposure(
+        &mut self,
+        camera: &Camera,
+        objects: &[SdfObject],
+        selected: &[uuid::Uuid],
+        scene_versions: [i32; 2],
+        exposure: f32,
+    ) {
         let scene_changed = self.uploaded_scene_versions != scene_versions;
         let mut gpu_camera = GpuCamera {
             inverse_view_projection: (camera.projection() * camera.view())
                 .inverse()
                 .to_cols_array_2d(),
-            position: camera.position.extend(0.0).to_array(),
+            position: camera.position.extend(exposure).to_array(),
             count: [
                 objects.len().min(MAX_OBJECTS) as u32,
                 self.node_count,
@@ -156,6 +167,37 @@ impl Renderer {
                         0,
                         object.softness.to_bits(),
                         object.material.kind.gpu_code(),
+                    ],
+                    wood: [
+                        object.material.wood.ring_spacing,
+                        object.material.wood.ring_contrast,
+                        object.material.wood.pores,
+                        object.material.wood.figure,
+                    ],
+                    wood_scale: abs_scale.extend(object.material.wood.coat_amber).to_array(),
+                    wood_growth: [
+                        object.material.wood.cut_angle,
+                        object.material.wood.ring_relief,
+                        object.material.wood.ring_variation,
+                        object.material.wood.bump,
+                    ],
+                    wood_fiber: [
+                        object.material.wood.fiber_relief,
+                        object.material.wood.fiber_pigment,
+                        object.material.wood.fiber_directionality,
+                        object.material.wood.scale_falloff,
+                    ],
+                    wood_damage: [
+                        object.material.wood.sanding_grit,
+                        object.material.wood.sanding_angle,
+                        object.material.wood.knots,
+                        object.material.wood.end_checks,
+                    ],
+                    wood_finish: [
+                        object.material.wood.stain_color.gpu_code(),
+                        object.material.wood.stain_load,
+                        object.material.wood.coat,
+                        object.material.wood.coat_sheen,
                     ],
                     meta: [
                         i32::from(selected_ids.contains(&object.uuid)),

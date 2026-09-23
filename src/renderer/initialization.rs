@@ -174,7 +174,7 @@ impl Renderer {
             egui_wgpu::RendererOptions::default(),
         );
         let viewport = crate::viewport::Viewport::new(&device, render_format, timestamps);
-        Self {
+        let mut renderer = Self {
             viewport,
             initial_pixel_budget: 48 * 1024,
             surface,
@@ -195,7 +195,13 @@ impl Renderer {
             bvh_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
             egui_renderer,
-        }
+            material_preview_ids: None,
+            material_preview_pipeline: None,
+            material_preview_textures: Vec::new(),
+            material_asset_previews: Vec::new(),
+        };
+        renderer.create_material_previews();
+        renderer
     }
 
     pub fn size(&self) -> Vec2 {

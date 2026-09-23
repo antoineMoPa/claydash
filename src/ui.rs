@@ -47,7 +47,7 @@ use crate::{
     model::{
         objects, selected, set_objects, set_selected, AnimatableProperty, AnimationBinding,
         AnimationTrack, BooleanOperation, ColorChannel, DataTree, KeyframeInterpolation, Material,
-        MaterialKind, PrimitiveKind, SdfObject, SdfParams, VectorAxis,
+        MaterialKind, PrimitiveKind, SdfObject, SdfParams, VectorAxis, WoodSpecies, WoodStain,
     },
     undo_redo,
 };
