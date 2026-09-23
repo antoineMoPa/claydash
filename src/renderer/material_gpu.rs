@@ -117,7 +117,7 @@ mod tests {
         assert_eq!(packed.params.len(), 8);
         assert_eq!(packed.insert(Material::preset(MaterialKind::Diagnostic)), 1);
         assert_eq!(packed.params.len(), 11);
-        assert_eq!(std::mem::size_of::<GpuObject>(), 160);
+        assert_eq!(std::mem::size_of::<GpuObject>(), 304);
         assert_eq!(std::mem::size_of::<GpuMaterialHeader>(), 16);
     }
 }

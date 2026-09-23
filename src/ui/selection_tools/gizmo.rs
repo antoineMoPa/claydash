@@ -288,7 +288,15 @@ impl UiState {
         }
         let scene = objects(tree);
         let selection = selected(tree);
-        let transform_targets = commands::transform_targets(tree);
+        let lattice_selected = selection.len() == 1
+            && scene
+                .iter()
+                .any(|object| object.uuid == selection[0] && object.lattice.is_some());
+        let transform_targets = if lattice_selected {
+            Vec::new()
+        } else {
+            commands::transform_targets(tree)
+        };
         if !self.selection_tools.box_mode() && !transform_targets.is_empty() {
             let center = transform_targets
                 .iter()

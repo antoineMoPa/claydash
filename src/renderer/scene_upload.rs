@@ -57,11 +57,85 @@ impl Renderer {
         let mut bounds = Vec::with_capacity(objects.len().min(MAX_OBJECTS));
         let mut materials = material_gpu::PackedMaterials::default();
         let mut polygon_points = Vec::new();
+        let mut lattice_points: Vec<[f32; 4]> = Vec::new();
+        let mut lattice_slots = std::collections::HashMap::new();
         let mut gpu_objects: Vec<GpuObject> = objects
             .iter()
             .take(MAX_OBJECTS)
             .enumerate()
             .map(|(index, object)| {
+                let mut ancestor = Some(object.uuid);
+                let mut cage = None;
+                for _ in 0..scene_objects.len() {
+                    let Some(id) = ancestor else {
+                        break;
+                    };
+                    let Some(candidate) =
+                        scene_objects.iter().find(|candidate| candidate.uuid == id)
+                    else {
+                        break;
+                    };
+                    if let Some(lattice) = &candidate.lattice {
+                        let n = lattice.resolution as usize;
+                        if (2..=9).contains(&n) && lattice.offsets.len() == n * n * n {
+                            cage = Some((id, lattice));
+                            break;
+                        }
+                    }
+                    ancestor = candidate.boolean_parent;
+                }
+                let (cage_inverse, cage_forward, cage_min, cage_max, cage_info, cage_extent) =
+                    if let Some((root, lattice)) = cage {
+                        let displaced = lattice.offsets.iter().any(|offset| *offset != Vec3::ZERO);
+                        let slot = if displaced {
+                            *lattice_slots.entry(root).or_insert_with(|| {
+                                let slot = lattice_points.len() as u32;
+                                lattice_points.extend(
+                                    lattice
+                                        .effective_offsets()
+                                        .iter()
+                                        .map(|point| point.extend(0.0).to_array()),
+                                );
+                                slot
+                            })
+                        } else {
+                            0
+                        };
+                        let forward = crate::model::lattice_world_matrix(scene_objects, root);
+                        let maximum = lattice
+                            .offsets
+                            .iter()
+                            .fold(Vec3::ZERO, |maximum, offset| maximum.max(offset.abs()));
+                        let world_extent = forward.x_axis.truncate().abs() * maximum.x
+                            + forward.y_axis.truncate().abs() * maximum.y
+                            + forward.z_axis.truncate().abs() * maximum.z;
+                        (
+                            inverse_affine_rows(forward.inverse()),
+                            inverse_affine_rows(forward),
+                            lattice.min.extend(0.0).to_array(),
+                            lattice.max.extend(0.0).to_array(),
+                            [
+                                slot,
+                                if displaced {
+                                    lattice.resolution as u32
+                                } else {
+                                    0
+                                },
+                                0,
+                                0,
+                            ],
+                            world_extent,
+                        )
+                    } else {
+                        (
+                            [[0.0; 4]; 3],
+                            [[0.0; 4]; 3],
+                            [0.0; 4],
+                            [0.0; 4],
+                            [0; 4],
+                            Vec3::ZERO,
+                        )
+                    };
                 let matrix = crate::model::object_world_matrix(scene_objects, object.uuid);
                 let abs_scale = Vec3::new(
                     matrix.x_axis.truncate().length(),
@@ -190,11 +264,12 @@ impl Renderer {
                 }
                 let half_extent = matrix.x_axis.truncate().abs() * repeated_extent.x
                     + matrix.y_axis.truncate().abs() * repeated_extent.y
-                    + matrix.z_axis.truncate().abs() * repeated_extent.z;
+                    + matrix.z_axis.truncate().abs() * repeated_extent.z
+                    + cage_extent;
                 bounds.push(ObjectBound {
                     half_extent,
                     center: matrix.transform_point3(Vec3::ZERO),
-                    radius: repeated_radius,
+                    radius: repeated_radius + cage_extent.length(),
                     object_index: index as u32,
                 });
                 let material_index = materials.insert(object.material);
@@ -237,6 +312,11 @@ impl Renderer {
                     } else {
                         [1, 1, 1, 0]
                     },
+                    lattice_inverse_rows: cage_inverse,
+                    lattice_forward_rows: cage_forward,
+                    lattice_min: cage_min,
+                    lattice_max: cage_max,
+                    lattice_info: cage_info,
                 }
             })
             .collect();
@@ -335,6 +415,13 @@ impl Renderer {
                     &self.polygon_points_buffer,
                     0,
                     bytemuck::cast_slice(&polygon_points),
+                );
+            }
+            if !lattice_points.is_empty() {
+                self.queue.write_buffer(
+                    &self.lattice_points_buffer,
+                    0,
+                    bytemuck::cast_slice(&lattice_points),
                 );
             }
             self.queue

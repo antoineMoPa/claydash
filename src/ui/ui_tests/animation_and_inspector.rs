@@ -812,12 +812,14 @@
         };
         let group_labels = labels(&mut tree, &mut runtime);
         assert!(group_labels.iter().any(|label| label == "Group transform"));
+        assert!(group_labels.iter().any(|label| label == "Modifiers"));
         assert!(!group_labels.iter().any(|label| label == "Object settings"));
         assert!(!group_labels.iter().any(|label| label.contains("Radius")));
 
         crate::model::set_selected_exact(&mut tree, vec![root.uuid]);
         let object_labels = labels(&mut tree, &mut runtime);
         assert!(object_labels.iter().any(|label| label == "Object settings"));
+        assert!(object_labels.iter().any(|label| label == "Modifiers"));
         assert!(object_labels.iter().any(|label| label.contains("Radius")));
     }
 

@@ -615,6 +615,97 @@
     }
 
     #[test]
+    fn selected_boolean_group_shows_its_lattice_handles() {
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let mut state = UiState::default();
+        let mut tree = DataTree::default();
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+        child.boolean_parent = Some(root.uuid);
+        let scene = vec![root.clone(), child];
+        let (min, max) = crate::model::lattice_bounds(&scene, root.uuid).unwrap();
+        root.lattice = Some(crate::model::Lattice::new(min, max, 2));
+        set_objects(&mut tree, vec![root.clone(), scene[1].clone()]);
+        set_selected(&mut tree, vec![root.uuid]);
+        assert_eq!(commands::effective_selected_ids(&tree).len(), 2);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(viewport);
+            state.draw_object_gizmos(ui, &mut tree, &camera);
+        });
+        output.textures_delta.clear();
+        assert!(
+            state.regions.len() >= 8,
+            "the selected group must expose its cage handles"
+        );
+    }
+
+    #[test]
+    fn dragging_a_group_lattice_handle_moves_a_control_point() {
+        let ctx = egui::Context::default();
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0));
+        let mut camera = Camera::new();
+        camera.viewport_origin = Vec2::new(viewport.left(), viewport.top());
+        camera.viewport = Vec2::new(viewport.width(), viewport.height());
+        let mut state = UiState::default();
+        let mut tree = DataTree::default();
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+        child.boolean_parent = Some(root.uuid);
+        child.transform.translation.x = 0.7;
+        let scene = vec![root.clone(), child.clone()];
+        let (min, max) = crate::model::lattice_bounds(&scene, root.uuid).unwrap();
+        let lattice = crate::model::Lattice::new(min, max, 2);
+        let nearest = (0..2)
+            .flat_map(|z| (0..2).flat_map(move |y| (0..2).map(move |x| (x, y, z))))
+            .min_by(|a, b| {
+                lattice.position(a.0, a.1, a.2).distance_squared(camera.position)
+                    .total_cmp(&lattice.position(b.0, b.1, b.2).distance_squared(camera.position))
+            })
+            .unwrap();
+        let start = camera
+            .project(lattice.position(nearest.0, nearest.1, nearest.2), 1.0)
+            .unwrap();
+        let end = start + egui::vec2(36.0, 0.0);
+        root.lattice = Some(lattice);
+        set_objects(&mut tree, vec![root.clone(), child]);
+        set_selected(&mut tree, vec![root.uuid]);
+        let mut frame = |events| {
+            primitive_gizmo_frame(
+                &ctx,
+                &mut state,
+                &mut tree,
+                &camera,
+                viewport,
+                events,
+                egui::Modifiers::NONE,
+            );
+        };
+        frame(vec![]);
+        frame(vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let lattice = objects(&tree)[0].lattice.clone().unwrap();
+        assert!(lattice.offsets.iter().any(|offset| offset.length() > 0.01));
+    }
+
+    #[test]
     fn resize_gizmo_shapes_are_clipped_to_the_viewport() {
         let ctx = egui::Context::default();
         let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(300.0, 250.0));

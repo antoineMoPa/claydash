@@ -12,6 +12,8 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
     }
     if let Some(group) = commands::selected_group_id(tree) {
         group_transform_panel(ui, tree, runtime, group);
+        ui.separator();
+        modifiers_panel(ui, tree);
         return;
     }
     if selection.len() != 1 {
@@ -129,6 +131,8 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
         }
     }
     apply_keyframe_requests(tree, runtime, keyframes);
+    ui.separator();
+    modifiers_panel(ui, tree);
 }
 
 fn camera_object_panel(

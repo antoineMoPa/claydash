@@ -3,6 +3,51 @@ use glam::{Quat, Vec2, Vec3};
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 #[test]
+fn lattice_interpolates_hidden_points_and_preserves_shape_when_resized() {
+    let mut lattice = Lattice::new(Vec3::splat(-1.0), Vec3::ONE, 2);
+    let corner = lattice.index(1, 1, 1);
+    lattice.offsets[corner] = Vec3::new(0.8, 0.0, 0.0);
+    assert!((lattice.displacement(Vec3::ZERO).x - 0.1).abs() < 0.0001);
+    lattice.resize(5);
+    assert_eq!(lattice.offsets.len(), 125);
+    assert!((lattice.displacement(Vec3::ZERO).x - 0.1).abs() < 0.0001);
+    assert!((lattice.offsets[lattice.index(4, 4, 4)].x - 0.8).abs() < 0.0001);
+    let mut cage = Lattice::new(Vec3::ZERO, Vec3::ONE, 3);
+    let face = cage.index(0, 1, 1);
+    cage.offsets[face] = Vec3::new(0.6, 0.0, 0.0);
+    assert!((cage.effective_offsets()[cage.index(1, 1, 1)].x - 0.1).abs() < 0.0001);
+}
+
+#[test]
+fn lattice_bounds_cover_complete_boolean_group_and_save_with_scene() {
+    let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+    child.boolean_parent = Some(root.uuid);
+    child.transform.translation = Vec3::new(2.0, 0.0, 0.0);
+    let (min, max) = lattice_bounds(&[root.clone(), child], root.uuid).unwrap();
+    assert!(min.x < -0.25 && max.x > 2.3);
+    root.lattice = Some(Lattice::new(min, max, 3));
+    let encoded = serde_json::to_string(&root).unwrap();
+    let restored: SdfObject = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.lattice, root.lattice);
+}
+
+#[test]
+fn single_object_lattice_moves_with_its_object_transform() {
+    let mut sphere = SdfObject::create_kind(PrimitiveKind::Sphere);
+    sphere.transform.translation = Vec3::new(4.0, 2.0, -1.0);
+    let scene = [sphere.clone()];
+    let (min, max) = lattice_bounds(&scene, sphere.uuid).unwrap();
+    assert!(min.x < 0.0 && max.x > 0.0);
+    assert!(
+        (lattice_world_matrix(&scene, sphere.uuid).transform_point3(Vec3::ZERO)
+            - sphere.transform.translation)
+            .length()
+            < 0.0001
+    );
+}
+
+#[test]
 fn primitive_kind_maps_every_gpu_type_explicitly() {
     for kind in PrimitiveKind::ALL {
         assert_eq!(PrimitiveKind::from_object_type(kind.object_type()), kind);

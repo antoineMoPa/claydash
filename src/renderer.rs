@@ -15,6 +15,7 @@ mod benchmark;
 const MAX_OBJECTS: usize = 1024;
 const MAX_BVH_NODES: usize = MAX_OBJECTS * 2 - 1;
 const MAX_POLYGON_POINTS: usize = MAX_OBJECTS * crate::model::MAX_POLYGON_PRISM_VERTICES;
+const MAX_LATTICE_POINTS: usize = MAX_OBJECTS * 9 * 9 * 9;
 const BVH_LEAF: u32 = u32::MAX;
 
 fn render_format_for_surface(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
@@ -45,6 +46,11 @@ struct GpuObject {
     repeat_count: [i32; 4],
     component: [u32; 4],
     scale: [f32; 4],
+    lattice_inverse_rows: [[f32; 4]; 3],
+    lattice_forward_rows: [[f32; 4]; 3],
+    lattice_min: [f32; 4],
+    lattice_max: [f32; 4],
+    lattice_info: [u32; 4],
 }
 
 #[repr(C)]
@@ -92,6 +98,7 @@ pub struct Renderer {
     material_headers_buffer: wgpu::Buffer,
     material_params_buffer: wgpu::Buffer,
     polygon_points_buffer: wgpu::Buffer,
+    lattice_points_buffer: wgpu::Buffer,
     uploaded_scene_versions: [i32; 2],
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,

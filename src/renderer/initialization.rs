@@ -110,9 +110,15 @@ impl Renderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let lattice_points_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lattice control offsets"),
+            size: (MAX_LATTICE_POINTS * 16) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene layout"),
-            entries: &(0..6)
+            entries: &(0..7)
                 .map(|binding| wgpu::BindGroupLayoutEntry {
                     binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -156,6 +162,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: polygon_points_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: lattice_points_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -211,6 +221,7 @@ impl Renderer {
             material_headers_buffer,
             material_params_buffer,
             polygon_points_buffer,
+            lattice_points_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
             egui_renderer,
             material_preview_ids: None,

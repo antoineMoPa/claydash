@@ -9,12 +9,18 @@ struct Object {
     repeat_count: vec4<i32>,
     component: vec4<u32>,
     scale: vec4<f32>,
+    lattice_inverse_rows: array<vec4<f32>, 3>,
+    lattice_forward_rows: array<vec4<f32>, 3>,
+    lattice_min: vec4<f32>,
+    lattice_max: vec4<f32>,
+    lattice_info: vec4<u32>,
 }
 struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> objects: array<Object>;
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
 @group(0) @binding(5) var<storage, read> polygon_points: array<vec2<f32>>;
+@group(0) @binding(6) var<storage, read> lattice_points: array<vec4<f32>>;
 override USE_BVH: bool = true;
 override HAS_BOOLEANS: bool = false;
 override TRANSPARENT_BACKGROUND: bool = false;
@@ -62,8 +68,45 @@ fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
     return sqrt(distance_squared) * select(1.0, -1.0, inside);
 }
 
+fn lattice_displacement(point: vec3<f32>, object: Object) -> vec3<f32> {
+    let n = object.lattice_info.y;
+    let coord = clamp((point - object.lattice_min.xyz) /
+        max(object.lattice_max.xyz - object.lattice_min.xyz, vec3(0.0001)), vec3(0.0), vec3(1.0)) * f32(n - 1u);
+    let low = vec3<u32>(floor(coord));
+    let high = min(low + vec3<u32>(1u), vec3<u32>(n - 1u));
+    let t = coord - vec3<f32>(low);
+    let base = object.lattice_info.x;
+    let a = lattice_points[base + low.x + n * (low.y + n * low.z)].xyz;
+    let b = lattice_points[base + high.x + n * (low.y + n * low.z)].xyz;
+    let c = lattice_points[base + low.x + n * (high.y + n * low.z)].xyz;
+    let d = lattice_points[base + high.x + n * (high.y + n * low.z)].xyz;
+    let e = lattice_points[base + low.x + n * (low.y + n * high.z)].xyz;
+    let f = lattice_points[base + high.x + n * (low.y + n * high.z)].xyz;
+    let g = lattice_points[base + low.x + n * (high.y + n * high.z)].xyz;
+    let h = lattice_points[base + high.x + n * (high.y + n * high.z)].xyz;
+    return mix(mix(mix(a, b, t.x), mix(c, d, t.x), t.y),
+        mix(mix(e, f, t.x), mix(g, h, t.x), t.y), t.z);
+}
+
 fn object_distance(point: vec3<f32>, object: Object) -> f32 {
-    let homogeneous = vec4(point, 1.0);
+    var sample_point = point;
+    if object.lattice_info.y >= 2u {
+        let homogeneous = vec4(point, 1.0);
+        let cage_point = vec3(
+            dot(object.lattice_inverse_rows[0], homogeneous),
+            dot(object.lattice_inverse_rows[1], homogeneous),
+            dot(object.lattice_inverse_rows[2], homogeneous));
+        var rest = cage_point;
+        for (var iteration = 0; iteration < 4; iteration++) {
+            rest = cage_point - lattice_displacement(rest, object);
+        }
+        let offset = cage_point - rest;
+        sample_point -= vec3(
+            dot(object.lattice_forward_rows[0].xyz, offset),
+            dot(object.lattice_forward_rows[1].xyz, offset),
+            dot(object.lattice_forward_rows[2].xyz, offset));
+    }
+    let homogeneous = vec4(sample_point, 1.0);
     var local = vec3(
         dot(object.inverse_rows[0], homogeneous),
         dot(object.inverse_rows[1], homogeneous),
@@ -233,7 +276,7 @@ fn primitive_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -
 }
 
 fn has_analytic_interval(object: Object) -> bool {
-    return object.repeat_count.w == 0 && object.state.y <= 3;
+    return object.repeat_count.w == 0 && object.state.y <= 3 && object.lattice_info.y == 0u;
 }
 
 // Traverse bounds once per ray, then march only the intersected primitives.
@@ -277,7 +320,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
                     owner = sample.y;
                     break;
                 }
-                travel += value * 0.8;
+                travel += value * select(0.8, 0.35, object.lattice_info.y >= 2u);
                 if travel > end { break; }
             }
         }

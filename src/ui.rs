@@ -5,6 +5,7 @@ mod camera_overlay;
 mod camera_panel;
 mod file_menu;
 mod materials_panel;
+mod modifiers_panel;
 mod object_gizmos;
 mod object_panel;
 pub(crate) mod scene_actions;
@@ -22,6 +23,7 @@ pub(crate) use camera_panel::exit_camera_view;
 use camera_panel::{sync_camera_view, toggle_camera_view};
 use file_menu::*;
 use materials_panel::*;
+use modifiers_panel::*;
 #[cfg(test)]
 use object_gizmos::*;
 use object_panel::*;
@@ -89,6 +91,7 @@ pub struct UiState {
     selection_tools: selection_tools::SelectionTools,
     active_guide: Option<crate::guides::ActiveGuideSet>,
     resize_guide_drag: Option<ResizeGuideDrag>,
+    lattice_drag: Option<object_gizmos::LatticeDrag>,
     polygon_cap_drag: Option<PolygonCapDrag>,
     insert_keyframe_menu_position: Option<egui::Pos2>,
     #[cfg(target_arch = "wasm32")]
@@ -99,7 +102,7 @@ impl Default for UiState {
     fn default() -> Self {
         let mut layout = Layout::with_pane(EditorPane::Viewport);
         layout.add_pane_against_edge(DropSide::Left, 0.30, EditorPane::Scene);
-        let inspector = layout.add_pane_against_edge(DropSide::Right, 0.28, EditorPane::Object);
+        let inspector = layout.add_pane_against_edge(DropSide::Right, 0.34, EditorPane::Object);
         let right = layout.frame_of(inspector).expect("inspector frame");
         layout.add_pane(right, EditorPane::Materials, None);
         layout.add_pane(right, EditorPane::Repetition, None);
@@ -122,6 +125,7 @@ impl Default for UiState {
             selection_tools: selection_tools::SelectionTools::default(),
             active_guide: None,
             resize_guide_drag: None,
+            lattice_drag: None,
             polygon_cap_drag: None,
             insert_keyframe_menu_position: None,
             #[cfg(target_arch = "wasm32")]
@@ -265,13 +269,18 @@ impl UiState {
                 {
                     let object_gizmo_blocker_count = self.regions.len();
                     self.draw_selection_tools(ui, tree, camera);
-                    if !self.selection_tools.box_mode() && !self.selection_tools.active() {
+                    if !self.selection_tools.box_mode()
+                        && !self.selection_tools.face_cut_mode()
+                        && !self.selection_tools.active()
+                    {
                         self.draw_object_gizmos_avoiding(
                             ui,
                             tree,
                             camera,
                             object_gizmo_blocker_count,
                         );
+                    } else {
+                        self.draw_selected_lattice_overlay(ui, tree, camera);
                     }
                 }
                 if let Some(active) = self.active_guide.or(interaction_guide) {

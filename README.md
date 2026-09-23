@@ -137,6 +137,12 @@ viewport shows move, rotate, and scale gizmos for the group. Repeated viewport c
 the hierarchy, where the exact primitive's shape, material, repetition, and operand properties
 become available again.
 
+The **Modifiers** section of the Object inspector contains Lattice, which deforms a complete object or Boolean
+group. Add a lattice, choose 2–9 points per axis, then drag its visible cage points in the viewport.
+The selected point is highlighted; drag cage points directly to shape the object.
+Points inside the cage follow the surface controls by linear interpolation. Lattices are saved
+with the project; lattice keyframing is not available yet.
+
 Selected boolean operands show translucent wire guides through solid surfaces: amber for
 subtraction and blue for other operations. Selecting a target shows its nested cutters and
 intersection operands more faintly. Guides follow transforms and repetition; dense scenes
