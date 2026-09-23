@@ -2,11 +2,15 @@ use super::*;
 
 mod frame;
 mod guides;
+mod paint;
 mod shape;
+mod split;
 
-use frame::{point_on_face, point_world, source_and_frame};
+use frame::{point_on_face, point_world, projected_depth_axis, source_and_frame};
 use guides::guided_outline_point;
+use paint::paint_split_region;
 use shape::{create_face_shape, polygon_is_valid};
+use split::{region_shapes, split_regions};
 
 const FACE_CUT_OVERLAP: f32 = 0.003;
 const FACE_CUT_INITIAL_DEPTH: f32 = 0.04;
@@ -18,12 +22,12 @@ const FRACTION_MIN_SPACING: f32 = 24.0;
 impl UiState {
     pub(super) fn cancel_face_cut(&mut self, tree: &mut DataTree) {
         if let Some(FaceCutDraft {
-            phase: FaceCutPhase::Depth { object, .. },
+            phase: FaceCutPhase::Depth { object, hole, .. },
             ..
         }) = self.selection_tools.face_cut.take()
         {
             let mut scene = objects(tree);
-            scene.retain(|candidate| candidate.uuid != object);
+            scene.retain(|candidate| candidate.uuid != object && Some(candidate.uuid) != hole);
             crate::model::set_objects_transient(tree, scene);
         }
         self.selection_tools.face_cut = None;
@@ -31,14 +35,18 @@ impl UiState {
 
     fn finish_face_cut(&mut self, tree: &mut DataTree) {
         let Some(FaceCutDraft {
-            phase: FaceCutPhase::Depth { object, .. },
+            phase: FaceCutPhase::Depth { object, hole, .. },
             ..
         }) = self.selection_tools.face_cut.take()
         else {
             return;
         };
         set_objects(tree, objects(tree));
-        crate::model::set_selected_exact(tree, vec![object]);
+        if hole.is_some() {
+            crate::model::set_selected(tree, vec![object]);
+        } else {
+            crate::model::set_selected_exact(tree, vec![object]);
+        }
         tree.make_undo_redo_snapshot();
         self.selection_tools.tool = SelectionTool::Select;
     }
@@ -69,10 +77,14 @@ impl UiState {
                     depth
                 ))
             }
-            Some(FaceCutDraft { vertices, .. }) if vertices.len() >= 3 && !polygon_is_valid(vertices) => {
+            Some(FaceCutDraft {
+                phase: FaceCutPhase::ChooseRegion { .. },
+                ..
+            }) => Some("Choose a face to extrude · Backspace edits the path · Esc cancels".into()),
+            Some(FaceCutDraft { vertices, phase: FaceCutPhase::Outline, .. }) if vertices.len() >= 3 && !polygon_is_valid(vertices) && split_regions(&objects(tree), self.selection_tools.face_cut.as_ref()?.face, vertices, false).is_none() => {
                 Some("Outline cannot cross itself · Backspace removes a point · Esc cancels".into())
             }
-            _ => Some("Points snap to edges, corners, fractions, and earlier points · Alt bypasses guides · Enter closes · Esc cancels".into()),
+            _ => Some("Points snap to edges, corners, fractions, and earlier points · Alt bypasses guides · Enter shows faces · Esc cancels".into()),
         }
     }
 
@@ -123,9 +135,12 @@ impl UiState {
             return;
         }
 
-        let mut close_outline = enter && draft.vertices.len() >= 3;
+        let mut request_regions = enter && draft.vertices.len() >= 2;
+        let mut closed_by_click = false;
         if backspace && matches!(draft.phase, FaceCutPhase::Outline) {
             draft.vertices.pop();
+        } else if backspace && matches!(draft.phase, FaceCutPhase::ChooseRegion { .. }) {
+            draft.phase = FaceCutPhase::Outline;
         }
         let pointer_in_view = pointer.filter(|point| {
             ui.clip_rect().contains(*point)
@@ -172,7 +187,8 @@ impl UiState {
                 if draft.vertices.len() >= 3
                     && first_screen.is_some_and(|first| first.distance(point) <= CLOSE_DISTANCE)
                 {
-                    close_outline = true;
+                    request_regions = true;
+                    closed_by_click = true;
                 } else if draft.vertices.len() < crate::model::MAX_POLYGON_PRISM_VERTICES {
                     if let Some(local) = hovered_local {
                         draft.vertices.push(local);
@@ -181,42 +197,60 @@ impl UiState {
             }
         }
 
-        let mut just_closed = false;
-        if close_outline && matches!(draft.phase, FaceCutPhase::Outline) {
-            let start_pointer = pointer.unwrap_or(ui.clip_rect().center());
-            if let Some((_, frame)) = source_and_frame(&scene, draft.face) {
-                let matrix = crate::model::object_world_matrix(&scene, draft.face.object());
-                let center = matrix.transform_point3(frame.origin);
-                let direction = matrix.transform_vector3(frame.normal);
-                if let (Some(at), Some(ahead)) = (
-                    camera.project(center, scale),
-                    camera.project(center + direction * 0.1, scale),
-                ) {
-                    let mut projected_axis = (ahead - at) * 10.0;
-                    if projected_axis.length_sq() < 4.0 {
-                        let screen_up = camera.view().inverse().y_axis.truncate();
-                        if let Some(fallback) = camera.project(center + screen_up * 0.1, scale) {
-                            projected_axis = (fallback - at) * 10.0;
-                        }
-                    }
-                    if projected_axis.length_sq() > 0.0001 {
-                        let id = uuid::Uuid::new_v4();
-                        if let Some(shape) = create_face_shape(
+        let mut just_entered_phase = false;
+        if request_regions && matches!(draft.phase, FaceCutPhase::Outline) {
+            let open = split_regions(&scene, draft.face, &draft.vertices, false);
+            let closed = closed_by_click || open.is_none();
+            if (if closed {
+                split_regions(&scene, draft.face, &draft.vertices, true)
+            } else {
+                open
+            })
+            .is_some()
+            {
+                draft.phase = FaceCutPhase::ChooseRegion { closed };
+                just_entered_phase = true;
+            }
+        }
+
+        if let FaceCutPhase::ChooseRegion { closed } = draft.phase {
+            if pressed && !just_entered_phase {
+                if let Some(local) = pointer_in_view.and_then(|point| {
+                    point_on_face(
+                        camera,
+                        Vec2::new(point.x, point.y) * scale,
+                        &scene,
+                        draft.face,
+                    )
+                }) {
+                    if let (Some(regions), Some(projected_axis)) = (
+                        split_regions(&scene, draft.face, &draft.vertices, closed),
+                        projected_depth_axis(camera, &scene, draft.face, scale),
+                    ) {
+                        let selected = regions.region_at(local);
+                        let object = uuid::Uuid::new_v4();
+                        let hole = regions.hole(selected).map(|_| uuid::Uuid::new_v4());
+                        if let Some(shapes) = region_shapes(
                             &scene,
                             draft.face,
-                            &draft.vertices,
+                            &regions,
+                            selected,
                             FACE_CUT_INITIAL_DEPTH,
-                            id,
+                            object,
+                            hole,
                         ) {
                             let mut preview = scene.clone();
-                            preview.push(shape);
+                            preview.extend(shapes);
                             crate::model::set_objects_transient(tree, preview);
                             draft.phase = FaceCutPhase::Depth {
-                                object: id,
-                                start_pointer,
+                                object,
+                                hole,
+                                region: selected,
+                                closed,
+                                start_pointer: pointer.unwrap(),
                                 projected_axis,
                             };
-                            just_closed = true;
+                            just_entered_phase = true;
                         }
                     }
                 }
@@ -225,6 +259,9 @@ impl UiState {
 
         if let FaceCutPhase::Depth {
             object,
+            hole,
+            region,
+            closed,
             start_pointer,
             projected_axis,
         } = draft.phase
@@ -233,15 +270,19 @@ impl UiState {
                 let depth = FACE_CUT_INITIAL_DEPTH
                     + (point - start_pointer).dot(projected_axis) / projected_axis.length_sq();
                 let mut preview = objects(tree);
-                preview.retain(|candidate| candidate.uuid != object);
-                if let Some(shape) =
-                    create_face_shape(&preview, draft.face, &draft.vertices, depth, object)
+                preview
+                    .retain(|candidate| candidate.uuid != object && Some(candidate.uuid) != hole);
+                if let Some(regions) = split_regions(&preview, draft.face, &draft.vertices, closed)
                 {
-                    preview.push(shape);
-                    crate::model::set_objects_transient(tree, preview);
+                    if let Some(shapes) =
+                        region_shapes(&preview, draft.face, &regions, region, depth, object, hole)
+                    {
+                        preview.extend(shapes);
+                        crate::model::set_objects_transient(tree, preview);
+                    }
                 }
             }
-            if !just_closed && (enter || (pressed && pointer_in_view.is_some())) {
+            if !just_entered_phase && (enter || (pressed && pointer_in_view.is_some())) {
                 self.finish_face_cut(tree);
                 return;
             }
@@ -257,6 +298,34 @@ impl UiState {
         let stroke = Stroke::new(2.0, Color32::from_rgb(255, 190, 72));
         for segment in points.windows(2) {
             ui.painter().line_segment([segment[0], segment[1]], stroke);
+        }
+        if let FaceCutPhase::ChooseRegion { closed } = draft.phase {
+            if closed {
+                if let (Some(first), Some(last)) = (points.first(), points.last()) {
+                    ui.painter().line_segment([*last, *first], stroke);
+                }
+            }
+            if let (Some(pointer), Some(regions)) = (
+                pointer_in_view,
+                split_regions(&scene, draft.face, &draft.vertices, closed),
+            ) {
+                if let Some(local) = point_on_face(
+                    camera,
+                    Vec2::new(pointer.x, pointer.y) * scale,
+                    &scene,
+                    draft.face,
+                ) {
+                    paint_split_region(
+                        ui,
+                        camera,
+                        &scene,
+                        draft.face,
+                        &regions,
+                        regions.region_at(local),
+                        scale,
+                    );
+                }
+            }
         }
         if matches!(draft.phase, FaceCutPhase::Outline) {
             if let (Some(last), Some(local)) = (points.last(), hovered_local) {

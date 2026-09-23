@@ -201,3 +201,25 @@ pub(super) fn point_world(
             .transform_point3(frame.origin + frame.u * point.x + frame.v * point.y),
     )
 }
+
+pub(super) fn projected_depth_axis(
+    camera: &Camera,
+    scene: &[SdfObject],
+    face: crate::model::ModelingFaceSelection,
+    scale: f32,
+) -> Option<egui::Vec2> {
+    let (_, frame) = source_and_frame(scene, face)?;
+    let matrix = crate::model::object_world_matrix(scene, face.object());
+    let center = matrix.transform_point3(frame.origin);
+    let direction = matrix.transform_vector3(frame.normal);
+    let at = camera.project(center, scale)?;
+    let ahead = camera.project(center + direction * 0.1, scale)?;
+    let mut projected = (ahead - at) * 10.0;
+    if projected.length_sq() < 4.0 {
+        let screen_up = camera.view().inverse().y_axis.truncate();
+        if let Some(fallback) = camera.project(center + screen_up * 0.1, scale) {
+            projected = (fallback - at) * 10.0;
+        }
+    }
+    (projected.length_sq() > 0.0001).then_some(projected)
+}

@@ -26,6 +26,15 @@ pub(super) struct FaceCutGuide {
 pub(super) struct FaceAnchorGuide {
     pub(super) screen: egui::Pos2,
     pub(super) label: String,
+    pub(super) kind: FaceAnchorKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FaceAnchorKind {
+    Corner,
+    Edge,
+    Rim,
+    Fraction,
 }
 
 pub(super) fn fraction_divisions(projected_span: f32) -> u32 {
@@ -63,7 +72,7 @@ pub(super) fn guided_face_anchor_point(
         return (raw, None);
     };
     let mut best: Option<(u8, f32, Vec2, FaceAnchorGuide)> = None;
-    let mut offer = |candidate: Vec2, tier: u8, label: String| {
+    let mut offer = |candidate: Vec2, tier: u8, kind: FaceAnchorKind, label: String| {
         if !face_point_inside(&frame.domain, candidate) {
             return;
         }
@@ -85,6 +94,7 @@ pub(super) fn guided_face_anchor_point(
             FaceAnchorGuide {
                 screen: projected,
                 label,
+                kind,
             },
         ));
     };
@@ -128,17 +138,23 @@ pub(super) fn guided_face_anchor_point(
             offer(
                 Vec2::new(angle.cos(), angle.sin()) * *radius,
                 1,
+                FaceAnchorKind::Rim,
                 format!("Rim {}", fraction_label(index, steps)),
             );
         }
         if raw.length_squared() > 0.000_001 {
-            offer(raw * (*radius / raw.length()), 2, "Rim".into());
+            offer(
+                raw * (*radius / raw.length()),
+                2,
+                FaceAnchorKind::Rim,
+                "Rim".into(),
+            );
         }
     } else {
         for index in 0..boundary.len() {
             let a = boundary[index];
             let b = boundary[(index + 1) % boundary.len()];
-            offer(a, 0, "Corner".into());
+            offer(a, 0, FaceAnchorKind::Corner, "Corner".into());
             let edge = b - a;
             let length_squared = edge.length_squared();
             if length_squared < 0.000_001 {
@@ -151,9 +167,10 @@ pub(super) fn guided_face_anchor_point(
             offer(
                 a + edge * (step as f32 / divisions as f32),
                 1,
+                FaceAnchorKind::Edge,
                 format!("Edge {}", fraction_label(step, divisions)),
             );
-            offer(a + edge * fraction, 2, "Edge".into());
+            offer(a + edge * fraction, 2, FaceAnchorKind::Edge, "Edge".into());
         }
     }
     let center = (minimum + maximum) * 0.5;
@@ -179,6 +196,7 @@ pub(super) fn guided_face_anchor_point(
                 minimum.y + extent.y * v as f32 / divisions_v as f32,
             ),
             3,
+            FaceAnchorKind::Fraction,
             format!(
                 "{} · {}",
                 fraction_label(u, divisions_u),
@@ -232,23 +250,34 @@ pub(super) fn guided_outline_point(
     let Some(pointer) = screen(raw) else {
         return (angle_point, angle_guides, None);
     };
+    let matching_guides: Vec<_> = angle_guides
+        .iter()
+        .filter_map(|guide| {
+            let direction = guide.end - guide.start;
+            let length_squared = direction.length_sq();
+            if length_squared < 0.0001 {
+                return None;
+            }
+            let toward_anchor = anchor.screen - guide.start;
+            let along = toward_anchor.dot(direction) / length_squared;
+            let closest = guide.start + direction * along;
+            (along >= 0.0 && closest.distance(anchor.screen) <= 3.0).then_some(FaceCutGuide {
+                start: guide.start,
+                end: anchor.screen,
+                label: guide.label,
+            })
+        })
+        .collect();
+    if anchor.kind == FaceAnchorKind::Corner && !matching_guides.is_empty() {
+        return (anchor_point, matching_guides, Some(anchor));
+    }
     let angle_error = if angle_guides.is_empty() {
         f32::INFINITY
     } else {
         screen(angle_point).map_or(f32::INFINITY, |point| pointer.distance(point))
     };
     if pointer.distance(anchor.screen) <= angle_error {
-        let matching_angle =
-            screen(angle_point).is_some_and(|point| point.distance(anchor.screen) <= 3.0);
-        return (
-            anchor_point,
-            if matching_angle {
-                angle_guides
-            } else {
-                Vec::new()
-            },
-            Some(anchor),
-        );
+        return (anchor_point, Vec::new(), Some(anchor));
     }
     (angle_point, angle_guides, None)
 }

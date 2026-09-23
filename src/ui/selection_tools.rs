@@ -17,8 +17,14 @@ struct FaceCutDraft {
 
 enum FaceCutPhase {
     Outline,
+    ChooseRegion {
+        closed: bool,
+    },
     Depth {
         object: uuid::Uuid,
+        hole: Option<uuid::Uuid>,
+        region: usize,
+        closed: bool,
         start_pointer: egui::Pos2,
         projected_axis: egui::Vec2,
     },

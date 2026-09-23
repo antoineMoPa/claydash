@@ -383,6 +383,7 @@ struct PolygonCapDrag {
     positive: bool,
     initial_transform: crate::model::Transform,
     initial_half_depth: f32,
+    split_void: Option<(uuid::Uuid, crate::model::Transform, f32)>,
     projected_axis: egui::Vec2,
     raw_amount: f32,
 }

@@ -730,6 +730,49 @@
     }
 
     #[test]
+    fn split_void_tracks_the_selected_cap_depth() {
+        let prism = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+        let mut split_void = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+        split_void.boolean_parent = Some(prism.uuid);
+        split_void.name = "Face split void".into();
+        let SdfParams::PolygonPrismParams(root_params) = &prism.params else {
+            unreachable!();
+        };
+        let initial_half_depth = root_params.half_depth;
+        let SdfParams::PolygonPrismParams(void_params) = &mut split_void.params else {
+            unreachable!();
+        };
+        void_params.half_depth = initial_half_depth + 0.006;
+        let void_half_depth = void_params.half_depth;
+        let session = PolygonCapDrag {
+            object: prism.uuid,
+            positive: true,
+            initial_transform: prism.transform,
+            initial_half_depth,
+            split_void: Some((split_void.uuid, split_void.transform, void_half_depth)),
+            projected_axis: egui::Vec2::Y,
+            raw_amount: 0.2,
+        };
+        let mut scene = vec![prism, split_void];
+
+        apply_polygon_cap_drag(&mut scene, &session, 1.0);
+
+        let SdfParams::PolygonPrismParams(root_params) = &scene[0].params else {
+            unreachable!();
+        };
+        let SdfParams::PolygonPrismParams(void_params) = &scene[1].params else {
+            unreachable!();
+        };
+        assert!((root_params.half_depth - initial_half_depth - 0.1).abs() < 0.0001);
+        assert!((void_params.half_depth - root_params.half_depth - 0.006).abs() < 0.0001);
+        assert!(scene[0]
+            .transform
+            .translation
+            .distance(scene[1].transform.translation)
+            < 0.0001);
+    }
+
+    #[test]
     fn group_selection_hides_primitive_resize_gizmos() {
         let ctx = egui::Context::default();
         let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(500.0, 400.0));

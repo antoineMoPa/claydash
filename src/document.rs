@@ -133,7 +133,27 @@ pub fn serialize_scene(tree: &DataTree) -> Result<Vec<u8>, String> {
 }
 
 pub fn deserialize_scene(bytes: &[u8]) -> Result<ObservableKVTree<ClaydashValue>, String> {
-    serde_json::from_slice(bytes).map_err(|error| error.to_string())
+    let mut scene: ObservableKVTree<ClaydashValue> =
+        serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    if let ClaydashValue::VecSDFObject(mut objects) = scene.get_path("sdf_objects") {
+        let ids: std::collections::HashSet<_> = objects.iter().map(|object| object.uuid).collect();
+        let mut repaired = false;
+        for object in &mut objects {
+            if object
+                .boolean_parent
+                .is_some_and(|parent| !ids.contains(&parent))
+            {
+                object.boolean_parent = None;
+                object.operation = crate::model::BooleanOperation::Union;
+                object.name = format!("Recovered {}", object.name);
+                repaired = true;
+            }
+        }
+        if repaired {
+            scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(objects));
+        }
+    }
+    Ok(scene)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -449,6 +469,27 @@ mod tests {
     #[test]
     fn malformed_project_is_rejected() {
         assert!(deserialize_scene(b"not json").is_err());
+    }
+
+    #[test]
+    fn opening_a_project_recovers_a_split_void_whose_parent_was_deleted() {
+        let mut tree = DataTree::default();
+        let mut split_void =
+            crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::PolygonPrism);
+        split_void.name = "Face split void".into();
+        split_void.boolean_parent = Some(uuid::Uuid::new_v4());
+        split_void.operation = crate::model::BooleanOperation::Subtract;
+        crate::model::set_objects(&mut tree, vec![split_void.clone()]);
+        let bytes = serialize_scene(&tree).unwrap();
+
+        let mut restored = DataTree::default();
+        restored.set_tree("scene", deserialize_scene(&bytes).unwrap());
+
+        let objects = crate::model::objects(&restored);
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].boolean_parent, None);
+        assert_eq!(objects[0].operation, crate::model::BooleanOperation::Union);
+        assert_eq!(objects[0].name, "Recovered Face split void");
     }
 
     #[test]

@@ -387,6 +387,16 @@ impl UiState {
         };
         let mut scene = objects(tree);
         let matrix = crate::model::object_world_matrix(&scene, face.object);
+        let split_void = scene.iter().find_map(|candidate| {
+            if candidate.boolean_parent != Some(face.object) || candidate.name != "Face split void"
+            {
+                return None;
+            }
+            let SdfParams::PolygonPrismParams(params) = &candidate.params else {
+                return None;
+            };
+            Some((candidate.uuid, candidate.transform, params.half_depth))
+        });
         let Some(object) = scene.iter_mut().find(|object| object.uuid == face.object) else {
             return;
         };
@@ -441,6 +451,7 @@ impl UiState {
                 positive,
                 initial_transform: object.transform,
                 initial_half_depth: params.half_depth,
+                split_void,
                 projected_axis,
                 raw_amount: 0.0,
             });
@@ -454,21 +465,43 @@ impl UiState {
                 let delta = ui.input(|input| input.pointer.delta());
                 session.raw_amount +=
                     delta.dot(session.projected_axis) / session.projected_axis.length_sq();
-                let half_delta = session.raw_amount * 0.5;
-                let SdfParams::PolygonPrismParams(params) = &mut object.params else {
-                    return;
-                };
-                params.half_depth = (session.initial_half_depth + half_delta).max(0.01);
-                object.transform = session.initial_transform;
-                object.transform.translation += object.transform.matrix().transform_vector3(
-                    Vec3::Z * sign * (params.half_depth - session.initial_half_depth),
-                );
+                apply_polygon_cap_drag(&mut scene, session, sign);
                 set_objects(tree, scene);
             }
         }
         if response.drag_stopped() {
             self.polygon_cap_drag = None;
             tree.make_undo_redo_snapshot();
+        }
+    }
+}
+
+pub(super) fn apply_polygon_cap_drag(scene: &mut [SdfObject], session: &PolygonCapDrag, sign: f32) {
+    let Some(object) = scene
+        .iter_mut()
+        .find(|object| object.uuid == session.object)
+    else {
+        return;
+    };
+    let SdfParams::PolygonPrismParams(params) = &mut object.params else {
+        return;
+    };
+    params.half_depth = (session.initial_half_depth + session.raw_amount * 0.5).max(0.01);
+    let depth_change = params.half_depth - session.initial_half_depth;
+    object.transform = session.initial_transform;
+    let translation_change = object
+        .transform
+        .matrix()
+        .transform_vector3(Vec3::Z * sign * depth_change);
+    object.transform.translation += translation_change;
+
+    if let Some((id, initial_transform, initial_half_depth)) = session.split_void {
+        if let Some(void) = scene.iter_mut().find(|candidate| candidate.uuid == id) {
+            if let SdfParams::PolygonPrismParams(params) = &mut void.params {
+                params.half_depth = (initial_half_depth + depth_change).max(0.01);
+                void.transform = initial_transform;
+                void.transform.translation += translation_change;
+            }
         }
     }
 }

@@ -312,7 +312,7 @@ fn finish(tree: &mut DataTree) {
 }
 
 fn delete(tree: &mut DataTree) {
-    let selection = effective_selected_ids(tree);
+    let selection = selected_subtree_ids(&objects(tree), &effective_selected_ids(tree));
     animation::remove_tracks_for_objects(tree, &selection);
     let mut scene: Vec<_> = objects(tree)
         .into_iter()
@@ -740,6 +740,25 @@ mod tests {
         delete(&mut tree);
         assert!(objects(&tree).is_empty());
         assert!(selected(&tree).is_empty());
+    }
+
+    #[test]
+    fn deleting_an_exactly_selected_split_prism_removes_its_void() {
+        let mut tree = DataTree::default();
+        let source = SdfObject::create(TYPE_BOX);
+        let mut prism = SdfObject::create(sdf_consts::TYPE_POLYGON_PRISM);
+        prism.boolean_parent = Some(source.uuid);
+        let mut void = SdfObject::create(sdf_consts::TYPE_POLYGON_PRISM);
+        void.boolean_parent = Some(prism.uuid);
+        void.operation = BooleanOperation::Subtract;
+        crate::model::set_selected_exact(&mut tree, vec![prism.uuid]);
+        set_objects(&mut tree, vec![source.clone(), prism, void]);
+
+        delete(&mut tree);
+
+        let scene = objects(&tree);
+        assert_eq!(scene.len(), 1);
+        assert_eq!(scene[0].uuid, source.uuid);
     }
 
     #[test]

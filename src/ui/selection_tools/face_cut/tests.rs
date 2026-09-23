@@ -265,3 +265,69 @@ fn later_points_can_snap_to_face_fractions_without_losing_angle_guides() {
     assert!(!guides.is_empty());
     assert!(anchor.is_none());
 }
+
+#[test]
+fn diagonal_cut_from_center_snaps_to_corner_and_keeps_angle_guide() {
+    let source = SdfObject::create_kind(PrimitiveKind::Box);
+    let face = crate::model::ModelingFaceSelection::Box(crate::model::BoxFaceSelection {
+        object: source.uuid,
+        axis: VectorAxis::Z,
+        positive: true,
+    });
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let (point, guides, anchor) = guided_outline_point(
+        &camera,
+        1.0,
+        &[source],
+        face,
+        &[Vec2::ZERO],
+        Vec2::new(0.293, 0.292),
+    );
+    assert!(point.distance(Vec2::splat(0.3)) < 0.0001);
+    assert_eq!(anchor.unwrap().label, "Corner");
+    assert!(guides.iter().any(|guide| guide.label == "45°"));
+}
+
+#[test]
+fn finishing_a_split_with_a_void_selects_the_whole_prism_group() {
+    let source = SdfObject::create_kind(PrimitiveKind::Box);
+    let prism = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+    let mut split_void = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+    split_void.boolean_parent = Some(prism.uuid);
+    let mut tree = DataTree::default();
+    set_objects(
+        &mut tree,
+        vec![source.clone(), prism.clone(), split_void.clone()],
+    );
+    let mut state = UiState::default();
+    state.selection_tools.tool = SelectionTool::FaceCut;
+    state.selection_tools.face_cut = Some(FaceCutDraft {
+        face: crate::model::ModelingFaceSelection::Box(crate::model::BoxFaceSelection {
+            object: source.uuid,
+            axis: VectorAxis::Z,
+            positive: true,
+        }),
+        vertices: Vec::new(),
+        phase: FaceCutPhase::Depth {
+            object: prism.uuid,
+            hole: Some(split_void.uuid),
+            region: 1,
+            closed: true,
+            start_pointer: egui::Pos2::ZERO,
+            projected_axis: egui::Vec2::X,
+        },
+    });
+
+    state.finish_face_cut(&mut tree);
+
+    assert_eq!(selected(&tree), vec![prism.uuid]);
+    assert_eq!(
+        crate::model::selection_scope(&tree),
+        crate::model::SelectionScope::Group
+    );
+    assert_eq!(
+        crate::commands::transform_targets(&tree)[0].kind,
+        crate::commands::TransformTargetKind::Group
+    );
+}
