@@ -92,7 +92,7 @@ fn pack_wood(material: Material, params: &mut Vec<[f32; 4]>) {
 
 // Explicit local assembler: declaration order is stable; WGSL functions may call later ones.
 pub(super) fn shader_source() -> String {
-    include_str!("../../assets/shaders/sdf.wgsl").replace(
+    super::modifier_gpu::shader_source().replace(
         "// MATERIAL_MODULES",
         &[
             include_str!("../../assets/shaders/material_common.wgsl"),
@@ -117,7 +117,7 @@ mod tests {
         assert_eq!(packed.params.len(), 8);
         assert_eq!(packed.insert(Material::preset(MaterialKind::Diagnostic)), 1);
         assert_eq!(packed.params.len(), 11);
-        assert_eq!(std::mem::size_of::<GpuObject>(), 304);
+        assert_eq!(std::mem::size_of::<GpuObject>(), 176);
         assert_eq!(std::mem::size_of::<GpuMaterialHeader>(), 16);
     }
 }

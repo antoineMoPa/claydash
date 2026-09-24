@@ -41,6 +41,7 @@ wgpu = "30.0.1"
 winit = "0.30.13"
 web-time = "1.1.0"
 bytemuck = { version = "1.24.0", features = ["derive"] }
+half = "2.7.1"
 png = "0.17.16"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

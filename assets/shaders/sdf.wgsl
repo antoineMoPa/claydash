@@ -9,18 +9,13 @@ struct Object {
     repeat_count: vec4<i32>,
     component: vec4<u32>,
     scale: vec4<f32>,
-    lattice_inverse_rows: array<vec4<f32>, 3>,
-    lattice_forward_rows: array<vec4<f32>, 3>,
-    lattice_min: vec4<f32>,
-    lattice_max: vec4<f32>,
-    lattice_info: vec4<u32>,
+    modifier: vec4<u32>,
 }
 struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> objects: array<Object>;
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
 @group(0) @binding(5) var<storage, read> polygon_points: array<vec2<f32>>;
-@group(0) @binding(6) var<storage, read> lattice_points: array<vec4<f32>>;
 override USE_BVH: bool = true;
 override HAS_BOOLEANS: bool = false;
 override TRANSPARENT_BACKGROUND: bool = false;
@@ -68,44 +63,7 @@ fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
     return sqrt(distance_squared) * select(1.0, -1.0, inside);
 }
 
-fn lattice_displacement(point: vec3<f32>, object: Object) -> vec3<f32> {
-    let n = object.lattice_info.y;
-    let coord = clamp((point - object.lattice_min.xyz) /
-        max(object.lattice_max.xyz - object.lattice_min.xyz, vec3(0.0001)), vec3(0.0), vec3(1.0)) * f32(n - 1u);
-    let low = vec3<u32>(floor(coord));
-    let high = min(low + vec3<u32>(1u), vec3<u32>(n - 1u));
-    let t = coord - vec3<f32>(low);
-    let base = object.lattice_info.x;
-    let a = lattice_points[base + low.x + n * (low.y + n * low.z)].xyz;
-    let b = lattice_points[base + high.x + n * (low.y + n * low.z)].xyz;
-    let c = lattice_points[base + low.x + n * (high.y + n * low.z)].xyz;
-    let d = lattice_points[base + high.x + n * (high.y + n * low.z)].xyz;
-    let e = lattice_points[base + low.x + n * (low.y + n * high.z)].xyz;
-    let f = lattice_points[base + high.x + n * (low.y + n * high.z)].xyz;
-    let g = lattice_points[base + low.x + n * (high.y + n * high.z)].xyz;
-    let h = lattice_points[base + high.x + n * (high.y + n * high.z)].xyz;
-    return mix(mix(mix(a, b, t.x), mix(c, d, t.x), t.y),
-        mix(mix(e, f, t.x), mix(g, h, t.x), t.y), t.z);
-}
-
-fn object_distance(point: vec3<f32>, object: Object) -> f32 {
-    var sample_point = point;
-    if object.lattice_info.y >= 2u {
-        let homogeneous = vec4(point, 1.0);
-        let cage_point = vec3(
-            dot(object.lattice_inverse_rows[0], homogeneous),
-            dot(object.lattice_inverse_rows[1], homogeneous),
-            dot(object.lattice_inverse_rows[2], homogeneous));
-        var rest = cage_point;
-        for (var iteration = 0; iteration < 4; iteration++) {
-            rest = cage_point - lattice_displacement(rest, object);
-        }
-        let offset = cage_point - rest;
-        sample_point -= vec3(
-            dot(object.lattice_forward_rows[0].xyz, offset),
-            dot(object.lattice_forward_rows[1].xyz, offset),
-            dot(object.lattice_forward_rows[2].xyz, offset));
-    }
+fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
     let homogeneous = vec4(sample_point, 1.0);
     var local = vec3(
         dot(object.inverse_rows[0], homogeneous),
@@ -144,6 +102,10 @@ fn object_distance(point: vec3<f32>, object: Object) -> f32 {
     return distance * object.params.w;
 }
 
+fn object_distance(point: vec3<f32>, object: Object) -> f32 {
+    return object_distance_at(modifier_point(point, object), object);
+}
+
 fn combine_operand(value: vec2<f32>, child: vec2<f32>, operand: Object, group: Object) -> vec2<f32> {
     let operation = operand.state.z;
     let b = select(child.x, -child.x, operation == 1);
@@ -170,14 +132,28 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
         return vec2(object_distance(point, objects[root]), f32(root));
     }
     if CSG_SIZE == 2u {
-        let child = vec2(object_distance(point, objects[start]), f32(start));
-        var value = vec2(object_distance(point, objects[root]), f32(root));
-        value = combine_operand(value, child, objects[start], objects[root]);
+        let parent = objects[root];
+        let operand = objects[start];
+        let parent_point = modifier_point(point, parent);
+        var operand_point = parent_point;
+        if operand.modifier.x != parent.modifier.x {
+            operand_point = modifier_point(point, operand);
+        }
+        let child = vec2(object_distance_at(operand_point, operand), f32(start));
+        var value = vec2(object_distance_at(parent_point, parent), f32(root));
+        value = combine_operand(value, child, operand, parent);
         return value;
     }
     var values: array<vec2<f32>, CSG_SIZE>;
+    let parent = objects[root];
+    let parent_point = modifier_point(point, parent);
     for (var i = start; i <= root; i++) {
-        values[i - start] = vec2(object_distance(point, objects[i]), f32(i));
+        let object = objects[i];
+        var sample_point = parent_point;
+        if object.modifier.x != parent.modifier.x {
+            sample_point = modifier_point(point, object);
+        }
+        values[i - start] = vec2(object_distance_at(sample_point, object), f32(i));
     }
     for (var i = start; i < root; i++) {
         let parent = u32(objects[i].state.w) - start;
@@ -276,7 +252,7 @@ fn primitive_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -
 }
 
 fn has_analytic_interval(object: Object) -> bool {
-    return object.repeat_count.w == 0 && object.state.y <= 3 && object.lattice_info.y == 0u;
+    return object.repeat_count.w == 0 && object.state.y <= 3 && object.modifier.x == 0u;
 }
 
 // Traverse bounds once per ray, then march only the intersected primitives.
@@ -320,7 +296,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
                     owner = sample.y;
                     break;
                 }
-                travel += value * select(0.8, 0.35, object.lattice_info.y >= 2u);
+                travel += value * bitcast<f32>(object.modifier.y);
                 if travel > end { break; }
             }
         }
@@ -385,6 +361,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
     return vec2(100.0, -1.0);
 }
 
+// MODIFIER_MODULES
 // MATERIAL_MODULES
 
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {

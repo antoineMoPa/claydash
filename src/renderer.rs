@@ -16,6 +16,9 @@ const MAX_OBJECTS: usize = 1024;
 const MAX_BVH_NODES: usize = MAX_OBJECTS * 2 - 1;
 const MAX_POLYGON_POINTS: usize = MAX_OBJECTS * crate::model::MAX_POLYGON_PRISM_VERTICES;
 const MAX_LATTICE_POINTS: usize = MAX_OBJECTS * 9 * 9 * 9;
+const LATTICE_ATLAS_TILE_PITCH: u32 = 19;
+const LATTICE_ATLAS_TILES_PER_ROW: u32 = 32;
+const LATTICE_ATLAS_WIDTH: u32 = LATTICE_ATLAS_TILE_PITCH * LATTICE_ATLAS_TILES_PER_ROW;
 const BVH_LEAF: u32 = u32::MAX;
 
 fn render_format_for_surface(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
@@ -46,11 +49,7 @@ struct GpuObject {
     repeat_count: [i32; 4],
     component: [u32; 4],
     scale: [f32; 4],
-    lattice_inverse_rows: [[f32; 4]; 3],
-    lattice_forward_rows: [[f32; 4]; 3],
-    lattice_min: [f32; 4],
-    lattice_max: [f32; 4],
-    lattice_info: [u32; 4],
+    modifier: [u32; 4],
 }
 
 #[repr(C)]
@@ -92,6 +91,7 @@ pub struct Renderer {
     node_count: u32,
     has_booleans: bool,
     bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
     objects_buffer: wgpu::Buffer,
     bvh_buffer: wgpu::Buffer,
@@ -99,6 +99,10 @@ pub struct Renderer {
     material_params_buffer: wgpu::Buffer,
     polygon_points_buffer: wgpu::Buffer,
     lattice_points_buffer: wgpu::Buffer,
+    lattice_atlas: wgpu::Texture,
+    lattice_atlas_rows: u32,
+    lattice_sampler: wgpu::Sampler,
+    modifier_params_buffer: wgpu::Buffer,
     uploaded_scene_versions: [i32; 2],
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,
@@ -167,6 +171,7 @@ mod bvh;
 mod initialization;
 mod material_gpu;
 mod material_previews;
+mod modifier_gpu;
 mod rendering;
 mod scene_bounds;
 mod scene_upload;

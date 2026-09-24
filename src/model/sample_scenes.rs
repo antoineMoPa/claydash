@@ -153,6 +153,71 @@ pub fn renderer_stress_scene() -> Vec<SdfObject> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     let mut cases = Vec::new();
+    let mut transparent_lattice = SdfObject::create_kind(PrimitiveKind::Box);
+    transparent_lattice.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(0.55),
+    });
+    let mut transparent_cage = super::Lattice::new(Vec3::splat(-0.55), Vec3::splat(0.55), 3);
+    let transparent_corner = transparent_cage.index(2, 2, 2);
+    transparent_cage.offsets[transparent_corner] = Vec3::new(0.3, 0.15, 0.0);
+    transparent_lattice.lattice = Some(transparent_cage);
+    cases.push(("lattice-transparent".into(), vec![transparent_lattice]));
+    let mut lattice_reference = SdfObject::create_kind(PrimitiveKind::Box);
+    lattice_reference.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(1.0),
+    });
+    lattice_reference.material = Material::preset(MaterialKind::Solid);
+    lattice_reference.color = lattice_reference.material.color;
+    let mut lattice_deformed = lattice_reference.clone();
+    let mut lattice = super::Lattice::new(Vec3::splat(-1.0), Vec3::splat(1.0), 3);
+    let corner = lattice.index(2, 2, 2);
+    lattice.offsets[corner] = Vec3::new(0.5, 0.25, 0.0);
+    lattice_deformed.lattice = Some(lattice);
+    cases.push(("lattice-reference".into(), vec![lattice_reference]));
+    cases.push(("lattice-deformed".into(), vec![lattice_deformed]));
+    let mut dense = SdfObject::create_kind(PrimitiveKind::Box);
+    dense.params = SdfParams::BoxParams(BoxParams { box_q: Vec3::ONE });
+    dense.material = Material::preset(MaterialKind::Solid);
+    dense.color = dense.material.color;
+    let mut dense_lattice = super::Lattice::new(Vec3::splat(-1.0), Vec3::ONE, 9);
+    let dense_corner = dense_lattice.index(8, 8, 8);
+    dense_lattice.offsets[dense_corner] = Vec3::new(0.5, 0.25, 0.0);
+    dense.lattice = Some(dense_lattice);
+    cases.push(("lattice-dense".into(), vec![dense]));
+    let mut group = SdfObject::create_kind(PrimitiveKind::Box);
+    group.params = SdfParams::BoxParams(BoxParams { box_q: Vec3::ONE });
+    group.material = Material::preset(MaterialKind::Solid);
+    group.color = group.material.color;
+    let mut group_lattice = super::Lattice::new(Vec3::splat(-1.0), Vec3::ONE, 3);
+    let group_corner = group_lattice.index(2, 2, 2);
+    group_lattice.offsets[group_corner] = Vec3::new(0.5, 0.25, 0.0);
+    group.lattice = Some(group_lattice);
+    let mut cutter = SdfObject::create_kind(PrimitiveKind::Sphere);
+    cutter.params = SdfParams::SphereParams(SphereParams { radius: 0.55 });
+    cutter.transform.translation = Vec3::new(0.5, 0.3, 0.7);
+    cutter.boolean_parent = Some(group.uuid);
+    cutter.operation = BooleanOperation::Subtract;
+    cases.push(("lattice-boolean".into(), vec![group, cutter]));
+    let mut many_cages = Vec::new();
+    for index in 0..40 {
+        let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+        object.params = SdfParams::BoxParams(BoxParams {
+            box_q: Vec3::splat(0.12),
+        });
+        object.transform.translation = Vec3::new(
+            (index % 8) as f32 * 0.32 - 1.12,
+            (index / 8) as f32 * 0.32 - 0.64,
+            0.0,
+        );
+        object.material = Material::preset(MaterialKind::Solid);
+        object.color = object.material.color;
+        let mut cage = super::Lattice::new(Vec3::splat(-0.12), Vec3::splat(0.12), 2);
+        let corner = cage.index(1, 1, 1);
+        cage.offsets[corner] = Vec3::new(0.04, 0.0, 0.0);
+        object.lattice = Some(cage);
+        many_cages.push(object);
+    }
+    cases.push(("lattice-many".into(), many_cages));
     let mut wood_gallery = Vec::new();
     for (index, species) in [WoodSpecies::Pine, WoodSpecies::Oak, WoodSpecies::Walnut]
         .into_iter()

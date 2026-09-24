@@ -46,6 +46,10 @@ impl Renderer {
         // boolean tree in one forward pass while preserving sibling order.
         let selected_ids: std::collections::HashSet<_> = selected.iter().copied().collect();
         let scene_objects = &objects[..objects.len().min(MAX_OBJECTS)];
+        let scene_lookup: std::collections::HashMap<_, _> = scene_objects
+            .iter()
+            .map(|object| (object.uuid, object))
+            .collect();
         let ordered = boolean_postorder(scene_objects);
         let objects = &ordered;
         let object_indices: std::collections::HashMap<_, _> = objects
@@ -58,6 +62,8 @@ impl Renderer {
         let mut materials = material_gpu::PackedMaterials::default();
         let mut polygon_points = Vec::new();
         let mut lattice_points: Vec<[f32; 4]> = Vec::new();
+        let mut lattice_atlas_uploads = Vec::new();
+        let mut modifiers = modifier_gpu::PackedModifiers::default();
         let mut lattice_slots = std::collections::HashMap::new();
         let mut gpu_objects: Vec<GpuObject> = objects
             .iter()
@@ -70,9 +76,7 @@ impl Renderer {
                     let Some(id) = ancestor else {
                         break;
                     };
-                    let Some(candidate) =
-                        scene_objects.iter().find(|candidate| candidate.uuid == id)
-                    else {
+                    let Some(candidate) = scene_lookup.get(&id).copied() else {
                         break;
                     };
                     if let Some(lattice) = &candidate.lattice {
@@ -84,57 +88,71 @@ impl Renderer {
                     }
                     ancestor = candidate.boolean_parent;
                 }
-                let (cage_inverse, cage_forward, cage_min, cage_max, cage_info, cage_extent) =
+                let (modifier_index, march_factor, cage_extent) =
                     if let Some((root, lattice)) = cage {
-                        let displaced = lattice.offsets.iter().any(|offset| *offset != Vec3::ZERO);
-                        let slot = if displaced {
-                            *lattice_slots.entry(root).or_insert_with(|| {
-                                let slot = lattice_points.len() as u32;
-                                lattice_points.extend(
-                                    lattice
-                                        .effective_offsets()
-                                        .iter()
-                                        .map(|point| point.extend(0.0).to_array()),
-                                );
-                                slot
-                            })
-                        } else {
-                            0
-                        };
-                        let forward = crate::model::lattice_world_matrix(scene_objects, root);
-                        let maximum = lattice
-                            .offsets
-                            .iter()
-                            .fold(Vec3::ZERO, |maximum, offset| maximum.max(offset.abs()));
-                        let world_extent = forward.x_axis.truncate().abs() * maximum.x
-                            + forward.y_axis.truncate().abs() * maximum.y
-                            + forward.z_axis.truncate().abs() * maximum.z;
-                        (
-                            inverse_affine_rows(forward.inverse()),
-                            inverse_affine_rows(forward),
-                            lattice.min.extend(0.0).to_array(),
-                            lattice.max.extend(0.0).to_array(),
-                            [
-                                slot,
-                                if displaced {
-                                    lattice.resolution as u32
+                        *lattice_slots.entry(root).or_insert_with(|| {
+                            if lattice.offsets.iter().all(|offset| *offset == Vec3::ZERO) {
+                                return (0, 0.8, Vec3::ZERO);
+                            }
+                            let effective_offsets = lattice.effective_offsets();
+                            let control_offset = lattice_points.len() as u32;
+                            lattice_points.extend(
+                                effective_offsets
+                                    .iter()
+                                    .map(|point| point.extend(0.0).to_array()),
+                            );
+                            let (tile, inverse_min, inverse_max) = if lattice.resolution <= 3 {
+                                let tile = lattice_atlas_uploads.len() as u32;
+                                let (inverse_points, inverse_min, inverse_max) =
+                                    modifier_gpu::inverse_lattice_grid(lattice, &effective_offsets);
+                                lattice_atlas_uploads.push((
+                                    tile,
+                                    modifier_gpu::INVERSE_GRID_RESOLUTION as u32,
+                                    inverse_points,
+                                ));
+                                (tile, inverse_min, inverse_max)
+                            } else {
+                                let tile = lattice_atlas_uploads.len() as u32;
+                                lattice_atlas_uploads.push((
+                                    tile,
+                                    lattice.resolution as u32,
+                                    effective_offsets.clone(),
+                                ));
+                                (tile, lattice.min, lattice.max)
+                            };
+                            let forward = crate::model::lattice_world_matrix(scene_objects, root);
+                            let march_factor = modifier_gpu::lattice_march_factor(
+                                lattice,
+                                &effective_offsets,
+                                forward,
+                            );
+                            let maximum = lattice
+                                .offsets
+                                .iter()
+                                .fold(Vec3::ZERO, |maximum, offset| maximum.max(offset.abs()));
+                            let world_extent = forward.x_axis.truncate().abs() * maximum.x
+                                + forward.y_axis.truncate().abs() * maximum.y
+                                + forward.z_axis.truncate().abs() * maximum.z;
+                            let index = modifiers.insert_lattice(
+                                inverse_affine_rows(forward.inverse()),
+                                inverse_affine_rows(forward),
+                                inverse_min,
+                                inverse_max,
+                                tile,
+                                if lattice.resolution <= 3 {
+                                    modifier_gpu::INVERSE_GRID_RESOLUTION as u32
                                 } else {
-                                    0
+                                    lattice.resolution as u32
                                 },
-                                0,
-                                0,
-                            ],
-                            world_extent,
-                        )
+                                control_offset,
+                                lattice.resolution as u32,
+                                lattice.min,
+                                lattice.max,
+                            );
+                            (index, march_factor, world_extent)
+                        })
                     } else {
-                        (
-                            [[0.0; 4]; 3],
-                            [[0.0; 4]; 3],
-                            [0.0; 4],
-                            [0.0; 4],
-                            [0; 4],
-                            Vec3::ZERO,
-                        )
+                        (0, 0.8, Vec3::ZERO)
                     };
                 let matrix = crate::model::object_world_matrix(scene_objects, object.uuid);
                 let abs_scale = Vec3::new(
@@ -312,11 +330,20 @@ impl Renderer {
                     } else {
                         [1, 1, 1, 0]
                     },
-                    lattice_inverse_rows: cage_inverse,
-                    lattice_forward_rows: cage_forward,
-                    lattice_min: cage_min,
-                    lattice_max: cage_max,
-                    lattice_info: cage_info,
+                    modifier: [
+                        modifier_index,
+                        march_factor.to_bits(),
+                        if modifier_index == 0 {
+                            0
+                        } else {
+                            modifiers.parameter_offset(modifier_index)
+                        },
+                        if modifier_index == 0 {
+                            0
+                        } else {
+                            modifier_gpu::MODIFIER_LATTICE
+                        },
+                    ],
                 }
             })
             .collect();
@@ -326,11 +353,16 @@ impl Renderer {
         let mut group_start = 0;
         let mut capacity = 1;
         let mut starts = vec![0u32; objects.len()];
-        for (index, object) in gpu_objects.iter().enumerate() {
-            if object.meta[3] < 0 {
+        for index in 0..gpu_objects.len() {
+            if gpu_objects[index].meta[3] < 0 {
                 if let Some(bound) = component_bounds[index] {
                     group_bounds.push(bound);
                 }
+                let march_factor = gpu_objects[group_start..=index]
+                    .iter()
+                    .map(|object| f32::from_bits(object.modifier[1]))
+                    .fold(0.8_f32, f32::min);
+                gpu_objects[index].modifier[1] = march_factor.to_bits();
                 starts[index] = group_start as u32;
                 capacity = capacity.max((index - group_start + 1).next_power_of_two() as u32);
                 group_start = index + 1;
@@ -380,6 +412,7 @@ impl Renderer {
                 48 * 1024
             };
         self.viewport.set_initial_budget(self.initial_pixel_budget);
+        self.resize_lattice_atlas_for(lattice_atlas_uploads.len());
         if self.has_booleans
             && self
                 .boolean_pipeline
@@ -422,6 +455,45 @@ impl Renderer {
                     &self.lattice_points_buffer,
                     0,
                     bytemuck::cast_slice(&lattice_points),
+                );
+            }
+            for (tile, resolution, offsets) in lattice_atlas_uploads {
+                let texels: Vec<u16> = offsets
+                    .iter()
+                    .flat_map(|offset| {
+                        [offset.x, offset.y, offset.z, 0.0]
+                            .map(|value| half::f16::from_f32(value).to_bits())
+                    })
+                    .collect();
+                self.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.lattice_atlas,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: tile % LATTICE_ATLAS_TILES_PER_ROW * LATTICE_ATLAS_TILE_PITCH + 1,
+                            y: tile / LATTICE_ATLAS_TILES_PER_ROW * LATTICE_ATLAS_TILE_PITCH + 1,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    bytemuck::cast_slice(&texels),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(resolution * 8),
+                        rows_per_image: Some(resolution),
+                    },
+                    wgpu::Extent3d {
+                        width: resolution,
+                        height: resolution,
+                        depth_or_array_layers: resolution,
+                    },
+                );
+            }
+            if !modifiers.headers.is_empty() {
+                self.queue.write_buffer(
+                    &self.modifier_params_buffer,
+                    0,
+                    bytemuck::cast_slice(&modifiers.params),
                 );
             }
             self.queue
