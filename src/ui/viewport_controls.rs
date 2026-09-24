@@ -72,6 +72,14 @@ impl UiState {
         };
         let mut open = true;
         let mut properties = None;
+        let mut insert_lattice = false;
+        let lattice_available = objects(tree).iter().any(|object| {
+            selected(tree).contains(&object.uuid)
+                && object
+                    .lattice
+                    .as_ref()
+                    .is_some_and(|lattice| lattice.current_shape_key.is_some())
+        });
         let style = ctx.style_of(ctx.theme());
         let response = egui::Window::new("Insert keyframe")
             .id(egui::Id::new("insert-keyframe-menu"))
@@ -98,6 +106,9 @@ impl UiState {
                         properties = Some(value);
                     }
                 }
+                if lattice_available && ui.button("Lattice shape").clicked() {
+                    insert_lattice = true;
+                }
             });
         if let Some(response) = response {
             self.regions.push(response.response.rect);
@@ -113,6 +124,22 @@ impl UiState {
         }
         if let Some(properties) = properties {
             insert_transform_keyframes(tree, &mut self.animation, properties);
+            open = false;
+        }
+        if insert_lattice {
+            let frame = self.animation.current_frame.round().max(0.0) as u32;
+            for id in selected(tree) {
+                if animation::insert_lattice_keyframe(tree, id, frame) {
+                    self.animation.selected_keyframes = vec![SelectedKeyframe {
+                        binding: AnimationBinding {
+                            object: id,
+                            property: AnimatableProperty::LatticeShape,
+                        },
+                        frame,
+                    }];
+                }
+            }
+            tree.make_undo_redo_snapshot();
             open = false;
         }
         self.insert_keyframe_menu_position = open.then_some(cursor_position);

@@ -703,6 +703,8 @@
         }]);
         let lattice = objects(&tree)[0].lattice.clone().unwrap();
         assert!(lattice.offsets.iter().any(|offset| offset.length() > 0.01));
+        assert_eq!(lattice.current_shape_key, Some(1));
+        assert_eq!(lattice.shape_keys[0].offsets, lattice.offsets);
     }
 
     #[test]

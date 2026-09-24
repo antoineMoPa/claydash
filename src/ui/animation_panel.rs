@@ -118,6 +118,7 @@ pub(super) fn animation_panel(
     egui::Frame::NONE
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
+            animation::migrate_legacy_lattice_tracks(tree);
             let mut data = animation::animation_data(tree);
             let mut data_changed = false;
             let mut requested_frame = None;
@@ -381,7 +382,15 @@ pub(super) fn animation_panel(
                             let frame_x = |frame: f32| {
                                 rect.left() + (frame - view_start_frame) / frame_span * rect.width()
                             };
-                            let (minimum, maximum) = timeline_value_bounds(track);
+                            let shape_count = (track.binding.property == AnimatableProperty::LatticeShape)
+                                .then(|| objects.iter().find(|object| object.uuid == track.binding.object)
+                                    .and_then(|object| object.lattice.as_ref())
+                                    .map_or(0, |lattice| lattice.shape_keys.len()));
+                            let (minimum, maximum) = if let Some(count) = shape_count {
+                                (-0.1, count.max(1) as f32 + 0.1)
+                            } else {
+                                timeline_value_bounds(track)
+                            };
                             let value_span = maximum - minimum;
                             let value_y = |value: f32| {
                                 rect.bottom()
@@ -393,6 +402,16 @@ pub(super) fn animation_panel(
                                     + (rect.bottom() - 5.0 - y) / (rect.height() - 10.0)
                                         * value_span
                             };
+                            if let Some(count) = shape_count {
+                                for index in 0..=count {
+                                    let y = value_y(index as f32);
+                                    painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                                        Stroke::new(0.5, Color32::from_gray(58)));
+                                    painter.text(egui::pos2(rect.left() + 3.0, y - 2.0),
+                                        egui::Align2::LEFT_BOTTOM, index.to_string(),
+                                        egui::FontId::proportional(10.0), Color32::from_gray(145));
+                                }
+                            }
                             let frame_at_x = |x: f32| {
                                 view_start_frame + (x - rect.left()) / rect.width() * frame_span
                             };
@@ -809,6 +828,10 @@ pub(super) fn animation_panel(
                 .find(|track| track.binding == selected_keyframe.binding);
             let easing = selected_track
                 .and_then(|track| animation::easing_preset(track, selected_keyframe.frame));
+            let shape_max = (selected_keyframe.binding.property == AnimatableProperty::LatticeShape)
+                .then(|| objects.iter().find(|object| object.uuid == selected_keyframe.binding.object)
+                    .and_then(|object| object.lattice.as_ref())
+                    .map_or(0, |lattice| lattice.shape_keys.len()));
             let mut requested_easing = None;
             ui.horizontal_wrapped(|ui| {
                 ui.strong(selected_keyframe.binding.property.label());
@@ -817,9 +840,14 @@ pub(super) fn animation_panel(
                     .add(egui::DragValue::new(&mut frame).range(data.start_frame..=data.end_frame))
                     .changed();
                 ui.label("Value");
-                update |= ui
-                    .add(egui::DragValue::new(&mut value).speed(0.01))
-                    .changed();
+                let mut value_editor = egui::DragValue::new(&mut value).speed(0.01);
+                if let Some(maximum) = shape_max {
+                    value_editor = value_editor.range(0.0..=maximum as f32);
+                }
+                update |= ui.add(value_editor).changed();
+                if shape_max.is_some() {
+                    ui.weak("0 = reset grid; integers = saved shapes");
+                }
                 if let Some(easing) = easing {
                     egui::ComboBox::from_id_salt("keyframe-easing")
                         .selected_text(easing.label())

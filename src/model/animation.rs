@@ -1,4 +1,4 @@
-use glam::{EulerRot, Quat};
+use glam::{EulerRot, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
 use super::{SdfObject, SdfParams};
@@ -87,6 +87,7 @@ pub enum AnimatableProperty {
     RepetitionSpacing(VectorAxis),
     CameraFocalDistance,
     CameraProjection,
+    LatticeShape,
 }
 
 impl AnimatableProperty {
@@ -117,6 +118,7 @@ impl AnimatableProperty {
             Self::RepetitionSpacing(axis) => format!("Spacing {}", axis.label()),
             Self::CameraFocalDistance => "Camera focal distance".into(),
             Self::CameraProjection => "Camera projection".into(),
+            Self::LatticeShape => "Lattice shape".into(),
         }
     }
 
@@ -173,6 +175,10 @@ impl AnimatableProperty {
             }),
             Self::RepetitionCount(axis) => Some(object.repetition.count[axis.index()] as f32),
             Self::RepetitionSpacing(axis) => Some(object.repetition.spacing[axis.index()]),
+            Self::LatticeShape => object
+                .lattice
+                .as_ref()
+                .map(|lattice| lattice.shape_position),
             Self::CameraFocalDistance | Self::CameraProjection => None,
         }
     }
@@ -254,6 +260,12 @@ impl AnimatableProperty {
             }
             Self::RepetitionSpacing(axis) => {
                 object.repetition.spacing[axis.index()] = value.clamp(0.01, 20.0)
+            }
+            Self::LatticeShape => {
+                if let Some(lattice) = &mut object.lattice {
+                    lattice.current_shape_key = None;
+                    lattice.apply_shape_position(value);
+                }
             }
             Self::CameraFocalDistance | Self::CameraProjection => {}
         }
@@ -365,6 +377,19 @@ pub struct AnimationTrack {
     pub keyframes: Vec<Keyframe>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LatticeKeyframe {
+    pub frame: u32,
+    pub offsets: Vec<Vec3>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LatticeAnimationTrack {
+    pub object: uuid::Uuid,
+    pub resolution: u8,
+    pub keyframes: Vec<LatticeKeyframe>,
+}
+
 fn default_animation_fps() -> f32 {
     24.0
 }
@@ -383,6 +408,8 @@ pub struct AnimationData {
     pub end_frame: u32,
     #[serde(default)]
     pub tracks: Vec<AnimationTrack>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lattice_tracks: Vec<LatticeAnimationTrack>,
 }
 
 impl Default for AnimationData {
@@ -392,6 +419,7 @@ impl Default for AnimationData {
             start_frame: 0,
             end_frame: default_animation_end_frame(),
             tracks: Vec::new(),
+            lattice_tracks: Vec::new(),
         }
     }
 }

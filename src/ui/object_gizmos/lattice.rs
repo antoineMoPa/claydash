@@ -216,6 +216,10 @@ impl UiState {
                 .circle_filled(center, if selected { 5.0 } else { 4.5 }, color);
         }
         if changed {
+            if lattice.current_shape_key.is_none_or(|index| index == 0) {
+                lattice.add_shape_key();
+            }
+            lattice.save_selected_shape_key();
             set_objects(tree, scene.clone());
         }
         if finished {

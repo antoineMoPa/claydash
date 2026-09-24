@@ -478,6 +478,18 @@ pub struct Lattice {
     pub min: Vec3,
     pub max: Vec3,
     pub offsets: Vec<Vec3>,
+    #[serde(default)]
+    pub shape_keys: Vec<LatticeShapeKey>,
+    #[serde(default)]
+    pub current_shape_key: Option<usize>,
+    #[serde(default)]
+    pub shape_position: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LatticeShapeKey {
+    pub name: String,
+    pub offsets: Vec<Vec3>,
 }
 
 impl Lattice {
@@ -491,7 +503,68 @@ impl Lattice {
                 Vec3::ZERO;
                 resolution as usize * resolution as usize * resolution as usize
             ],
+            shape_keys: Vec::new(),
+            current_shape_key: Some(0),
+            shape_position: 0.0,
         }
+    }
+
+    pub fn select_shape_key(&mut self, index: usize) {
+        if index > self.shape_keys.len() {
+            return;
+        }
+        self.current_shape_key = Some(index);
+        self.apply_shape_position(index as f32);
+    }
+
+    pub fn add_shape_key(&mut self) -> usize {
+        let index = self.shape_keys.len() + 1;
+        self.shape_keys.push(LatticeShapeKey {
+            name: format!("Shape {index}"),
+            offsets: self.offsets.clone(),
+        });
+        self.select_shape_key(index);
+        index
+    }
+
+    pub fn save_selected_shape_key(&mut self) {
+        if let Some(index) = self.current_shape_key.filter(|index| *index > 0) {
+            if let Some(key) = self.shape_keys.get_mut(index - 1) {
+                key.offsets = self.offsets.clone();
+            }
+        }
+    }
+
+    pub fn apply_shape_position(&mut self, value: f32) {
+        if !value.is_finite() {
+            return;
+        }
+        let value = value.clamp(0.0, self.shape_keys.len() as f32);
+        let lower = value.floor() as usize;
+        let upper = value.ceil() as usize;
+        let amount = value - lower as f32;
+        let count = self.offsets.len();
+        let left = if lower == 0 {
+            None
+        } else {
+            self.shape_keys.get(lower - 1).map(|key| &key.offsets)
+        };
+        let right = if upper == 0 {
+            None
+        } else {
+            self.shape_keys.get(upper - 1).map(|key| &key.offsets)
+        };
+        if left.is_some_and(|offsets| offsets.len() != count)
+            || right.is_some_and(|offsets| offsets.len() != count)
+        {
+            return;
+        }
+        for index in 0..count {
+            let a = left.map_or(Vec3::ZERO, |offsets| offsets[index]);
+            let b = right.map_or(Vec3::ZERO, |offsets| offsets[index]);
+            self.offsets[index] = a.lerp(b, amount);
+        }
+        self.shape_position = value;
     }
 
     pub fn index(&self, x: usize, y: usize, z: usize) -> usize {
@@ -563,11 +636,41 @@ impl Lattice {
         }
         let previous = self.clone();
         *self = Self::new(previous.min, previous.max, resolution);
+        self.current_shape_key = previous.current_shape_key;
+        self.shape_position = previous.shape_position;
+        self.shape_keys = previous
+            .shape_keys
+            .iter()
+            .map(|key| LatticeShapeKey {
+                name: key.name.clone(),
+                offsets: vec![
+                    Vec3::ZERO;
+                    resolution as usize * resolution as usize * resolution as usize
+                ],
+            })
+            .collect();
         for z in 0..resolution as usize {
             for y in 0..resolution as usize {
                 for x in 0..resolution as usize {
                     let index = self.index(x, y, z);
                     self.offsets[index] = previous.displacement(self.position(x, y, z));
+                }
+            }
+        }
+        let min = self.min;
+        let max = self.max;
+        let denominator = (resolution - 1) as f32;
+        for (key, previous_key) in self.shape_keys.iter_mut().zip(&previous.shape_keys) {
+            let mut previous_shape = previous.clone();
+            previous_shape.offsets = previous_key.offsets.clone();
+            for z in 0..resolution as usize {
+                for y in 0..resolution as usize {
+                    for x in 0..resolution as usize {
+                        let index = x + resolution as usize * (y + resolution as usize * z);
+                        let position = min
+                            + (max - min) * Vec3::new(x as f32, y as f32, z as f32) / denominator;
+                        key.offsets[index] = previous_shape.displacement(position);
+                    }
                 }
             }
         }

@@ -1,8 +1,9 @@
 use web_time::Instant;
 
 use crate::model::{
-    objects, scene_cameras, set_objects_transient, AnimationBinding, AnimationData, AnimationTrack,
-    BezierHandle, ClaydashValue, DataTree, Keyframe, KeyframeInterpolation,
+    objects, scene_cameras, set_objects, set_objects_transient, AnimatableProperty,
+    AnimationBinding, AnimationData, AnimationTrack, BezierHandle, ClaydashValue, DataTree,
+    Keyframe, KeyframeInterpolation, Lattice, LatticeShapeKey,
 };
 
 const ANIMATION_PATH: &str = "scene.animation";
@@ -238,6 +239,138 @@ pub fn insert_keyframe(tree: &mut DataTree, binding: AnimationBinding, frame: u3
         });
         track.keyframes.sort_by_key(|keyframe| keyframe.frame);
     }
+    set_animation_data(tree, data);
+}
+
+pub fn insert_lattice_keyframe(tree: &mut DataTree, object_id: uuid::Uuid, frame: u32) -> bool {
+    migrate_legacy_lattice_tracks(tree);
+    let Some(index) = objects(tree)
+        .iter()
+        .find(|object| object.uuid == object_id)
+        .and_then(|object| object.lattice.as_ref())
+        .and_then(|lattice| {
+            lattice
+                .current_shape_key
+                .filter(|index| *index <= lattice.shape_keys.len())
+        })
+    else {
+        return false;
+    };
+    insert_keyframe(
+        tree,
+        AnimationBinding {
+            object: object_id,
+            property: AnimatableProperty::LatticeShape,
+        },
+        frame,
+        index as f32,
+    );
+    true
+}
+
+pub fn remove_lattice_track(tree: &mut DataTree, object_id: uuid::Uuid) {
+    let mut data = animation_data(tree);
+    data.lattice_tracks
+        .retain(|track| track.object != object_id);
+    data.tracks.retain(|track| {
+        !(track.binding.object == object_id
+            && track.binding.property == AnimatableProperty::LatticeShape)
+    });
+    set_animation_data(tree, data);
+}
+
+pub fn remap_lattice_shape_keys_after_delete(
+    tree: &mut DataTree,
+    object_id: uuid::Uuid,
+    deleted: usize,
+) {
+    let mut data = animation_data(tree);
+    let binding = AnimationBinding {
+        object: object_id,
+        property: AnimatableProperty::LatticeShape,
+    };
+    if let Some(track) = data
+        .tracks
+        .iter_mut()
+        .find(|track| track.binding == binding)
+    {
+        for keyframe in &mut track.keyframes {
+            if keyframe.value >= deleted as f32 {
+                keyframe.value = (keyframe.value - 1.0).max(0.0);
+            }
+        }
+    }
+    set_animation_data(tree, data);
+}
+
+fn resample_lattice(
+    offsets: &[glam::Vec3],
+    resolution: u8,
+    target: &Lattice,
+) -> Option<Vec<glam::Vec3>> {
+    let n = resolution as usize;
+    if !(2..=9).contains(&n) || offsets.len() != n * n * n {
+        return None;
+    }
+    let mut lattice = Lattice::new(target.min, target.max, resolution);
+    lattice.offsets = offsets.to_vec();
+    lattice.resize(target.resolution);
+    Some(lattice.offsets)
+}
+
+/// Convert pose snapshots from documents written by the first lattice animation version.
+pub fn migrate_legacy_lattice_tracks(tree: &mut DataTree) {
+    let mut data = animation_data(tree);
+    if data.lattice_tracks.is_empty() {
+        return;
+    }
+    let mut scene = objects(tree);
+    let old_tracks = std::mem::take(&mut data.lattice_tracks);
+    for old in old_tracks {
+        let Some(lattice) = scene
+            .iter_mut()
+            .find(|object| object.uuid == old.object)
+            .and_then(|object| object.lattice.as_mut())
+        else {
+            continue;
+        };
+        let binding = AnimationBinding {
+            object: old.object,
+            property: AnimatableProperty::LatticeShape,
+        };
+        let track = if let Some(track) = data
+            .tracks
+            .iter_mut()
+            .find(|track| track.binding == binding)
+        {
+            track
+        } else {
+            data.tracks.push(AnimationTrack {
+                binding,
+                keyframes: Vec::new(),
+            });
+            data.tracks.last_mut().expect("inserted shape track")
+        };
+        for pose in old.keyframes {
+            let Some(offsets) = resample_lattice(&pose.offsets, old.resolution, lattice) else {
+                continue;
+            };
+            let index = lattice.shape_keys.len() + 1;
+            lattice.shape_keys.push(LatticeShapeKey {
+                name: format!("Shape {index}"),
+                offsets,
+            });
+            track.keyframes.push(Keyframe {
+                frame: pose.frame,
+                value: index as f32,
+                interpolation: KeyframeInterpolation::Linear,
+                incoming_handle: None,
+                outgoing_handle: None,
+            });
+        }
+        track.keyframes.sort_by_key(|keyframe| keyframe.frame);
+    }
+    set_objects(tree, scene);
     set_animation_data(tree, data);
 }
 
@@ -522,6 +655,8 @@ pub fn remove_tracks_for_objects(tree: &mut DataTree, objects: &[uuid::Uuid]) {
     let mut data = animation_data(tree);
     data.tracks
         .retain(|track| !objects.contains(&track.binding.object));
+    data.lattice_tracks
+        .retain(|track| !objects.contains(&track.object));
     set_animation_data(tree, data);
 }
 
@@ -541,12 +676,24 @@ pub fn duplicate_tracks_for_objects(
         })
         .collect();
     data.tracks.extend(copies);
+    let lattice_copies: Vec<_> = data
+        .lattice_tracks
+        .iter()
+        .filter_map(|track| {
+            let object = object_map.get(&track.object)?;
+            let mut copy = track.clone();
+            copy.object = *object;
+            Some(copy)
+        })
+        .collect();
+    data.lattice_tracks.extend(lattice_copies);
     set_animation_data(tree, data);
 }
 
 pub fn evaluate(tree: &mut DataTree, frame: f32) -> bool {
+    migrate_legacy_lattice_tracks(tree);
     let data = animation_data(tree);
-    if data.tracks.is_empty() {
+    if data.tracks.is_empty() && data.lattice_tracks.is_empty() {
         return false;
     }
     let mut scene = objects(tree);
@@ -653,8 +800,106 @@ pub fn sample(track: &AnimationTrack, frame: f32) -> Option<f32> {
 mod tests {
     use super::*;
     use crate::model::{
-        objects, set_objects, AnimatableProperty, PrimitiveKind, SdfObject, VectorAxis,
+        objects, set_objects, AnimatableProperty, Lattice, PrimitiveKind, SdfObject, VectorAxis,
     };
+
+    #[test]
+    fn lattice_shape_keys_use_scalar_bezier_tracks_and_survive_resize() {
+        let mut tree = DataTree::default();
+        let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
+        object.lattice = Some(Lattice::new(glam::Vec3::splat(-1.0), glam::Vec3::ONE, 2));
+        let id = object.uuid;
+        set_objects(&mut tree, vec![object.clone()]);
+        assert!(insert_lattice_keyframe(&mut tree, id, 0));
+        let lattice = object.lattice.as_mut().unwrap();
+        lattice.offsets[0] = glam::Vec3::new(2.0, 4.0, 6.0);
+        assert_eq!(lattice.add_shape_key(), 1);
+        set_objects(&mut tree, vec![object]);
+        assert!(insert_lattice_keyframe(&mut tree, id, 10));
+        let binding = AnimationBinding {
+            object: id,
+            property: AnimatableProperty::LatticeShape,
+        };
+        assert_eq!(animation_data(&tree).tracks[0].keyframes[1].value, 1.0);
+        assert!(evaluate(&mut tree, 5.0));
+        assert!(objects(&tree)[0].lattice.as_ref().unwrap().offsets[0]
+            .abs_diff_eq(glam::Vec3::new(1.0, 2.0, 3.0), 0.0001));
+
+        let mut second_shape = objects(&tree);
+        let lattice = second_shape[0].lattice.as_mut().unwrap();
+        lattice.select_shape_key(0);
+        lattice.offsets[0] = glam::Vec3::new(-2.0, -4.0, -6.0);
+        assert_eq!(lattice.add_shape_key(), 2);
+        set_objects(&mut tree, second_shape);
+        assert!(insert_lattice_keyframe(&mut tree, id, 20));
+        evaluate(&mut tree, 15.0);
+        assert!(objects(&tree)[0].lattice.as_ref().unwrap().offsets[0]
+            .abs_diff_eq(glam::Vec3::ZERO, 0.0001));
+
+        set_bezier_handle(
+            &mut tree,
+            SelectedKeyframe { binding, frame: 0 },
+            false,
+            BezierHandle {
+                frame_offset: 3.0,
+                value_offset: 1.0,
+            },
+        );
+        assert!(sample(&animation_data(&tree).tracks[0], 2.5).unwrap() > 0.25);
+        let mut resized = objects(&tree);
+        resized[0].lattice.as_mut().unwrap().resize(3);
+        assert_eq!(
+            resized[0].lattice.as_ref().unwrap().shape_keys[0]
+                .offsets
+                .len(),
+            27
+        );
+        set_objects(&mut tree, resized);
+        evaluate(&mut tree, 5.0);
+        let value = sample(&animation_data(&tree).tracks[0], 5.0).unwrap();
+        assert!(objects(&tree)[0].lattice.as_ref().unwrap().offsets[0]
+            .abs_diff_eq(glam::Vec3::new(2.0, 4.0, 6.0) * value, 0.0001));
+        let serialized = serde_json::to_string(&objects(&tree)[0].lattice).unwrap();
+        let restored: Option<Lattice> = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.unwrap().shape_keys[0].offsets.len(), 27);
+
+        let duplicate = uuid::Uuid::new_v4();
+        duplicate_tracks_for_objects(
+            &mut tree,
+            &std::collections::HashMap::from([(id, duplicate)]),
+        );
+        remove_tracks_for_objects(&mut tree, &[id]);
+        assert_eq!(animation_data(&tree).tracks.len(), 1);
+        assert_eq!(animation_data(&tree).tracks[0].binding.object, duplicate);
+    }
+
+    #[test]
+    fn legacy_lattice_pose_tracks_become_shape_keys() {
+        let mut tree = DataTree::default();
+        let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
+        object.lattice = Some(Lattice::new(glam::Vec3::splat(-1.0), glam::Vec3::ONE, 2));
+        let id = object.uuid;
+        set_objects(&mut tree, vec![object]);
+        let mut data = AnimationData::default();
+        data.lattice_tracks
+            .push(crate::model::LatticeAnimationTrack {
+                object: id,
+                resolution: 2,
+                keyframes: vec![crate::model::LatticeKeyframe {
+                    frame: 12,
+                    offsets: vec![glam::Vec3::ONE; 8],
+                }],
+            });
+        set_animation_data(&mut tree, data);
+        evaluate(&mut tree, 12.0);
+        let migrated = animation_data(&tree);
+        assert!(migrated.lattice_tracks.is_empty());
+        assert_eq!(migrated.tracks[0].keyframes[0].value, 1.0);
+        assert_eq!(
+            objects(&tree)[0].lattice.as_ref().unwrap().shape_keys[0].offsets,
+            vec![glam::Vec3::ONE; 8]
+        );
+    }
 
     #[test]
     fn linear_and_constant_tracks_sample_explicitly() {

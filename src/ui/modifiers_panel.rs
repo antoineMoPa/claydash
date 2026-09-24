@@ -1,8 +1,9 @@
 use super::*;
 
 pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
+    animation::migrate_legacy_lattice_tracks(tree);
     ui.spacing_mut().item_spacing.y = 8.0;
-    ui.heading("Modifiers");
+    ui.label(RichText::new("Modifiers").strong());
     let selection = selected(tree);
     if selection.len() != 1 {
         ui.label("Select one object or Boolean group to edit its modifiers.");
@@ -42,6 +43,7 @@ pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     });
 
     let mut remove_lattice = false;
+    let mut deleted_shape_key = None;
     if let Some(lattice) = &mut object.lattice {
         ui.group(|ui| {
             ui.set_width(ui.available_width());
@@ -81,8 +83,89 @@ pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
                 resolution, resolution, resolution
             ));
             ui.separator();
+            ui.label(RichText::new("Shape keys").strong());
+            if ui.button("+ Add shape from current lattice").clicked() {
+                lattice.add_shape_key();
+                changed = true;
+                snapshot = true;
+            }
+            if lattice.current_shape_key.is_none() {
+                ui.weak(format!(
+                    "Previewing position {:.2}. Select a shape to edit it.",
+                    lattice.shape_position
+                ));
+            }
+            if ui
+                .selectable_label(lattice.current_shape_key == Some(0), "0 · Reset grid")
+                .clicked()
+            {
+                lattice.select_shape_key(0);
+                changed = true;
+                snapshot = true;
+            }
+            let mut select_shape_key = None;
+            for (index, key) in lattice.shape_keys.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::selectable(
+                                lattice.current_shape_key == Some(index + 1),
+                                format!("{} ·", index + 1),
+                            )
+                            .min_size(egui::vec2(36.0, 24.0)),
+                        )
+                        .clicked()
+                    {
+                        select_shape_key = Some(index + 1);
+                    }
+                    let remaining_width = ui.available_width();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(remaining_width, 24.0),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if ui
+                                .add(egui::Button::new("Delete").min_size(egui::vec2(0.0, 24.0)))
+                                .on_hover_text("Delete shape key")
+                                .clicked()
+                            {
+                                deleted_shape_key = Some(index + 1);
+                            }
+                            let name_width = ui.available_width().max(24.0);
+                            if ui
+                                .add_sized(
+                                    [name_width, 24.0],
+                                    egui::TextEdit::singleline(&mut key.name),
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                                snapshot = true;
+                            }
+                        },
+                    );
+                });
+            }
+            if let Some(index) = select_shape_key {
+                lattice.select_shape_key(index);
+                changed = true;
+                snapshot = true;
+            }
+            if let Some(index) = deleted_shape_key {
+                lattice.shape_keys.remove(index - 1);
+                let selected = lattice.current_shape_key.unwrap_or(0);
+                lattice.current_shape_key = Some(if selected >= index {
+                    selected.saturating_sub(1)
+                } else {
+                    selected
+                });
+                lattice.select_shape_key(lattice.current_shape_key.unwrap_or(0));
+                changed = true;
+                snapshot = true;
+            }
+            ui.separator();
             if ui.button("Reset all points").clicked() {
                 lattice.offsets.fill(Vec3::ZERO);
+                lattice.save_selected_shape_key();
                 changed = true;
                 snapshot = true;
             }
@@ -100,6 +183,12 @@ pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     }
     if changed {
         set_objects(tree, scene);
+    }
+    if remove_lattice {
+        animation::remove_lattice_track(tree, target);
+    }
+    if let Some(index) = deleted_shape_key {
+        animation::remap_lattice_shape_keys_after_delete(tree, target, index);
     }
     if snapshot {
         tree.make_undo_redo_snapshot();
