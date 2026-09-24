@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claydash user guide</title>
+  <style>
+    :root { color-scheme: dark; font: 16px/1.6 system-ui, sans-serif; background: #111317; color: #e9ebef; }
+    * { box-sizing: border-box; }
+    body { margin: 0; display: grid; grid-template-columns: minmax(190px, 238px) minmax(0, 1fr); }
+    a { color: #a9c7ff; }
+    header, main, footer { grid-column: 2; width: 100%; max-width: 1120px; margin: auto; padding: 24px; }
+    header { padding-top: 56px; }
+    h1 { font-size: clamp(2.2rem, 5vw, 3.5rem); line-height: 1.1; margin: 0 0 16px; }
+    h2 { font-size: 1.8rem; margin: 64px 0 16px; }
+    h3 { font-size: 1.2rem; margin: 28px 0 8px; }
+    p { max-width: 72ch; }
+    .lede { color: #bdc7d7; font-size: 1.18rem; }
+    nav { position: fixed; left: 0; top: 0; bottom: 0; width: 238px; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 48px 16px; border-right: 1px solid #353c47; background: #171a20; }
+    nav .nav-title { color: #8e9aab; font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; margin: 0 12px 12px; }
+    nav a { color: #c8d3e3; text-decoration: none; padding: 7px 12px; border-radius: 7px; }
+    nav a:hover, nav a:focus-visible { color: #fff; background: #2b3442; outline: none; }
+    @media (max-width: 760px) { body { display: block; } header { padding-top: 30px; } nav { position: static; width: auto; max-height: 210px; padding: 12px; margin-top: 20px; border: 1px solid #353c47; border-radius: 10px; } }
+    figure { margin: 24px 0; }
+    figure img { display: block; width: 100%; height: auto; border: 1px solid #454e5d; border-radius: 12px; background: #20252d; }
+    figcaption, .note { color: #aab4c3; font-size: .9rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+    .card { background: #1c2027; border: 1px solid #353c47; border-radius: 12px; padding: 18px 20px; }
+    .card h3 { margin-top: 0; }
+    .card p { margin-bottom: 0; }
+    code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: #2a303a; border-radius: 4px; padding: .12em .35em; }
+    .key { display: inline-block; font: 600 .83em ui-monospace, SFMono-Regular, Menlo, monospace; color: #f1f5fb; background: linear-gradient(#414b5a, #2c3441); border: 1px solid #657185; border-bottom: 2px solid #1b222d; border-radius: 5px; padding: .04em .42em; white-space: nowrap; }
+    ol, ul { max-width: 72ch; padding-left: 24px; }
+    li { margin: 7px 0; }
+    footer { color: #aab4c3; padding-bottom: 60px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Claydash user guide</h1>
+    <nav aria-label="Guide sections">
+      <span class="nav-title">On this page</span><a href="#window">App window</a><a href="#sdf">A word about SDF</a><a href="#shapes">Shapes</a><a href="#gizmos">Viewport gizmos</a><a href="#face-cut">Face cutting and extrusion</a><a href="#booleans">Boolean groups</a><a href="#materials">Materials</a><a href="#repeat">Repeat</a><a href="#modifiers">Modifiers</a><a href="#camera">Cameras</a><a href="#animation">Animation</a><a href="#files">Files and renders</a>
+    </nav>
+  </header>
+  <main>
+    <section id="window">
+      <h2>Claydash app window</h2>
+      <p>The center <strong>Viewport</strong> shows your model and is where you select and shape it. The <strong>Scene</strong> panel on the left lists objects and their Boolean relationships. Tabs on the right hold the selected object's <strong>Object</strong>, <strong>Materials</strong>, and <strong>Operand</strong> settings. Drag a tab to rearrange the workspace. Open the optional bottom <strong>Animation</strong> panel with <strong>Panels → Animation Timeline</strong>.</p>
+      <figure>
+        <img src="window.webp" alt="Claydash window with the Scene panel at left, 3D viewport in the center, and inspector tabs at right" width="1280" height="800">
+        <figcaption>The app window with its default duck scene. Rerunning the capture updates this image.</figcaption>
+      </figure>
+      <div class="grid">
+        <div class="card"><h3>Top menu</h3><p><strong>File</strong> opens and saves projects, <strong>Panels</strong> opens the timeline, and <strong>Render</strong> exports a still or animation.</p></div>
+        <div class="card"><h3>Viewport controls</h3><p>Use the top-left buttons to add shapes, open the command palette, undo, and redo. The top-right buttons switch projection, snap to an isometric view, and enter the active camera view.</p></div>
+        <div class="card"><h3>Selection and view</h3><p>Click an object in the viewport or Scene tree to select it. Use the viewport's selection and transform tools to work directly on the model. The orientation gizmo in the lower-left corner helps you snap the view.</p></div>
+      </div>
+    </section>
+    <section id="sdf">
+      <h2>A word about SDF</h2>
+      <p>An SDF (signed distance field) describes a shape by the distance from any point to its surface. That makes operations such as union, subtraction, intersection, and soft blending natural: shapes can combine without manually joining polygon meshes. Claydash draws these fields by tracing rays through the scene, which can be slower than rendering ordinary meshes, especially with many objects, transparent materials, or complex Boolean groups.</p>
+      <figure><img class="detail" src="boolean.webp" alt="Union, subtraction, and intersection examples in the viewport" width="1280" height="800" loading="lazy"><figcaption>Three Boolean results in the same scene.</figcaption></figure>
+    </section>
+    <section id="shapes">
+      <h2>Make and edit shapes</h2>
+      <p>Add a sphere, box, cylinder, or torus with the shape buttons at the top-left of the viewport. In a narrow viewport, open the <strong>Add</strong> menu instead. The command palette (<kbd class="key">Cmd/Ctrl</kbd>+<kbd class="key">Shift</kbd>+<kbd class="key">P</kbd>) also finds these actions. New shapes appear in the Scene tree and can be selected there or in the viewport.</p>
+      <p>Move, rotate, and scale a selection with <kbd class="key">G</kbd>, <kbd class="key">R</kbd>, and <kbd class="key">S</kbd>. During a transform, press <kbd class="key">X</kbd>, <kbd class="key">Y</kbd>, or <kbd class="key">Z</kbd> to constrain it to one world axis; press the same key again to unlock it. The <strong>Object</strong> tab also lets you enter Position, Rotation, Scale, and shape dimensions precisely. Selected shapes show viewport handles for dimensions such as box faces, radius, cylinder height, and torus radii. Undo is available for these edits.</p>
+      <p>Movement and face edits can snap to guides from other boxes. Hold <kbd class="key">Alt</kbd> while dragging to temporarily bypass a guide.</p>
+      <figure><img class="detail" src="shapes.webp" alt="Selected shape with Object settings and editable dimensions" width="1280" height="800" loading="lazy"><figcaption>An isolated box and its Object settings.</figcaption></figure>
+    </section>
+    <section id="gizmos">
+      <h2>Use the viewport gizmos</h2>
+      <p>When an object is selected, the colored transform gizmo appears at its center. Drag a colored arrow to move on its X, Y, or Z axis, a colored square to scale on one axis, or a curved arc to rotate around an axis. The white controls move freely, scale uniformly, or rotate in the view plane. The gizmo follows a selected Boolean group as a whole.</p>
+      <p>Separate shape handles edit geometry rather than its overall transform: boxes show face rectangles and resize arrows, spheres show radius guides, cylinders also show height, and tori show major and tube radii. The small orientation gizmo at the lower-left corner snaps your view to an axis. Translucent wires through a Boolean target mark hidden operands; click one to select that exact shape.</p>
+      <figure><img class="detail" src="gizmos.webp" alt="Selected cylinder showing transform controls, shape handles, and the orientation gizmo" width="1280" height="800" loading="lazy"><figcaption>An isolated cylinder shows transform controls, shape handles, and view orientation.</figcaption></figure>
+    </section>
+    <section id="face-cut">
+      <h2>Face cutting and extrusion</h2>
+      <p>Click a box face or cylinder cap, then press <kbd class="key">E</kbd> to extrude it. Move the pointer to set the depth, then click or press <kbd class="key">Enter</kbd> to confirm. The selected face stays available for further editing; <kbd class="key">Esc</kbd> cancels the current extrusion.</p>
+      <p>For a custom outline, select a box or generated extrusion face and choose the scissors <strong>Face Cut</strong> tool in the viewport's lower-right corner. Click the outline's corners, then click the first corner or press <kbd class="key">Enter</kbd> to close it. Choose a face region if prompted. Move the pointer away from the face for a raised shape or through it for a cut, then click or press <kbd class="key">Enter</kbd> to finish. <kbd class="key">Backspace</kbd> removes the latest point, <kbd class="key">Esc</kbd> cancels, and holding <kbd class="key">Alt</kbd> bypasses snapping guides.</p>
+      <figure><img class="detail" src="face-cut.webp" alt="A polygon extruded from a box face alongside a box face extrusion, with the selected polygon cap outlined" width="1280" height="800" loading="lazy"><figcaption>A polygon face extrusion and a box face extrusion.</figcaption></figure>
+    </section>
+    <section id="booleans">
+      <h2>Combine shapes with Boolean groups</h2>
+      <p><strong>Union</strong> adds volumes, <strong>Subtract</strong> cuts one from another, and <strong>Intersect</strong> keeps only their shared volume. Select the target first and another object second, then use the combine buttons in the Scene panel or press <kbd class="key">+</kbd>, <kbd class="key">-</kbd>, or <kbd class="key">*</kbd>. With only one object selected, a shortcut waits for you to pick the operand in the viewport or Scene tree; press <kbd class="key">Esc</kbd> to cancel.</p>
+      <p>In the Scene tree, drag a shape or group onto a target row and choose the operation. A child's colored badge shows its operation and lets you change or detach it. The row's <strong>−</strong> button adds a subtractive shape directly. Select a whole group to move, rotate, or scale it together; click again in the viewport to reach an individual shape. The <strong>Operand</strong> tab changes an operand's operation and the group's edge softness. Set softness to zero for a sharp edge.</p>
+      <figure><img src="boolean.webp" alt="Boolean operands in the Scene tree with their operation settings in the Operand tab" width="1280" height="800"><figcaption>The Scene tree shows nested operands and their operation badges.</figcaption></figure>
+    </section>
+    <section id="materials">
+      <h2>Choose and reuse materials</h2>
+      <p>The <strong>Materials</strong> tab offers solid, metallic, transparent, and wood presets. Pick a material for selected objects, or choose one as the active material for new shapes. Adjust its color and other properties in the same tab. Materials are shared scene assets: changing a linked material updates every object using it. Use <strong>Unlink</strong> when one object needs its own copy. You can also copy, paste, and filter materials in the library.</p>
+      <figure><img src="materials.webp" alt="Materials tab with presets and settings for a selected transparent sphere" width="1280" height="800"><figcaption>Material presets and properties for the selected object.</figcaption></figure>
+    </section>
+    <section id="repeat">
+      <h2>Repeat an object</h2>
+      <p>In the <strong>Object</strong> tab's <strong>Modifiers</strong> section, choose <strong>+ Add modifier → Repeat</strong>. It starts with three copies along X. Choose other axes, counts, and spacing to create a finite pattern without adding a Scene row for every copy. Select a primitive inside a Boolean group when you want to repeat just that primitive.</p>
+      <figure><img class="detail" src="repeat.webp" alt="Repeat modifier with axis count and spacing controls" width="1280" height="800" loading="lazy"><figcaption>Choose axes, counts, and spacing in the Repeat modifier.</figcaption></figure>
+    </section>
+    <section id="modifiers">
+      <h2>Deform with a lattice</h2>
+      <p>In the <strong>Object</strong> tab's <strong>Modifiers</strong> section, add a <strong>Lattice</strong> to one object or a whole Boolean group. Set its point density, then drag the visible cage points in the viewport to reshape the enclosed surface. Reset points to restore the original cage. Shape keys in this section let you save and animate different lattice forms.</p>
+      <figure><img class="detail" src="modifiers.webp" alt="Selected lattice cage around a sphere and modifier controls" width="1280" height="800" loading="lazy"><figcaption>A lattice exposes cage controls in the viewport and Object tab.</figcaption></figure>
+    </section>
+    <section id="camera">
+      <h2>Frame the scene with cameras</h2>
+      <p>Use the viewport's top-right projection button to switch between perspective and orthographic views, or snap to an isometric view. The orientation gizmo helps align the viewport to an axis. The camera button creates a camera from the current view when needed and toggles the active camera view. Camera objects appear in the Scene tree; select one to edit its transform, focal distance, and projection in the Object tab.</p>
+      <figure><img class="detail" src="camera.webp" alt="Selected camera object and its transform and projection settings" width="1280" height="800" loading="lazy"><figcaption>Camera objects have their own settings in the Object tab.</figcaption></figure>
+    </section>
+    <section id="animation">
+      <h2>Animate changes over time</h2>
+      <p>Open <strong>Panels → Animation Timeline</strong> to reveal the bottom editor. Scrub to a frame, hover a property in the Object, Materials, Operand, or Repeat inspector, and press <kbd class="key">I</kbd> to add a keyframe. With the pointer over the viewport, <kbd class="key">I</kbd> opens a menu for Location, Rotation, and Scale keys. The timeline shows one lane per animated property; drag a diamond to move a key, or click it to edit its value and easing. Use the transport controls to play, stop, or loop. <kbd class="key">Space</kbd> toggles playback from the viewport, and arrow keys step through frames.</p>
+      <figure><img class="detail" src="animation.webp" alt="Animation timeline showing a keyframed position track" width="1280" height="800" loading="lazy"><figcaption>Keyframes appear as diamonds in a property lane.</figcaption></figure>
+    </section>
+    <section id="files">
+      <h2>Save and render</h2>
+      <p><strong>File → Save</strong> stores the editable scene in a <code>.claydash</code> project; <strong>Open</strong> and <strong>Open Recent</strong> bring projects back. Use <strong>Render</strong> to export a WebP still or an MP4 of the animation range. Exports contain the rendered scene, without editor panels, handles, or labels. Dense scenes may take a little longer to finish sharpening before capture.</p>
+      <figure><img class="detail" src="window.webp" alt="Claydash top menu showing File, Panels, and Render" width="1280" height="800" loading="lazy"><figcaption>File and Render are in the top menu bar.</figcaption></figure>
+    </section>
+  </main>
+  <footer><p>Claydash is experimental. This guide describes the current editing workflow and its controls.</p></footer>
+</body>
+</html>

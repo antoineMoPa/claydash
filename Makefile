@@ -19,5 +19,8 @@ serve:
 doc:
 	cargo doc --open
 
+guide:
+	scripts/capture-guide.sh
+
 run-native:
 	cargo run
