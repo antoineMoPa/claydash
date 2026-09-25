@@ -4,6 +4,8 @@ Claydash is an experimental 3D SDF modeler made in Rust with winit, wgpu, and eg
 
 https://app.claydash.com/ - note: live version does not always point to main branch.
 
+[User guide](docs/guide/index.html)
+
 # What we can do so far
 
 * Add spheres, boxes, cylinders, and tori from the shape toolbar (Add menu in narrow viewports) or the `⌘⇧P` / `Ctrl+Shift+P`
@@ -74,7 +76,7 @@ property to zero, preserve scale and the other property, and support Undo.
 
 Open **Panels → Animation Timeline** to add the optional bottom animation editor. Its open or
 closed state is restored on the next launch; a first launch starts closed. Hover a numeric, color,
-checkbox, or repetition input in the Object, Materials, Operand, or Repeat inspector and press
+checkbox, or repetition input in the Object, Materials, or Operand inspector and press
 `I` to insert a keyframe at the current frame. Color inserts one key for each RGBA channel.
 
 The timeline provides play/pause, stop, looping, frame scrubbing, editable start/end/FPS values,
@@ -137,8 +139,9 @@ viewport shows move, rotate, and scale gizmos for the group. Repeated viewport c
 the hierarchy, where the exact primitive's shape, material, repetition, and operand properties
 become available again.
 
-The **Modifiers** section of the Object inspector contains Lattice, which deforms a complete object or Boolean
-group. Add a lattice, choose 2–9 points per axis, then drag its visible cage points in the viewport.
+The **Modifiers** section of the Object inspector offers Repeat and Lattice. Add Repeat to a
+primitive or a complete Boolean group to create three copies along X immediately, then edit the copy count and spacing on each axis. A count of 1 leaves that axis unchanged.
+Add Lattice to a complete object or Boolean group, choose 2–9 points per axis, then drag its visible cage points in the viewport.
 The selected point is highlighted; drag cage points directly to shape the object.
 Points inside the cage follow the surface controls by linear interpolation. Lattices are saved
 with the project; lattice keyframing is not available yet.
@@ -151,6 +154,8 @@ operand even through the target's surface; Shift-click adds or removes it from t
 
 Selected boxes show face-parallel rectangles with X/Y/Z resize arrows. Round primitives show
 labeled radius guides; cylinders also expose height, and tori have separate major/tube radii.
+Click an object once to select it, again to enter its exact selection, and once more on a face
+to select that face. G moves the object until a face is selected, then drags the face.
 Drag along the arrow, then release to record the resize for undo. Gizmos and their labels are
 clipped to the viewport. Toolbar icons are bundled Lucide SVGs; attribution is in
 `assets/icons/lucide/`.

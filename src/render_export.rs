@@ -264,7 +264,7 @@ fn write_mp4_sample<W: std::io::Write + std::io::Seek>(
         .map_err(|error| format!("could not write video frame {index} to the MP4 file: {error}"))
 }
 
-fn png_bytes(frame: &CapturedFrame) -> Result<Vec<u8>, String> {
+pub(crate) fn png_bytes(frame: &CapturedFrame) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut bytes, frame.width, frame.height);

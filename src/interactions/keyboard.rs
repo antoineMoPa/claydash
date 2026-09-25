@@ -98,6 +98,7 @@ impl InteractionState {
                     | EditorState::Scaling
                     | EditorState::Rotating
                     | EditorState::Extruding
+                    | EditorState::DraggingFace
             )
         );
         if rotating && !has_command_modifier {
@@ -153,6 +154,14 @@ impl InteractionState {
         };
         crate::ui::scene_actions::cancel_boolean_pick(tree);
         commands::execute(command_map, name, tree);
+        if name == "grab"
+            && matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::EditorState(EditorState::DraggingFace)
+            )
+        {
+            self.extrusion_session = None;
+        }
         match name {
             "rotate" => {
                 self.numeric_rotation = NumericRotationInput::Editing(String::new());
@@ -213,6 +222,7 @@ impl InteractionState {
                         | EditorState::Scaling
                         | EditorState::Rotating
                         | EditorState::Extruding
+                        | EditorState::DraggingFace
                 )
             );
             if !transforming

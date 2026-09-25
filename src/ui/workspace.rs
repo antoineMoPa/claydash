@@ -36,9 +36,6 @@ impl PaneView<EditorPane> for WorkspaceView<'_> {
                             EditorPane::Scene => scene_panel(ui, self.tree),
                             EditorPane::Object => object_panel(ui, self.tree, self.animation),
                             EditorPane::Materials => materials_panel(ui, self.tree, self.animation),
-                            EditorPane::Repetition => {
-                                repetition_panel(ui, self.tree, self.animation)
-                            }
                             EditorPane::Operand => operand_panel(ui, self.tree, self.animation),
                             EditorPane::Viewport => {}
                         }

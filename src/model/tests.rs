@@ -131,12 +131,49 @@ fn polygon_prism_caps_and_sides_are_explicitly_selectable() {
 fn finite_domain_repetition_creates_pickable_copies() {
     let mut sphere = SdfObject::create_kind(PrimitiveKind::Sphere);
     sphere.repetition.enabled = true;
-    sphere.repetition.axes = [true, false, false];
     sphere.repetition.count = [3, 1, 1];
     sphere.repetition.spacing = Vec3::splat(1.0);
 
     assert!(sphere.distance(Vec3::X) < 0.0);
     assert!(sphere.distance(Vec3::X * 2.0) > 0.5);
+}
+
+#[test]
+fn legacy_repeat_axis_flags_become_counts_on_load() {
+    let repetition: Repetition = serde_json::from_value(serde_json::json!({
+        "enabled": true,
+        "axes": [false, true, false],
+        "count": [3, 4, 5],
+        "spacing": [1.0, 2.0, 3.0]
+    }))
+    .unwrap();
+    assert_eq!(repetition.count, [1, 4, 1]);
+    let saved = serde_json::to_value(repetition).unwrap();
+    assert!(saved.get("axes").is_none());
+    assert_eq!(saved["count"], serde_json::json!([1, 4, 1]));
+}
+
+#[test]
+fn repeating_a_boolean_group_copies_its_assembled_shape() {
+    let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+    root.group_transform.translation = Vec3::new(0.4, -0.2, 0.0);
+    root.transform.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    child.transform.translation = Vec3::X;
+    let child_id = child.uuid;
+    let base = [root.clone(), child.clone()];
+    let child_center = object_world_matrix(&base, child_id).transform_point3(Vec3::ZERO);
+    root.repetition.enabled = true;
+    root.repetition.spacing = Vec3::splat(3.0);
+    let repeated = [root, child];
+    let copy = child_center + Vec3::X * 3.0;
+
+    assert!(scene_sample(child_center, &base).unwrap().0 < 0.0);
+    assert!(scene_sample(copy, &base).unwrap().0 > 0.5);
+    let sample = scene_sample(copy, &repeated).unwrap();
+    assert!(sample.0 < 0.0);
+    assert_eq!(sample.1, child_id);
 }
 
 #[test]
@@ -148,6 +185,40 @@ fn material_presets_expose_distinct_surface_properties() {
     assert!(transparent.opacity < solid.opacity);
     assert!(metallic.metallic > solid.metallic);
     assert!(transparent.refractive_index > 1.0);
+}
+
+#[test]
+fn brick_settings_round_trip_and_legacy_materials_load() {
+    let mut brick = Material::preset(MaterialKind::Brick);
+    brick.brick.width = 0.64;
+    brick.brick.mortar_width = 0.026;
+    let serialized = serde_json::to_value(brick).unwrap();
+    assert_eq!(
+        serde_json::from_value::<Material>(serialized.clone()).unwrap(),
+        brick
+    );
+    let mut legacy = serialized.clone();
+    legacy.as_object_mut().unwrap().remove("brick");
+    assert_eq!(
+        serde_json::from_value::<Material>(legacy).unwrap().brick,
+        BrickSettings::default()
+    );
+    let mut early_brick = serialized;
+    let settings = early_brick
+        .get_mut("brick")
+        .unwrap()
+        .as_object_mut()
+        .unwrap();
+    settings.remove("relief");
+    settings.remove("bevel");
+    settings.remove("mortar_color");
+    let restored: Material = serde_json::from_value(early_brick).unwrap();
+    assert_eq!(restored.brick.width, 0.64);
+    assert_eq!(restored.brick.relief, BrickSettings::default().relief);
+    assert_eq!(
+        restored.brick.mortar_color,
+        BrickSettings::default().mortar_color
+    );
 }
 
 #[test]

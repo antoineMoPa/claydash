@@ -28,11 +28,7 @@ impl Renderer {
             count: [
                 objects.len().min(MAX_OBJECTS) as u32,
                 self.node_count,
-                u32::from(
-                    objects
-                        .iter()
-                        .any(|object| object.operation.gpu_code() != 0),
-                ),
+                camera.viewport.y.round().max(1.0) as u32,
                 u32::from(camera.projection_mode == ProjectionMode::Orthographic),
             ],
         };
@@ -155,6 +151,11 @@ impl Renderer {
                         (0, 0.8, Vec3::ZERO)
                     };
                 let matrix = crate::model::object_world_matrix(scene_objects, object.uuid);
+                let group_matrix = crate::model::group_world_matrix(scene_objects, object.uuid);
+                let repeats_group = object.repetition.enabled
+                    && scene_objects
+                        .iter()
+                        .any(|child| child.boolean_parent == Some(object.uuid));
                 let abs_scale = Vec3::new(
                     matrix.x_axis.truncate().length(),
                     matrix.y_axis.truncate().length(),
@@ -218,23 +219,23 @@ impl Renderer {
                         )
                     }
                 };
-                let repeated_radius = if object.repetition.enabled {
+                let repeated_radius = if object.repetition.enabled && !repeats_group {
                     let extent = Vec3::from_array([
-                        if object.repetition.axes[0] {
+                        if object.repetition.count[0] > 1 {
                             (object.repetition.count[0].saturating_sub(1)) as f32
                                 * object.repetition.spacing.x
                                 * 0.5
                         } else {
                             0.0
                         },
-                        if object.repetition.axes[1] {
+                        if object.repetition.count[1] > 1 {
                             (object.repetition.count[1].saturating_sub(1)) as f32
                                 * object.repetition.spacing.y
                                 * 0.5
                         } else {
                             0.0
                         },
-                        if object.repetition.axes[2] {
+                        if object.repetition.count[2] > 1 {
                             (object.repetition.count[2].saturating_sub(1)) as f32
                                 * object.repetition.spacing.z
                                 * 0.5
@@ -270,9 +271,9 @@ impl Renderer {
                     }
                 };
                 let mut repeated_extent = local_extent;
-                if object.repetition.enabled {
+                if object.repetition.enabled && !repeats_group {
                     for axis in 0..3 {
-                        if object.repetition.axes[axis] {
+                        if object.repetition.count[axis] > 1 {
                             repeated_extent[axis] += object.repetition.count[axis].saturating_sub(1)
                                 as f32
                                 * object.repetition.spacing[axis].max(0.001)
@@ -306,25 +307,14 @@ impl Renderer {
                     ],
                     color: object.color.to_array(),
                     inverse_rows: inverse_affine_rows(matrix.inverse()),
+                    group_inverse_rows: inverse_affine_rows(group_matrix.inverse()),
                     params,
                     repeat_spacing: object.repetition.spacing.extend(0.0).to_array(),
                     repeat_count: if object.repetition.enabled {
                         [
-                            if object.repetition.axes[0] {
-                                object.repetition.count[0] as i32
-                            } else {
-                                1
-                            },
-                            if object.repetition.axes[1] {
-                                object.repetition.count[1] as i32
-                            } else {
-                                1
-                            },
-                            if object.repetition.axes[2] {
-                                object.repetition.count[2] as i32
-                            } else {
-                                1
-                            },
+                            object.repetition.count[0] as i32,
+                            object.repetition.count[1] as i32,
+                            object.repetition.count[2] as i32,
                             1,
                         ]
                     } else {
@@ -348,7 +338,35 @@ impl Renderer {
             })
             .collect();
         expand_soft_bounds(&gpu_objects, &mut bounds);
-        let component_bounds = boolean_component_bounds(&gpu_objects, &bounds);
+        let mut component_bounds = boolean_component_bounds(&gpu_objects, &bounds);
+        for (index, object) in objects.iter().enumerate() {
+            if object.boolean_parent.is_some() || !object.repetition.enabled {
+                continue;
+            }
+            if !scene_objects
+                .iter()
+                .any(|child| child.boolean_parent == Some(object.uuid))
+            {
+                continue;
+            }
+            let Some(bound) = component_bounds[index].as_mut() else {
+                continue;
+            };
+            let group = crate::model::group_world_matrix(scene_objects, object.uuid);
+            let local_offset = Vec3::from_array(std::array::from_fn(|axis| {
+                if object.repetition.count[axis] > 1 {
+                    object.repetition.count[axis].saturating_sub(1) as f32
+                        * object.repetition.spacing[axis].max(0.001)
+                        * 0.5
+                } else {
+                    0.0
+                }
+            }));
+            bound.half_extent += group.x_axis.truncate().abs() * local_offset.x
+                + group.y_axis.truncate().abs() * local_offset.y
+                + group.z_axis.truncate().abs() * local_offset.z;
+            bound.radius = bound.half_extent.length();
+        }
         let mut group_bounds = Vec::new();
         let mut group_start = 0;
         let mut capacity = 1;

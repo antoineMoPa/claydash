@@ -62,7 +62,6 @@ enum EditorPane {
     Viewport,
     Object,
     Materials,
-    Repetition,
     Operand,
 }
 
@@ -74,7 +73,6 @@ impl EditorPane {
             Self::Viewport => "Viewport",
             Self::Object => "Object",
             Self::Materials => "Materials",
-            Self::Repetition => "Repeat",
             Self::Operand => "Operand",
         }
     }
@@ -105,7 +103,6 @@ impl Default for UiState {
         let inspector = layout.add_pane_against_edge(DropSide::Right, 0.34, EditorPane::Object);
         let right = layout.frame_of(inspector).expect("inspector frame");
         layout.add_pane(right, EditorPane::Materials, None);
-        layout.add_pane(right, EditorPane::Repetition, None);
         layout.add_pane(right, EditorPane::Operand, None);
         layout.focus_pane(inspector);
 
@@ -168,6 +165,19 @@ impl UiState {
                 self.layout.close_pane(pane);
             }
             _ => {}
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn focus_guide_panel(&mut self, panel: &str) {
+        let pane = match panel {
+            "materials" => EditorPane::Materials,
+            "repeat" => EditorPane::Object,
+            "operand" => EditorPane::Operand,
+            _ => EditorPane::Object,
+        };
+        if let Some((id, _)) = self.layout.find_pane(|candidate| *candidate == pane) {
+            self.layout.focus_pane(id);
         }
     }
 
@@ -264,7 +274,10 @@ impl UiState {
                 // Resize handles must not intercept extrusion or operand-selection clicks.
                 if !matches!(
                     tree.get_path("editor.state"),
-                    crate::model::ClaydashValue::EditorState(crate::model::EditorState::Extruding)
+                    crate::model::ClaydashValue::EditorState(
+                        crate::model::EditorState::Extruding
+                            | crate::model::EditorState::DraggingFace
+                    )
                 ) && scene_actions::pending_boolean(tree).is_none()
                 {
                     let object_gizmo_blocker_count = self.regions.len();

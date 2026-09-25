@@ -135,10 +135,6 @@ pub(super) fn repetition_panel(
     tree: &mut DataTree,
     runtime: &mut AnimationRuntime,
 ) {
-    if commands::selected_group_id(tree).is_some() {
-        ui.label("Drill into the group to repeat a primitive.");
-        return;
-    }
     let selection = selected(tree);
     if selection.is_empty() {
         ui.label("Select objects to repeat.");
@@ -151,52 +147,8 @@ pub(super) fn repetition_panel(
     let first_id = first.uuid;
     let mut repetition = first.repetition;
     let mut keyframes = Vec::new();
-    let enabled_response = animatable_widget(
-        ui,
-        tree,
-        runtime,
-        AnimationBinding {
-            object: first_id,
-            property: AnimatableProperty::RepetitionEnabled,
-        },
-        |ui| ui.checkbox(&mut repetition.enabled, "Enable domain repetition"),
-    );
-    let mut changed = enabled_response.changed();
-    append_selected_keyframes_on_hover(
-        ui,
-        &enabled_response,
-        &scene,
-        &selection,
-        AnimatableProperty::RepetitionEnabled,
-        if repetition.enabled { 1.0 } else { 0.0 },
-        &mut keyframes,
-    );
-    ui.label("Axes");
-    ui.horizontal(|ui| {
-        for axis in VectorAxis::ALL {
-            let index = axis.index();
-            let response = animatable_widget(
-                ui,
-                tree,
-                runtime,
-                AnimationBinding {
-                    object: first_id,
-                    property: AnimatableProperty::RepetitionAxis(axis),
-                },
-                |ui| ui.checkbox(&mut repetition.axes[index], axis.label()),
-            );
-            changed |= response.changed();
-            append_selected_keyframes_on_hover(
-                ui,
-                &response,
-                &scene,
-                &selection,
-                AnimatableProperty::RepetitionAxis(axis),
-                if repetition.axes[index] { 1.0 } else { 0.0 },
-                &mut keyframes,
-            );
-        }
-    });
+    let mut changed = false;
+    ui.label("Copies · 1 means off for that axis");
     for axis in VectorAxis::ALL {
         let index = axis.index();
         ui.horizontal_wrapped(|ui| {

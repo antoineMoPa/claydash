@@ -1,9 +1,11 @@
 // position.w is display exposure: 1.0 in the viewport, brighter in material previews.
+// count: object count, BVH node count, viewport height, orthographic flag.
 struct Camera { inverse_view_projection: mat4x4<f32>, position: vec4<f32>, count: vec4<u32> }
 struct Object {
     state: vec4<i32>,
     color: vec4<f32>,
     inverse_rows: array<vec4<f32>, 3>,
+    group_inverse_rows: array<vec4<f32>, 3>,
     params: vec4<f32>,
     repeat_spacing: vec4<f32>,
     repeat_count: vec4<i32>,
@@ -36,6 +38,32 @@ fn repeated_axis(value: f32, spacing: f32, count: i32) -> f32 {
     let half = f32(count - 1) * 0.5;
     let cell = clamp(round(value / safe_spacing), -half, half);
     return value - cell * safe_spacing;
+}
+
+fn group_repeat_point(point: vec3<f32>, root: Object) -> vec3<f32> {
+    let homogeneous = vec4(point, 1.0);
+    let local = vec3(
+        dot(root.group_inverse_rows[0], homogeneous),
+        dot(root.group_inverse_rows[1], homogeneous),
+        dot(root.group_inverse_rows[2], homogeneous)
+    );
+    let folded = vec3(
+        repeated_axis(local.x, root.repeat_spacing.x, root.repeat_count.x),
+        repeated_axis(local.y, root.repeat_spacing.y, root.repeat_count.y),
+        repeated_axis(local.z, root.repeat_spacing.z, root.repeat_count.z)
+    );
+    let delta = local - folded;
+    let row_x = root.group_inverse_rows[0].xyz;
+    let row_y = root.group_inverse_rows[1].xyz;
+    let row_z = root.group_inverse_rows[2].xyz;
+    let determinant = dot(row_x, cross(row_y, row_z));
+    if abs(determinant) < 1e-8 { return point; }
+    let world_delta = (
+        cross(row_y, row_z) * delta.x
+        + cross(row_z, row_x) * delta.y
+        + cross(row_x, row_y) * delta.z
+    ) / determinant;
+    return point - world_delta;
 }
 
 fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
@@ -99,7 +127,20 @@ fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
         let outside = length(max(vec2(polygon, depth), vec2(0.0)));
         distance = outside + min(max(polygon, depth), 0.0);
     }
-    return distance * object.params.w;
+    var world_distance = distance * object.params.w;
+    if object.state.y == 2 && brick_geometry_visible(object) {
+        let relief = material_params[material_headers[object.component.w].offset + BRICK_RELIEF];
+        if world_distance < max(relief.x * 2.0, 0.06) {
+            let bond = material_params[material_headers[object.component.w].offset + BRICK_BOND];
+            let stock = local * object.scale.xyz;
+            let box_q = abs(local) - object.params.xyz;
+            let face = select(select(stock.xy, stock.xz, box_q.y > box_q.z), stock.zy,
+                box_q.x > box_q.y && box_q.x > box_q.z);
+            let height = brick_structure_height(face, bond, relief);
+            world_distance += max(relief.x, 0.0) * (1.0 - height);
+        }
+    }
+    return world_distance;
 }
 
 fn object_distance(point: vec3<f32>, object: Object) -> f32 {
@@ -134,25 +175,32 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     if CSG_SIZE == 2u {
         let parent = objects[root];
         let operand = objects[start];
-        let parent_point = modifier_point(point, parent);
+        let group_repeated = parent.repeat_count.w != 0;
+        let group_point = select(point, group_repeat_point(point, parent), group_repeated);
+        let parent_point = modifier_point(group_point, parent);
         var operand_point = parent_point;
         if operand.modifier.x != parent.modifier.x {
-            operand_point = modifier_point(point, operand);
+            operand_point = modifier_point(group_point, operand);
         }
         let child = vec2(object_distance_at(operand_point, operand), f32(start));
-        var value = vec2(object_distance_at(parent_point, parent), f32(root));
+        var parent_shape = parent;
+        if group_repeated { parent_shape.repeat_count.w = 0; }
+        var value = vec2(object_distance_at(parent_point, parent_shape), f32(root));
         value = combine_operand(value, child, operand, parent);
         return value;
     }
     var values: array<vec2<f32>, CSG_SIZE>;
     let parent = objects[root];
-    let parent_point = modifier_point(point, parent);
+    let group_repeated = parent.repeat_count.w != 0;
+    let group_point = select(point, group_repeat_point(point, parent), group_repeated);
+    let parent_point = modifier_point(group_point, parent);
     for (var i = start; i <= root; i++) {
-        let object = objects[i];
+        var object = objects[i];
         var sample_point = parent_point;
         if object.modifier.x != parent.modifier.x {
-            sample_point = modifier_point(point, object);
+            sample_point = modifier_point(group_point, object);
         }
+        if i == root && group_repeated { object.repeat_count.w = 0; }
         values[i - start] = vec2(object_distance_at(sample_point, object), f32(i));
     }
     for (var i = start; i < root; i++) {
@@ -252,7 +300,8 @@ fn primitive_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -
 }
 
 fn has_analytic_interval(object: Object) -> bool {
-    return object.repeat_count.w == 0 && object.state.y <= 3 && object.modifier.x == 0u;
+    return object.repeat_count.w == 0 && object.state.y <= 3 && object.modifier.x == 0u
+        && !(object.state.y == 2 && brick_geometry_visible(object));
 }
 
 // Traverse bounds once per ray, then march only the intersected primitives.
@@ -418,7 +467,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             if hit {
                 let reflected_normal = scene_normal(point, index);
                 reflected_color = surface_light(point, reflected_normal, -direction, objects[index],
-                    material_surface(point, reflected_normal, objects[index]), false);
+                    material_surface(point, reflected_normal, -direction, objects[index]), false);
             }
             radiance += reflection_weight * reflected_color;
             reflecting = false;
@@ -439,7 +488,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             let outward = scene_normal(point, index);
             let entering = dot(direction, outward) < 0.0;
             let normal = select(-outward, outward, entering);
-            let surface = material_surface(point, normal, object);
+            let surface = material_surface(point, normal, -direction, object);
             let ior = max(surface.ior, 1.0);
             let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
             let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(-direction, normal), 0.0), 5.0);

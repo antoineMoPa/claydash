@@ -627,6 +627,7 @@
                     metallic: egui::TextureId::User(2),
                     solid: egui::TextureId::User(3),
                     diagnostic: egui::TextureId::User(8),
+                    brick: egui::TextureId::User(9),
                     oak: egui::TextureId::User(4),
                     walnut: egui::TextureId::User(5),
                     pine: egui::TextureId::User(6),
@@ -650,7 +651,12 @@
                 _ => None,
             })
             .collect();
-        for kind in [MaterialKind::Transparent, MaterialKind::Metallic, MaterialKind::Solid] {
+        for kind in [
+            MaterialKind::Transparent,
+            MaterialKind::Metallic,
+            MaterialKind::Solid,
+            MaterialKind::Brick,
+        ] {
             assert!(labels.iter().any(|label| label == kind.label()));
         }
         for species in WoodSpecies::ALL {
@@ -821,6 +827,98 @@
         assert!(object_labels.iter().any(|label| label == "Object settings"));
         assert!(object_labels.iter().any(|label| label == "Modifiers"));
         assert!(object_labels.iter().any(|label| label.contains("Radius")));
+    }
+
+    #[test]
+    fn adding_repeat_modifier_creates_visible_copies_with_defaults() {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let crate::model::SdfParams::SphereParams(params) = &object.params else {
+            panic!("expected a sphere");
+        };
+        let diameter = params.radius * 2.0;
+        set_selected(&mut tree, vec![object.uuid]);
+        set_objects(&mut tree, vec![object]);
+        let mut runtime = AnimationRuntime::default();
+        let frame =
+            |events: Vec<egui::Event>, tree: &mut DataTree, runtime: &mut AnimationRuntime| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.set_width(350.0);
+                        modifiers_panel(ui, tree, runtime);
+                    },
+                );
+                output.textures_delta.clear();
+                output.shapes
+            };
+        let position_of = |shapes: &[egui::epaint::ClippedShape], label: &str| {
+            shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing modifier control: {label}"))
+        };
+        let pointer_event = |position, pressed| {
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        let shapes = frame(vec![], &mut tree, &mut runtime);
+        let add = position_of(&shapes, "+ Add modifier");
+        frame(pointer_event(add, true), &mut tree, &mut runtime);
+        frame(pointer_event(add, false), &mut tree, &mut runtime);
+        let shapes = frame(vec![], &mut tree, &mut runtime);
+        let repeat = position_of(&shapes, "Repeat");
+        frame(pointer_event(repeat, true), &mut tree, &mut runtime);
+        frame(pointer_event(repeat, false), &mut tree, &mut runtime);
+
+        let repetition = objects(&tree)[0].repetition;
+        assert!(repetition.enabled);
+        assert_eq!(repetition.count, [3, 1, 1]);
+        assert!(repetition.spacing.x > diameter);
+        let object_id = objects(&tree)[0].uuid;
+        for property in [
+            AnimatableProperty::RepetitionEnabled,
+            AnimatableProperty::RepetitionCount(VectorAxis::X),
+            AnimatableProperty::Position(VectorAxis::X),
+        ] {
+            animation::insert_keyframe(
+                &mut tree,
+                AnimationBinding {
+                    object: object_id,
+                    property,
+                },
+                0,
+                1.0,
+            );
+        }
+
+        let shapes = frame(vec![], &mut tree, &mut runtime);
+        let remove = position_of(&shapes, "Remove");
+        frame(pointer_event(remove, true), &mut tree, &mut runtime);
+        frame(pointer_event(remove, false), &mut tree, &mut runtime);
+        assert!(!objects(&tree)[0].repetition.enabled);
+        let tracks = animation::animation_data(&tree).tracks;
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(
+            tracks[0].binding.property,
+            AnimatableProperty::Position(VectorAxis::X)
+        );
     }
 
     #[test]

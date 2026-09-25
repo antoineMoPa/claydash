@@ -14,6 +14,15 @@ impl UiState {
                 "Move mouse · Alt bypasses guides · click or Enter confirms · Esc cancels".into(),
             ));
         }
+        if matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::DraggingFace)
+        ) {
+            return Some((
+                "Drag face".into(),
+                "Move mouse · Alt bypasses guides · click or Enter confirms · Esc cancels".into(),
+            ));
+        }
         if let Some(pick) = scene_actions::pending_boolean(tree) {
             return Some((
                 pick.operation.label().into(),

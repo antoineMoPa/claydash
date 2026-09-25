@@ -71,7 +71,7 @@ pub(super) fn draw(ui: &egui::Ui, tree: &DataTree, camera: &Camera) -> Ghosts {
         let world_to_clip = projection * transform;
         let local_eye = transform.inverse().transform_point3(camera.position);
         let cells: [Vec<Cell>; 3] = std::array::from_fn(|axis| {
-            let count = if object.repetition.enabled && object.repetition.axes[axis] {
+            let count = if object.repetition.enabled {
                 object.repetition.count[axis]
             } else {
                 1

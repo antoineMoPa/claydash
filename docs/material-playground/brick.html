@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brick material study</title>
+  <style>
+    :root { color-scheme: light; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #f1eee8; color: #24231f; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { width: min(1440px, 100%); margin: auto; padding: clamp(20px, 3vw, 48px); }
+    header { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 24px; }
+    .eyebrow { margin: 0 0 7px; color: #82796c; font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(27px, 3vw, 40px); font-weight: 500; letter-spacing: -.04em; line-height: 1.1; }
+    .hint { margin: 0 0 3px; color: #82796c; font-size: 13px; white-space: nowrap; }
+    .panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    section { min-width: 0; }
+    .pane-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 9px; }
+    h2 { margin: 0; font-size: 13px; font-weight: 650; }
+    .pane-label span { color: #82796c; font-size: 12px; }
+    .image-frame { aspect-ratio: 3 / 2; overflow: hidden; border: 1px solid #d6d0c6; border-radius: 12px; background: #ded8ce; }
+    canvas, img { display: block; width: 100%; height: 100%; }
+    canvas { touch-action: none; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+    img { object-fit: cover; }
+    #status { margin: 11px 0 0; color: #82796c; font-size: 12px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 20px 0 0; }
+    .controls label { display: grid; gap: 5px; color: #514b43; font-size: 12px; }
+    .controls output { color: #82796c; font-variant-numeric: tabular-nums; }
+    .controls input { width: 180px; accent-color: #a45447; }
+    .controls input[type="color"] { width: 80px; height: 26px; padding: 1px; }
+    .controls select { min-width: 180px; padding: 5px; border: 1px solid #d6d0c6; border-radius: 6px; background: #fff; }
+    @media (max-width: 700px) { header { align-items: start; } .hint { display: none; } .panes { grid-template-columns: 1fr; gap: 24px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><p class="eyebrow">Claydash / material lab</p><h1>Brick material study</h1></div>
+    <p class="hint">Drag the render to orbit</p>
+  </header>
+  <div class="panes">
+    <section aria-label="Shader render">
+      <div class="pane-label"><h2>Shader render</h2><span>Raymarched cube</span></div>
+      <div class="image-frame"><canvas id="render" aria-label="Raymarched cube material preview"></canvas></div>
+    </section>
+    <section aria-label="Target material reference">
+      <div class="pane-label"><h2>Target reference</h2><span>Red brick and mortar</span></div>
+      <div class="image-frame"><img src="brick-reference.webp" alt="Close view of a red brick wall corner with pale mortar joints"></div>
+    </section>
+  </div>
+  <div class="controls">
+    <label>Brick width <input id="brick-width" type="range" min="0.30" max="0.80" step="0.01" value="0.52"></label>
+    <label>Course height <input id="course-height" type="range" min="0.16" max="0.38" step="0.01" value="0.25"></label>
+    <label>Mortar width <input id="mortar-width" type="range" min="0.006" max="0.045" step="0.001" value="0.030"></label>
+    <label>Wear <input id="wear" type="range" min="0" max="1" step="0.01" value="0.42"></label>
+    <label>Joint depth <input id="relief" type="range" min="0" max="0.055" step="0.001" value="0.038"></label>
+    <label>Edge rounding <input id="bevel" type="range" min="0.002" max="0.035" step="0.001" value="0.015"></label>
+    <label>Clay porosity <input id="porosity" type="range" min="0" max="1" step="0.01" value="0.62"></label>
+    <label>Firing variation <input id="firing" type="range" min="0" max="1" step="0.01" value="0.48"></label>
+    <label>Efflorescence <input id="efflorescence" type="range" min="0" max="1" step="0.01" value="0.16"></label>
+    <label>Mortar color <input id="mortar-color" type="color" value="#b3aba0"></label>
+    <label>Inspect layer <select id="view-mode"><option value="0">Beauty</option><option value="1">Height</option><option value="2">Normal</option><option value="3">Pores</option><option value="4">Cavity shadow</option></select></label>
+    <label>Camera distance <input id="camera-distance" type="range" min="1.8" max="4.5" step="0.05" value="2.5"></label>
+    <label>Camera height <input id="camera-height" type="range" min="0.4" max="2.5" step="0.05" value="0.85"></label>
+    <label>True SDF relief <input id="geometry-relief" type="checkbox" checked></label>
+  </div>
+  <p id="status" role="status"></p>
+</main>
+<script>
+(() => {
+  const canvas = document.getElementById('render');
+  const status = document.getElementById('status');
+  const gl = canvas.getContext('webgl', { antialias: false, alpha: false });
+  if (!gl) { status.textContent = 'WebGL is unavailable in this browser.'; return; }
+
+  const vertexSource = `
+    attribute vec2 a_position;
+    void main() { gl_Position = vec4(a_position, 0.0, 1.0); }
+  `;
+  const fragmentSource = `
+    precision highp float;
+    uniform vec2 u_resolution;
+    uniform float u_orbit;
+    uniform vec4 u_bond;
+    uniform vec4 u_relief;
+    uniform vec4 u_mineral;
+    uniform int u_mode;
+    uniform int u_geometry;
+    uniform float u_camera_distance;
+    uniform float u_camera_height;
+
+    float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise2(vec2 p) {
+      vec2 cell = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash21(cell), hash21(cell + vec2(1.0, 0.0)), f.x),
+        mix(hash21(cell + vec2(0.0, 1.0)), hash21(cell + vec2(1.0, 1.0)), f.x), f.y);
+    }
+
+    vec2 brickMicroHeight(vec2 face, float pixel) {
+      vec2 poreCell = floor(face * 83.0);
+      vec2 poreCenter = vec2(hash21(poreCell + vec2(11.0, 3.0)), hash21(poreCell + vec2(4.0, 17.0)));
+      float poreDistance = length(fract(face * 83.0) - poreCenter);
+      float poreVisibility = 1.0 - smoothstep(0.004, 0.015, pixel);
+      float pit = step(mix(0.97, 0.76, u_relief.z), hash21(poreCell))
+        * (1.0 - smoothstep(0.12, 0.38, poreDistance)) * poreVisibility;
+      float smallGrain = (noise2(face * 69.0) - 0.5) * poreVisibility;
+      return vec2(pit, -u_relief.z * (0.22 * pit + 0.11 * max(-smallGrain, 0.0)));
+    }
+
+    struct BrickProfile { float height; float clay; float edge; float pit; vec2 cell; };
+    BrickProfile brickProfile(vec2 face, float pixel) {
+      float width = max(u_bond.x, 0.05), height = max(u_bond.y, 0.05);
+      float joint = clamp(u_bond.z, 0.001, min(width, height) * 0.3);
+      float row = floor(face.y / height);
+      vec2 tile = vec2(face.x / width + 0.5 * mod(row, 2.0), face.y / height);
+      vec2 cell = floor(tile);
+      vec2 edge = min(fract(tile), 1.0 - fract(tile)) * vec2(width, height);
+      float distanceToJoint = min(edge.x, edge.y);
+      float irregular = (noise2(face * 37.0) - 0.5) * u_bond.w * 0.012;
+      float chip = step(0.79, hash21(floor(face * 53.0))) * u_bond.w
+        * (1.0 - smoothstep(joint * 0.5, joint * 2.0, distanceToJoint)) * 0.008;
+      float signedEdge = distanceToJoint - joint * 0.5 + irregular - chip;
+      float clay = smoothstep(-0.0015, 0.0025, signedEdge);
+      vec2 micro = brickMicroHeight(face, pixel);
+      float mortarHeight = 0.08 + 0.055 * noise2(face * 28.0);
+      float clayHeight = 0.73 + 0.27 * smoothstep(0.0, max(u_relief.y, 0.002), signedEdge)
+        + micro.y;
+      BrickProfile result;
+      result.height = clamp(mix(mortarHeight, clayHeight, clay), 0.0, 1.0);
+      result.clay = clay;
+      result.edge = signedEdge;
+      result.pit = micro.x;
+      result.cell = cell;
+      return result;
+    }
+
+    float brickStructureHeight(vec2 face) {
+      float width = max(u_bond.x, 0.05), height = max(u_bond.y, 0.05);
+      float joint = clamp(u_bond.z, 0.001, min(width, height) * 0.3);
+      float row = floor(face.y / height);
+      vec2 tile = vec2(face.x / width + 0.5 * mod(row, 2.0), face.y / height);
+      vec2 edge = min(fract(tile), 1.0 - fract(tile)) * vec2(width, height);
+      float signedEdge = min(edge.x, edge.y) - joint * 0.5
+        + (noise2(face * 13.0) - 0.5) * u_bond.w * 0.006;
+      float clay = smoothstep(-0.002, 0.003, signedEdge);
+      return mix(0.25, 0.80 + 0.20 * smoothstep(0.0, max(u_relief.y, 0.002), signedEdge), clay);
+    }
+
+    vec2 brickParallax(vec2 face, vec2 viewUV, float viewNormal, float pixel) {
+      float depth = max(u_relief.x, 0.0);
+      if (depth < 0.0005 || viewNormal <= 0.05) return face;
+      vec2 slope = viewUV / max(viewNormal, 0.25);
+      vec2 previousFace = face;
+      float previousDepth = 0.0;
+      float previousGap = -depth * (1.0 - brickProfile(face, pixel).height);
+      for (int i = 1; i <= 12; i++) {
+        float travel = depth * float(i) / 12.0;
+        vec2 sampleFace = face - slope * travel;
+        float gap = travel - depth * (1.0 - brickProfile(sampleFace, pixel).height);
+        if (gap >= 0.0) {
+          float fraction = clamp(-previousGap / max(gap - previousGap, 0.00001), 0.0, 1.0);
+          return mix(previousFace, sampleFace, fraction);
+        }
+        previousFace = sampleFace;
+        previousDepth = travel;
+        previousGap = gap;
+      }
+      return face - slope * previousDepth;
+    }
+
+    float brickShadow(vec2 face, float height, vec2 lightUV, float lightNormal, float pixel) {
+      if (u_relief.x < 0.0005 || lightNormal <= 0.05) return 1.0;
+      vec2 slope = lightUV / max(lightNormal, 0.25);
+      float baseHeight = height * u_relief.x;
+      float occlusion = 0.0;
+      for (int i = 1; i <= 7; i++) {
+        float travel = u_relief.x * float(i) / 7.0;
+        float surfaceHeight = brickProfile(face + slope * travel, pixel).height * u_relief.x;
+        occlusion = max(occlusion, smoothstep(0.001, 0.005, surfaceHeight - baseHeight - travel));
+      }
+      return 1.0 - 0.56 * occlusion;
+    }
+
+    float boxDistance(vec3 point) {
+      vec3 q = abs(point) - vec3(0.72);
+      float distance = length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - 0.035;
+      if (u_geometry == 1) {
+        vec2 face = q.x > q.y && q.x > q.z ? point.zy : (q.y > q.z ? point.xz : point.xy);
+        distance += u_relief.x * (1.0 - brickStructureHeight(face));
+      }
+      return distance;
+    }
+
+    vec2 sceneDistance(vec3 point) {
+      float cube = boxDistance(point - vec3(0.0, -0.02, 0.0));
+      float ground = point.y + 0.79;
+      return cube < ground ? vec2(cube, 1.0) : vec2(ground, 2.0);
+    }
+
+    vec3 surfaceNormal(vec3 point) {
+      float e = 0.0015;
+      return normalize(vec3(
+        sceneDistance(point + vec3(e, 0.0, 0.0)).x - sceneDistance(point - vec3(e, 0.0, 0.0)).x,
+        sceneDistance(point + vec3(0.0, e, 0.0)).x - sceneDistance(point - vec3(0.0, e, 0.0)).x,
+        sceneDistance(point + vec3(0.0, 0.0, e)).x - sceneDistance(point - vec3(0.0, 0.0, e)).x
+      ));
+    }
+
+    struct BrickSurface { vec3 color; vec3 normal; float roughness; float height; float pit; float cavity; };
+    BrickSurface brickMaterial(vec3 point, vec3 normal, vec3 view, vec3 light) {
+      vec3 shapePoint = point - vec3(0.0, -0.02, 0.0);
+      vec3 q = abs(shapePoint) - vec3(0.72);
+      vec3 faceNormal = q.x > q.y && q.x > q.z ? vec3(1.0, 0.0, 0.0)
+        : (q.y > q.z ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));
+      vec3 axisU = vec3(1.0, 0.0, 0.0), axisV = vec3(0.0, 1.0, 0.0);
+      if (faceNormal.x > 0.5) axisU = vec3(0.0, 0.0, 1.0);
+      else if (faceNormal.y > 0.5) axisV = vec3(0.0, 0.0, 1.0);
+      vec2 face = vec2(dot(shapePoint, axisU), dot(shapePoint, axisV));
+      float pixel = max(0.83 * length(point - vec3(u_camera_distance * sin(u_orbit), u_camera_height, u_camera_distance * cos(u_orbit))) / u_resolution.y, 0.001);
+      vec2 viewUV = vec2(dot(view, axisU), dot(view, axisV));
+      vec2 sampleFace = u_geometry == 1 ? face : brickParallax(face, viewUV, dot(view, normal), pixel);
+      BrickProfile p = brickProfile(sampleFace, pixel);
+      float delta = max(pixel * 0.55, 0.0025);
+      float slopeU = u_geometry == 1
+        ? (brickMicroHeight(sampleFace + vec2(delta, 0.0), pixel).y - brickMicroHeight(sampleFace - vec2(delta, 0.0), pixel).y) / (2.0 * delta)
+        : (brickProfile(sampleFace + vec2(delta, 0.0), pixel).height - brickProfile(sampleFace - vec2(delta, 0.0), pixel).height) / (2.0 * delta);
+      float slopeV = u_geometry == 1
+        ? (brickMicroHeight(sampleFace + vec2(0.0, delta), pixel).y - brickMicroHeight(sampleFace - vec2(0.0, delta), pixel).y) / (2.0 * delta)
+        : (brickProfile(sampleFace + vec2(0.0, delta), pixel).height - brickProfile(sampleFace - vec2(0.0, delta), pixel).height) / (2.0 * delta);
+      vec3 shadeNormal = normalize(normal - u_relief.x * (axisU * slopeU + axisV * slopeV) * (u_geometry == 1 ? 0.4 * p.clay : 1.0));
+      float batch = hash21(p.cell);
+      float firingCloud = noise2(sampleFace * 8.0 + p.cell * 0.31) - 0.5;
+      float sand = noise2(sampleFace * 64.0) - 0.5;
+      float fired = 1.0 + u_relief.w * (0.33 * (batch - 0.5) + 0.27 * firingCloud);
+      vec3 clayColor = vec3(0.51, 0.19, 0.14) * fired * (1.0 + 0.24 * sand - 0.38 * p.pit * u_relief.z);
+      float chalk = smoothstep(0.35, 0.75, noise2(sampleFace * 17.0 + vec2(11.0, 3.0)))
+        * (1.0 - smoothstep(0.0, max(u_bond.z * 3.0, 0.01), p.edge));
+      clayColor = mix(clayColor, vec3(0.78, 0.75, 0.69), u_mineral.w * chalk * 0.36);
+      vec3 mortarColor = u_mineral.rgb * (0.91 + 0.16 * (noise2(sampleFace * 31.0) - 0.5));
+      vec2 lightUV = vec2(dot(light, axisU), dot(light, axisV));
+      float cavity = u_geometry == 1 ? 1.0 : brickShadow(sampleFace, p.height, lightUV, dot(light, normal), pixel);
+      float contact = mix(0.90, 1.0, smoothstep(0.06, 0.85, p.height));
+      BrickSurface result;
+      result.color = mix(mortarColor, clayColor, p.clay) * cavity * contact;
+      result.normal = shadeNormal;
+      result.roughness = clamp(mix(0.97, 0.88 + 0.06 * u_relief.z * abs(sand) + 0.20 * p.pit, p.clay), 0.65, 1.0);
+      result.height = p.height;
+      result.pit = p.pit;
+      result.cavity = cavity;
+      return result;
+    }
+
+    float shadow(vec3 point, vec3 lightDirection) {
+      float shade = 1.0;
+      float distanceAlongRay = 0.025;
+      for (int i = 0; i < 42; i++) {
+        float distanceToScene = sceneDistance(point + lightDirection * distanceAlongRay).x;
+        shade = min(shade, 13.0 * distanceToScene / distanceAlongRay);
+        distanceAlongRay += clamp(distanceToScene, 0.018, 0.22);
+        if (distanceToScene < 0.001 || distanceAlongRay > 6.0) break;
+      }
+      return clamp(shade, 0.0, 1.0);
+    }
+
+    void main() {
+      vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
+      vec3 camera = vec3(u_camera_distance * sin(u_orbit), u_camera_height, u_camera_distance * cos(u_orbit));
+      vec3 forward = normalize(vec3(0.0, -0.05, 0.0) - camera);
+      vec3 right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
+      vec3 up = cross(right, forward);
+      vec3 ray = normalize(forward * 2.25 + right * uv.x * 2.0 + up * uv.y * 2.0);
+      vec3 background = mix(vec3(0.88, 0.86, 0.82), vec3(0.79, 0.77, 0.73), smoothstep(-0.5, 0.8, uv.y));
+      vec3 color = background;
+      float distanceAlongRay = 0.0;
+      vec2 hit = vec2(0.0);
+      for (int i = 0; i < 100; i++) {
+        hit = sceneDistance(camera + ray * distanceAlongRay);
+        if (hit.x < 0.001 || distanceAlongRay > 18.0) break;
+        distanceAlongRay += hit.x;
+      }
+      if (hit.x < 0.001 && distanceAlongRay < 18.0) {
+        vec3 point = camera + ray * distanceAlongRay;
+        vec3 normal = surfaceNormal(point);
+        vec3 lightDirection = normalize(vec3(-0.55, 1.0, 0.65));
+        BrickSurface surface = brickMaterial(point, normal, -ray, lightDirection);
+        vec3 shadeNormal = hit.y < 1.5 ? surface.normal : normal;
+        float direct = max(dot(shadeNormal, lightDirection), 0.0) * shadow(point + normal * 0.003, lightDirection);
+        float ambient = 0.42 + 0.16 * max(normal.y, 0.0);
+        vec3 base = hit.y < 1.5 ? surface.color : vec3(0.76, 0.74, 0.70);
+        color = base * (ambient + 0.55 * direct);
+        if (hit.y < 1.5) {
+          vec3 halfVector = normalize(lightDirection - ray);
+          color += vec3(0.055) * pow(max(dot(shadeNormal, halfVector), 0.0), mix(35.0, 5.0, surface.roughness)) * direct;
+        }
+        color = mix(color, background, 1.0 - exp(-0.012 * distanceAlongRay * distanceAlongRay));
+        if (hit.y < 1.5 && u_mode == 1) color = vec3(surface.height);
+        if (hit.y < 1.5 && u_mode == 2) color = surface.normal * 0.5 + 0.5;
+        if (hit.y < 1.5 && u_mode == 3) color = vec3(surface.pit);
+        if (hit.y < 1.5 && u_mode == 4) color = vec3(surface.cavity);
+      }
+      color = pow(color, vec3(1.0 / 2.2));
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `;
+
+  function compile(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(shader));
+    }
+    return shader;
+  }
+
+  try {
+    const program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+    gl.useProgram(program);
+    const quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, 'a_position');
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    const resolution = gl.getUniformLocation(program, 'u_resolution');
+    const orbitUniform = gl.getUniformLocation(program, 'u_orbit');
+    const bondUniform = gl.getUniformLocation(program, 'u_bond');
+    const reliefUniform = gl.getUniformLocation(program, 'u_relief');
+    const mineralUniform = gl.getUniformLocation(program, 'u_mineral');
+    const modeUniform = gl.getUniformLocation(program, 'u_mode');
+    const geometryUniform = gl.getUniformLocation(program, 'u_geometry');
+    const cameraDistanceUniform = gl.getUniformLocation(program, 'u_camera_distance');
+    const cameraHeightUniform = gl.getUniformLocation(program, 'u_camera_height');
+    const controls = ['brick-width', 'course-height', 'mortar-width', 'wear', 'relief', 'bevel', 'porosity', 'firing', 'efflorescence', 'mortar-color', 'view-mode', 'camera-distance', 'camera-height', 'geometry-relief'].map(id => document.getElementById(id));
+    let orbit = 0.6;
+    let pointerX = null;
+    let startingOrbit = orbit;
+
+    function draw() {
+      const bounds = canvas.getBoundingClientRect();
+      const scale = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(1, Math.round(bounds.width * scale));
+      const height = Math.max(1, Math.round(bounds.height * scale));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      gl.viewport(0, 0, width, height);
+      gl.uniform2f(resolution, width, height);
+      gl.uniform1f(orbitUniform, orbit);
+      gl.uniform4f(bondUniform, ...controls.slice(0, 4).map(control => Number(control.value)));
+      gl.uniform4f(reliefUniform, ...controls.slice(4, 8).map(control => Number(control.value)));
+      const mortar = controls[9].value;
+      gl.uniform4f(mineralUniform, parseInt(mortar.slice(1, 3), 16) / 255, parseInt(mortar.slice(3, 5), 16) / 255, parseInt(mortar.slice(5, 7), 16) / 255, Number(controls[8].value));
+      gl.uniform1i(modeUniform, Number(controls[10].value));
+      gl.uniform1f(cameraDistanceUniform, Number(controls[11].value));
+      gl.uniform1f(cameraHeightUniform, Number(controls[12].value));
+      gl.uniform1i(geometryUniform, controls[13].checked ? 1 : 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    controls.forEach(control => {
+      if (control.type === 'range') {
+        const value = document.createElement('output');
+        value.textContent = control.value;
+        control.parentElement.appendChild(value);
+        control.addEventListener('input', () => { value.textContent = control.value; draw(); });
+      } else {
+        control.addEventListener('input', draw);
+      }
+    });
+
+    canvas.addEventListener('pointerdown', event => {
+      pointerX = event.clientX;
+      startingOrbit = orbit;
+      canvas.setPointerCapture(event.pointerId);
+    });
+    canvas.addEventListener('pointermove', event => {
+      if (pointerX === null) return;
+      orbit = startingOrbit + (event.clientX - pointerX) / canvas.clientWidth * 3.0;
+      draw();
+    });
+    canvas.addEventListener('pointerup', () => { pointerX = null; });
+    canvas.addEventListener('pointercancel', () => { pointerX = null; });
+    new ResizeObserver(draw).observe(canvas);
+    draw();
+  } catch (error) {
+    status.textContent = `Shader error: ${error.message}`;
+    console.error(error);
+  }
+})();
+</script>
+</body>
+</html>

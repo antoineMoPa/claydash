@@ -64,7 +64,7 @@
     <section id="shapes">
       <h2>Make and edit shapes</h2>
       <p>Add a sphere, box, cylinder, or torus with the shape buttons at the top-left of the viewport. In a narrow viewport, open the <strong>Add</strong> menu instead. The command palette (<kbd class="key">Cmd/Ctrl</kbd>+<kbd class="key">Shift</kbd>+<kbd class="key">P</kbd>) also finds these actions. New shapes appear in the Scene tree and can be selected there or in the viewport.</p>
-      <p>Move, rotate, and scale a selection with <kbd class="key">G</kbd>, <kbd class="key">R</kbd>, and <kbd class="key">S</kbd>. During a transform, press <kbd class="key">X</kbd>, <kbd class="key">Y</kbd>, or <kbd class="key">Z</kbd> to constrain it to one world axis; press the same key again to unlock it. The <strong>Object</strong> tab also lets you enter Position, Rotation, Scale, and shape dimensions precisely. Selected shapes show viewport handles for dimensions such as box faces, radius, cylinder height, and torus radii. Undo is available for these edits.</p>
+      <p>Move, rotate, and scale a selection with <kbd class="key">G</kbd>, <kbd class="key">R</kbd>, and <kbd class="key">S</kbd>. During a transform, press <kbd class="key">X</kbd>, <kbd class="key">Y</kbd>, or <kbd class="key">Z</kbd> to constrain it to one world axis; press the same key again to unlock it. A first viewport click selects the object, a second enters its exact selection, and a further click selects a face when the shape supports it. With a face selected, <kbd class="key">G</kbd> drags that face; otherwise it moves the object. The <strong>Object</strong> tab also lets you enter Position, Rotation, Scale, and shape dimensions precisely. Selected shapes show viewport handles for dimensions such as box faces, radius, cylinder height, and torus radii. Undo is available for these edits.</p>
       <p>Movement and face edits can snap to guides from other boxes. Hold <kbd class="key">Alt</kbd> while dragging to temporarily bypass a guide.</p>
       <figure><img class="detail" src="shapes.webp" alt="Selected shape with Object settings and editable dimensions" width="1280" height="800" loading="lazy"><figcaption>An isolated box and its Object settings.</figcaption></figure>
     </section>
@@ -76,7 +76,7 @@
     </section>
     <section id="face-cut">
       <h2>Face cutting and extrusion</h2>
-      <p>Click a box face or cylinder cap, then press <kbd class="key">E</kbd> to extrude it. Move the pointer to set the depth, then click or press <kbd class="key">Enter</kbd> to confirm. The selected face stays available for further editing; <kbd class="key">Esc</kbd> cancels the current extrusion.</p>
+      <p>Select a box or cylinder, click it again to enter its exact selection, then click the face or cap you want. Press <kbd class="key">E</kbd> to extrude it. Move the pointer to set the depth, then click or press <kbd class="key">Enter</kbd> to confirm. The selected face stays available for further editing; <kbd class="key">Esc</kbd> cancels the current extrusion.</p>
       <p>For a custom outline, select a box or generated extrusion face and choose the scissors <strong>Face Cut</strong> tool in the viewport's lower-right corner. Click the outline's corners, then click the first corner or press <kbd class="key">Enter</kbd> to close it. Choose a face region if prompted. Move the pointer away from the face for a raised shape or through it for a cut, then click or press <kbd class="key">Enter</kbd> to finish. <kbd class="key">Backspace</kbd> removes the latest point, <kbd class="key">Esc</kbd> cancels, and holding <kbd class="key">Alt</kbd> bypasses snapping guides.</p>
       <figure><img class="detail" src="face-cut.webp" alt="A polygon extruded from a box face alongside a box face extrusion, with the selected polygon cap outlined" width="1280" height="800" loading="lazy"><figcaption>A polygon face extrusion and a box face extrusion.</figcaption></figure>
     </section>
@@ -93,8 +93,7 @@
     </section>
     <section id="repeat">
       <h2>Repeat an object</h2>
-      <p>In the <strong>Object</strong> tab's <strong>Modifiers</strong> section, choose <strong>+ Add modifier → Repeat</strong>. It starts with three copies along X. Choose other axes, counts, and spacing to create a finite pattern without adding a Scene row for every copy. Select a primitive inside a Boolean group when you want to repeat just that primitive.</p>
-      <figure><img class="detail" src="repeat.webp" alt="Repeat modifier with axis count and spacing controls" width="1280" height="800" loading="lazy"><figcaption>Choose axes, counts, and spacing in the Repeat modifier.</figcaption></figure>
+      <p>In the <strong>Object</strong> tab's <strong>Modifiers</strong> section, choose <strong>+ Add modifier → Repeat</strong>. It starts with three copies along X. Set the copy count and spacing on each axis to create a finite pattern without adding a Scene row for every copy. A count of 1 leaves that axis unchanged. Select a complete Boolean group to repeat the assembled shape, such as the default duck, or select a primitive inside it to repeat just that part.</p>
     </section>
     <section id="modifiers">
       <h2>Deform with a lattice</h2>

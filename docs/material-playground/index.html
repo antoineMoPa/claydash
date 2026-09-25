@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Brick material study</title>
+  <title>Material shader study</title>
   <style>
     :root { color-scheme: light; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #f1eee8; color: #24231f; }
     * { box-sizing: border-box; }
@@ -24,16 +24,13 @@
     canvas:active { cursor: grabbing; }
     img { object-fit: cover; }
     #status { margin: 11px 0 0; color: #82796c; font-size: 12px; }
-    .controls { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 20px 0 0; }
-    .controls label { display: grid; gap: 5px; color: #514b43; font-size: 12px; }
-    .controls input { width: 180px; accent-color: #a45447; }
     @media (max-width: 700px) { header { align-items: start; } .hint { display: none; } .panes { grid-template-columns: 1fr; gap: 24px; } }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <div><p class="eyebrow">Claydash / material lab</p><h1>Brick material study</h1></div>
+    <div><p class="eyebrow">Claydash / material lab</p><h1>Material shader study</h1></div>
     <p class="hint">Drag the render to orbit</p>
   </header>
   <div class="panes">
@@ -43,14 +40,8 @@
     </section>
     <section aria-label="Target material reference">
       <div class="pane-label"><h2>Target reference</h2><span>Red brick and mortar</span></div>
-      <div class="image-frame"><img src="reference.webp" alt="Close view of a red brick wall corner with pale mortar joints"></div>
+      <div class="image-frame"><img src="brick-reference.webp" alt="Close view of a red brick wall corner with pale mortar joints"></div>
     </section>
-  </div>
-  <div class="controls">
-    <label>Brick width <input id="brick-width" type="range" min="0.30" max="0.80" step="0.01" value="0.52"></label>
-    <label>Course height <input id="course-height" type="range" min="0.16" max="0.38" step="0.01" value="0.25"></label>
-    <label>Mortar width <input id="mortar-width" type="range" min="0.006" max="0.045" step="0.001" value="0.019"></label>
-    <label>Wear <input id="wear" type="range" min="0" max="1" step="0.01" value="0.42"></label>
   </div>
   <p id="status" role="status"></p>
 </main>
@@ -69,15 +60,6 @@
     precision highp float;
     uniform vec2 u_resolution;
     uniform float u_orbit;
-    uniform vec4 u_brick;
-
-    float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-    float noise2(vec2 p) {
-      vec2 cell = floor(p), f = fract(p);
-      f = f * f * (3.0 - 2.0 * f);
-      return mix(mix(hash21(cell), hash21(cell + vec2(1.0, 0.0)), f.x),
-        mix(hash21(cell + vec2(0.0, 1.0)), hash21(cell + vec2(1.0, 1.0)), f.x), f.y);
-    }
 
     float boxDistance(vec3 point) {
       vec3 q = abs(point) - vec3(0.72);
@@ -99,24 +81,9 @@
       ));
     }
 
+    // Replace this color function when prototyping the target material.
     vec3 materialColor(vec3 point, vec3 normal) {
-      // A face-specific running bond keeps the horizontal courses level on both walls.
-      vec2 face = abs(normal.x) > abs(normal.z) && abs(normal.x) > abs(normal.y)
-        ? vec2(point.z, point.y) : (abs(normal.y) > abs(normal.z)
-        ? vec2(point.x, point.z) : vec2(point.x, point.y));
-      float row = floor(face.y / u_brick.y);
-      vec2 tiled = vec2(face.x / u_brick.x + 0.5 * mod(row, 2.0), face.y / u_brick.y);
-      vec2 cell = floor(tiled);
-      vec2 edge = min(fract(tiled), 1.0 - fract(tiled)) * u_brick.xy;
-      float wear = (noise2(face * 45.0) - 0.5) * u_brick.w * 0.009;
-      float brick = smoothstep(-0.002, 0.003, min(edge.x, edge.y) - u_brick.z * 0.5 + wear);
-      float batch = hash21(cell);
-      float grain = noise2(face * 76.0) - 0.5;
-      float freckles = step(0.82, hash21(floor(face * 115.0)));
-      vec3 clay = vec3(0.51, 0.19, 0.14) * (0.82 + 0.35 * batch + 0.19 * grain - 0.12 * freckles * u_brick.w);
-      vec3 mortar = vec3(0.70, 0.67, 0.61) * (0.92 + 0.15 * noise2(face * 29.0));
-      float bevel = 1.0 - 0.13 * (1.0 - smoothstep(u_brick.z * 0.5, u_brick.z * 1.8, min(edge.x, edge.y)));
-      return mix(mortar, clay * bevel, brick);
+      return vec3(0.72, 0.68, 0.60);
     }
 
     float shadow(vec3 point, vec3 lightDirection) {
@@ -191,8 +158,6 @@
     gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     const resolution = gl.getUniformLocation(program, 'u_resolution');
     const orbitUniform = gl.getUniformLocation(program, 'u_orbit');
-    const brickUniform = gl.getUniformLocation(program, 'u_brick');
-    const controls = ['brick-width', 'course-height', 'mortar-width', 'wear'].map(id => document.getElementById(id));
     let orbit = 0.6;
     let pointerX = null;
     let startingOrbit = orbit;
@@ -209,11 +174,8 @@
       gl.viewport(0, 0, width, height);
       gl.uniform2f(resolution, width, height);
       gl.uniform1f(orbitUniform, orbit);
-      gl.uniform4f(brickUniform, ...controls.map(control => Number(control.value)));
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
-
-    controls.forEach(control => control.addEventListener('input', draw));
 
     canvas.addEventListener('pointerdown', event => {
       pointerX = event.clientX;

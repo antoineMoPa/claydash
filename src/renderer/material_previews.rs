@@ -74,6 +74,7 @@ impl Renderer {
             Material::preset(MaterialKind::Metallic),
             Material::preset(MaterialKind::Solid),
             Material::preset(MaterialKind::Diagnostic),
+            Material::preset(MaterialKind::Brick),
             Material::wood_preset(WoodSpecies::Oak),
             Material::wood_preset(WoodSpecies::Walnut),
             Material::wood_preset(WoodSpecies::Pine),
@@ -90,10 +91,11 @@ impl Renderer {
             metallic: ids[1],
             solid: ids[2],
             diagnostic: ids[3],
-            oak: ids[4],
-            walnut: ids[5],
-            pine: ids[6],
-            maple: ids[7],
+            brick: ids[4],
+            oak: ids[5],
+            walnut: ids[6],
+            pine: ids[7],
+            maple: ids[8],
             assets: Vec::new(),
         });
         self.material_preview_pipeline = Some(pipeline);

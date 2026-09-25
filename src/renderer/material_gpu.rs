@@ -39,6 +39,26 @@ impl PackedMaterials {
         self.params.push([material.refractive_index, 0.0, 0.0, 0.0]);
         match material.kind {
             MaterialKind::Wood => pack_wood(material, &mut self.params),
+            MaterialKind::Brick => self.params.extend_from_slice(&[
+                [
+                    material.brick.width,
+                    material.brick.course_height,
+                    material.brick.mortar_width,
+                    material.brick.wear,
+                ],
+                [
+                    material.brick.relief,
+                    material.brick.bevel,
+                    material.brick.porosity,
+                    material.brick.firing,
+                ],
+                [
+                    material.brick.mortar_color.x,
+                    material.brick.mortar_color.y,
+                    material.brick.mortar_color.z,
+                    material.brick.efflorescence,
+                ],
+            ]),
             MaterialKind::Diagnostic => self.params.push([8.0, 0.96, 0.35, 0.1]),
             _ => {}
         }
@@ -97,6 +117,7 @@ pub(super) fn shader_source() -> String {
         &[
             include_str!("../../assets/shaders/material_common.wgsl"),
             include_str!("../../assets/shaders/material_wood.wgsl"),
+            include_str!("../../assets/shaders/material_brick.wgsl"),
             include_str!("../../assets/shaders/material_diagnostic.wgsl"),
             include_str!("../../assets/shaders/ambient_occlusion.wgsl"),
         ]
@@ -117,7 +138,9 @@ mod tests {
         assert_eq!(packed.params.len(), 8);
         assert_eq!(packed.insert(Material::preset(MaterialKind::Diagnostic)), 1);
         assert_eq!(packed.params.len(), 11);
-        assert_eq!(std::mem::size_of::<GpuObject>(), 176);
+        assert_eq!(packed.insert(Material::preset(MaterialKind::Brick)), 2);
+        assert_eq!(packed.params.len(), 16);
+        assert_eq!(std::mem::size_of::<GpuObject>(), 224);
         assert_eq!(std::mem::size_of::<GpuMaterialHeader>(), 16);
     }
 }

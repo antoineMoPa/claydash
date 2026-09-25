@@ -168,7 +168,7 @@ impl AnimatableProperty {
             Self::MaterialOpacity => Some(object.material.opacity),
             Self::OperandSoftness => Some(object.softness),
             Self::RepetitionEnabled => Some(if object.repetition.enabled { 1.0 } else { 0.0 }),
-            Self::RepetitionAxis(axis) => Some(if object.repetition.axes[axis.index()] {
+            Self::RepetitionAxis(axis) => Some(if object.repetition.count[axis.index()] > 1 {
                 1.0
             } else {
                 0.0
@@ -254,7 +254,14 @@ impl AnimatableProperty {
             Self::MaterialOpacity => object.material.opacity = value.clamp(0.02, 1.0),
             Self::OperandSoftness => object.softness = value.clamp(0.0, 0.5),
             Self::RepetitionEnabled => object.repetition.enabled = value >= 0.5,
-            Self::RepetitionAxis(axis) => object.repetition.axes[axis.index()] = value >= 0.5,
+            Self::RepetitionAxis(axis) => {
+                let count = &mut object.repetition.count[axis.index()];
+                if value < 0.5 {
+                    *count = 1;
+                } else if *count <= 1 {
+                    *count = 2;
+                }
+            }
             Self::RepetitionCount(axis) => {
                 object.repetition.count[axis.index()] = value.round().clamp(1.0, 32.0) as u32
             }

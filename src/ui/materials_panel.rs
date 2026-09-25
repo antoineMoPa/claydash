@@ -11,6 +11,7 @@ pub(super) fn materials_panel(
             MaterialKind::Transparent,
             MaterialKind::Metallic,
             MaterialKind::Solid,
+            MaterialKind::Brick,
             MaterialKind::Diagnostic,
         ] {
             let preset = Material::preset(kind);
@@ -50,6 +51,7 @@ pub(super) fn materials_panel(
             MaterialKind::Transparent,
             MaterialKind::Metallic,
             MaterialKind::Solid,
+            MaterialKind::Brick,
             MaterialKind::Diagnostic,
         ] {
             if (filter.is_empty() || kind.label().contains(&filter))
@@ -252,6 +254,44 @@ pub(super) fn materials_panel(
         }
     }
     color_response.on_hover_text("Press I to keyframe all four color channels");
+    if material.kind == MaterialKind::Brick {
+        ui.separator();
+        ui.label(RichText::new("Brick bond").strong());
+        for (label, value, range) in [
+            ("Brick width", &mut material.brick.width, 0.30..=0.80),
+            (
+                "Course height",
+                &mut material.brick.course_height,
+                0.16..=0.38,
+            ),
+            (
+                "Mortar width",
+                &mut material.brick.mortar_width,
+                0.006..=0.045,
+            ),
+            ("Wear", &mut material.brick.wear, 0.0..=1.0),
+            ("Joint depth", &mut material.brick.relief, 0.0..=0.055),
+            ("Edge rounding", &mut material.brick.bevel, 0.002..=0.035),
+            ("Clay porosity", &mut material.brick.porosity, 0.0..=1.0),
+            ("Firing variation", &mut material.brick.firing, 0.0..=1.0),
+            (
+                "Efflorescence",
+                &mut material.brick.efflorescence,
+                0.0..=1.0,
+            ),
+        ] {
+            changed |= ui
+                .add(egui::Slider::new(value, range).text(label))
+                .changed();
+        }
+        ui.horizontal(|ui| {
+            ui.label("Mortar color");
+            let mut mortar = material.brick.mortar_color.to_array();
+            changed |= ui.color_edit_button_rgb(&mut mortar).changed();
+            material.brick.mortar_color = Vec3::from_array(mortar);
+        });
+        ui.separator();
+    }
     if material.kind == MaterialKind::Wood {
         ui.separator();
         ui.label(RichText::new("Wood grain").strong());

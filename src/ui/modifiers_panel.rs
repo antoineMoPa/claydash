@@ -1,6 +1,10 @@
 use super::*;
 
-pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
+pub(super) fn modifiers_panel(
+    ui: &mut egui::Ui,
+    tree: &mut DataTree,
+    runtime: &mut AnimationRuntime,
+) {
     animation::migrate_legacy_lattice_tracks(tree);
     ui.spacing_mut().item_spacing.y = 8.0;
     ui.label(RichText::new("Modifiers").strong());
@@ -19,18 +23,22 @@ pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     let mut scene = objects(tree);
     let target = commands::selected_group_id(tree).unwrap_or(selection[0]);
     let bounds = crate::model::lattice_bounds(&scene, target);
+    let repeat_spacing =
+        bounds.map(|(min, max)| ((max - min) * 1.1).clamp(Vec3::splat(0.01), Vec3::splat(20.0)));
+    let has_children = crate::model::has_boolean_children(&scene, target);
     let Some(object) = scene.iter_mut().find(|object| object.uuid == target) else {
         return;
     };
-    if object.boolean_parent.is_some() {
-        ui.label("Select the whole object or its top level Boolean group to add a modifier.");
-        return;
-    }
+    let can_lattice = object.boolean_parent.is_none();
+    let can_repeat = !has_children || object.boolean_parent.is_none();
     let mut changed = false;
     let mut snapshot = false;
     ui.menu_button("+ Add modifier", |ui| {
         if ui
-            .add_enabled(object.lattice.is_none(), egui::Button::new("Lattice"))
+            .add_enabled(
+                can_lattice && object.lattice.is_none(),
+                egui::Button::new("Lattice"),
+            )
             .clicked()
         {
             if let Some((min, max)) = bounds {
@@ -38,6 +46,23 @@ pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
                 changed = true;
                 snapshot = true;
             }
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                can_repeat && !object.repetition.enabled,
+                egui::Button::new("Repeat"),
+            )
+            .clicked()
+        {
+            object.repetition = crate::model::Repetition {
+                enabled: true,
+                spacing: repeat_spacing
+                    .unwrap_or_else(|| crate::model::Repetition::default().spacing),
+                ..Default::default()
+            };
+            changed = true;
+            snapshot = true;
             ui.close();
         }
     });
@@ -170,7 +195,7 @@ pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
                 snapshot = true;
             }
         });
-    } else {
+    } else if !object.repetition.enabled {
         ui.group(|ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new("No modifiers").strong());
@@ -181,6 +206,7 @@ pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
         changed = true;
         snapshot = true;
     }
+    let show_repeat = object.repetition.enabled;
     if changed {
         set_objects(tree, scene);
     }
@@ -192,5 +218,29 @@ pub(super) fn modifiers_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     }
     if snapshot {
         tree.make_undo_redo_snapshot();
+    }
+    if show_repeat {
+        let mut remove_repeat = false;
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Repeat").strong().size(16.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    remove_repeat = ui.small_button("Remove").clicked();
+                });
+            });
+            if !remove_repeat {
+                repetition_panel(ui, tree, runtime);
+            }
+        });
+        if remove_repeat {
+            let mut scene = objects(tree);
+            if let Some(object) = scene.iter_mut().find(|object| object.uuid == target) {
+                object.repetition.enabled = false;
+                set_objects(tree, scene);
+                animation::remove_repetition_tracks(tree, target);
+                tree.make_undo_redo_snapshot();
+            }
+        }
     }
 }

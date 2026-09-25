@@ -9,6 +9,7 @@ pub enum EditorState {
     Scaling,
     Rotating,
     Extruding,
+    DraggingFace,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,7 +137,40 @@ pub enum MaterialKind {
     #[default]
     Solid,
     Wood,
+    Brick,
     Diagnostic,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrickSettings {
+    pub width: f32,
+    pub course_height: f32,
+    pub mortar_width: f32,
+    pub wear: f32,
+    pub relief: f32,
+    pub bevel: f32,
+    pub porosity: f32,
+    pub firing: f32,
+    pub mortar_color: Vec3,
+    pub efflorescence: f32,
+}
+
+impl Default for BrickSettings {
+    fn default() -> Self {
+        Self {
+            width: 0.52,
+            course_height: 0.25,
+            mortar_width: 0.030,
+            wear: 0.42,
+            relief: 0.038,
+            bevel: 0.015,
+            porosity: 0.62,
+            firing: 0.48,
+            mortar_color: Vec3::new(0.70, 0.67, 0.61),
+            efflorescence: 0.16,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,11 +295,12 @@ impl WoodSettings {
 }
 
 impl MaterialKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Transparent,
         Self::Metallic,
         Self::Solid,
         Self::Wood,
+        Self::Brick,
         Self::Diagnostic,
     ];
 
@@ -275,6 +310,7 @@ impl MaterialKind {
             Self::Metallic => "Metallic",
             Self::Solid => "Solid",
             Self::Wood => "Wood",
+            Self::Brick => "Brick",
             Self::Diagnostic => "Diagnostic",
         }
     }
@@ -283,6 +319,7 @@ impl MaterialKind {
         match self {
             Self::Solid => 0,
             Self::Wood => 1,
+            Self::Brick => 5,
             Self::Transparent => 2,
             Self::Metallic => 3,
             Self::Diagnostic => 4,
@@ -301,6 +338,8 @@ pub struct Material {
     pub opacity: f32,
     #[serde(default)]
     pub wood: WoodSettings,
+    #[serde(default)]
+    pub brick: BrickSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -331,6 +370,7 @@ impl Default for Material {
             refractive_index: 1.45,
             opacity: 1.0,
             wood: WoodSettings::default(),
+            brick: BrickSettings::default(),
         }
     }
 }
@@ -377,6 +417,12 @@ impl Material {
                 roughness: 0.65,
                 ..Self::default()
             },
+            MaterialKind::Brick => Self {
+                kind,
+                color: Vec4::new(0.51, 0.19, 0.14, 1.0),
+                roughness: 0.88,
+                ..Self::default()
+            },
         }
     }
 
@@ -395,19 +441,40 @@ impl Material {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct Repetition {
     pub enabled: bool,
-    pub axes: [bool; 3],
     pub count: [u32; 3],
     pub spacing: Vec3,
+}
+
+#[derive(Deserialize)]
+struct StoredRepetition {
+    enabled: bool,
+    #[serde(default)]
+    axes: Option<[bool; 3]>,
+    count: [u32; 3],
+    spacing: Vec3,
+}
+
+impl<'de> Deserialize<'de> for Repetition {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let stored = StoredRepetition::deserialize(deserializer)?;
+        let count = stored.axes.map_or(stored.count, |axes| {
+            std::array::from_fn(|axis| if axes[axis] { stored.count[axis] } else { 1 })
+        });
+        Ok(Self {
+            enabled: stored.enabled,
+            count,
+            spacing: stored.spacing,
+        })
+    }
 }
 
 impl Default for Repetition {
     fn default() -> Self {
         Self {
             enabled: false,
-            axes: [true, false, false],
             count: [3, 1, 1],
             spacing: Vec3::splat(0.8),
         }
@@ -773,8 +840,20 @@ impl SdfObject {
     }
 
     pub fn distance_with_matrix(&self, point: Vec3, matrix: Mat4) -> f32 {
+        self.distance_with_matrix_at(point, matrix, true)
+    }
+
+    pub(crate) fn distance_with_matrix_without_repetition(&self, point: Vec3, matrix: Mat4) -> f32 {
+        self.distance_with_matrix_at(point, matrix, false)
+    }
+
+    fn distance_with_matrix_at(&self, point: Vec3, matrix: Mat4, repeat: bool) -> f32 {
         let local = (matrix.inverse() * point.extend(1.0)).truncate();
-        let local = self.repeated_local_point(local);
+        let local = if repeat {
+            self.repeated_local_point(local)
+        } else {
+            local
+        };
         let distance = match self.params {
             SdfParams::SphereParams(ref params) => local.length() - params.radius,
             SdfParams::BoxParams(ref params) => {
@@ -811,12 +890,12 @@ impl SdfObject {
         distance * scale.min_element()
     }
 
-    fn repeated_local_point(&self, mut local: Vec3) -> Vec3 {
+    pub(crate) fn repeated_local_point(&self, mut local: Vec3) -> Vec3 {
         if !self.repetition.enabled {
             return local;
         }
         for axis in 0..3 {
-            if !self.repetition.axes[axis] || self.repetition.count[axis] <= 1 {
+            if self.repetition.count[axis] <= 1 {
                 continue;
             }
             let spacing = self.repetition.spacing[axis].max(0.001);
@@ -952,7 +1031,7 @@ pub fn lattice_bounds(scene: &[SdfObject], root: uuid::Uuid) -> Option<(Vec3, Ve
         let mut extent = extent;
         if object.repetition.enabled {
             for axis in 0..3 {
-                if object.repetition.axes[axis] {
+                if object.repetition.count[axis] > 1 {
                     extent[axis] += object.repetition.count[axis].saturating_sub(1) as f32
                         * object.repetition.spacing[axis].max(0.001)
                         * 0.5;

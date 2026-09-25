@@ -44,6 +44,7 @@ struct GpuObject {
     meta: [i32; 4],
     color: [f32; 4],
     inverse_rows: [[f32; 4]; 3],
+    group_inverse_rows: [[f32; 4]; 3],
     params: [f32; 4],
     repeat_spacing: [f32; 4],
     repeat_count: [i32; 4],
@@ -126,6 +127,7 @@ pub(crate) struct MaterialPreviewIds {
     pub metallic: egui::TextureId,
     pub solid: egui::TextureId,
     pub diagnostic: egui::TextureId,
+    pub brick: egui::TextureId,
     pub oak: egui::TextureId,
     pub walnut: egui::TextureId,
     pub pine: egui::TextureId,
@@ -144,6 +146,7 @@ impl MaterialPreviewIds {
             MaterialKind::Metallic => self.metallic,
             MaterialKind::Solid => self.solid,
             MaterialKind::Diagnostic => self.diagnostic,
+            MaterialKind::Brick => self.brick,
             MaterialKind::Wood => match material.wood.species {
                 WoodSpecies::Oak => self.oak,
                 WoodSpecies::Walnut => self.walnut,

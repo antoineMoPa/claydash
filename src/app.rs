@@ -57,6 +57,10 @@ pub struct App {
     document: DocumentState,
     #[cfg(not(target_arch = "wasm32"))]
     pending_render: Option<PendingRender>,
+    #[cfg(not(target_arch = "wasm32"))]
+    guide_screenshot: Option<std::path::PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    guide_capture_done: bool,
     window_focused: bool,
     window_occluded: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -100,6 +104,51 @@ struct UiBenchmark {
     samples: Vec<f64>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn guide_face_scene() -> Vec<crate::model::SdfObject> {
+    use crate::model::{
+        BooleanOperation, BoxParams, PolygonPrismParams, PrimitiveKind, SdfObject, SdfParams,
+    };
+
+    let mut cut_source = SdfObject::create_kind(PrimitiveKind::Box);
+    cut_source.name = "Face cut source".into();
+    cut_source.params = SdfParams::BoxParams(BoxParams {
+        box_q: glam::Vec3::splat(0.55),
+    });
+    cut_source.transform.translation = glam::Vec3::new(-1.0, 0.0, 0.0);
+    cut_source.softness = 0.0;
+
+    let mut cut = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+    cut.name = "Face extrusion".into();
+    cut.params = SdfParams::PolygonPrismParams(PolygonPrismParams {
+        vertices: vec![
+            Vec2::new(-0.35, -0.3),
+            Vec2::new(0.35, -0.3),
+            Vec2::new(0.0, 0.35),
+        ],
+        half_depth: 0.3,
+    });
+    cut.transform.translation = glam::Vec3::new(-1.0, 0.0, 0.85);
+    cut.boolean_parent = Some(cut_source.uuid);
+    cut.operation = BooleanOperation::Union;
+
+    let mut box_source = SdfObject::create_kind(PrimitiveKind::Box);
+    box_source.name = "Box face source".into();
+    box_source.params = SdfParams::BoxParams(BoxParams {
+        box_q: glam::Vec3::splat(0.5),
+    });
+    box_source.transform.translation = glam::Vec3::new(1.0, -0.15, 0.0);
+
+    let mut box_extrusion = SdfObject::create_kind(PrimitiveKind::Box);
+    box_extrusion.name = "Box face extrusion".into();
+    box_extrusion.params = SdfParams::BoxParams(BoxParams {
+        box_q: glam::Vec3::new(0.32, 0.38, 0.5),
+    });
+    box_extrusion.transform.translation = glam::Vec3::new(1.0, 0.72, 0.0);
+
+    vec![cut_source, cut, box_source, box_extrusion]
+}
+
 impl App {
     pub fn new() -> Self {
         let scene = serde_json::from_str(duck::DEFAULT_DUCK).expect("parse default scene");
@@ -141,17 +190,119 @@ impl App {
         };
         #[cfg(not(target_arch = "wasm32"))]
         let camera = if std::env::args().any(|argument| argument == "--ui-preview") {
-            let scene = crate::model::ui_preview_scene();
-            crate::model::set_selected(&mut tree, vec![scene[2].uuid]);
+            let face_preview =
+                std::env::args().any(|argument| argument == "--guide-panel=face-cut");
+            let repeat_preview =
+                std::env::args().any(|argument| argument == "--guide-panel=repeat");
+            let simple_kind = std::env::args().find_map(|argument| match argument.as_str() {
+                "--guide-panel=shapes" => Some(crate::model::PrimitiveKind::Box),
+                "--guide-panel=gizmos" => Some(crate::model::PrimitiveKind::Cylinder),
+                "--guide-panel=modifiers" => Some(crate::model::PrimitiveKind::Sphere),
+                _ => None,
+            });
+            let mut scene = if repeat_preview {
+                let duck: DataTree =
+                    serde_json::from_str(duck::DEFAULT_DUCK).expect("parse default duck preview");
+                let mut scene = crate::model::objects(&data_tree_with_scene(duck));
+                let root = scene[0].uuid;
+                scene.retain(|object| object.uuid == root || object.boolean_parent == Some(root));
+                scene
+            } else if face_preview {
+                guide_face_scene()
+            } else if let Some(kind) = simple_kind {
+                let mut shape = crate::model::SdfObject::create_kind(kind);
+                shape.name = format!("{} example", kind.label());
+                shape.params = match kind {
+                    crate::model::PrimitiveKind::Box => {
+                        crate::model::SdfParams::BoxParams(crate::model::BoxParams {
+                            box_q: glam::Vec3::splat(0.55),
+                        })
+                    }
+                    crate::model::PrimitiveKind::Cylinder => {
+                        crate::model::SdfParams::CylinderParams {
+                            radius: 0.45,
+                            half_height: 0.65,
+                        }
+                    }
+                    crate::model::PrimitiveKind::Sphere => {
+                        crate::model::SdfParams::SphereParams(crate::model::SphereParams {
+                            radius: 0.5,
+                        })
+                    }
+                    _ => shape.params,
+                };
+                vec![shape]
+            } else {
+                crate::model::ui_preview_scene()
+            };
+            let operand_preview =
+                std::env::args().any(|argument| argument == "--guide-panel=operand");
+            if std::env::args().any(|argument| argument == "--guide-panel=modifiers") {
+                if let Some((min, max)) = crate::model::lattice_bounds(&scene, scene[0].uuid) {
+                    scene[0].lattice = Some(crate::model::Lattice::new(min, max, 3));
+                }
+            }
+            if repeat_preview {
+                let (min, max) =
+                    crate::model::lattice_bounds(&scene, scene[0].uuid).expect("duck bounds");
+                scene[0].repetition.enabled = true;
+                scene[0].repetition.spacing = (max - min) * 1.1;
+            }
+            let selected = scene[if face_preview {
+                1
+            } else if operand_preview {
+                7
+            } else if simple_kind.is_some() || repeat_preview {
+                0
+            } else {
+                2
+            }]
+            .uuid;
+            if face_preview {
+                crate::model::set_selected_exact(&mut tree, vec![selected]);
+            } else {
+                crate::model::set_selected(&mut tree, vec![selected]);
+            }
             crate::model::set_objects(&mut tree, scene);
+            if face_preview {
+                crate::model::set_selected_modeling_face(
+                    &mut tree,
+                    Some(crate::model::ModelingFaceSelection::PolygonPrism(
+                        crate::model::PolygonPrismFaceSelection {
+                            object: selected,
+                            face: crate::model::PolygonPrismFace::Cap { positive: true },
+                        },
+                    )),
+                );
+            }
+            if std::env::args().any(|argument| argument == "--guide-panel=animation") {
+                let binding = crate::model::AnimationBinding {
+                    object: selected,
+                    property: crate::model::AnimatableProperty::Position(
+                        crate::model::VectorAxis::X,
+                    ),
+                };
+                crate::animation::insert_keyframe(&mut tree, binding, 0, 1.35);
+                crate::animation::insert_keyframe(&mut tree, binding, 30, -1.35);
+            }
             tree.make_undo_redo_snapshot();
             Camera {
-                position: glam::Vec3::new(0.0, 1.6, 8.5),
+                position: if simple_kind.is_some() {
+                    glam::Vec3::new(0.0, 1.3, 4.5)
+                } else {
+                    glam::Vec3::new(0.0, 1.6, 8.5)
+                },
                 ..camera
             }
         } else {
             camera
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::env::args().any(|argument| argument == "--guide-panel=camera") {
+            let scene_camera = crate::camera::SceneCamera::from_view("Camera 1", &camera);
+            crate::model::set_selected(&mut tree, vec![scene_camera.uuid]);
+            crate::model::set_scene_cameras(&mut tree, vec![scene_camera]);
+        }
         let mut commands = Commands::new();
         commands::register_all(&mut commands);
         #[cfg(target_arch = "wasm32")]
@@ -161,6 +312,19 @@ impl App {
         let document = DocumentState::default();
         let mut ui = UiState::default();
         ui.set_animation_timeline_open(document.animation_timeline_open());
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::env::args().any(|argument| argument.starts_with("--guide-screenshot=")) {
+            let show_timeline = !std::env::args().any(|argument| {
+                argument.starts_with("--guide-panel=") && argument != "--guide-panel=animation"
+            });
+            ui.set_animation_timeline_open(show_timeline);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(panel) = std::env::args()
+            .find_map(|argument| argument.strip_prefix("--guide-panel=").map(str::to_owned))
+        {
+            ui.focus_guide_panel(&panel);
+        }
         Self {
             window: None,
             renderer: None,
@@ -177,6 +341,14 @@ impl App {
             document,
             #[cfg(not(target_arch = "wasm32"))]
             pending_render: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            guide_screenshot: std::env::args().find_map(|argument| {
+                argument
+                    .strip_prefix("--guide-screenshot=")
+                    .map(std::path::PathBuf::from)
+            }),
+            #[cfg(not(target_arch = "wasm32"))]
+            guide_capture_done: false,
             window_focused: true,
             window_occluded: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -271,9 +443,13 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let effective_selection = commands::effective_selected_ids(&self.tree);
         #[cfg(not(target_arch = "wasm32"))]
-        let capture_render = self.pending_render.is_some();
+        let capture_render = self.pending_render.is_some() || self.guide_screenshot.is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_ui = self.guide_screenshot.is_some();
         #[cfg(target_arch = "wasm32")]
         let capture_render = false;
+        #[cfg(target_arch = "wasm32")]
+        let capture_ui = false;
         if let Some(renderer) = &mut self.renderer {
             let export_version = if capture_render { i32::MIN } else { 0 };
             let scene_versions = [
@@ -290,9 +466,29 @@ impl App {
                 &self.egui,
                 &mut output,
                 capture_render,
+                capture_ui,
             );
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(frame) = captured_frame {
+                if let Some(path) = self.guide_screenshot.take() {
+                    let result = path
+                        .parent()
+                        .filter(|parent| !parent.as_os_str().is_empty())
+                        .map(std::fs::create_dir_all)
+                        .transpose()
+                        .and_then(|_| {
+                            crate::render_export::png_bytes(&frame).map_err(std::io::Error::other)
+                        })
+                        .and_then(|bytes| std::fs::write(&path, bytes));
+                    result.unwrap_or_else(|error| {
+                        panic!(
+                            "Could not write guide screenshot {}: {error}",
+                            path.display()
+                        )
+                    });
+                    eprintln!("Guide screenshot: {}", path.display());
+                    self.guide_capture_done = true;
+                }
                 if let Some(pending) = self.pending_render.take() {
                     let frame = crate::render_export::crop_to_viewport(frame, &self.camera);
                     match pending {
@@ -709,7 +905,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if !self.window_focused || self.window_occluded {
+                #[cfg(not(target_arch = "wasm32"))]
+                let guide_capture = self.guide_screenshot.is_some();
+                #[cfg(target_arch = "wasm32")]
+                let guide_capture = false;
+                if (!self.window_focused || self.window_occluded) && !guide_capture {
                     return;
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -762,6 +962,10 @@ impl ApplicationHandler for App {
                     }
                 }
                 self.redraw();
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.guide_capture_done {
+                    event_loop.exit();
+                }
             }
             WindowEvent::Resized(size) => {
                 if let Some(renderer) = &mut self.renderer {
@@ -903,7 +1107,11 @@ impl ApplicationHandler for App {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
         }
-        if self.window_focused && !self.window_occluded {
+        #[cfg(not(target_arch = "wasm32"))]
+        let guide_capture = self.guide_screenshot.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let guide_capture = false;
+        if self.window_focused && !self.window_occluded || guide_capture {
             let Some(window) = &self.window else {
                 return;
             };

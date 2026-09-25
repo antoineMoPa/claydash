@@ -15,7 +15,7 @@ impl InteractionState {
         }
         if matches!(
             tree.get_path("editor.state"),
-            ClaydashValue::EditorState(EditorState::Extruding)
+            ClaydashValue::EditorState(EditorState::Extruding | EditorState::DraggingFace)
         ) {
             self.update_transformation(camera, tree);
             tree.set_path(
@@ -24,6 +24,7 @@ impl InteractionState {
             );
             tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
             tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
+            tree.set_transient_path("editor.face_drag_initial_object", ClaydashValue::None);
             self.extrusion_session = None;
             tree.make_undo_redo_snapshot();
             return;
@@ -102,12 +103,15 @@ impl InteractionState {
         } else {
             let target =
                 crate::ui::scene_actions::viewport_selection_target(&scene, hit, &selection);
+            let was_exact_target = crate::model::selection_scope(tree)
+                == crate::model::SelectionScope::Exact
+                && selection == vec![target.id];
             if target.scope == crate::model::SelectionScope::Exact {
                 set_selected_exact(tree, vec![target.id]);
             } else {
                 set_selected(tree, vec![target.id]);
             }
-            if ghost.is_none() {
+            if was_exact_target && ghost.is_none() {
                 if let Some(position) = marched.map(|hit| hit.position) {
                     let face = crate::model::modeling_face_at_world_position(&scene, hit, position);
                     crate::model::set_selected_modeling_face(tree, face);

@@ -7,10 +7,10 @@ impl InteractionState {
             ClaydashValue::EditorState(mode) => mode,
             _ => EditorState::Start,
         };
-        if mode == EditorState::Extruding {
+        if matches!(mode, EditorState::Extruding | EditorState::DraggingFace) {
             self.transform_session = None;
             self.numeric_rotation = NumericRotationInput::Idle;
-            self.update_extrusion(camera, tree);
+            self.update_extrusion(mode, camera, tree);
             return;
         }
         self.extrusion_session = None;
@@ -139,7 +139,9 @@ impl InteractionState {
                         * Mat4::from_quat(rotation)
                         * Mat4::from_translation(-session.center)
                 }
-                EditorState::Start | EditorState::Extruding => Mat4::IDENTITY,
+                EditorState::Start | EditorState::Extruding | EditorState::DraggingFace => {
+                    Mat4::IDENTITY
+                }
             };
             let local = target.parent_world.inverse() * operation * target.world;
             let (scale, rotation, translation) = local.to_scale_rotation_translation();
@@ -159,7 +161,7 @@ impl InteractionState {
         crate::model::set_scene_cameras(tree, cameras);
     }
 
-    fn update_extrusion(&mut self, camera: &Camera, tree: &mut DataTree) {
+    fn update_extrusion(&mut self, mode: EditorState, camera: &Camera, tree: &mut DataTree) {
         let Some(face) = crate::model::selected_modeling_face(tree) else {
             tree.set_path(
                 "editor.state",
@@ -179,7 +181,7 @@ impl InteractionState {
         if self
             .extrusion_session
             .as_ref()
-            .is_none_or(|session| session.object != face.object())
+            .is_none_or(|session| session.mode != mode || session.object != face.object())
         {
             let scene = objects(tree);
             let Some(object) = scene.iter().find(|object| object.uuid == face.object()) else {
@@ -225,6 +227,7 @@ impl InteractionState {
             }
             let guides = crate::guides::face_center_guides(&scene, &excluded);
             self.extrusion_session = Some(ExtrusionSession {
+                mode,
                 object: face.object(),
                 axis,
                 positive,

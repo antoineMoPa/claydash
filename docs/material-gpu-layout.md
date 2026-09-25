@@ -1,6 +1,6 @@
 # GPU material layout
 
-The scene stores `Material` and `MaterialAsset` exactly as before. At upload, the renderer packs distinct material **values** into GPU records. Objects with a shared asset and matching current values use one record; an edited object with different values gets its own. An object's `color` remains on `GpuObject` as its color override. Transform scale remains there because it varies per object and the wood pattern uses physical stock coordinates.
+The scene stores `Material` and `MaterialAsset` exactly as before. At upload, the renderer packs distinct material **values** into GPU records. Objects with a shared asset and matching current values use one record; an edited object with different values gets its own. An object's `color` remains on `GpuObject` as its color override. Transform scale remains there because it varies per object and the wood and brick patterns use physical stock coordinates.
 
 ## Buffers
 
@@ -12,7 +12,7 @@ The scene stores `Material` and `MaterialAsset` exactly as before. At upload, th
 
 Binding 0 is the camera uniform and binding 2 is the BVH. All records are 16-byte aligned and tightly packed. The fixed allocation allows 1024 material headers and 8192 parameter slots (128 KiB). A unique basic material takes two slots (32 bytes); wood takes eight (128 bytes); the diagnostic material takes three (48 bytes). The previous object was 256 bytes; the new object is 160 bytes, saving 96 bytes per object. For 1024 objects sharing one wood material, upload changes from 256 KiB of objects to 160 KiB of objects plus 16 bytes of header and 128 bytes of parameters. Unique wood on every object totals 160 KiB objects plus 16 KiB headers plus 128 KiB parameters, so this design targets the common shared-asset case rather than claiming a universal upload reduction.
 
-The two common slots contain `(roughness, metallic, reflectivity, opacity)` and `(refractive_index, 0, 0, 0)`. Wood owns six slots with named offsets in `material_wood.wgsl`; the second wood slot reserves `.w` for coat amber while its other lanes are unused. Brick owns one slot containing brick width, course height, mortar width, and wear. Diagnostic owns one additional slot containing checker frequency and alternate color. No kind-specific value is stored in the object buffer.
+The two common slots contain `(roughness, metallic, reflectivity, opacity)` and `(refractive_index, 0, 0, 0)`. Wood owns six slots with named offsets in `material_wood.wgsl`; the second wood slot reserves `.w` for coat amber while its other lanes are unused. Brick owns three slots for bond dimensions, relief and surface detail, and mortar color. Diagnostic owns one additional slot containing checker frequency and alternate color. No kind-specific value is stored in the object buffer.
 
 ## Adding a material
 

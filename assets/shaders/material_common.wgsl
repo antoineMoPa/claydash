@@ -1,6 +1,7 @@
 // Shared surface contract and explicit material dispatch.
 const MATERIAL_WOOD: u32 = 1u;
 const MATERIAL_DIAGNOSTIC: u32 = 4u;
+const MATERIAL_BRICK: u32 = 5u;
 struct MaterialHeader { kind: u32, offset: u32, length: u32, reserved: u32 }
 @group(0) @binding(3) var<storage, read> material_headers: array<MaterialHeader>;
 @group(0) @binding(4) var<storage, read> material_params: array<vec4<f32>>;
@@ -9,7 +10,7 @@ struct Surface {
     reflectivity: f32, opacity: f32, ior: f32, coat: f32,
     sheen: f32, fiber: vec3<f32>, figure: f32,
 }
-fn material_surface(point: vec3<f32>, normal: vec3<f32>, object: Object) -> Surface {
+fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object) -> Surface {
     let header = material_headers[object.component.w];
     let common_values = material_params[header.offset];
     let optics = material_params[header.offset + 1u];
@@ -18,6 +19,7 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, object: Object) -> Surf
     switch header.kind {
         case MATERIAL_WOOD: { return evaluate_wood(point, normal, object, base, header.offset); }
         case MATERIAL_DIAGNOSTIC: { return evaluate_diagnostic(point, object, base, header.offset); }
+        case MATERIAL_BRICK: { return evaluate_brick(point, normal, view, object, base, header.offset); }
         default: { return base; }
     }
 }
@@ -53,4 +55,3 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
         + specular_color * specular * (1.0 - roughness * 0.5) * (1.0 - 0.72 * coat)
         + color * fiber_light + vec3(1.0, 0.98, 0.93) * coat_light;
 }
-

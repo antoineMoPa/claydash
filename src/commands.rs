@@ -227,6 +227,33 @@ fn start_edit(tree: &mut DataTree, state: EditorState) {
 }
 
 pub fn start_grab(tree: &mut DataTree) {
+    if let Some(face) = crate::model::selected_modeling_face(tree) {
+        let scene = objects(tree);
+        if selected(tree) == vec![face.object()]
+            && !crate::model::has_boolean_children(&scene, face.object())
+        {
+            if let Some(object) = scene.iter().find(|object| object.uuid == face.object()) {
+                let supported = matches!(
+                    (face, &object.params),
+                    (
+                        crate::model::ModelingFaceSelection::Box(_),
+                        crate::model::SdfParams::BoxParams(_)
+                    ) | (
+                        crate::model::ModelingFaceSelection::CylinderCap(_),
+                        crate::model::SdfParams::CylinderParams { .. }
+                    )
+                );
+                if supported {
+                    tree.set_transient_path(
+                        "editor.face_drag_initial_object",
+                        ClaydashValue::VecSDFObject(vec![object.clone()]),
+                    );
+                    start_edit(tree, EditorState::DraggingFace);
+                    return;
+                }
+            }
+        }
+    }
     start_edit(tree, EditorState::Grabbing);
 }
 
@@ -250,6 +277,28 @@ fn toggle_constraint(tree: &mut DataTree, path: &str) {
 }
 
 fn cancel(tree: &mut DataTree) {
+    if matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::DraggingFace)
+    ) {
+        if let ClaydashValue::VecSDFObject(initial) =
+            tree.get_path("editor.face_drag_initial_object")
+        {
+            if let Some(initial) = initial.into_iter().next() {
+                let mut scene = objects(tree);
+                if let Some(object) = scene.iter_mut().find(|object| object.uuid == initial.uuid) {
+                    *object = initial;
+                    set_objects(tree, scene);
+                }
+            }
+        }
+        tree.set_transient_path("editor.face_drag_initial_object", ClaydashValue::None);
+        tree.set_path(
+            "editor.state",
+            ClaydashValue::EditorState(EditorState::Start),
+        );
+        return;
+    }
     if matches!(
         tree.get_path("editor.state"),
         ClaydashValue::EditorState(EditorState::Extruding)
@@ -302,6 +351,7 @@ fn cancel(tree: &mut DataTree) {
 }
 
 fn finish(tree: &mut DataTree) {
+    tree.set_transient_path("editor.face_drag_initial_object", ClaydashValue::None);
     tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
     tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
     tree.set_path(

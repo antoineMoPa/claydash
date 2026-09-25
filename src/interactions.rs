@@ -29,6 +29,7 @@ struct TransformSession {
 
 #[derive(Clone)]
 struct ExtrusionSession {
+    mode: EditorState,
     object: uuid::Uuid,
     axis: crate::model::VectorAxis,
     positive: bool,

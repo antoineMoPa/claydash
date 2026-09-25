@@ -279,6 +279,21 @@ pub fn remove_lattice_track(tree: &mut DataTree, object_id: uuid::Uuid) {
     set_animation_data(tree, data);
 }
 
+pub fn remove_repetition_tracks(tree: &mut DataTree, object_id: uuid::Uuid) {
+    let mut data = animation_data(tree);
+    data.tracks.retain(|track| {
+        track.binding.object != object_id
+            || !matches!(
+                track.binding.property,
+                AnimatableProperty::RepetitionEnabled
+                    | AnimatableProperty::RepetitionAxis(_)
+                    | AnimatableProperty::RepetitionCount(_)
+                    | AnimatableProperty::RepetitionSpacing(_)
+            )
+    });
+    set_animation_data(tree, data);
+}
+
 pub fn remap_lattice_shape_keys_after_delete(
     tree: &mut DataTree,
     object_id: uuid::Uuid,

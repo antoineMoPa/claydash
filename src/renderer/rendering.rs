@@ -10,6 +10,7 @@ impl Renderer {
         egui: &egui::Context,
         output: &mut egui::FullOutput,
         capture: bool,
+        capture_ui: bool,
     ) -> Option<CapturedFrame> {
         self.upload_scene(camera, objects, selected, scene_versions);
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
@@ -112,7 +113,7 @@ impl Renderer {
         }
         // Copy the scene before egui is composited so exports never contain
         // editor chrome, transform gizmos, camera wireframes, or labels.
-        let capture_buffer = capture.then(|| {
+        let mut capture_buffer = capture.then(|| {
             let unpadded = self.config.width * 4;
             let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
                 * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -122,27 +123,29 @@ impl Renderer {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &frame.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(padded),
-                        rows_per_image: Some(self.config.height),
+            if !capture_ui {
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &frame.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
                     },
-                },
-                wgpu::Extent3d {
-                    width: self.config.width,
-                    height: self.config.height,
-                    depth_or_array_layers: 1,
-                },
-            );
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(padded),
+                            rows_per_image: Some(self.config.height),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: self.config.width,
+                        height: self.config.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             (buffer, padded)
         });
         {
@@ -165,6 +168,31 @@ impl Renderer {
                 })
                 .forget_lifetime();
             self.egui_renderer.render(&mut pass, &clipped, &screen);
+        }
+        if capture_ui {
+            if let Some((buffer, padded)) = &mut capture_buffer {
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &frame.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(*padded),
+                            rows_per_image: Some(self.config.height),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: self.config.width,
+                        height: self.config.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
         }
         let submission = self
             .queue

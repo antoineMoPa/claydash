@@ -69,8 +69,24 @@ pub fn ui_preview_scene() -> Vec<SdfObject> {
 pub fn scene_sample(point: Vec3, scene: &[SdfObject]) -> Option<(f32, uuid::Uuid)> {
     fn subtree(point: Vec3, scene: &[SdfObject], index: usize, depth: usize) -> (f32, uuid::Uuid) {
         let object = &scene[index];
+        let has_children = scene
+            .iter()
+            .any(|child| child.boolean_parent == Some(object.uuid));
+        let point = if has_children && object.repetition.enabled {
+            let group = super::group_world_matrix(scene, object.uuid);
+            group.transform_point3(
+                object.repeated_local_point(group.inverse().transform_point3(point)),
+            )
+        } else {
+            point
+        };
+        let matrix = object_world_matrix(scene, object.uuid);
         let mut result = (
-            object.distance_with_matrix(point, object_world_matrix(scene, object.uuid)),
+            if has_children && object.repetition.enabled {
+                object.distance_with_matrix_without_repetition(point, matrix)
+            } else {
+                object.distance_with_matrix(point, matrix)
+            },
             object.uuid,
         );
         if depth >= scene.len() {
@@ -254,11 +270,39 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     drill.material = cut_block.material;
     drill.color = cut_block.color;
     cases.push(("wood-cut".into(), vec![cut_block, drill]));
+    let mut brick_corner = SdfObject::create_kind(PrimitiveKind::Box);
+    brick_corner.name = "Brick corner detail".into();
+    brick_corner.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(0.72),
+    });
+    brick_corner.material = Material::preset(MaterialKind::Brick);
+    brick_corner.color = brick_corner.material.color;
+    cases.push(("brick-corner".into(), vec![brick_corner]));
+    let mut brick_wall = SdfObject::create_kind(PrimitiveKind::Box);
+    brick_wall.name = "Brick wall with opening".into();
+    brick_wall.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::new(1.05, 0.75, 0.18),
+    });
+    brick_wall.material = Material::preset(MaterialKind::Brick);
+    brick_wall.color = brick_wall.material.color;
+    let mut opening = SdfObject::create_kind(PrimitiveKind::Box);
+    opening.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::new(0.28, 0.37, 0.35),
+    });
+    opening.transform.translation = Vec3::new(0.18, -0.04, 0.0);
+    opening.boolean_parent = Some(brick_wall.uuid);
+    opening.operation = BooleanOperation::Subtract;
+    opening.material = brick_wall.material;
+    opening.color = brick_wall.color;
+    cases.push(("brick-window".into(), vec![brick_wall, opening]));
     for kind in MaterialKind::ALL {
         let mut scene = renderer_stress_scene();
         for object in &mut scene {
             object.material = Material::preset(kind);
-            if kind == MaterialKind::Wood || kind == MaterialKind::Diagnostic {
+            if kind == MaterialKind::Wood
+                || kind == MaterialKind::Brick
+                || kind == MaterialKind::Diagnostic
+            {
                 object.color = object.material.color;
             }
         }
@@ -267,6 +311,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
             MaterialKind::Metallic => "metallic",
             MaterialKind::Solid => "solid",
             MaterialKind::Wood => "wood",
+            MaterialKind::Brick => "brick",
             MaterialKind::Diagnostic => "diagnostic",
         };
         cases.push((name.into(), scene));
@@ -307,7 +352,6 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
         object.params = template.params;
         object.material = Material::preset(MaterialKind::ALL[i % MaterialKind::ALL.len()]);
         object.repetition.enabled = true;
-        object.repetition.axes = [true; 3];
         object.repetition.count = [3; 3];
         object.repetition.spacing = Vec3::splat(1.5);
     }
