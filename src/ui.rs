@@ -49,8 +49,9 @@ use crate::{
     document::{DocumentState, FileMenuAction},
     model::{
         objects, selected, set_objects, set_selected, AnimatableProperty, AnimationBinding,
-        AnimationTrack, BooleanOperation, ColorChannel, DataTree, KeyframeInterpolation, Material,
-        MaterialKind, PrimitiveKind, SdfObject, SdfParams, VectorAxis, WoodSpecies, WoodStain,
+        AnimationTrack, BooleanOperation, ClaydashValue, ColorChannel, DataTree,
+        KeyframeInterpolation, Material, MaterialKind, PrimitiveKind, SdfObject, SdfParams,
+        VectorAxis, WoodSpecies, WoodStain,
     },
     undo_redo,
 };
@@ -199,7 +200,20 @@ impl UiState {
         if self.animation.playing {
             viewport_ui.ctx().request_repaint();
         }
-        let file_action = draw_file_menu(viewport_ui, document, &mut self.layout);
+        let cursor_targets = commands::transform_targets(tree);
+        let (file_action, cursor_action) = draw_file_menu(
+            viewport_ui,
+            document,
+            &mut self.layout,
+            cursor_targets.len() == 1,
+            matches!(
+                tree.get_path("editor.place_cursor"),
+                ClaydashValue::Bool(true)
+            ),
+        );
+        if let Some(action) = cursor_action {
+            self.apply_cursor_menu_action(tree, action);
+        }
         let context = viewport_ui.ctx();
         let style = context.style_of(context.theme());
         let mut frame_style = FramesStyle::from_visuals(&style.visuals);
@@ -301,7 +315,10 @@ impl UiState {
                 {
                     let object_gizmo_blocker_count = self.regions.len();
                     self.draw_selection_tools(ui, tree, camera);
-                    if !self.selection_tools.box_mode()
+                    if !matches!(
+                        tree.get_path("editor.place_cursor"),
+                        ClaydashValue::Bool(true)
+                    ) && !self.selection_tools.box_mode()
                         && !self.selection_tools.face_cut_mode()
                         && !self.selection_tools.active()
                     {
@@ -311,7 +328,10 @@ impl UiState {
                             camera,
                             object_gizmo_blocker_count,
                         );
-                    } else {
+                    } else if !matches!(
+                        tree.get_path("editor.place_cursor"),
+                        ClaydashValue::Bool(true)
+                    ) {
                         self.draw_selected_lattice_overlay(ui, tree, camera);
                     }
                 }
@@ -364,6 +384,33 @@ impl UiState {
         self.active_guide = None;
         self.resize_guide_drag = None;
         self.insert_keyframe_menu_position = None;
+    }
+
+    fn apply_cursor_menu_action(&mut self, tree: &mut DataTree, action: CursorMenuAction) {
+        match action {
+            CursorMenuAction::Reset => {
+                tree.set_path("scene.cursor_position", ClaydashValue::Vec3(Vec3::ZERO));
+                tree.set_transient_path("editor.place_cursor", ClaydashValue::Bool(false));
+                tree.make_undo_redo_snapshot();
+            }
+            CursorMenuAction::SetPosition => {
+                self.enter_cursor_placement(tree);
+                let placing = matches!(
+                    tree.get_path("editor.place_cursor"),
+                    ClaydashValue::Bool(true)
+                );
+                tree.set_transient_path("editor.place_cursor", ClaydashValue::Bool(!placing));
+            }
+            CursorMenuAction::ToObjectCenter => {
+                let targets = commands::transform_targets(tree);
+                if let [target] = targets.as_slice() {
+                    let center = target.world.transform_point3(Vec3::ZERO);
+                    tree.set_path("scene.cursor_position", ClaydashValue::Vec3(center));
+                    tree.set_transient_path("editor.place_cursor", ClaydashValue::Bool(false));
+                    tree.make_undo_redo_snapshot();
+                }
+            }
+        }
     }
 
     pub fn reset_animation(&mut self, tree: &DataTree) {

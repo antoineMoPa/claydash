@@ -44,6 +44,15 @@ impl InteractionState {
         if egui_wants_keyboard || !first_press {
             return;
         }
+        if key == KeyCode::Escape
+            && matches!(
+                tree.get_path("editor.place_cursor"),
+                ClaydashValue::Bool(true)
+            )
+        {
+            tree.set_transient_path("editor.place_cursor", ClaydashValue::Bool(false));
+            return;
+        }
         if key == KeyCode::Escape && crate::ui::scene_actions::pending_boolean(tree).is_some() {
             crate::ui::scene_actions::cancel_boolean_pick(tree);
             return;

@@ -214,6 +214,43 @@ impl UiState {
         tree: &mut DataTree,
         camera: &Camera,
     ) {
+        let placing_cursor = matches!(
+            tree.get_path("editor.place_cursor"),
+            ClaydashValue::Bool(true)
+        );
+        if let Some(point) = camera.project(
+            crate::model::cursor_position(tree),
+            ui.ctx().pixels_per_point(),
+        ) {
+            let painter = ui.painter();
+            let stroke = Stroke::new(1.5, Color32::WHITE);
+            painter.line_segment(
+                [
+                    point + egui::vec2(-10.0, 0.0),
+                    point + egui::vec2(10.0, 0.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    point + egui::vec2(0.0, -10.0),
+                    point + egui::vec2(0.0, 10.0),
+                ],
+                stroke,
+            );
+            painter.circle_stroke(point, 4.0, stroke);
+        }
+        if placing_cursor {
+            if ui.input(|input| {
+                input
+                    .pointer
+                    .hover_pos()
+                    .is_some_and(|point| ui.clip_rect().contains(point))
+            }) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+            return;
+        }
         if self.selection_tools.face_cut_mode() {
             self.draw_face_cut(ui, tree, camera);
             return;
@@ -348,6 +385,13 @@ impl UiState {
                             start_pointer: point,
                             last_pointer: point,
                             center,
+                            rotation_pivot: if crate::model::rotation_pivot(tree)
+                                == crate::model::RotationPivot::Cursor
+                            {
+                                crate::model::cursor_position(tree)
+                            } else {
+                                center
+                            },
                             initial_angle: delta.y.atan2(delta.x),
                             initial_axis_vector,
                             initial_radius: delta.length().max(0.001),
@@ -449,12 +493,12 @@ impl UiState {
                                 }
                                 _ => unreachable!(),
                             };
-                            glam::Mat4::from_translation(session.center)
+                            glam::Mat4::from_translation(session.rotation_pivot)
                                 * glam::Mat4::from_quat(glam::Quat::from_axis_angle(
                                     rotation_axis,
                                     applied_angle,
                                 ))
-                                * glam::Mat4::from_translation(-session.center)
+                                * glam::Mat4::from_translation(-session.rotation_pivot)
                         }
                     };
                     let move_snap = match session.action {

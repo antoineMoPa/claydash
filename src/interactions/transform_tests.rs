@@ -270,6 +270,64 @@ fn rotate_turns_the_selection_with_the_cursor() {
 }
 
 #[test]
+fn top_view_rotation_follows_pointer_direction() {
+    let (mut tree, _) = selected_object();
+    let mut scene = objects(&tree);
+    scene[0].transform.translation = Vec3::X;
+    set_objects(&mut tree, scene);
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    camera.snap(crate::camera::ViewAngle::Top);
+    let center = camera.project(Vec3::X, 1.0).unwrap();
+    let mut interactions = InteractionState {
+        mouse_position: Vec2::new(center.x + 100.0, center.y),
+        ..Default::default()
+    };
+    commands::start_rotate(&mut tree);
+    interactions.update(&mut camera, &mut tree);
+    interactions.mouse_position = Vec2::new(center.x, center.y + 100.0);
+    interactions.update(&mut camera, &mut tree);
+    let rotated_x = objects(&tree)[0].transform.rotation * Vec3::X;
+    assert!(rotated_x.distance(Vec3::Z) < 0.001, "{rotated_x:?}");
+}
+
+#[test]
+fn cursor_pivot_rotates_translation_and_orientation() {
+    let (mut tree, _) = selected_object();
+    let mut scene = objects(&tree);
+    scene[0].transform.translation = Vec3::X;
+    set_objects(&mut tree, scene);
+    tree.set_path(
+        "editor.rotation_pivot",
+        ClaydashValue::RotationPivot(crate::model::RotationPivot::Cursor),
+    );
+    tree.set_path("scene.cursor_position", ClaydashValue::Vec3(Vec3::Z));
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    camera.snap(crate::camera::ViewAngle::Top);
+    let pivot = camera.project(Vec3::Z, 1.0).unwrap();
+    let mut interactions = InteractionState {
+        mouse_position: Vec2::new(pivot.x + 100.0, pivot.y),
+        ..Default::default()
+    };
+    commands::start_rotate(&mut tree);
+    interactions.update(&mut camera, &mut tree);
+    interactions.mouse_position = Vec2::new(pivot.x, pivot.y + 100.0);
+    interactions.update(&mut camera, &mut tree);
+    let object = &objects(&tree)[0];
+    assert!(
+        object
+            .transform
+            .translation
+            .distance(Vec3::new(1.0, 0.0, 2.0))
+            < 0.001,
+        "{:?}",
+        object.transform.translation
+    );
+    assert!((object.transform.rotation * Vec3::X).distance(Vec3::Z) < 0.001);
+}
+
+#[test]
 fn releasing_ctrl_keeps_rotation_snapped_until_the_pointer_moves() {
     assert!(rotation_snap_active(true, false, false));
     assert!(!rotation_snap_active(true, false, true));

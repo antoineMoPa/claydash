@@ -1,4 +1,4 @@
-use glam::{Vec2, Vec4};
+use glam::{Vec2, Vec3, Vec4};
 use observable_key_value_tree::{CanBeNone, ObservableKVTree};
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,9 @@ pub enum ClaydashValue {
     VecUuid(Vec<uuid::Uuid>),
     F32(f32),
     Vec2(Vec2),
+    Vec3(Vec3),
     Vec4(Vec4),
+    RotationPivot(RotationPivot),
     Transform(Transform),
     VecSDFObject(Vec<SdfObject>),
     EditorState(EditorState),
@@ -37,6 +39,27 @@ pub enum SelectionScope {
     #[default]
     Group,
     Exact,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RotationPivot {
+    #[default]
+    ObjectCenter,
+    Cursor,
+}
+
+pub fn rotation_pivot(tree: &DataTree) -> RotationPivot {
+    match tree.get_path("editor.rotation_pivot") {
+        ClaydashValue::RotationPivot(pivot) => pivot,
+        _ => RotationPivot::ObjectCenter,
+    }
+}
+
+pub fn cursor_position(tree: &DataTree) -> Vec3 {
+    match tree.get_path("scene.cursor_position") {
+        ClaydashValue::Vec3(position) => position,
+        _ => Vec3::ZERO,
+    }
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]

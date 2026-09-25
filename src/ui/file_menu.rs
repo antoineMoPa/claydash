@@ -1,11 +1,20 @@
 use super::*;
 
+pub(super) enum CursorMenuAction {
+    Reset,
+    SetPosition,
+    ToObjectCenter,
+}
+
 pub(super) fn draw_file_menu(
     viewport_ui: &mut egui::Ui,
     document: &DocumentState,
     layout: &mut Layout<EditorPane>,
-) -> Option<FileMenuAction> {
+    cursor_target_available: bool,
+    placing_cursor: bool,
+) -> (Option<FileMenuAction>, Option<CursorMenuAction>) {
     let mut action = None;
+    let mut cursor_action = None;
     egui::Panel::top("file-menu").show(viewport_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -66,6 +75,31 @@ pub(super) fn draw_file_menu(
                     ui.weak("Animation Timeline is open");
                 }
             });
+            ui.menu_button("Tool", |ui| {
+                ui.menu_button("Cursor", |ui| {
+                    if ui.button("Reset 3D cursor").clicked() {
+                        cursor_action = Some(CursorMenuAction::Reset);
+                        ui.close();
+                    }
+                    if ui
+                        .selectable_label(placing_cursor, "Set position")
+                        .clicked()
+                    {
+                        cursor_action = Some(CursorMenuAction::SetPosition);
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(
+                            cursor_target_available,
+                            egui::Button::new("Cursor to object center"),
+                        )
+                        .clicked()
+                    {
+                        cursor_action = Some(CursorMenuAction::ToObjectCenter);
+                        ui.close();
+                    }
+                });
+            });
             ui.menu_button("Render", |ui| {
                 for format in crate::document::RenderFormat::ALL {
                     if ui.button(format.label()).clicked() {
@@ -104,7 +138,7 @@ pub(super) fn draw_file_menu(
             action = Some(FileMenuAction::Save);
         }
     });
-    action
+    (action, cursor_action)
 }
 
 pub(super) fn draw_file_error(

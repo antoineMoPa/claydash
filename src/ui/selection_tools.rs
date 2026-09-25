@@ -36,6 +36,7 @@ struct TransformGesture {
     start_pointer: egui::Pos2,
     last_pointer: egui::Pos2,
     center: Vec3,
+    rotation_pivot: Vec3,
     initial_angle: f32,
     initial_axis_vector: Option<Vec3>,
     initial_radius: f32,

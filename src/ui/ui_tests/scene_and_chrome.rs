@@ -373,3 +373,22 @@
             }
         }
     }
+#[test]
+fn cursor_menu_moves_to_selected_object_center_and_resets() {
+    let mut state = UiState::default();
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create(sdf_consts::TYPE_BOX);
+    object.transform.translation = Vec3::new(1.0, 2.0, 3.0);
+    set_objects(&mut tree, vec![object.clone()]);
+    set_selected(&mut tree, vec![object.uuid]);
+
+    state.apply_cursor_menu_action(&mut tree, CursorMenuAction::ToObjectCenter);
+    assert_eq!(crate::model::cursor_position(&tree), object.transform.translation);
+
+    state.apply_cursor_menu_action(&mut tree, CursorMenuAction::SetPosition);
+    assert!(matches!(tree.get_path("editor.place_cursor"), ClaydashValue::Bool(true)));
+
+    state.apply_cursor_menu_action(&mut tree, CursorMenuAction::Reset);
+    assert_eq!(crate::model::cursor_position(&tree), Vec3::ZERO);
+    assert!(matches!(tree.get_path("editor.place_cursor"), ClaydashValue::Bool(false)));
+}

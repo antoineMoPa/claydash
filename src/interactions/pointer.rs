@@ -41,6 +41,14 @@ impl InteractionState {
             self.numeric_rotation = NumericRotationInput::Idle;
             return;
         }
+        if matches!(
+            tree.get_path("editor.place_cursor"),
+            ClaydashValue::Bool(true)
+        ) {
+            tree.set_transient_path("editor.place_cursor", ClaydashValue::Bool(false));
+            Self::place_cursor_on_view_plane(camera, tree, self.mouse_position);
+            return;
+        }
         let shift =
             self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
         if shift {
@@ -90,6 +98,9 @@ impl InteractionState {
         let marched = raymarch_hit(origin, direction, &scene);
         let Some(hit) = ghost.or_else(|| marched.map(|hit| hit.object)) else {
             set_selected(tree, vec![]);
+            if !shift {
+                Self::place_cursor_on_view_plane(camera, tree, position);
+            }
             return;
         };
         let mut selection = selected(tree);
@@ -120,6 +131,13 @@ impl InteractionState {
             return;
         }
         set_selected(tree, selection);
+    }
+
+    fn place_cursor_on_view_plane(camera: &Camera, tree: &mut DataTree, position: Vec2) {
+        let plane_origin = crate::model::cursor_position(tree);
+        let world = camera.cursor_on_plane(position, plane_origin);
+        tree.set_path("scene.cursor_position", ClaydashValue::Vec3(world));
+        tree.make_undo_redo_snapshot();
     }
 
     pub fn pointer_up(&mut self, camera: &Camera, tree: &mut DataTree) {
@@ -163,7 +181,15 @@ impl InteractionState {
             .iter()
             .map(|target| target.world.transform_point3(Vec3::ZERO))
             .collect();
-        let center = selected_world.iter().copied().sum::<Vec3>() / selected_world.len() as f32;
+        let selection_center =
+            selected_world.iter().copied().sum::<Vec3>() / selected_world.len() as f32;
+        let center = if mode == EditorState::Rotating
+            && crate::model::rotation_pivot(tree) == crate::model::RotationPivot::Cursor
+        {
+            crate::model::cursor_position(tree)
+        } else {
+            selection_center
+        };
         for target in &targets {
             let path = match target.kind {
                 commands::TransformTargetKind::Object => "editor.initial_transform",

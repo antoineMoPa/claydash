@@ -398,6 +398,10 @@ mod tests {
         let object = SdfObject::create(TYPE_SPHERE);
         set_objects(&mut tree, vec![object.clone()]);
         tree.set_path("editor.color", ClaydashValue::F32(0.25));
+        tree.set_path(
+            "scene.cursor_position",
+            ClaydashValue::Vec3(glam::Vec3::new(1.0, 2.0, 3.0)),
+        );
 
         let bytes = serialize_scene(&tree).unwrap();
         let scene = deserialize_scene(&bytes).unwrap();
@@ -405,6 +409,10 @@ mod tests {
         restored.set_tree("scene", scene);
 
         assert_eq!(objects(&restored)[0].uuid, object.uuid);
+        assert_eq!(
+            crate::model::cursor_position(&restored),
+            glam::Vec3::new(1.0, 2.0, 3.0)
+        );
         assert!(matches!(
             restored.get_path("editor.color"),
             ClaydashValue::None

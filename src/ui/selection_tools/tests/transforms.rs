@@ -329,3 +329,49 @@ fn viewport_rotation_follows_the_mouse_in_screen_space() {
     let screen_angle = rotated_x.y.atan2(rotated_x.x);
     assert!((screen_angle - pointer_angle).abs() < 0.001);
 }
+
+#[test]
+fn viewport_rotation_uses_the_3d_cursor_pivot() {
+    let ctx = egui::Context::default();
+    let camera = camera();
+    let mut state = UiState::default();
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create(sdf_consts::TYPE_BOX);
+    object.transform.translation = Vec3::X;
+    set_objects(&mut tree, vec![object.clone()]);
+    set_selected(&mut tree, vec![object.uuid]);
+    tree.set_path(
+        "editor.rotation_pivot",
+        ClaydashValue::RotationPivot(crate::model::RotationPivot::Cursor),
+    );
+    tree.set_path("scene.cursor_position", ClaydashValue::Vec3(Vec3::Z));
+    let geometry = selection_gizmo_geometry(&camera, Vec3::X, 1.0).unwrap();
+    let start = geometry.view_rotate;
+    let delta = start - geometry.center;
+    let end = geometry.center + egui::vec2(-delta.y, delta.x);
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        pressed,
+        button: egui::PointerButton::Primary,
+        modifiers: egui::Modifiers::NONE,
+    };
+
+    draw(
+        &mut state,
+        &ctx,
+        &mut tree,
+        &camera,
+        vec![egui::Event::PointerMoved(start), button(start, true)],
+    );
+    draw(
+        &mut state,
+        &ctx,
+        &mut tree,
+        &camera,
+        vec![egui::Event::PointerMoved(end), button(end, false)],
+    );
+
+    let object = &objects(&tree)[0];
+    assert!(object.transform.translation.distance(Vec3::NEG_Y) < 0.001);
+    assert!((object.transform.rotation * Vec3::X).distance(Vec3::NEG_Y) < 0.001);
+}

@@ -1,6 +1,11 @@
 use super::*;
 
 impl UiState {
+    pub(in crate::ui) fn enter_cursor_placement(&mut self, tree: &mut DataTree) {
+        self.cancel_face_cut(tree);
+        self.selection_tools.tool = SelectionTool::Select;
+    }
+
     pub fn selection_gesture_active(&self) -> bool {
         self.selection_tools.active()
     }
@@ -108,6 +113,36 @@ impl UiState {
                                     self.selection_tools.tool = tool;
                                 }
                             }
+                        }
+                        ui.separator();
+                        let pivot = crate::model::rotation_pivot(tree);
+                        if selectable_view_button(
+                            ui,
+                            egui::include_image!("../../../assets/icons/lucide/box.svg"),
+                            "Rotate around object center",
+                            pivot == crate::model::RotationPivot::ObjectCenter,
+                        )
+                        .clicked()
+                        {
+                            tree.set_path(
+                                "editor.rotation_pivot",
+                                ClaydashValue::RotationPivot(
+                                    crate::model::RotationPivot::ObjectCenter,
+                                ),
+                            );
+                        }
+                        if selectable_view_button(
+                            ui,
+                            egui::include_image!("../../../assets/icons/lucide/crosshair.svg"),
+                            "Rotate around 3D cursor · Tool > Cursor sets its position",
+                            pivot == crate::model::RotationPivot::Cursor,
+                        )
+                        .clicked()
+                        {
+                            tree.set_path(
+                                "editor.rotation_pivot",
+                                ClaydashValue::RotationPivot(crate::model::RotationPivot::Cursor),
+                            );
                         }
                     });
                 });

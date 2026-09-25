@@ -286,11 +286,11 @@ impl Camera {
     }
 
     pub fn cursor_angle(&self, cursor: Vec2, center: Vec3) -> f32 {
-        let offset = self.cursor_at_depth(cursor, center) - center;
-        let inverse_view = self.view().inverse();
-        offset
-            .dot(inverse_view.y_axis.truncate())
-            .atan2(offset.dot(inverse_view.x_axis.truncate()))
+        let Some(projected) = self.project(center, 1.0) else {
+            return 0.0;
+        };
+        let offset = cursor - Vec2::new(projected.x, projected.y);
+        (-offset.y).atan2(offset.x)
     }
 
     pub fn orbit(&mut self, delta: Vec2) {

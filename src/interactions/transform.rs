@@ -130,7 +130,7 @@ impl InteractionState {
                         NumericRotationInput::Editing(input) => input.parse::<f32>().ok(),
                         NumericRotationInput::Idle => None,
                     };
-                    let pointer_angle = if constrained { -angle } else { angle };
+                    let pointer_angle = if constrained { angle } else { -angle };
                     let rotation = Quat::from_axis_angle(
                         axis,
                         numeric_angle.map_or(pointer_angle, f32::to_radians),

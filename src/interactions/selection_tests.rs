@@ -15,6 +15,64 @@ fn selected_object() -> (DataTree, uuid::Uuid) {
 }
 
 #[test]
+fn empty_scene_click_places_cursor_on_its_current_view_plane() {
+    let (mut tree, _) = selected_object();
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    tree.set_path("scene.cursor_position", ClaydashValue::Vec3(Vec3::Z));
+    let click = Vec2::new(750.0, 550.0);
+    let expected = camera.cursor_on_plane(click, Vec3::Z);
+    let mut interactions = InteractionState {
+        mouse_position: click,
+        ..Default::default()
+    };
+
+    interactions.pointer_down(&camera, &mut tree, None);
+
+    assert!(crate::model::cursor_position(&tree).distance(expected) < 0.001);
+    assert!(selected(&tree).is_empty());
+}
+
+#[test]
+fn placement_mode_can_click_an_object_without_changing_selection() {
+    let (mut tree, id) = selected_object();
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    tree.set_path("scene.cursor_position", ClaydashValue::Vec3(Vec3::Z));
+    tree.set_transient_path("editor.place_cursor", ClaydashValue::Bool(true));
+    let click = camera.viewport / 2.0;
+    let expected = camera.cursor_on_plane(click, Vec3::Z);
+    let mut interactions = InteractionState {
+        mouse_position: click,
+        ..Default::default()
+    };
+
+    interactions.pointer_down(&camera, &mut tree, None);
+
+    assert!(crate::model::cursor_position(&tree).distance(expected) < 0.001);
+    assert_eq!(selected(&tree), vec![id]);
+    assert!(matches!(
+        tree.get_path("editor.place_cursor"),
+        ClaydashValue::Bool(false)
+    ));
+}
+
+#[test]
+fn escape_cancels_cursor_placement_without_clearing_selection() {
+    let (mut tree, id) = selected_object();
+    tree.set_transient_path("editor.place_cursor", ClaydashValue::Bool(true));
+    let mut interactions = InteractionState::default();
+
+    interactions.key_pressed(KeyCode::Escape, false, &Commands::new(), &mut tree);
+
+    assert!(matches!(
+        tree.get_path("editor.place_cursor"),
+        ClaydashValue::Bool(false)
+    ));
+    assert_eq!(selected(&tree), vec![id]);
+}
+
+#[test]
 fn raymarch_selects_an_object_in_front_of_the_camera() {
     let mut camera = Camera::new();
     camera.viewport = Vec2::new(800.0, 600.0);
