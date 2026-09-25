@@ -73,8 +73,35 @@
     }
 
     #[test]
+    fn dragging_bezier_handle_changes_the_rendered_curve() {
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0));
+        let mut camera = Camera::new();
+        camera.viewport_origin = Vec2::new(100.0, 40.0);
+        camera.viewport = Vec2::new(600.0, 500.0);
+        let mut state = UiState::default();
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+        let SdfParams::BezierCurveParams(curve) = &object.params else { unreachable!() };
+        let before = curve.point(0, 0.5);
+        let start = camera.project(curve.points[1], 1.0).unwrap();
+        let end = start + egui::vec2(0.0, -35.0);
+        set_selected(&mut tree, vec![object.uuid]);
+        set_objects(&mut tree, vec![object]);
+        let mut frame = |events| primitive_gizmo_frame(&ctx, &mut state, &mut tree, &camera, viewport, events, egui::Modifiers::NONE);
+        frame(vec![]);
+        frame(vec![egui::Event::PointerMoved(start), egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+        frame(vec![egui::Event::PointerMoved(start.lerp(end, 0.5))]);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        frame(vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]);
+        let scene = objects(&tree);
+        let SdfParams::BezierCurveParams(curve) = &scene[0].params else { unreachable!() };
+        assert!(curve.point(0, 0.5).distance(before) > 0.01);
+    }
+
+    #[test]
     fn dragging_each_primitive_handle_outward_increases_its_dimension() {
-        for (kind, handle_index) in PrimitiveKind::SPAWNABLE.into_iter().flat_map(|kind| {
+        for (kind, handle_index) in [PrimitiveKind::Sphere, PrimitiveKind::Box, PrimitiveKind::Cylinder, PrimitiveKind::Torus].into_iter().flat_map(|kind| {
             let count = if kind == PrimitiveKind::Sphere { 3 } else { 1 };
             (0..count).map(move |index| (kind, index))
         }) {

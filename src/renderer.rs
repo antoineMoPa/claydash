@@ -14,7 +14,7 @@ mod benchmark;
 
 const MAX_OBJECTS: usize = 1024;
 const MAX_BVH_NODES: usize = MAX_OBJECTS * 2 - 1;
-const MAX_POLYGON_POINTS: usize = MAX_OBJECTS * crate::model::MAX_POLYGON_PRISM_VERTICES;
+const MAX_POLYGON_POINTS: usize = MAX_OBJECTS * 128;
 const MAX_LATTICE_POINTS: usize = MAX_OBJECTS * 9 * 9 * 9;
 const LATTICE_ATLAS_TILE_PITCH: u32 = 19;
 const LATTICE_ATLAS_TILES_PER_ROW: u32 = 32;

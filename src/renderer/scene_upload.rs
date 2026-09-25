@@ -162,6 +162,35 @@ impl Renderer {
                     matrix.z_axis.truncate().length(),
                 );
                 let distance_scale = abs_scale.min_element().max(0.000_001);
+                let path_profile = object
+                    .path_extrusion
+                    .and_then(|modifier| modifier.profile_curve)
+                    .and_then(|id| crate::model::profile_curve_vertices(scene_objects, id));
+                let path_profile_extent = path_profile.as_ref().map_or(1.0_f32, |vertices| {
+                    vertices
+                        .iter()
+                        .map(|point| point.length())
+                        .fold(1.0_f32, f32::max)
+                });
+                let path_radius = object
+                    .path_extrusion
+                    .map_or(0.0, |modifier| modifier.radius);
+                let path_profile_count = if object
+                    .path_extrusion
+                    .and_then(|modifier| modifier.profile_curve)
+                    .is_some()
+                {
+                    path_profile
+                        .as_ref()
+                        .map_or(2.0, |vertices| vertices.len().min(65) as f32)
+                } else if object
+                    .path_extrusion
+                    .is_some_and(|modifier| modifier.profile == crate::model::BezierProfile::Square)
+                {
+                    1.0
+                } else {
+                    0.0
+                };
                 let (params, radius) = match object.params {
                     SdfParams::SphereParams(ref params) => (
                         [params.radius, 0.0, 0.0, distance_scale],
@@ -218,6 +247,37 @@ impl Renderer {
                                 * abs_scale.max_element(),
                         )
                     }
+                    SdfParams::BezierCurveParams(ref curve) => {
+                        let offset = polygon_points.len() as u32;
+                        for &point in curve.points.iter().take(25) {
+                            polygon_points.push(GpuPolygonPoint {
+                                position: [point.x, point.y],
+                            });
+                            polygon_points.push(GpuPolygonPoint {
+                                position: [point.z, 0.0],
+                            });
+                        }
+                        let profile_offset = polygon_points.len() as u32;
+                        if let Some(vertices) = &path_profile {
+                            polygon_points.extend(vertices.iter().take(65).map(|point| {
+                                GpuPolygonPoint {
+                                    position: point.to_array(),
+                                }
+                            }));
+                        }
+                        (
+                            [
+                                path_radius,
+                                f32::from_bits(offset),
+                                f32::from_bits(profile_offset),
+                                distance_scale,
+                            ],
+                            curve
+                                .local_extent(path_radius * path_profile_extent)
+                                .length()
+                                * abs_scale.max_element(),
+                        )
+                    }
                 };
                 let repeated_radius = if object.repetition.enabled && !repeats_group {
                     let extent = Vec3::from_array([
@@ -269,6 +329,9 @@ impl Renderer {
                             .fold(Vec2::ZERO, |extent, point| extent.max(point.abs()));
                         Vec3::new(planar.x, planar.y, polygon.half_depth)
                     }
+                    SdfParams::BezierCurveParams(ref curve) => {
+                        curve.local_extent(path_radius * path_profile_extent)
+                    }
                 };
                 let mut repeated_extent = local_extent;
                 if object.repetition.enabled && !repeats_group {
@@ -295,7 +358,7 @@ impl Renderer {
                 GpuObject {
                     // Spare component lanes carry blend width and material index.
                     component: [0, 0, object.softness.to_bits(), material_index],
-                    scale: abs_scale.extend(0.0).to_array(),
+                    scale: abs_scale.extend(path_profile_count).to_array(),
                     meta: [
                         i32::from(selected_ids.contains(&object.uuid)),
                         object.object_type,
@@ -322,7 +385,19 @@ impl Renderer {
                     },
                     modifier: [
                         modifier_index,
-                        march_factor.to_bits(),
+                        (if matches!(object.params, SdfParams::BezierCurveParams(_))
+                            && path_profile_count == 0.0
+                            && modifier_index == 0
+                        {
+                            1.0
+                        } else if matches!(object.params, SdfParams::BezierCurveParams(_))
+                            && path_profile_count != 0.0
+                        {
+                            march_factor.min(0.5)
+                        } else {
+                            march_factor
+                        })
+                        .to_bits(),
                         if modifier_index == 0 {
                             0
                         } else {
@@ -334,14 +409,24 @@ impl Renderer {
                             modifier_gpu::MODIFIER_LATTICE
                         },
                     ],
-                    mirror_axes: object.mirror.map_or([0; 4], |mirror| {
-                        [
-                            u32::from(mirror.axes[0]),
-                            u32::from(mirror.axes[1]),
-                            u32::from(mirror.axes[2]),
-                            0,
-                        ]
-                    }),
+                    mirror_axes: {
+                        let mut axes = object.mirror.map_or([0; 4], |mirror| {
+                            [
+                                u32::from(mirror.axes[0]),
+                                u32::from(mirror.axes[1]),
+                                u32::from(mirror.axes[2]),
+                                0,
+                            ]
+                        });
+                        if let SdfParams::BezierCurveParams(curve) = &object.params {
+                            axes[3] = curve
+                                .segment_count()
+                                .min(crate::model::BezierCurveParams::MAX_SEGMENTS)
+                                as u32
+                                | if curve.closed { 0x8000_0000 } else { 0 };
+                        }
+                        axes
+                    },
                 }
             })
             .collect();
@@ -403,7 +488,7 @@ impl Renderer {
                 let march_factor = gpu_objects[group_start..=index]
                     .iter()
                     .map(|object| f32::from_bits(object.modifier[1]))
-                    .fold(0.8_f32, f32::min);
+                    .fold(1.0_f32, f32::min);
                 gpu_objects[index].modifier[1] = march_factor.to_bits();
                 starts[index] = group_start as u32;
                 capacity = capacity.max((index - group_start + 1).next_power_of_two() as u32);

@@ -6,6 +6,24 @@ const BAR_HEIGHT: f32 = 24.0;
 impl UiState {
     fn status_line(&self, tree: &DataTree) -> Option<(String, String)> {
         if matches!(
+            tree.get_path("editor.curve_grab_initial"),
+            ClaydashValue::VecSDFObject(_)
+        ) {
+            return Some((
+                "Move curve point".into(),
+                "Move mouse · X/Y/Z constrains · click or Enter confirms · Esc cancels".into(),
+            ));
+        }
+        if matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::ExtendingCurve)
+        ) {
+            return Some((
+                "Extend curve".into(),
+                "Move mouse to place the new point · click to place · Enter closes the loop · Esc cancels".into(),
+            ));
+        }
+        if matches!(
             tree.get_path("editor.state"),
             ClaydashValue::EditorState(EditorState::Extruding)
         ) {

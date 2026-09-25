@@ -41,7 +41,19 @@ impl InteractionState {
         tree: &mut DataTree,
     ) {
         let first_press = self.keys.insert(key);
-        if egui_wants_keyboard || !first_press {
+        let modal_confirm_key = matches!(key, KeyCode::Enter | KeyCode::Escape)
+            && matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::EditorState(
+                    EditorState::ExtendingCurve
+                        | EditorState::Extruding
+                        | EditorState::DraggingFace
+                )
+            );
+        if (egui_wants_keyboard && !modal_confirm_key) || !first_press {
+            return;
+        }
+        if key == KeyCode::Enter && commands::close_curve_extension(tree) {
             return;
         }
         if key == KeyCode::Escape
@@ -64,6 +76,15 @@ impl InteractionState {
             )
         {
             set_selected(tree, vec![]);
+            return;
+        }
+        if key == KeyCode::Enter
+            && matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::None | ClaydashValue::EditorState(EditorState::Start)
+            )
+            && commands::close_selected_curve(tree)
+        {
             return;
         }
         let has_command_modifier = self.command_modifier_down();
@@ -108,6 +129,7 @@ impl InteractionState {
                     | EditorState::Rotating
                     | EditorState::Extruding
                     | EditorState::DraggingFace
+                    | EditorState::ExtendingCurve
             )
         );
         if rotating && !has_command_modifier {
@@ -163,6 +185,18 @@ impl InteractionState {
         };
         crate::ui::scene_actions::cancel_boolean_pick(tree);
         commands::execute(command_map, name, tree);
+        if name == "grab"
+            && matches!(
+                tree.get_path("editor.curve_grab_initial"),
+                ClaydashValue::VecSDFObject(_)
+            )
+            && self.curve_grab_mouse_start.is_none()
+        {
+            self.curve_grab_mouse_start = Some(self.mouse_position);
+        }
+        if name == "quit" || name == "finish" {
+            self.curve_grab_mouse_start = None;
+        }
         if name == "grab"
             && matches!(
                 tree.get_path("editor.state"),
@@ -232,6 +266,7 @@ impl InteractionState {
                         | EditorState::Rotating
                         | EditorState::Extruding
                         | EditorState::DraggingFace
+                        | EditorState::ExtendingCurve
                 )
             );
             if !transforming

@@ -3,8 +3,8 @@ use observable_key_value_tree::{CanBeNone, ObservableKVTree};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AnimationData, BooleanOperation, BoxFaceSelection, EditorState, Material, MaterialAsset,
-    ModelingFaceSelection, SdfObject, Transform,
+    AnimationData, BooleanOperation, BoxFaceSelection, CurvePointSelection, EditorState, Material,
+    MaterialAsset, ModelingFaceSelection, SdfObject, Transform,
 };
 use crate::camera::SceneCamera;
 
@@ -17,6 +17,7 @@ pub enum ClaydashValue {
     BooleanPick(BooleanPick),
     BoxFaceSelection(BoxFaceSelection),
     ModelingFaceSelection(ModelingFaceSelection),
+    CurvePointSelection(CurvePointSelection),
     Uuid(uuid::Uuid),
     VecUuid(Vec<uuid::Uuid>),
     F32(f32),
@@ -264,6 +265,20 @@ pub fn selected_modeling_face(tree: &DataTree) -> Option<ModelingFaceSelection> 
     }
 }
 
+pub fn selected_curve_point(tree: &DataTree) -> Option<CurvePointSelection> {
+    match tree.get_path("editor.selected_curve_point") {
+        ClaydashValue::CurvePointSelection(point) => Some(point),
+        _ => None,
+    }
+}
+
+pub fn set_selected_curve_point(tree: &mut DataTree, point: Option<CurvePointSelection>) {
+    tree.set_transient_path(
+        "editor.selected_curve_point",
+        point.map_or(ClaydashValue::None, ClaydashValue::CurvePointSelection),
+    );
+}
+
 pub fn set_selected_modeling_face(tree: &mut DataTree, face: Option<ModelingFaceSelection>) {
     tree.set_transient_path(
         "editor.selected_modeling_face",
@@ -292,18 +307,24 @@ pub fn set_objects_transient(tree: &mut DataTree, value: Vec<SdfObject>) {
 
 pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
     set_selected_modeling_face(tree, None);
+    set_selected_curve_point(tree, None);
     tree.set_transient_path(
         "scene.selection_scope",
         ClaydashValue::SelectionScope(SelectionScope::Group),
     );
-    tree.set_transient_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+    if selected_ref(tree) != value {
+        tree.set_transient_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+    }
 }
 
 pub fn set_selected_exact(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
     set_selected_modeling_face(tree, None);
+    set_selected_curve_point(tree, None);
     tree.set_transient_path(
         "scene.selection_scope",
         ClaydashValue::SelectionScope(SelectionScope::Exact),
     );
-    tree.set_transient_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+    if selected_ref(tree) != value {
+        tree.set_transient_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+    }
 }

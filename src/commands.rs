@@ -63,8 +63,8 @@ pub fn register_all(commands: &mut Commands) {
     register(
         commands,
         "extrude",
-        "Extrude selected face",
-        "Create an adjacent box or cylinder from the selected planar face.",
+        "Extrude face or extend curve",
+        "Create an adjacent shape from a face or extend a selected Bézier curve.",
         "E",
         extrude_selected_face,
     );
@@ -227,6 +227,29 @@ fn start_edit(tree: &mut DataTree, state: EditorState) {
 }
 
 pub fn start_grab(tree: &mut DataTree) {
+    if matches!(
+        tree.get_path("editor.curve_grab_initial"),
+        ClaydashValue::VecSDFObject(_)
+    ) {
+        return;
+    }
+    if let Some(point) = crate::model::selected_curve_point(tree) {
+        let scene = objects(tree);
+        if selected(tree) == vec![point.object] {
+            if let Some(object) = scene.iter().find(|object| object.uuid == point.object) {
+                if let crate::model::SdfParams::BezierCurveParams(curve) = &object.params {
+                    if curve.points.get(point.index).is_some() {
+                        tree.set_transient_path(
+                            "editor.curve_grab_initial",
+                            ClaydashValue::VecSDFObject(vec![object.clone()]),
+                        );
+                        start_edit(tree, EditorState::Grabbing);
+                        return;
+                    }
+                }
+            }
+        }
+    }
     if let Some(face) = crate::model::selected_modeling_face(tree) {
         let scene = objects(tree);
         if selected(tree) == vec![face.object()]
@@ -277,6 +300,49 @@ fn toggle_constraint(tree: &mut DataTree, path: &str) {
 }
 
 fn cancel(tree: &mut DataTree) {
+    if let ClaydashValue::VecSDFObject(initial) = tree.get_path("editor.curve_grab_initial") {
+        if let Some(initial) = initial.into_iter().next() {
+            let mut scene = objects(tree);
+            if let Some(object) = scene.iter_mut().find(|object| object.uuid == initial.uuid) {
+                *object = initial;
+                set_objects(tree, scene);
+            }
+        }
+        tree.set_transient_path("editor.curve_grab_initial", ClaydashValue::None);
+        tree.set_path(
+            "editor.state",
+            ClaydashValue::EditorState(EditorState::Start),
+        );
+        return;
+    }
+    if matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::ExtendingCurve)
+    ) {
+        if let ClaydashValue::VecSDFObject(initial) =
+            tree.get_path("editor.curve_extension_initial")
+        {
+            if let Some(initial) = initial.into_iter().next() {
+                let mut scene = objects(tree);
+                if let Some(object) = scene.iter_mut().find(|object| object.uuid == initial.uuid) {
+                    *object = initial;
+                    set_objects(tree, scene);
+                }
+            }
+        }
+        let previous = match tree.get_path("editor.curve_extension_source_point") {
+            ClaydashValue::CurvePointSelection(point) => Some(point),
+            _ => None,
+        };
+        crate::model::set_selected_curve_point(tree, previous);
+        tree.set_transient_path("editor.curve_extension_initial", ClaydashValue::None);
+        tree.set_transient_path("editor.curve_extension_source_point", ClaydashValue::None);
+        tree.set_path(
+            "editor.state",
+            ClaydashValue::EditorState(EditorState::Start),
+        );
+        return;
+    }
     if matches!(
         tree.get_path("editor.state"),
         ClaydashValue::EditorState(EditorState::DraggingFace)
@@ -350,7 +416,10 @@ fn cancel(tree: &mut DataTree) {
     );
 }
 
-fn finish(tree: &mut DataTree) {
+pub(crate) fn finish(tree: &mut DataTree) {
+    tree.set_transient_path("editor.curve_grab_initial", ClaydashValue::None);
+    tree.set_transient_path("editor.curve_extension_initial", ClaydashValue::None);
+    tree.set_transient_path("editor.curve_extension_source_point", ClaydashValue::None);
     tree.set_transient_path("editor.face_drag_initial_object", ClaydashValue::None);
     tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
     tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
@@ -362,6 +431,27 @@ fn finish(tree: &mut DataTree) {
 }
 
 fn delete(tree: &mut DataTree) {
+    if let Some(point) = crate::model::selected_curve_point(tree) {
+        let mut scene = objects(tree);
+        if selected(tree) == vec![point.object] {
+            if let Some(object) = scene.iter_mut().find(|object| object.uuid == point.object) {
+                if let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params {
+                    if let Some(next_index) = curve.delete_anchor(point.index) {
+                        set_objects(tree, scene);
+                        crate::model::set_selected_curve_point(
+                            tree,
+                            Some(crate::model::CurvePointSelection {
+                                object: point.object,
+                                index: next_index,
+                            }),
+                        );
+                        tree.make_undo_redo_snapshot();
+                    }
+                    return;
+                }
+            }
+        }
+    }
     let selection = selected_subtree_ids(&objects(tree), &effective_selected_ids(tree));
     animation::remove_tracks_for_objects(tree, &selection);
     let mut scene: Vec<_> = objects(tree)
@@ -386,6 +476,74 @@ fn delete(tree: &mut DataTree) {
     crate::model::set_scene_cameras(tree, cameras);
     set_selected(tree, vec![]);
     tree.make_undo_redo_snapshot();
+}
+
+pub fn close_selected_curve(tree: &mut DataTree) -> bool {
+    let Some(point) = crate::model::selected_curve_point(tree) else {
+        return false;
+    };
+    if selected(tree) != vec![point.object] {
+        return false;
+    }
+    let mut scene = objects(tree);
+    let Some(object) = scene.iter_mut().find(|object| object.uuid == point.object) else {
+        return false;
+    };
+    let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        return false;
+    };
+    if point.index + 1 != curve.points.len() || !curve.close_from_end() {
+        return false;
+    }
+    set_objects(tree, scene);
+    crate::model::set_selected_curve_point(
+        tree,
+        Some(crate::model::CurvePointSelection {
+            object: point.object,
+            index: 0,
+        }),
+    );
+    tree.make_undo_redo_snapshot();
+    true
+}
+
+pub fn close_curve_extension(tree: &mut DataTree) -> bool {
+    if !matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::ExtendingCurve)
+    ) {
+        return false;
+    }
+    let Some(point) = crate::model::selected_curve_point(tree) else {
+        return false;
+    };
+    let mut scene = objects(tree);
+    let Some(object) = scene.iter_mut().find(|object| object.uuid == point.object) else {
+        return false;
+    };
+    let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        return false;
+    };
+    let closed = if point.index == 0 {
+        curve.close_at_current_start()
+    } else if point.index + 1 == curve.points.len() {
+        curve.close_at_current_tip()
+    } else {
+        false
+    };
+    if !closed {
+        return false;
+    }
+    set_objects(tree, scene);
+    crate::model::set_selected_curve_point(
+        tree,
+        Some(crate::model::CurvePointSelection {
+            object: point.object,
+            index: 0,
+        }),
+    );
+    finish(tree);
+    true
 }
 
 fn select_all(tree: &mut DataTree) {
@@ -466,6 +624,9 @@ fn duplicate(tree: &mut DataTree) {
 }
 
 pub fn extrude_selected_face(tree: &mut DataTree) {
+    if extend_selected_curve(tree) {
+        return;
+    }
     if let Some(crate::model::ModelingFaceSelection::CylinderCap(face)) =
         crate::model::selected_modeling_face(tree)
     {
@@ -525,6 +686,59 @@ pub fn extrude_selected_face(tree: &mut DataTree) {
         "editor.state",
         ClaydashValue::EditorState(EditorState::Extruding),
     );
+}
+
+fn extend_selected_curve(tree: &mut DataTree) -> bool {
+    if matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::ExtendingCurve)
+    ) {
+        return true;
+    }
+    let selection = selected(tree);
+    if selection.len() != 1 {
+        return false;
+    }
+    let mut scene = objects(tree);
+    let Some(object) = scene.iter_mut().find(|object| object.uuid == selection[0]) else {
+        return false;
+    };
+    let initial = object.clone();
+    let selected_point =
+        crate::model::selected_curve_point(tree).filter(|point| point.object == object.uuid);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        return false;
+    };
+    let at_start = selected_point.is_some_and(|point| point.index == 0);
+    let next = if at_start {
+        curve.extend_from_start()
+    } else {
+        curve.extend_from_end()
+    };
+    let Some(index) = next else {
+        return true;
+    };
+    tree.set_transient_path(
+        "editor.curve_extension_initial",
+        ClaydashValue::VecSDFObject(vec![initial]),
+    );
+    tree.set_transient_path(
+        "editor.curve_extension_source_point",
+        selected_point.map_or(ClaydashValue::None, ClaydashValue::CurvePointSelection),
+    );
+    set_objects(tree, scene);
+    crate::model::set_selected_curve_point(
+        tree,
+        Some(crate::model::CurvePointSelection {
+            object: selection[0],
+            index,
+        }),
+    );
+    tree.set_path(
+        "editor.state",
+        ClaydashValue::EditorState(EditorState::ExtendingCurve),
+    );
+    true
 }
 
 fn extrude_cylinder_cap(tree: &mut DataTree, face: crate::model::CylinderCapSelection) {
@@ -953,6 +1167,40 @@ mod tests {
         assert_eq!(half_height, EXTRUSION_INITIAL_HALF_EXTENT);
         assert!((scene[1].transform.translation.y + 0.35 + half_height).abs() < 0.0001);
         assert_eq!(selected(&tree), vec![scene[1].uuid]);
+    }
+
+    #[test]
+    fn extrude_command_extends_the_selected_curve_from_its_endpoint() {
+        let mut tree = DataTree::default();
+        let curve = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+        let id = curve.uuid;
+        set_objects(&mut tree, vec![curve]);
+        set_selected(&mut tree, vec![id]);
+        crate::model::set_selected_curve_point(
+            &mut tree,
+            Some(crate::model::CurvePointSelection {
+                object: id,
+                index: 3,
+            }),
+        );
+        extrude_selected_face(&mut tree);
+        let scene = objects(&tree);
+        let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+            unreachable!()
+        };
+        assert_eq!(curve.segment_count(), 2);
+        assert_eq!(crate::model::selected_curve_point(&tree).unwrap().index, 6);
+        assert!(matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::ExtendingCurve)
+        ));
+        finish(&mut tree);
+        extrude_selected_face(&mut tree);
+        let scene = objects(&tree);
+        let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+            unreachable!()
+        };
+        assert_eq!(curve.segment_count(), 3);
     }
 }
 

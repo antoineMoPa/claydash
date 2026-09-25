@@ -87,12 +87,17 @@ pub fn scene_sample(point: Vec3, scene: &[SdfObject]) -> Option<(f32, uuid::Uuid
             point
         };
         let matrix = object_world_matrix(scene, object.uuid);
+        let profile = object
+            .path_extrusion
+            .and_then(|modifier| modifier.profile_curve)
+            .and_then(|id| super::profile_curve_vertices(scene, id));
         let mut result = (
-            if has_children && object.repetition.enabled {
-                object.distance_with_matrix_without_repetition(point, matrix)
-            } else {
-                object.distance_with_matrix(point, matrix)
-            },
+            object.distance_with_matrix_with_profile(
+                point,
+                matrix,
+                !(has_children && object.repetition.enabled),
+                profile.as_deref(),
+            ),
             object.uuid,
         );
         if depth >= scene.len() {

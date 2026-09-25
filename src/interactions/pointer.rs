@@ -9,6 +9,40 @@ impl InteractionState {
     ) {
         if matches!(
             tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::ExtendingCurve)
+        ) {
+            self.update_transformation(camera, tree);
+            if let Some(point) = crate::model::selected_curve_point(tree) {
+                let mut scene = objects(tree);
+                let matrix = crate::model::object_world_matrix(&scene, point.object);
+                if let Some(object) = scene.iter_mut().find(|object| object.uuid == point.object) {
+                    if let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params {
+                        if point.index + 1 == curve.points.len() && !curve.closed {
+                            if let Some(first) =
+                                camera.project(matrix.transform_point3(curve.points[0]), 1.0)
+                            {
+                                if self.mouse_position.distance(Vec2::new(first.x, first.y)) <= 12.0
+                                    && curve.close_at_current_tip()
+                                {
+                                    set_objects(tree, scene);
+                                    crate::model::set_selected_curve_point(
+                                        tree,
+                                        Some(crate::model::CurvePointSelection {
+                                            object: point.object,
+                                            index: 0,
+                                        }),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            commands::finish(tree);
+            return;
+        }
+        if matches!(
+            tree.get_path("editor.state"),
             ClaydashValue::EditorState(EditorState::Grabbing)
         ) {
             return; // A grab commits on release, not on press.
@@ -152,6 +186,14 @@ impl InteractionState {
             ClaydashValue::EditorState(EditorState::Grabbing)
         ) {
             self.update_transformation(camera, tree);
+            if matches!(
+                tree.get_path("editor.curve_grab_initial"),
+                ClaydashValue::VecSDFObject(_)
+            ) {
+                self.curve_grab_mouse_start = None;
+                commands::finish(tree);
+                return;
+            }
             tree.set_path(
                 "editor.state",
                 ClaydashValue::EditorState(EditorState::Start),

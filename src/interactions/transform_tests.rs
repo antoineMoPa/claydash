@@ -15,6 +15,363 @@ fn selected_object() -> (DataTree, uuid::Uuid) {
 }
 
 #[test]
+fn g_moves_only_the_selected_curve_point() {
+    for index in [0, 1] {
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+        let id = object.uuid;
+        let initial_transform = object.transform;
+        let crate::model::SdfParams::BezierCurveParams(initial_curve) = &object.params else {
+            unreachable!()
+        };
+        let initial_points = initial_curve.points.clone();
+        set_objects(&mut tree, vec![object]);
+        set_selected(&mut tree, vec![id]);
+        crate::model::set_selected_curve_point(
+            &mut tree,
+            Some(crate::model::CurvePointSelection { object: id, index }),
+        );
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let mut commands = Commands::new();
+        commands::register_all(&mut commands);
+        let mut interaction = InteractionState {
+            mouse_position: Vec2::new(400.0, 300.0),
+            ..Default::default()
+        };
+        interaction.key_pressed(KeyCode::KeyG, false, &commands, &mut tree);
+        interaction.cursor_moved(Vec2::new(510.0, 260.0), false);
+        interaction.update(&mut camera, &mut tree);
+        let scene = objects(&tree);
+        let object = &scene[0];
+        let crate::model::SdfParams::BezierCurveParams(curve) = &object.params else {
+            unreachable!()
+        };
+        assert_ne!(curve.points[index], initial_points[index]);
+        for (other_index, (&current, &initial)) in
+            curve.points.iter().zip(&initial_points).enumerate()
+        {
+            if other_index != index {
+                assert_eq!(current, initial);
+            }
+        }
+        assert_eq!(object.transform, initial_transform);
+        interaction.pointer_down(&camera, &mut tree, None);
+        interaction.pointer_up(&camera, &mut tree);
+        assert!(matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Start)
+        ));
+        assert_eq!(
+            crate::model::selected_curve_point(&tree).unwrap().index,
+            index
+        );
+    }
+}
+
+#[test]
+fn escape_restores_a_curve_point_moved_with_g() {
+    let mut tree = DataTree::default();
+    let object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+    let id = object.uuid;
+    let initial = object.clone();
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_selected_curve_point(
+        &mut tree,
+        Some(crate::model::CurvePointSelection {
+            object: id,
+            index: 3,
+        }),
+    );
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState {
+        mouse_position: Vec2::new(400.0, 300.0),
+        ..Default::default()
+    };
+    interaction.key_pressed(KeyCode::KeyG, false, &commands, &mut tree);
+    interaction.cursor_moved(Vec2::new(510.0, 260.0), false);
+    interaction.update(&mut camera, &mut tree);
+    interaction.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
+    let scene = objects(&tree);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+        unreachable!()
+    };
+    let crate::model::SdfParams::BezierCurveParams(initial_curve) = &initial.params else {
+        unreachable!()
+    };
+    assert_eq!(curve.points, initial_curve.points);
+    assert_eq!(scene[0].transform, initial.transform);
+    assert_eq!(crate::model::selected_curve_point(&tree).unwrap().index, 3);
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::Start)
+    ));
+}
+
+#[test]
+fn backspace_removes_the_selected_anchor_and_enter_closes_the_remaining_path() {
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+    let id = object.uuid;
+    let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        unreachable!()
+    };
+    curve.extend_from_end();
+    curve.extend_from_end();
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_selected_curve_point(
+        &mut tree,
+        Some(crate::model::CurvePointSelection {
+            object: id,
+            index: 3,
+        }),
+    );
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState::default();
+    interaction.key_pressed(KeyCode::Backspace, false, &commands, &mut tree);
+    let scene = objects(&tree);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+        unreachable!()
+    };
+    assert_eq!(curve.segment_count(), 2);
+    assert_eq!(crate::model::selected_curve_point(&tree).unwrap().index, 0);
+    interaction.key_released(KeyCode::Backspace);
+    crate::model::set_selected_curve_point(
+        &mut tree,
+        Some(crate::model::CurvePointSelection {
+            object: id,
+            index: 6,
+        }),
+    );
+    interaction.key_pressed(KeyCode::Enter, false, &commands, &mut tree);
+    let scene = objects(&tree);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+        unreachable!()
+    };
+    assert!(curve.closed);
+    assert_eq!(curve.segment_count(), 3);
+    assert_eq!(curve.points[0], *curve.points.last().unwrap());
+}
+
+#[test]
+fn clicking_first_anchor_while_extending_closes_the_curve() {
+    let mut tree = DataTree::default();
+    let object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+    let id = object.uuid;
+    let crate::model::SdfParams::BezierCurveParams(curve) = &object.params else {
+        unreachable!()
+    };
+    let first = curve.points[0];
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_selected_curve_point(
+        &mut tree,
+        Some(crate::model::CurvePointSelection {
+            object: id,
+            index: 3,
+        }),
+    );
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let pointer = camera.project(first, 1.0).unwrap();
+    let mut interaction = InteractionState {
+        mouse_position: Vec2::new(pointer.x, pointer.y),
+        ..Default::default()
+    };
+    interaction.key_pressed(KeyCode::KeyE, false, &commands, &mut tree);
+    interaction.update(&mut camera, &mut tree);
+    interaction.pointer_down(&camera, &mut tree, None);
+    let scene = objects(&tree);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+        unreachable!()
+    };
+    assert!(curve.closed);
+    assert_eq!(curve.points[0], *curve.points.last().unwrap());
+    assert_eq!(crate::model::selected_curve_point(&tree).unwrap().index, 0);
+}
+
+#[test]
+fn enter_closes_a_curve_while_e_is_placing_either_endpoint() {
+    for source_index in [0, 3] {
+        let mut tree = DataTree::default();
+        let object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+        let id = object.uuid;
+        set_objects(&mut tree, vec![object]);
+        set_selected(&mut tree, vec![id]);
+        crate::model::set_selected_curve_point(
+            &mut tree,
+            Some(crate::model::CurvePointSelection {
+                object: id,
+                index: source_index,
+            }),
+        );
+        let mut commands = Commands::new();
+        commands::register_all(&mut commands);
+        let mut interaction = InteractionState::default();
+        interaction.key_pressed(KeyCode::KeyE, false, &commands, &mut tree);
+        assert!(matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::ExtendingCurve)
+        ));
+        interaction.key_pressed(KeyCode::Enter, true, &commands, &mut tree);
+        let scene = objects(&tree);
+        let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+            unreachable!()
+        };
+        assert!(curve.closed);
+        assert_eq!(curve.points[0], *curve.points.last().unwrap());
+        assert!(matches!(
+            tree.get_path("editor.state"),
+            ClaydashValue::EditorState(EditorState::Start)
+        ));
+    }
+}
+
+#[test]
+fn moving_the_first_anchor_of_a_closed_curve_keeps_the_seam_joined() {
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+    let id = object.uuid;
+    let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        unreachable!()
+    };
+    curve.close_from_end();
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_selected_curve_point(
+        &mut tree,
+        Some(crate::model::CurvePointSelection {
+            object: id,
+            index: 0,
+        }),
+    );
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState {
+        mouse_position: Vec2::new(400.0, 300.0),
+        ..Default::default()
+    };
+    interaction.key_pressed(KeyCode::KeyG, false, &commands, &mut tree);
+    interaction.cursor_moved(Vec2::new(480.0, 300.0), false);
+    interaction.update(&mut camera, &mut tree);
+    let scene = objects(&tree);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+        unreachable!()
+    };
+    assert_eq!(curve.points[0], *curve.points.last().unwrap());
+}
+
+#[test]
+fn e_attaches_only_the_new_curve_endpoint_to_the_pointer_until_click() {
+    let mut tree = DataTree::default();
+    let object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+    let id = object.uuid;
+    let crate::model::SdfParams::BezierCurveParams(original) = &object.params else {
+        unreachable!()
+    };
+    let original = original.points.clone();
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_selected_curve_point(
+        &mut tree,
+        Some(crate::model::CurvePointSelection {
+            object: id,
+            index: 3,
+        }),
+    );
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState {
+        mouse_position: camera.viewport / 2.0,
+        ..Default::default()
+    };
+    interaction.key_pressed(KeyCode::KeyE, false, &commands, &mut tree);
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::ExtendingCurve)
+    ));
+    interaction.update(&mut camera, &mut tree);
+    let pointer = Vec2::new(570.0, 245.0);
+    interaction.cursor_moved(pointer, false);
+    interaction.update(&mut camera, &mut tree);
+    let scene = objects(&tree);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+        unreachable!()
+    };
+    assert_eq!(&curve.points[..4], &original[..]);
+    assert_eq!(curve.points.len(), 7);
+    let tip = camera.project(curve.points[6], 1.0).unwrap();
+    assert!(Vec2::new(tip.x, tip.y).distance(pointer) < 0.01);
+    interaction.pointer_down(&camera, &mut tree, None);
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::Start)
+    ));
+    assert_eq!(crate::model::selected_curve_point(&tree).unwrap().index, 6);
+    assert_eq!(objects(&tree)[0].uuid, id);
+}
+
+#[test]
+fn escape_cancels_a_pointer_placed_curve_extension() {
+    let mut tree = DataTree::default();
+    let object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+    let id = object.uuid;
+    let crate::model::SdfParams::BezierCurveParams(original) = &object.params else {
+        unreachable!()
+    };
+    let original = original.points.clone();
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_selected_curve_point(
+        &mut tree,
+        Some(crate::model::CurvePointSelection {
+            object: id,
+            index: 0,
+        }),
+    );
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState {
+        mouse_position: Vec2::new(540.0, 250.0),
+        ..Default::default()
+    };
+    interaction.key_pressed(KeyCode::KeyE, false, &commands, &mut tree);
+    interaction.update(&mut camera, &mut tree);
+    let scene = objects(&tree);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+        unreachable!()
+    };
+    assert_eq!(curve.points.len(), 7);
+    assert_eq!(&curve.points[3..], &original[..]);
+    assert_eq!(crate::model::selected_curve_point(&tree).unwrap().index, 0);
+    interaction.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
+    let scene = objects(&tree);
+    let crate::model::SdfParams::BezierCurveParams(curve) = &scene[0].params else {
+        unreachable!()
+    };
+    assert_eq!(curve.points, original);
+    assert_eq!(crate::model::selected_curve_point(&tree).unwrap().index, 0);
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::Start)
+    ));
+}
+
+#[test]
 fn boolean_keys_combine_multiple_selections_immediately_and_undo() {
     for (key, operation) in [
         (KeyCode::Equal, BooleanOperation::Union),

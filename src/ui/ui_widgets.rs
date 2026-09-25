@@ -58,6 +58,7 @@ pub(super) fn primitive_icon_source(kind: PrimitiveKind) -> egui::ImageSource<'s
         PrimitiveKind::PolygonPrism => {
             egui::include_image!("../../assets/icons/lucide/square.svg")
         }
+        PrimitiveKind::BezierCurve => egui::include_image!("../../assets/icons/lucide/tangent.svg"),
     }
 }
 

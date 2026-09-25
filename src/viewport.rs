@@ -39,6 +39,7 @@ pub struct Viewport {
     pending_frames: u32,
     timing: Arc<Mutex<Option<Option<f64>>>>,
     submitted_pixels: u32,
+    submitted_budget: u32,
     query_set: Option<wgpu::QuerySet>,
     query_resolve: Option<wgpu::Buffer>,
     pipeline: wgpu::RenderPipeline,
@@ -128,6 +129,7 @@ impl Viewport {
             pending: false,
             pending_frames: 0,
             submitted_pixels: INITIAL_PIXELS,
+            submitted_budget: INITIAL_PIXELS,
             timing: Arc::new(Mutex::new(None)),
             query_set: timestamps.then(|| {
                 device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -180,8 +182,12 @@ impl Viewport {
         if let Some(milliseconds) = self.timing.lock().unwrap().take() {
             self.pending = false;
             if let Some(ms) = milliseconds {
-                self.pixel_budget = adjusted_budget(self.submitted_pixels, ms)
-                    .min(self.pixel_budget.saturating_mul(6) / 5);
+                self.pixel_budget = budget_after_sample(
+                    self.pixel_budget,
+                    self.submitted_budget,
+                    self.submitted_pixels,
+                    ms,
+                );
             }
         }
         if self.pending {
@@ -284,7 +290,7 @@ impl Viewport {
         if self.completed >= total {
             return Work::Cached;
         }
-        let count = (self.pixel_budget / (TILE * TILE)).max(1);
+        let count = (self.pixel_budget.saturating_mul(2) / (TILE * TILE)).max(1);
         Work::Refine {
             first: self.completed,
             end: (self.completed + count).min(total),
@@ -370,6 +376,11 @@ impl Viewport {
                 .sum(),
             Work::Cached => 0,
         };
+        self.submitted_budget = match work {
+            Work::Refine { .. } => self.pixel_budget.saturating_mul(2),
+            Work::Preview => self.pixel_budget,
+            Work::Cached => 0,
+        };
         self.pending = true;
         if let (Some(query_set), Some(resolve)) = (&self.query_set, &self.query_resolve) {
             let readback = device.create_buffer(&wgpu::BufferDescriptor {
@@ -448,6 +459,21 @@ fn adjusted_budget(previous: u32, milliseconds: f64) -> u32 {
     ((previous as f64 * ratio) as u32).clamp(TILE * TILE, 4 * 1024 * 1024)
 }
 
+fn budget_after_sample(
+    budget: u32,
+    submitted_budget: u32,
+    rendered_pixels: u32,
+    milliseconds: f64,
+) -> u32 {
+    // The final refinement batch can be just a few edge pixels. Its fixed GPU
+    // overhead says nothing about the cost of a full batch, so retain the
+    // learned budget for the next camera or selection change.
+    if rendered_pixels < submitted_budget / 2 {
+        return budget;
+    }
+    adjusted_budget(rendered_pixels, milliseconds).min(budget.saturating_mul(6) / 5)
+}
+
 fn preview_size(size: [u32; 2], budget: u32) -> [u32; 2] {
     let scale = (budget as f64 / (size[0] as f64 * size[1] as f64))
         .sqrt()
@@ -502,5 +528,12 @@ mod tests {
         assert!(adjusted_budget(INITIAL_PIXELS, 2.0) > INITIAL_PIXELS);
         assert_eq!(adjusted_budget(INITIAL_PIXELS, f64::NAN), INITIAL_PIXELS);
         assert_eq!(adjusted_budget(TILE * TILE, 100.0), TILE * TILE);
+    }
+
+    #[test]
+    fn final_partial_tile_keeps_the_budget_for_the_next_view() {
+        let budget = 16 * 1024;
+        assert_eq!(budget_after_sample(budget, budget * 2, 288, 1.0), budget);
+        assert!(budget_after_sample(budget, budget * 2, budget * 2, 20.0) < budget);
     }
 }

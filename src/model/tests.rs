@@ -3,6 +3,20 @@ use glam::{Quat, Vec2, Vec3};
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 #[test]
+fn selecting_the_same_objects_keeps_the_render_selection_version() {
+    let mut tree = DataTree::default();
+    let empty_version = tree.path_version("scene.selected_uuids");
+    set_selected(&mut tree, Vec::new());
+    assert_eq!(tree.path_version("scene.selected_uuids"), empty_version);
+    let id = uuid::Uuid::new_v4();
+    set_selected(&mut tree, vec![id]);
+    let version = tree.path_version("scene.selected_uuids");
+    set_selected(&mut tree, vec![id]);
+    set_selected_exact(&mut tree, vec![id]);
+    assert_eq!(tree.path_version("scene.selected_uuids"), version);
+}
+
+#[test]
 fn lattice_interpolates_hidden_points_and_preserves_shape_when_resized() {
     let mut lattice = Lattice::new(Vec3::splat(-1.0), Vec3::ONE, 2);
     let corner = lattice.index(1, 1, 1);
@@ -52,6 +66,144 @@ fn primitive_kind_maps_every_gpu_type_explicitly() {
     for kind in PrimitiveKind::ALL {
         assert_eq!(PrimitiveKind::from_object_type(kind.object_type()), kind);
     }
+}
+
+#[test]
+fn bezier_extrusion_follows_edited_3d_controls_and_survives_save() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    let SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        unreachable!()
+    };
+    curve.points = vec![
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(-0.5, 0.0, 1.0),
+        Vec3::new(0.5, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    ];
+    assert!((curve.point(0, 0.5).z - 0.75).abs() < 0.0001);
+    assert!(object.distance(Vec3::new(0.0, 0.0, 0.75)) > 0.0);
+    object.path_extrusion = Some(PathExtrusion {
+        radius: 0.2,
+        ..Default::default()
+    });
+    assert!(object.distance(Vec3::new(0.0, 0.0, 0.75)) < 0.0);
+    assert!(object.distance(Vec3::new(0.0, 0.5, 0.75)) > 0.0);
+    let restored: SdfObject =
+        serde_json::from_str(&serde_json::to_string(&object).unwrap()).unwrap();
+    assert!(restored.distance(Vec3::new(0.0, 0.0, 0.75)) < 0.0);
+    let SdfParams::BezierCurveParams(curve) = restored.params else {
+        unreachable!()
+    };
+    assert_eq!(curve.points[1].z, 1.0);
+}
+
+#[test]
+fn bezier_square_profile_is_distinct_from_round_profile() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    let SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        unreachable!()
+    };
+    curve.points = vec![
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(-0.3, 0.0, 0.0),
+        Vec3::new(0.3, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    ];
+    object.path_extrusion = Some(PathExtrusion {
+        radius: 0.2,
+        ..Default::default()
+    });
+    let corner = Vec3::new(0.0, 0.16, 0.16);
+    assert!(object.distance(corner) > 0.0);
+    object.path_extrusion.as_mut().unwrap().profile = BezierProfile::Square;
+    assert!(object.distance(corner) < 0.0);
+}
+
+#[test]
+fn extending_bezier_curve_preserves_join_tangent() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    let SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        unreachable!()
+    };
+    let join = curve.points[3];
+    let incoming = join - curve.points[2];
+    assert_eq!(curve.extend_from_end(), Some(6));
+    assert_eq!(curve.points[3], join);
+    assert_eq!(curve.points[4] - join, incoming);
+    assert_eq!(curve.segment_count(), 2);
+    assert_eq!(curve.point(0, 1.0), curve.point(1, 0.0));
+    let next_midpoint = curve.point(1, 0.5);
+    object.path_extrusion = Some(PathExtrusion::default());
+    assert!(object.distance(next_midpoint) < 0.0);
+}
+
+#[test]
+fn deleting_an_interior_curve_anchor_joins_its_neighbors() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    let SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        unreachable!()
+    };
+    curve.extend_from_end();
+    curve.extend_from_end();
+    let before = curve.points.clone();
+    assert_eq!(curve.delete_anchor(3), Some(0));
+    assert_eq!(curve.segment_count(), 2);
+    assert_eq!(curve.points[0], before[0]);
+    assert_eq!(curve.points[1], before[1]);
+    assert_eq!(curve.points[2], before[5]);
+    assert_eq!(curve.points[3], before[6]);
+    assert_eq!(curve.points[6], before[9]);
+}
+
+#[test]
+fn closing_a_curve_joins_end_to_start_with_a_smooth_seam() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    let SdfParams::BezierCurveParams(curve) = &mut object.params else {
+        unreachable!()
+    };
+    assert!(curve.close_from_end());
+    assert!(curve.closed);
+    assert_eq!(curve.points[0], *curve.points.last().unwrap());
+    let last = curve.points.len() - 1;
+    assert_eq!(
+        curve.points[1] - curve.points[0],
+        curve.points[last] - curve.points[last - 1]
+    );
+    assert_eq!(curve.segment_count(), 2);
+    assert_eq!(curve.extend_from_end(), None);
+}
+
+#[test]
+fn another_curve_can_define_the_path_extrusions_cross_section() {
+    let mut path = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    let SdfParams::BezierCurveParams(path_curve) = &mut path.params else {
+        unreachable!()
+    };
+    path_curve.points = vec![
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(-0.3, 0.0, 0.0),
+        Vec3::new(0.3, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    ];
+    let mut profile = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    let SdfParams::BezierCurveParams(profile_curve) = &mut profile.params else {
+        unreachable!()
+    };
+    profile_curve.points = vec![
+        Vec3::new(-1.0, -1.0, 0.0),
+        Vec3::new(-1.0, 1.0, 0.0),
+        Vec3::new(1.0, 1.0, 0.0),
+        Vec3::new(1.0, -1.0, 0.0),
+    ];
+    path.path_extrusion = Some(PathExtrusion {
+        radius: 0.3,
+        profile_curve: Some(profile.uuid),
+        ..Default::default()
+    });
+    let scene = [path, profile];
+    assert!(scene_sample(Vec3::ZERO, &scene).unwrap().0 < 0.0);
+    assert!(scene_sample(Vec3::new(0.0, 0.0, 0.7), &scene).unwrap().0 > 0.0);
+    assert_eq!(scene[1].distance(Vec3::ZERO), 100.0);
 }
 
 #[test]

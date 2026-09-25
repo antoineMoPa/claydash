@@ -7,6 +7,25 @@ impl InteractionState {
             ClaydashValue::EditorState(mode) => mode,
             _ => EditorState::Start,
         };
+        if mode == EditorState::ExtendingCurve {
+            self.transform_session = None;
+            self.extrusion_session = None;
+            self.active_guide = None;
+            self.update_curve_extension(camera, tree);
+            return;
+        }
+        if mode == EditorState::Grabbing
+            && matches!(
+                tree.get_path("editor.curve_grab_initial"),
+                ClaydashValue::VecSDFObject(_)
+            )
+        {
+            self.transform_session = None;
+            self.extrusion_session = None;
+            self.active_guide = None;
+            self.update_curve_grab(camera, tree);
+            return;
+        }
         if matches!(mode, EditorState::Extruding | EditorState::DraggingFace) {
             self.transform_session = None;
             self.numeric_rotation = NumericRotationInput::Idle;
@@ -16,6 +35,7 @@ impl InteractionState {
         self.extrusion_session = None;
         if mode == EditorState::Start {
             self.transform_session = None;
+            self.curve_grab_mouse_start = None;
             self.active_guide = None;
             self.numeric_rotation = NumericRotationInput::Idle;
             return;
@@ -139,9 +159,10 @@ impl InteractionState {
                         * Mat4::from_quat(rotation)
                         * Mat4::from_translation(-session.center)
                 }
-                EditorState::Start | EditorState::Extruding | EditorState::DraggingFace => {
-                    Mat4::IDENTITY
-                }
+                EditorState::Start
+                | EditorState::Extruding
+                | EditorState::DraggingFace
+                | EditorState::ExtendingCurve => Mat4::IDENTITY,
             };
             let local = target.parent_world.inverse() * operation * target.world;
             let (scale, rotation, translation) = local.to_scale_rotation_translation();
@@ -159,6 +180,120 @@ impl InteractionState {
         }
         set_objects(tree, scene);
         crate::model::set_scene_cameras(tree, cameras);
+    }
+
+    fn update_curve_extension(&mut self, camera: &Camera, tree: &mut DataTree) {
+        let Some(point) = crate::model::selected_curve_point(tree) else {
+            return;
+        };
+        let ClaydashValue::VecSDFObject(initial) = tree.get_path("editor.curve_extension_initial")
+        else {
+            return;
+        };
+        let Some(initial) = initial.iter().find(|object| object.uuid == point.object) else {
+            return;
+        };
+        let crate::model::SdfParams::BezierCurveParams(initial_curve) = &initial.params else {
+            return;
+        };
+        let mut scene = objects(tree);
+        let matrix = crate::model::object_world_matrix(&scene, point.object);
+        let Some(object) = scene.iter_mut().find(|object| object.uuid == point.object) else {
+            return;
+        };
+        let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params else {
+            return;
+        };
+        let from_start = point.index == 0;
+        let Some(anchor) = (if from_start {
+            initial_curve.points.first()
+        } else {
+            initial_curve.points.last()
+        }) else {
+            return;
+        };
+        let anchor = *anchor;
+        if curve.points.len() < 2 {
+            return;
+        }
+        let world_anchor = matrix.transform_point3(anchor);
+        let world_pointer = camera.cursor_on_plane(self.mouse_position, world_anchor);
+        let local_pointer = matrix.inverse().transform_point3(world_pointer);
+        if from_start {
+            curve.points[0] = local_pointer;
+            curve.points[1] = local_pointer.lerp(anchor, 1.0 / 3.0);
+        } else {
+            let last = curve.points.len() - 1;
+            curve.points[last] = local_pointer;
+            curve.points[last - 1] = anchor.lerp(local_pointer, 2.0 / 3.0);
+        }
+        set_objects(tree, scene);
+    }
+
+    fn update_curve_grab(&mut self, camera: &Camera, tree: &mut DataTree) {
+        let start_mouse = *self
+            .curve_grab_mouse_start
+            .get_or_insert(self.mouse_position);
+        let Some(point) = crate::model::selected_curve_point(tree) else {
+            return;
+        };
+        let ClaydashValue::VecSDFObject(initial) = tree.get_path("editor.curve_grab_initial")
+        else {
+            return;
+        };
+        let Some(initial) = initial.iter().find(|object| object.uuid == point.object) else {
+            return;
+        };
+        let crate::model::SdfParams::BezierCurveParams(initial_curve) = &initial.params else {
+            return;
+        };
+        let Some(&initial_point) = initial_curve.points.get(point.index) else {
+            return;
+        };
+        let mut scene = objects(tree);
+        let matrix = crate::model::object_world_matrix(&scene, point.object);
+        let world_point = matrix.transform_point3(initial_point);
+        let world_start = camera.cursor_on_plane(start_mouse, world_point);
+        let world_current = camera.cursor_on_plane(self.mouse_position, world_point);
+        let world_delta = world_current - world_start;
+        let constrain_x = matches!(
+            tree.get_path("editor.constrain_x"),
+            ClaydashValue::Bool(true)
+        );
+        let constrain_y = matches!(
+            tree.get_path("editor.constrain_y"),
+            ClaydashValue::Bool(true)
+        );
+        let constrain_z = matches!(
+            tree.get_path("editor.constrain_z"),
+            ClaydashValue::Bool(true)
+        );
+        let world_delta = if constrain_x || constrain_y || constrain_z {
+            world_delta
+                * Vec3::new(
+                    constrain_x as u8 as f32,
+                    constrain_y as u8 as f32,
+                    constrain_z as u8 as f32,
+                )
+        } else {
+            world_delta
+        };
+        let local_delta = matrix.inverse().transform_vector3(world_delta);
+        let Some(object) = scene.iter_mut().find(|object| object.uuid == point.object) else {
+            return;
+        };
+        let crate::model::SdfParams::BezierCurveParams(curve) = &mut object.params else {
+            return;
+        };
+        let Some(current_point) = curve.points.get_mut(point.index) else {
+            return;
+        };
+        *current_point = initial_point + local_delta;
+        if curve.closed && point.index == 0 {
+            let last = curve.points.len() - 1;
+            curve.points[last] = curve.points[0];
+        }
+        set_objects(tree, scene);
     }
 
     fn update_extrusion(&mut self, mode: EditorState, camera: &Camera, tree: &mut DataTree) {

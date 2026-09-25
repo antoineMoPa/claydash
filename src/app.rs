@@ -98,6 +98,7 @@ enum PendingRender {
 #[cfg(not(target_arch = "wasm32"))]
 struct UiBenchmark {
     edit_objects: bool,
+    selection_click: bool,
     preview_pixels: Vec<u32>,
     frames: usize,
     last_frame: Option<std::time::Instant>,
@@ -165,17 +166,25 @@ impl App {
             });
         #[cfg(not(target_arch = "wasm32"))]
         if benchmark || std::env::args().any(|arg| arg == "--stress-ui-benchmark") {
-            let case = std::env::args()
-                .find_map(|arg| arg.strip_prefix("--benchmark-case=").map(str::to_owned));
-            let scene = case
-                .and_then(|case| {
-                    crate::model::renderer_benchmark_scenes()
-                        .into_iter()
-                        .find(|(name, _)| *name == case)
-                        .map(|(_, scene)| scene)
-                })
-                .unwrap_or_else(crate::model::renderer_stress_scene);
-            crate::model::set_objects(&mut tree, scene);
+            if let Some(path) = std::env::args()
+                .find_map(|arg| arg.strip_prefix("--benchmark-scene=").map(str::to_owned))
+            {
+                let scene = crate::document::read_scene(std::path::Path::new(&path))
+                    .unwrap_or_else(|error| panic!("read benchmark scene {path}: {error}"));
+                tree.set_tree("scene", scene);
+            } else {
+                let case = std::env::args()
+                    .find_map(|arg| arg.strip_prefix("--benchmark-case=").map(str::to_owned));
+                let scene = case
+                    .and_then(|case| {
+                        crate::model::renderer_benchmark_scenes()
+                            .into_iter()
+                            .find(|(name, _)| *name == case)
+                            .map(|(_, scene)| scene)
+                    })
+                    .unwrap_or_else(crate::model::renderer_stress_scene);
+                crate::model::set_objects(&mut tree, scene);
+            }
             crate::model::set_selected(&mut tree, Vec::new());
         }
         let camera = Camera::new();
@@ -416,6 +425,8 @@ impl App {
                 .any(|arg| arg == "--stress-ui-benchmark")
                 .then(|| UiBenchmark {
                     edit_objects: std::env::args().any(|arg| arg == "--benchmark-edit"),
+                    selection_click: std::env::args()
+                        .any(|arg| arg == "--benchmark-selection-click"),
                     preview_pixels: Vec::new(),
                     frames: 0,
                     last_frame: None,
@@ -508,12 +519,9 @@ impl App {
         let capture_ui = false;
         if let Some(renderer) = &mut self.renderer {
             let export_version = if capture_render { i32::MIN } else { 0 };
-            let scene_versions = [
-                self.tree.path_version("scene.sdf_objects"),
-                self.tree
-                    .path_version("scene.selected_uuids")
-                    .wrapping_add(export_version),
-            ];
+            // Selection is drawn by the editor gizmos. Keep the cached scene
+            // image when only selection changes, avoiding a full refinement.
+            let scene_versions = [self.tree.path_version("scene.sdf_objects"), export_version];
             let captured_frame = renderer.render(
                 &self.camera,
                 objects_ref(&self.tree),
@@ -976,6 +984,16 @@ impl ApplicationHandler for App {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(benchmark) = &mut self.ui_benchmark {
                     let now = std::time::Instant::now();
+                    if benchmark.selection_click && matches!(benchmark.frames, 60 | 90) {
+                        let pointer = self.camera.viewport_origin + self.camera.viewport * 0.5;
+                        InteractionState::select_at(
+                            &self.camera,
+                            &mut self.tree,
+                            pointer,
+                            None,
+                            false,
+                        );
+                    }
                     if let Some(last) = benchmark.last_frame {
                         if benchmark.frames > 10 {
                             benchmark
@@ -984,16 +1002,18 @@ impl ApplicationHandler for App {
                         }
                     }
                     benchmark.last_frame = Some(now);
-                    let angle = (benchmark.frames as f32 * 0.08).sin() * 0.3;
-                    if benchmark.edit_objects {
-                        let mut scene = objects_ref(&self.tree).to_vec();
-                        if let Some(object) = scene.first_mut() {
-                            object.transform.rotation = glam::Quat::from_rotation_y(angle);
+                    if !benchmark.selection_click {
+                        let angle = (benchmark.frames as f32 * 0.08).sin() * 0.3;
+                        if benchmark.edit_objects {
+                            let mut scene = objects_ref(&self.tree).to_vec();
+                            if let Some(object) = scene.first_mut() {
+                                object.transform.rotation = glam::Quat::from_rotation_y(angle);
+                            }
+                            crate::model::set_objects(&mut self.tree, scene);
+                        } else {
+                            self.camera.position = glam::Quat::from_rotation_y(angle)
+                                * glam::Vec3::new(-3.3, 0.8, 1.7);
                         }
-                        crate::model::set_objects(&mut self.tree, scene);
-                    } else {
-                        self.camera.position =
-                            glam::Quat::from_rotation_y(angle) * glam::Vec3::new(-3.3, 0.8, 1.7);
                     }
                     if benchmark.frames > 10 {
                         if let Some(renderer) = &self.renderer {

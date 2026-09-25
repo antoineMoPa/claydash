@@ -91,6 +91,7 @@ pub struct UiState {
     active_guide: Option<crate::guides::ActiveGuideSet>,
     resize_guide_drag: Option<ResizeGuideDrag>,
     lattice_drag: Option<object_gizmos::LatticeDrag>,
+    bezier_drag: Option<object_gizmos::BezierDrag>,
     polygon_cap_drag: Option<PolygonCapDrag>,
     insert_keyframe_menu_position: Option<egui::Pos2>,
     #[cfg(target_arch = "wasm32")]
@@ -124,6 +125,7 @@ impl Default for UiState {
             active_guide: None,
             resize_guide_drag: None,
             lattice_drag: None,
+            bezier_drag: None,
             polygon_cap_drag: None,
             insert_keyframe_menu_position: None,
             #[cfg(target_arch = "wasm32")]
@@ -303,6 +305,10 @@ impl UiState {
             viewport_ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 self.regions.extend(camera_overlay::draw(ui, tree, camera));
+                if let Some((curve, hit)) = object_gizmos::draw_bezier_paths(ui, tree, camera) {
+                    set_selected(tree, vec![curve]);
+                    self.regions.push(hit);
+                }
                 self.ghosts = boolean_overlay::draw(ui, tree, camera);
                 // Resize handles must not intercept extrusion or operand-selection clicks.
                 if !matches!(
@@ -310,7 +316,11 @@ impl UiState {
                     crate::model::ClaydashValue::EditorState(
                         crate::model::EditorState::Extruding
                             | crate::model::EditorState::DraggingFace
+                            | crate::model::EditorState::ExtendingCurve
                     )
+                ) && !matches!(
+                    tree.get_path("editor.curve_grab_initial"),
+                    ClaydashValue::VecSDFObject(_)
                 ) && scene_actions::pending_boolean(tree).is_none()
                 {
                     let object_gizmo_blocker_count = self.regions.len();

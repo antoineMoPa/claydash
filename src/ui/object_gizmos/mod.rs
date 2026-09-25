@@ -1,9 +1,13 @@
 use super::*;
 
+mod bezier;
 mod lattice;
 mod polygon;
 mod resize;
 
+use bezier::draw_bezier_gizmo;
+pub(super) use bezier::draw_bezier_paths;
+pub(in crate::ui) use bezier::BezierDrag;
 pub(in crate::ui) use lattice::LatticeDrag;
 pub(super) use polygon::{
     apply_polygon_cap_drag, polygon_overlay_triangles, selected_polygon_face_vertices,
@@ -36,6 +40,9 @@ impl UiState {
         draw_selected_polygon_face_overlay(ui, tree, camera);
         draw_selected_cylinder_cap_overlay(ui, tree, camera);
         let selection = selected(tree);
+        if selection.len() == 1 && draw_bezier_gizmo(self, ui, tree, camera, blocker_count) {
+            return;
+        }
         if selection.len() == 1 {
             let mut scene = objects(tree);
             if scene
@@ -380,7 +387,7 @@ impl UiState {
                         };
                         *value = (*value + amount).max(0.01);
                     }
-                    SdfParams::PolygonPrismParams(_) => {}
+                    SdfParams::PolygonPrismParams(_) | SdfParams::BezierCurveParams(_) => {}
                 }
                 changed = true;
             }

@@ -237,6 +237,16 @@ fn primitive_segments(params: &SdfParams) -> Vec<[Vec3; 2]> {
                 ]);
             }
         }
+        SdfParams::BezierCurveParams(curve) => {
+            for segment in 0..curve.segment_count() {
+                for step in 0..32 {
+                    result.push([
+                        curve.point(segment, step as f32 / 32.0),
+                        curve.point(segment, (step + 1) as f32 / 32.0),
+                    ]);
+                }
+            }
+        }
     }
     result
 }
@@ -373,7 +383,12 @@ mod tests {
 
     #[test]
     fn primitive_guide_vertices_follow_rotated_scaled_surfaces() {
-        for kind in PrimitiveKind::SPAWNABLE {
+        for kind in [
+            PrimitiveKind::Sphere,
+            PrimitiveKind::Box,
+            PrimitiveKind::Cylinder,
+            PrimitiveKind::Torus,
+        ] {
             let mut object = SdfObject::create_kind(kind);
             object.transform.translation = Vec3::new(1.0, 2.0, -1.0);
             object.transform.scale = Vec3::new(0.6, 1.8, 1.2);

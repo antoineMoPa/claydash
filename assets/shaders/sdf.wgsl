@@ -98,7 +98,7 @@ fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
     if count < 3u { return 100.0; }
     var distance_squared = 1e20;
     var inside = false;
-    for (var index = 0u; index < 32u; index++) {
+    for (var index = 0u; index < 65u; index++) {
         if index >= count { break; }
         let next = select(index + 1u, 0u, index + 1u == count);
         let a = polygon_points[offset + index];
@@ -117,6 +117,130 @@ fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
         }
     }
     return sqrt(distance_squared) * select(1.0, -1.0, inside);
+}
+
+fn bezier_control(offset: u32, index: u32) -> vec3<f32> {
+    let xy = polygon_points[offset + index * 2u];
+    let z = polygon_points[offset + index * 2u + 1u].x;
+    return vec3(xy, z);
+}
+
+fn bezier_tangent(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>, d: vec3<f32>, t: f32) -> vec3<f32> {
+    let u = 1.0 - t;
+    return (b - a) * (3.0 * u * u) + (c - b) * (6.0 * u * t) + (d - c) * (3.0 * t * t);
+}
+
+// Minimize distance to each cubic in the chain. The seed search avoids Newton
+// converging from an unrelated part of a curved segment.
+fn bezier_extrusion_distance(point: vec3<f32>, object: Object) -> f32 {
+    let radius = object.params.x;
+    let segment_count = object.mirror_axes.w & 0x7fffffffu;
+    let closed = (object.mirror_axes.w & 0x80000000u) != 0u;
+    if radius <= 0.0 || segment_count == 0u { return 100.0; }
+    let offset = bitcast<u32>(object.params.y);
+    let profile_count = u32(object.scale.w);
+    var best_distance = 1e20;
+    var best_position = vec3(0.0);
+    var best_tangent = vec3(1.0, 0.0, 0.0);
+    var best_t = 0.0;
+    var best_segment = 0u;
+    for (var segment = 0u; segment < 8u; segment++) {
+        if segment >= segment_count { break; }
+        let base = segment * 3u;
+        let a = bezier_control(offset, base);
+        let b = bezier_control(offset, base + 1u);
+        let c = bezier_control(offset, base + 2u);
+        let d = bezier_control(offset, base + 3u);
+        // A cubic stays inside the convex hull of its four controls. Once a
+        // closer segment is known, this bound can skip the seed and Newton work.
+        let lower = min(min(a, b), min(c, d));
+        let upper = max(max(a, b), max(c, d));
+        let outside = max(max(lower - point, point - upper), vec3(0.0));
+        if dot(outside, outside) >= best_distance { continue; }
+        var seed = 0.0;
+        var seed_distance = 1e20;
+        // Evaluate the same 13 uniform seeds by forward differences, using
+        // additions in the loop instead of expanding the cubic each time.
+        let h = 1.0 / 12.0;
+        let linear = (b - a) * 3.0;
+        let quadratic = (a - b * 2.0 + c) * 3.0;
+        let cubic = d - a + (b - c) * 3.0;
+        var sample_position = a;
+        var sample_step = linear * h + quadratic * (h * h) + cubic * (h * h * h);
+        var sample_second = quadratic * (2.0 * h * h) + cubic * (6.0 * h * h * h);
+        let sample_third = cubic * (6.0 * h * h * h);
+        for (var step = 0u; step <= 12u; step++) {
+            let t = f32(step) / 12.0;
+            let delta = sample_position - point;
+            let distance = dot(delta, delta);
+            if distance < seed_distance { seed_distance = distance; seed = t; }
+            sample_position += sample_step;
+            sample_step += sample_second;
+            sample_second += sample_third;
+        }
+        var t = seed;
+        for (var iteration = 0u; iteration < 4u; iteration++) {
+            let delta = ((cubic * t + quadratic) * t + linear) * t + a - point;
+            let tangent = (cubic * (3.0 * t) + quadratic * 2.0) * t + linear;
+            let second = cubic * (6.0 * t) + quadratic * 2.0;
+            let denominator = dot(tangent, tangent) + dot(delta, second);
+            if abs(denominator) < 1e-6 { break; }
+            t = clamp(t - dot(delta, tangent) / denominator, 0.0, 1.0);
+        }
+        if profile_count == 0u {
+            let position = ((cubic * t + quadratic) * t + linear) * t + a;
+            let delta = position - point;
+            best_distance = min(best_distance, min(seed_distance, dot(delta, delta)));
+            continue;
+        }
+        for (var candidate_index = 0u; candidate_index < 4u; candidate_index++) {
+            let candidate = select(select(select(0.0, seed, candidate_index == 1u), t, candidate_index == 2u), 1.0, candidate_index == 3u);
+            let position = ((cubic * candidate + quadratic) * candidate + linear) * candidate + a;
+            let delta = position - point;
+            let distance = dot(delta, delta);
+            if distance < best_distance {
+                best_distance = distance;
+                best_position = position;
+                best_tangent = (cubic * (3.0 * candidate) + quadratic * 2.0) * candidate + linear;
+                best_t = candidate;
+                best_segment = segment;
+            }
+        }
+    }
+    if profile_count == 0u { return sqrt(best_distance) - radius; }
+    let delta = point - best_position;
+    let initial = bezier_tangent(bezier_control(offset, 0u), bezier_control(offset, 1u),
+        bezier_control(offset, 2u), bezier_control(offset, 3u), 0.0);
+    var start = vec3(1.0, 0.0, 0.0);
+    if dot(initial, initial) > 1e-8 { start = normalize(initial); }
+    var tangent = start;
+    if dot(best_tangent, best_tangent) > 1e-8 { tangent = normalize(best_tangent); }
+    let reference = select(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), abs(start.y) < 0.9);
+    let initial_side = normalize(cross(start, reference));
+    let axis = cross(start, tangent);
+    let w = 1.0 + dot(start, tangent);
+    let denominator = w * w + dot(axis, axis);
+    var side = initial_side;
+    if denominator >= 1e-6 {
+        side = normalize(initial_side + 2.0 * cross(axis, cross(axis, initial_side) + w * initial_side) / denominator);
+    }
+    let up = cross(tangent, side);
+    let cross_position = vec2(dot(delta, side), dot(delta, up));
+    var cross_distance = 100.0;
+    if profile_count == 1u {
+        let q = abs(cross_position) - vec2(radius);
+        cross_distance = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
+    } else if profile_count >= 3u {
+        cross_distance = polygon_distance(cross_position / max(radius, 0.0001), bitcast<u32>(object.params.z), profile_count) * radius;
+    }
+    var cap = -100.0;
+    if !closed && best_segment == 0u && best_t <= 0.0001 {
+        cap = -dot(point - bezier_control(offset, 0u), tangent);
+    } else if !closed && best_segment + 1u == segment_count && best_t >= 0.9999 {
+        cap = dot(point - bezier_control(offset, segment_count * 3u), tangent);
+    }
+    let q = vec2(cross_distance, cap);
+    return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
 }
 
 fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
@@ -154,6 +278,8 @@ fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
         let depth = abs(local.z) - object.params.x;
         let outside = length(max(vec2(polygon, depth), vec2(0.0)));
         distance = outside + min(max(polygon, depth), 0.0);
+    } else if object.state.y == 6 {
+        distance = bezier_extrusion_distance(local, object);
     }
     var world_distance = distance * object.params.w;
     if object.state.y == 2 && brick_geometry_visible(object) {
@@ -476,7 +602,6 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
     var direction = ray;
     var throughput = vec3(1.0);
     var radiance = vec3(0.0);
-    let selected = f32(objects[index].state.x) * 0.12;
     var reflecting = false;
     var reflection_weight = vec3(0.0);
     var transmission_origin = vec3(0.0);
@@ -566,5 +691,5 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
     // The final transmission miss contributes the environment even at the
     // bounce cap, just as it does after each earlier transmitted ray.
     if !reflecting && !hit && !opaque { radiance += throughput * background(direction); }
-    return vec4((radiance + selected) * camera.position.w, 1.0);
+    return vec4(radiance * camera.position.w, 1.0);
 }

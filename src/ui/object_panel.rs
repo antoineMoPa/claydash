@@ -529,5 +529,14 @@ pub(super) fn params_editor(
         SdfParams::PolygonPrismParams(value) => ui
             .add(egui::Slider::new(&mut value.half_depth, 0.005..=4.0).text("Half depth"))
             .changed(),
+        SdfParams::BezierCurveParams(value) => {
+            ui.label(format!(
+                "{} Bézier segment{}",
+                value.segment_count(),
+                if value.segment_count() == 1 { "" } else { "s" }
+            ));
+            ui.weak("G moves a point · Backspace removes an anchor · E extends · Enter closes the loop.");
+            false
+        }
     }
 }

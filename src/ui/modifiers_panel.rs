@@ -26,15 +26,36 @@ pub(super) fn modifiers_panel(
     let repeat_spacing =
         bounds.map(|(min, max)| ((max - min) * 1.1).clamp(Vec3::splat(0.01), Vec3::splat(20.0)));
     let has_children = crate::model::has_boolean_children(&scene, target);
+    let profile_curves: Vec<_> = scene
+        .iter()
+        .filter(|candidate| {
+            candidate.uuid != target && matches!(candidate.params, SdfParams::BezierCurveParams(_))
+        })
+        .map(|candidate| (candidate.uuid, candidate.display_name()))
+        .collect();
     let Some(object) = scene.iter_mut().find(|object| object.uuid == target) else {
         return;
     };
-    let can_lattice = object.boolean_parent.is_none();
-    let can_mirror = object.boolean_parent.is_none();
-    let can_repeat = !has_children || object.boolean_parent.is_none();
+    let is_curve = matches!(object.params, SdfParams::BezierCurveParams(_));
+    let can_lattice = !is_curve && object.boolean_parent.is_none();
+    let can_mirror = !is_curve && object.boolean_parent.is_none();
+    let can_repeat = !is_curve && (!has_children || object.boolean_parent.is_none());
     let mut changed = false;
     let mut snapshot = false;
     ui.menu_button("+ Add modifier", |ui| {
+        if is_curve
+            && ui
+                .add_enabled(
+                    object.path_extrusion.is_none(),
+                    egui::Button::new("Path Extrusion"),
+                )
+                .clicked()
+        {
+            object.path_extrusion = Some(crate::model::PathExtrusion::default());
+            changed = true;
+            snapshot = true;
+            ui.close();
+        }
         if ui
             .add_enabled(
                 can_mirror && object.mirror.is_none(),
@@ -208,7 +229,10 @@ pub(super) fn modifiers_panel(
                 snapshot = true;
             }
         });
-    } else if !object.repetition.enabled && object.mirror.is_none() {
+    } else if !object.repetition.enabled
+        && object.mirror.is_none()
+        && object.path_extrusion.is_none()
+    {
         ui.group(|ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new("No modifiers").strong());
@@ -216,6 +240,86 @@ pub(super) fn modifiers_panel(
     }
     if remove_lattice {
         object.lattice = None;
+        changed = true;
+        snapshot = true;
+    }
+    let mut remove_path_extrusion = false;
+    if let Some(path) = &mut object.path_extrusion {
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Path Extrusion").strong().size(16.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    remove_path_extrusion = ui.small_button("Remove").clicked();
+                });
+            });
+            if !remove_path_extrusion {
+                let size =
+                    ui.add(egui::Slider::new(&mut path.radius, 0.01..=2.0).text("Profile size"));
+                changed |= size.changed();
+                snapshot |= size.drag_stopped();
+                ui.label("Cross section");
+                ui.horizontal(|ui| {
+                    changed |= ui
+                        .selectable_value(&mut path.profile_curve, None, "Built-in")
+                        .changed();
+                    if path.profile_curve.is_none() {
+                        changed |= ui
+                            .selectable_value(
+                                &mut path.profile,
+                                crate::model::BezierProfile::Round,
+                                "Round",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut path.profile,
+                                crate::model::BezierProfile::Square,
+                                "Square",
+                            )
+                            .changed();
+                    }
+                });
+                egui::ComboBox::from_label("Profile curve")
+                    .selected_text(
+                        path.profile_curve
+                            .and_then(|id| {
+                                profile_curves
+                                    .iter()
+                                    .find(|(candidate, _)| *candidate == id)
+                                    .map(|(_, name)| name.as_str())
+                            })
+                            .unwrap_or("None"),
+                    )
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(&mut path.profile_curve, None, "None")
+                            .changed();
+                        for (id, name) in &profile_curves {
+                            changed |= ui
+                                .selectable_value(&mut path.profile_curve, Some(*id), name)
+                                .changed();
+                        }
+                    });
+                if path.profile_curve.is_some() {
+                    ui.weak(
+                        "The profile curve's local XY shape is closed and swept along this path.",
+                    );
+                    if path.profile_curve.is_some_and(|id| {
+                        !profile_curves.iter().any(|(candidate, _)| *candidate == id)
+                    }) {
+                        ui.colored_label(
+                            Color32::LIGHT_RED,
+                            "Profile curve is missing. Choose another curve.",
+                        );
+                    }
+                }
+                snapshot |= changed;
+            }
+        });
+    }
+    if remove_path_extrusion {
+        object.path_extrusion = None;
         changed = true;
         snapshot = true;
     }

@@ -244,7 +244,7 @@ fn resize_handles_with_matrix_impl(
                 });
             }
         }
-        SdfParams::PolygonPrismParams(_) => {}
+        SdfParams::PolygonPrismParams(_) | SdfParams::BezierCurveParams(_) => {}
     }
     handles
 }
