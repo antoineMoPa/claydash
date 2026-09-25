@@ -200,6 +200,19 @@ impl UiState {
             viewport_ui.ctx().request_repaint();
         }
         let file_action = draw_file_menu(viewport_ui, document, &mut self.layout);
+        let context = viewport_ui.ctx();
+        let style = context.style_of(context.theme());
+        let mut frame_style = FramesStyle::from_visuals(&style.visuals);
+        frame_style.background = Color32::TRANSPARENT;
+        frame_style.frame_fill = Color32::TRANSPARENT;
+        let accent = if style.visuals.dark_mode {
+            Color32::from_rgb(95, 142, 246)
+        } else {
+            Color32::from_rgb(51, 100, 190)
+        };
+        frame_style.active_border = accent;
+        frame_style.accent = accent;
+        *self.frames.style_mut() = frame_style;
         #[cfg(target_arch = "wasm32")]
         let file_action = {
             let mut file_action = file_action;
@@ -222,11 +235,17 @@ impl UiState {
             file_action
         };
         self.draw_status_bar(viewport_ui, tree);
+        let viewport_frame = self
+            .layout
+            .find_pane(|pane| *pane == EditorPane::Viewport)
+            .and_then(|(pane, _)| self.layout.frame_of(pane));
         let mut frames = std::mem::take(&mut self.frames);
         let mut layout = std::mem::take(&mut self.layout);
         let mut view = WorkspaceView {
             tree,
             animation: &mut self.animation,
+            document,
+            viewport_frame,
         };
         let events = frames.show(viewport_ui, &mut layout, &mut view);
         for event in events {

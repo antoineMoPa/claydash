@@ -56,6 +56,31 @@ pub struct DocumentState {
 struct UiPreferences {
     #[serde(default)]
     animation_timeline_open: bool,
+    #[serde(default)]
+    color_theme: ColorTheme,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ColorTheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl ColorTheme {
+    pub fn egui_theme(self) -> egui::Theme {
+        match self {
+            Self::Dark => egui::Theme::Dark,
+            Self::Light => egui::Theme::Light,
+        }
+    }
+
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Dark,
+        }
+    }
 }
 
 impl Default for DocumentState {
@@ -80,6 +105,18 @@ impl DocumentState {
 
     pub fn animation_timeline_open(&self) -> bool {
         self.ui_preferences.animation_timeline_open
+    }
+
+    pub fn color_theme(&self) -> ColorTheme {
+        self.ui_preferences.color_theme
+    }
+
+    pub fn set_color_theme(&mut self, theme: ColorTheme) {
+        if self.ui_preferences.color_theme == theme {
+            return;
+        }
+        self.ui_preferences.color_theme = theme;
+        save_ui_preferences(self.ui_preferences);
     }
 
     pub fn set_animation_timeline_open(&mut self, open: bool) {
@@ -266,7 +303,11 @@ fn load_recent_paths() -> Vec<PathBuf> {
 
 #[cfg(target_arch = "wasm32")]
 fn load_ui_preferences() -> UiPreferences {
-    UiPreferences::default()
+    web_sys::window()
+        .and_then(|window| window.local_storage().ok().flatten())
+        .and_then(|storage| storage.get_item("claydash-ui-preferences").ok().flatten())
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -286,7 +327,14 @@ fn read_ui_preferences(path: &Path) -> UiPreferences {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn save_ui_preferences(_preferences: UiPreferences) {}
+fn save_ui_preferences(preferences: UiPreferences) {
+    if let (Some(storage), Ok(value)) = (
+        web_sys::window().and_then(|window| window.local_storage().ok().flatten()),
+        serde_json::to_string(&preferences),
+    ) {
+        let _ = storage.set_item("claydash-ui-preferences", &value);
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn save_ui_preferences(preferences: UiPreferences) {
@@ -458,12 +506,21 @@ mod tests {
         let path = directory.join("ui-preferences.json");
         let preferences = UiPreferences {
             animation_timeline_open: true,
+            color_theme: ColorTheme::Light,
         };
 
         write_ui_preferences(&path, preferences).unwrap();
 
         assert_eq!(read_ui_preferences(&path), preferences);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn older_ui_preferences_default_to_dark_mode() {
+        let preferences: UiPreferences =
+            serde_json::from_str(r#"{"animation_timeline_open":true}"#).unwrap();
+        assert!(preferences.animation_timeline_open);
+        assert_eq!(preferences.color_theme, ColorTheme::Dark);
     }
 
     #[test]

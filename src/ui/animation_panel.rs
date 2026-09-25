@@ -359,10 +359,15 @@ pub(super) fn animation_panel(
                                 "Two-finger horizontal: pan time · Ctrl/Cmd + scroll: time zoom · Shift + scroll: vertical zoom",
                             );
                             let painter = ui.painter_at(rect);
-                            painter.rect_filled(rect, 3.0, Color32::from_rgb(34, 35, 39));
+                            let lane_fill = if ui.visuals().dark_mode {
+                                Color32::from_rgb(34, 35, 39)
+                            } else {
+                                Color32::from_rgb(239, 243, 249)
+                            };
+                            painter.rect_filled(rect, 3.0, lane_fill);
                             painter.line_segment(
                                 [rect.left_center(), rect.right_center()],
-                                Stroke::new(1.0, Color32::from_gray(75)),
+                                ui.visuals().widgets.noninteractive.bg_stroke,
                             );
                             let frame_span = view_end_frame - view_start_frame;
                             if start_keyboard_grab && runtime.keyframe_drag.is_none() {
@@ -406,10 +411,10 @@ pub(super) fn animation_panel(
                                 for index in 0..=count {
                                     let y = value_y(index as f32);
                                     painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                                        Stroke::new(0.5, Color32::from_gray(58)));
+                                        Stroke::new(0.5, ui.visuals().widgets.noninteractive.bg_stroke.color));
                                     painter.text(egui::pos2(rect.left() + 3.0, y - 2.0),
                                         egui::Align2::LEFT_BOTTOM, index.to_string(),
-                                        egui::FontId::proportional(10.0), Color32::from_gray(145));
+                                        egui::FontId::proportional(10.0), ui.visuals().weak_text_color());
                                 }
                             }
                             let frame_at_x = |x: f32| {

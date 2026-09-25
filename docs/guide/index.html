@@ -39,7 +39,7 @@
   <header>
     <h1>Claydash user guide</h1>
     <nav aria-label="Guide sections">
-      <span class="nav-title">On this page</span><a href="#window">App window</a><a href="#sdf">A word about SDF</a><a href="#shapes">Shapes</a><a href="#gizmos">Viewport gizmos</a><a href="#face-cut">Face cutting and extrusion</a><a href="#booleans">Boolean groups</a><a href="#materials">Materials</a><a href="#repeat">Repeat</a><a href="#modifiers">Modifiers</a><a href="#camera">Cameras</a><a href="#animation">Animation</a><a href="#files">Files and renders</a>
+      <span class="nav-title">On this page</span><a href="#window">App window</a><a href="#sdf">A word about SDF</a><a href="#shapes">Shapes</a><a href="#gizmos">Viewport gizmos</a><a href="#face-cut">Face cutting and extrusion</a><a href="#booleans">Boolean groups</a><a href="#materials">Materials</a><a href="#repeat">Repeat modifier</a><a href="#mirror">Mirror modifier</a><a href="#modifiers">Lattice modifier</a><a href="#camera">Cameras</a><a href="#animation">Animation</a><a href="#files">Files and renders</a>
     </nav>
   </header>
   <main>
@@ -50,9 +50,13 @@
         <img src="window.webp" alt="Claydash window with the Scene panel at left, 3D viewport in the center, and inspector tabs at right" width="1280" height="800">
         <figcaption>The app window with its default duck scene. Rerunning the capture updates this image.</figcaption>
       </figure>
+      <figure>
+        <img src="light.webp" alt="Claydash in light mode, with light panel headers, controls, and animation timeline" width="1280" height="800" loading="lazy">
+        <figcaption>The same workspace in light mode. Use the sun or moon button in the Viewport frame header to switch themes.</figcaption>
+      </figure>
       <div class="grid">
         <div class="card"><h3>Top menu</h3><p><strong>File</strong> opens and saves projects, <strong>Panels</strong> opens the timeline, and <strong>Render</strong> exports a still or animation.</p></div>
-        <div class="card"><h3>Viewport controls</h3><p>Use the top-left buttons to add shapes, open the command palette, undo, and redo. The top-right buttons switch projection, snap to an isometric view, and enter the active camera view.</p></div>
+        <div class="card"><h3>Viewport controls</h3><p>Use the top-left buttons to add shapes, open the command palette, undo, and redo. The top-right buttons switch projection, snap to an isometric view, and enter the active camera view. The sun or moon in the Viewport frame header switches between light and dark mode.</p></div>
         <div class="card"><h3>Selection and view</h3><p>Click an object in the viewport or Scene tree to select it. Use the viewport's selection and transform tools to work directly on the model. The orientation gizmo in the lower-left corner helps you snap the view.</p></div>
       </div>
     </section>
@@ -92,8 +96,14 @@
       <figure><img src="materials.webp" alt="Materials tab with presets and settings for a selected transparent sphere" width="1280" height="800"><figcaption>Material presets and properties for the selected object.</figcaption></figure>
     </section>
     <section id="repeat">
-      <h2>Repeat an object</h2>
+      <h2>Repeat modifier</h2>
       <p>In the <strong>Object</strong> tab's <strong>Modifiers</strong> section, choose <strong>+ Add modifier → Repeat</strong>. It starts with three copies along X. Set the copy count and spacing on each axis to create a finite pattern without adding a Scene row for every copy. A count of 1 leaves that axis unchanged. Select a complete Boolean group to repeat the assembled shape, such as the default duck, or select a primitive inside it to repeat just that part.</p>
+      <figure><img class="detail" src="repeat.webp" alt="A repeated Boolean group in the viewport with X, Y, and Z count and spacing controls in the Object tab" width="1280" height="800" loading="lazy"><figcaption>Repeat copies the selected shape or Boolean group without adding separate Scene rows.</figcaption></figure>
+    </section>
+    <section id="mirror">
+      <h2>Mirror modifier</h2>
+      <p>Select an object or a complete Boolean group, then choose <strong>Object → Modifiers → + Add modifier → Mirror</strong>. The modifier reflects the positive side of the selected object across its local X axis by default. Turn on Y or Z to mirror across those axes too. Moving a child shape on the positive side changes both halves of a mirrored Boolean group.</p>
+      <figure><img class="detail" src="mirror.webp" alt="A mirrored Boolean group with matching side spheres and X, Y, and Z axis controls in the Object tab" width="1280" height="800" loading="lazy"><figcaption>Mirror reflects the group's positive X side to create the matching left half.</figcaption></figure>
     </section>
     <section id="modifiers">
       <h2>Deform with a lattice</h2>

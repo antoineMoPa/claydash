@@ -35,22 +35,45 @@ impl Renderer {
             &clipped,
             &screen,
         );
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
-                self.free_textures(output);
-                return None;
-            }
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Occluded
-            | wgpu::CurrentSurfaceTexture::Validation => {
-                self.free_textures(output);
-                return None;
-            }
+        let offscreen = capture_ui.then(|| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("guide screenshot target"),
+                size: wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &self.config.view_formats,
+            })
+        });
+        let frame = if offscreen.is_some() {
+            None
+        } else {
+            Some(match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(frame)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    self.surface.configure(&self.device, &self.config);
+                    self.free_textures(output);
+                    return None;
+                }
+                wgpu::CurrentSurfaceTexture::Timeout
+                | wgpu::CurrentSurfaceTexture::Occluded
+                | wgpu::CurrentSurfaceTexture::Validation => {
+                    self.free_textures(output);
+                    return None;
+                }
+            })
         };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+        let target = offscreen
+            .as_ref()
+            .unwrap_or_else(|| &frame.as_ref().expect("surface frame").texture);
+        let view = target.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.render_format),
             ..Default::default()
         });
@@ -84,6 +107,10 @@ impl Renderer {
         // resolution tile for this exact camera and scene state. If the final
         // tile is part of this submission, the later texture copy observes it.
         let capture = capture && self.viewport.is_refined();
+        let workspace_background = match egui.theme() {
+            egui::Theme::Dark => wgpu::Color::BLACK,
+            egui::Theme::Light => wgpu::Color::WHITE,
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene"),
@@ -92,7 +119,7 @@ impl Renderer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(workspace_background),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -126,7 +153,7 @@ impl Renderer {
             if !capture_ui {
                 encoder.copy_texture_to_buffer(
                     wgpu::TexelCopyTextureInfo {
-                        texture: &frame.texture,
+                        texture: target,
                         mip_level: 0,
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
@@ -173,7 +200,7 @@ impl Renderer {
             if let Some((buffer, padded)) = &mut capture_buffer {
                 encoder.copy_texture_to_buffer(
                     wgpu::TexelCopyTextureInfo {
-                        texture: &frame.texture,
+                        texture: target,
                         mip_level: 0,
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
@@ -199,7 +226,9 @@ impl Renderer {
             .submit(callback_commands.into_iter().chain([encoder.finish()]));
         self.viewport.submitted(&self.queue, work, readback);
         self.free_textures(output);
-        self.queue.present(frame);
+        if let Some(frame) = frame {
+            self.queue.present(frame);
+        }
         let (buffer, padded) = capture_buffer?;
         let slice = buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();

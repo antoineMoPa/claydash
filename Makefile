@@ -22,5 +22,8 @@ doc:
 guide:
 	scripts/capture-guide.sh
 
+guide-check:
+	scripts/capture-guide.sh --check
+
 run-native:
 	cargo run

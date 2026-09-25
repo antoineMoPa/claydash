@@ -22,7 +22,7 @@ use winit::{
 use crate::{
     camera::Camera,
     commands::{self, Commands},
-    document::{DocumentState, FileMenuAction},
+    document::{ColorTheme, DocumentState, FileMenuAction},
     duck,
     interactions::InteractionState,
     model::{objects_ref, ClaydashValue, DataTree, EditorState},
@@ -194,13 +194,32 @@ impl App {
                 std::env::args().any(|argument| argument == "--guide-panel=face-cut");
             let repeat_preview =
                 std::env::args().any(|argument| argument == "--guide-panel=repeat");
+            let mirror_preview =
+                std::env::args().any(|argument| argument == "--guide-panel=mirror");
             let simple_kind = std::env::args().find_map(|argument| match argument.as_str() {
                 "--guide-panel=shapes" => Some(crate::model::PrimitiveKind::Box),
                 "--guide-panel=gizmos" => Some(crate::model::PrimitiveKind::Cylinder),
                 "--guide-panel=modifiers" => Some(crate::model::PrimitiveKind::Sphere),
                 _ => None,
             });
-            let mut scene = if repeat_preview {
+            let mut scene = if mirror_preview {
+                let mut center =
+                    crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+                center.name = "Mirrored group".into();
+                center.params = crate::model::SdfParams::BoxParams(crate::model::BoxParams {
+                    box_q: glam::Vec3::new(0.2, 0.28, 0.28),
+                });
+                center.mirror = Some(crate::model::Mirror::default());
+                let mut side =
+                    crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+                side.name = "Side sphere".into();
+                side.params = crate::model::SdfParams::SphereParams(crate::model::SphereParams {
+                    radius: 0.42,
+                });
+                side.transform.translation.x = 0.8;
+                side.boolean_parent = Some(center.uuid);
+                vec![center, side]
+            } else if repeat_preview {
                 let duck: DataTree =
                     serde_json::from_str(duck::DEFAULT_DUCK).expect("parse default duck preview");
                 let mut scene = crate::model::objects(&data_tree_with_scene(duck));
@@ -252,7 +271,7 @@ impl App {
                 1
             } else if operand_preview {
                 7
-            } else if simple_kind.is_some() || repeat_preview {
+            } else if simple_kind.is_some() || repeat_preview || mirror_preview {
                 0
             } else {
                 2
@@ -287,7 +306,7 @@ impl App {
             }
             tree.make_undo_redo_snapshot();
             Camera {
-                position: if simple_kind.is_some() {
+                position: if simple_kind.is_some() || mirror_preview {
                     glam::Vec3::new(0.0, 1.3, 4.5)
                 } else {
                     glam::Vec3::new(0.0, 1.6, 8.5)
@@ -310,6 +329,43 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let (document_tx, document_rx) = channel();
         let document = DocumentState::default();
+        let egui = egui::Context::default();
+        egui.style_mut_of(egui::Theme::Light, |style| {
+            let widgets = &mut style.visuals.widgets;
+            widgets.inactive.weak_bg_fill = egui::Color32::WHITE;
+            widgets.inactive.bg_fill = egui::Color32::WHITE;
+            widgets.inactive.bg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(205, 212, 224));
+            widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(231, 239, 251);
+            widgets.hovered.bg_fill = widgets.hovered.weak_bg_fill;
+            widgets.hovered.bg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(136, 166, 216));
+            widgets.active.weak_bg_fill = egui::Color32::from_rgb(211, 226, 249);
+            widgets.active.bg_fill = widgets.active.weak_bg_fill;
+            widgets.open.weak_bg_fill = egui::Color32::from_rgb(231, 239, 251);
+            widgets.open.bg_fill = widgets.open.weak_bg_fill;
+            for widget in [
+                &mut widgets.inactive,
+                &mut widgets.hovered,
+                &mut widgets.active,
+                &mut widgets.open,
+            ] {
+                widget.corner_radius = egui::CornerRadius::same(5);
+            }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        let guide_theme = std::env::args().find_map(|argument| match argument.as_str() {
+            "--guide-theme=dark" => Some(ColorTheme::Dark),
+            "--guide-theme=light" => Some(ColorTheme::Light),
+            _ => None,
+        });
+        #[cfg(target_arch = "wasm32")]
+        let guide_theme: Option<ColorTheme> = None;
+        egui.set_theme(
+            guide_theme
+                .unwrap_or_else(|| document.color_theme())
+                .egui_theme(),
+        );
         let mut ui = UiState::default();
         ui.set_animation_timeline_open(document.animation_timeline_open());
         #[cfg(not(target_arch = "wasm32"))]
@@ -328,7 +384,7 @@ impl App {
         Self {
             window: None,
             renderer: None,
-            egui: egui::Context::default(),
+            egui,
             #[cfg(not(target_arch = "wasm32"))]
             egui_state: None,
             #[cfg(target_arch = "wasm32")]
@@ -795,6 +851,8 @@ impl ApplicationHandler for App {
         } else {
             attributes.with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0))
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let attributes = attributes.with_visible(self.guide_screenshot.is_none());
         #[cfg(target_arch = "wasm32")]
         let attributes = attributes.with_append(true);
         let window = Arc::new(event_loop.create_window(attributes).expect("create window"));
@@ -851,6 +909,9 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             self.renderer = Some(renderer);
+            if self.guide_screenshot.is_some() {
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+            }
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -1086,7 +1147,15 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(not(target_arch = "wasm32"))]
-        let _ = event_loop;
+        if self.guide_screenshot.is_some() {
+            if self.renderer.is_some() {
+                self.redraw();
+                if self.guide_capture_done {
+                    event_loop.exit();
+                }
+            }
+            return;
+        }
         #[cfg(target_arch = "wasm32")]
         if let Some(window) = &self.window {
             if let Some(size) = sync_web_canvas(window) {
@@ -1121,6 +1190,16 @@ impl ApplicationHandler for App {
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    let event_loop = {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        let mut builder = EventLoop::builder();
+        if std::env::args().any(|argument| argument.starts_with("--guide-screenshot=")) {
+            builder.with_activation_policy(ActivationPolicy::Prohibited);
+        }
+        builder.build().expect("create event loop")
+    };
+    #[cfg(not(target_os = "macos"))]
     let event_loop = EventLoop::new().expect("create event loop");
     #[cfg(not(target_arch = "wasm32"))]
     event_loop.run_app(&mut App::new()).expect("run app");

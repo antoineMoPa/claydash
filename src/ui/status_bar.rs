@@ -35,6 +35,11 @@ impl UiState {
 
     pub(super) fn draw_status_bar(&self, ui: &mut egui::Ui, tree: &DataTree) {
         let line = self.status_line(tree);
+        let fill = if ui.visuals().dark_mode {
+            Color32::from_rgb(25, 26, 29)
+        } else {
+            ui.visuals().panel_fill
+        };
         egui::Panel::bottom("claydash-status-bar")
             .exact_size(BAR_HEIGHT)
             .resizable(false)
@@ -42,7 +47,7 @@ impl UiState {
             .show_separator_line(false)
             .frame(
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(25, 26, 29))
+                    .fill(fill)
                     .stroke(Stroke::NONE)
                     .inner_margin(egui::Margin::symmetric(10, 3)),
             )
@@ -54,13 +59,13 @@ impl UiState {
                             egui::RichText::new(title)
                                 .strong()
                                 .size(12.0)
-                                .color(Color32::WHITE),
+                                .color(ui.visuals().text_color()),
                         );
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(message)
                                     .size(12.0)
-                                    .color(Color32::from_gray(190)),
+                                    .color(ui.visuals().weak_text_color()),
                             )
                             .truncate(),
                         );

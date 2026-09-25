@@ -15,12 +15,19 @@ pub(super) fn animatable_widget(
 ) -> egui::Response {
     let state = animation::field_animation_state(tree, binding, runtime.current_frame);
     ui.scope(|ui| {
+        let light = !ui.visuals().dark_mode;
         let fill = match state {
             animation::FieldAnimationState::NotAnimated => None,
-            animation::FieldAnimationState::Animated => Some(Color32::from_rgb(45, 104, 57)),
-            animation::FieldAnimationState::KeyedAtCurrentFrame => {
-                Some(Color32::from_rgb(168, 116, 17))
-            }
+            animation::FieldAnimationState::Animated => Some(if light {
+                Color32::from_rgb(205, 237, 211)
+            } else {
+                Color32::from_rgb(45, 104, 57)
+            }),
+            animation::FieldAnimationState::KeyedAtCurrentFrame => Some(if light {
+                Color32::from_rgb(255, 229, 172)
+            } else {
+                Color32::from_rgb(168, 116, 17)
+            }),
         };
         if let Some(fill) = fill {
             let visuals = &mut ui.style_mut().visuals;
