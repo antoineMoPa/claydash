@@ -30,10 +30,23 @@ pub(super) fn modifiers_panel(
         return;
     };
     let can_lattice = object.boolean_parent.is_none();
+    let can_mirror = object.boolean_parent.is_none();
     let can_repeat = !has_children || object.boolean_parent.is_none();
     let mut changed = false;
     let mut snapshot = false;
     ui.menu_button("+ Add modifier", |ui| {
+        if ui
+            .add_enabled(
+                can_mirror && object.mirror.is_none(),
+                egui::Button::new("Mirror"),
+            )
+            .clicked()
+        {
+            object.mirror = Some(crate::model::Mirror::default());
+            changed = true;
+            snapshot = true;
+            ui.close();
+        }
         if ui
             .add_enabled(
                 can_lattice && object.lattice.is_none(),
@@ -195,7 +208,7 @@ pub(super) fn modifiers_panel(
                 snapshot = true;
             }
         });
-    } else if !object.repetition.enabled {
+    } else if !object.repetition.enabled && object.mirror.is_none() {
         ui.group(|ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new("No modifiers").strong());
@@ -203,6 +216,35 @@ pub(super) fn modifiers_panel(
     }
     if remove_lattice {
         object.lattice = None;
+        changed = true;
+        snapshot = true;
+    }
+    let mut remove_mirror = false;
+    if let Some(mirror) = &mut object.mirror {
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Mirror").strong().size(16.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    remove_mirror = ui.small_button("Remove").clicked();
+                });
+            });
+            if !remove_mirror {
+                ui.label("Reflect the positive side across local axes");
+                ui.horizontal(|ui| {
+                    for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
+                        let response = ui.checkbox(&mut mirror.axes[axis], label);
+                        if response.changed() {
+                            changed = true;
+                            snapshot = true;
+                        }
+                    }
+                });
+            }
+        });
+    }
+    if remove_mirror {
+        object.mirror = None;
         changed = true;
         snapshot = true;
     }

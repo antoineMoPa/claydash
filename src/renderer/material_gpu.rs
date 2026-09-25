@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(packed.params.len(), 11);
         assert_eq!(packed.insert(Material::preset(MaterialKind::Brick)), 2);
         assert_eq!(packed.params.len(), 16);
-        assert_eq!(std::mem::size_of::<GpuObject>(), 224);
+        assert_eq!(std::mem::size_of::<GpuObject>(), 240);
         assert_eq!(std::mem::size_of::<GpuMaterialHeader>(), 16);
     }
 }

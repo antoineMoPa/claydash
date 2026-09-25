@@ -481,6 +481,31 @@ impl Default for Repetition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mirror {
+    pub axes: [bool; 3],
+}
+
+impl Default for Mirror {
+    fn default() -> Self {
+        Self {
+            axes: [true, false, false],
+        }
+    }
+}
+
+impl Mirror {
+    pub fn fold_point(self, point: Vec3, matrix: Mat4) -> Vec3 {
+        let mut local = matrix.inverse().transform_point3(point);
+        for axis in 0..3 {
+            if self.axes[axis] {
+                local[axis] = local[axis].abs();
+            }
+        }
+        matrix.transform_point3(local)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Transform {
     pub translation: Vec3,
@@ -769,6 +794,8 @@ pub struct SdfObject {
     #[serde(default)]
     pub repetition: Repetition,
     #[serde(default)]
+    pub mirror: Option<Mirror>,
+    #[serde(default)]
     pub lattice: Option<Lattice>,
 }
 
@@ -814,6 +841,7 @@ impl SdfObject {
             material,
             material_id: None,
             repetition: Repetition::default(),
+            mirror: None,
             lattice: None,
         }
     }

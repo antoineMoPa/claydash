@@ -72,6 +72,12 @@ pub fn scene_sample(point: Vec3, scene: &[SdfObject]) -> Option<(f32, uuid::Uuid
         let has_children = scene
             .iter()
             .any(|child| child.boolean_parent == Some(object.uuid));
+        let point = if let Some(mirror) = object.mirror.filter(|_| object.boolean_parent.is_none())
+        {
+            mirror.fold_point(point, super::group_world_matrix(scene, object.uuid))
+        } else {
+            point
+        };
         let point = if has_children && object.repetition.enabled {
             let group = super::group_world_matrix(scene, object.uuid);
             group.transform_point3(

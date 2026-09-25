@@ -177,6 +177,27 @@ fn repeating_a_boolean_group_copies_its_assembled_shape() {
 }
 
 #[test]
+fn mirror_reflects_complete_boolean_group_in_group_axes() {
+    let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+    root.group_transform.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+    root.transform.translation = Vec3::new(1.0, 0.0, 0.0);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    child.transform.translation = Vec3::new(2.0, 0.0, 0.0);
+    root.mirror = Some(Mirror::default());
+    let scene = [root.clone(), child.clone()];
+    let group = group_world_matrix(&scene, root.uuid);
+    let original = group.transform_point3(Vec3::new(2.0, 0.0, 0.0));
+    let reflected = group.transform_point3(Vec3::new(-2.0, 0.0, 0.0));
+    assert!(scene_sample(original, &scene).unwrap().0 < 0.0);
+    let sample = scene_sample(reflected, &scene).unwrap();
+    assert!(sample.0 < 0.0);
+    assert_eq!(sample.1, child.uuid);
+    let restored: SdfObject = serde_json::from_str(&serde_json::to_string(&root).unwrap()).unwrap();
+    assert_eq!(restored.mirror, root.mirror);
+}
+
+#[test]
 fn material_presets_expose_distinct_surface_properties() {
     let transparent = Material::preset(MaterialKind::Transparent);
     let metallic = Material::preset(MaterialKind::Metallic);

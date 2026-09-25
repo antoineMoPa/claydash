@@ -1,5 +1,43 @@
 use super::*;
 
+pub(super) fn mirrored_bound(
+    bound: ObjectBound,
+    group: glam::Mat4,
+    mirror: crate::model::Mirror,
+) -> ObjectBound {
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    let inverse = group.inverse();
+    for corner in 0..8 {
+        let position = bound.center
+            + bound.half_extent
+                * Vec3::new(
+                    if corner & 1 == 0 { -1.0 } else { 1.0 },
+                    if corner & 2 == 0 { -1.0 } else { 1.0 },
+                    if corner & 4 == 0 { -1.0 } else { 1.0 },
+                );
+        let local = inverse.transform_point3(position);
+        for reflected in 0..8 {
+            let mut copy = local;
+            for axis in 0..3 {
+                if mirror.axes[axis] && reflected & (1 << axis) != 0 {
+                    copy[axis] = -copy[axis];
+                }
+            }
+            let world = group.transform_point3(copy);
+            minimum = minimum.min(world);
+            maximum = maximum.max(world);
+        }
+    }
+    let half_extent = (maximum - minimum) * 0.5;
+    ObjectBound {
+        center: (minimum + maximum) * 0.5,
+        half_extent,
+        radius: half_extent.length(),
+        ..bound
+    }
+}
+
 // Smooth unions lower distance by at most k/4 per operand. Softness belongs to
 // the parent group, so every union edge reads the same value as evaluation.
 pub(super) fn expand_soft_bounds(objects: &[GpuObject], bounds: &mut [ObjectBound]) {

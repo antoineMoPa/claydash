@@ -51,6 +51,7 @@ struct GpuObject {
     component: [u32; 4],
     scale: [f32; 4],
     modifier: [u32; 4],
+    mirror_axes: [u32; 4],
 }
 
 #[repr(C)]

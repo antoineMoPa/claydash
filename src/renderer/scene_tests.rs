@@ -90,6 +90,20 @@ fn boolean_bounds_follow_volume_semantics_and_empty_subtrees() {
 }
 
 #[test]
+fn mirror_bounds_cover_reflected_side_in_rotated_group() {
+    let bound = ObjectBound {
+        center: Vec3::new(0.0, 2.0, 0.0),
+        half_extent: Vec3::splat(0.25),
+        radius: 0.5,
+        object_index: 0,
+    };
+    let group = glam::Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2);
+    let mirrored = mirrored_bound(bound, group, crate::model::Mirror::default());
+    assert!(mirrored.center.y - mirrored.half_extent.y < -2.2);
+    assert!(mirrored.center.y + mirrored.half_extent.y > 2.2);
+}
+
+#[test]
 fn soft_union_bounds_account_for_nonuniform_scale_and_nested_blends() {
     let mut operand = GpuObject::zeroed();
     operand.meta = [0, 1, 0, 2];

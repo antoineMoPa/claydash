@@ -12,6 +12,7 @@ struct Object {
     component: vec4<u32>,
     scale: vec4<f32>,
     modifier: vec4<u32>,
+    mirror_axes: vec4<u32>,
 }
 struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -51,6 +52,33 @@ fn group_repeat_point(point: vec3<f32>, root: Object) -> vec3<f32> {
         repeated_axis(local.x, root.repeat_spacing.x, root.repeat_count.x),
         repeated_axis(local.y, root.repeat_spacing.y, root.repeat_count.y),
         repeated_axis(local.z, root.repeat_spacing.z, root.repeat_count.z)
+    );
+    let delta = local - folded;
+    let row_x = root.group_inverse_rows[0].xyz;
+    let row_y = root.group_inverse_rows[1].xyz;
+    let row_z = root.group_inverse_rows[2].xyz;
+    let determinant = dot(row_x, cross(row_y, row_z));
+    if abs(determinant) < 1e-8 { return point; }
+    let world_delta = (
+        cross(row_y, row_z) * delta.x
+        + cross(row_z, row_x) * delta.y
+        + cross(row_x, row_y) * delta.z
+    ) / determinant;
+    return point - world_delta;
+}
+
+fn mirror_point(point: vec3<f32>, root: Object) -> vec3<f32> {
+    if all(root.mirror_axes.xyz == vec3<u32>(0u)) { return point; }
+    let homogeneous = vec4(point, 1.0);
+    let local = vec3(
+        dot(root.group_inverse_rows[0], homogeneous),
+        dot(root.group_inverse_rows[1], homogeneous),
+        dot(root.group_inverse_rows[2], homogeneous)
+    );
+    let folded = vec3(
+        select(local.x, abs(local.x), root.mirror_axes.x != 0u),
+        select(local.y, abs(local.y), root.mirror_axes.y != 0u),
+        select(local.z, abs(local.z), root.mirror_axes.z != 0u)
     );
     let delta = local - folded;
     let row_x = root.group_inverse_rows[0].xyz;
@@ -169,14 +197,15 @@ fn combine_operand(value: vec2<f32>, child: vec2<f32>, operand: Object, group: O
 // Each leaf is a complete boolean component in contiguous postorder.
 // Local scratch is specialized to component size, independent of scene size.
 fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    let mirrored_point = mirror_point(point, objects[root]);
     if !HAS_BOOLEANS || start == root {
-        return vec2(object_distance(point, objects[root]), f32(root));
+        return vec2(object_distance(mirrored_point, objects[root]), f32(root));
     }
     if CSG_SIZE == 2u {
         let parent = objects[root];
         let operand = objects[start];
         let group_repeated = parent.repeat_count.w != 0;
-        let group_point = select(point, group_repeat_point(point, parent), group_repeated);
+        let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
         let parent_point = modifier_point(group_point, parent);
         var operand_point = parent_point;
         if operand.modifier.x != parent.modifier.x {
@@ -192,7 +221,7 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     var values: array<vec2<f32>, CSG_SIZE>;
     let parent = objects[root];
     let group_repeated = parent.repeat_count.w != 0;
-    let group_point = select(point, group_repeat_point(point, parent), group_repeated);
+    let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
     let parent_point = modifier_point(group_point, parent);
     for (var i = start; i <= root; i++) {
         var object = objects[i];
@@ -238,10 +267,10 @@ fn scene_normal(point: vec3<f32>, index: u32) -> vec3<f32> {
     let d = vec3(1.0, 1.0, 1.0);
     if !HAS_BOOLEANS {
         let object = objects[index];
-        return normalize(a * object_distance(point + a * e, object)
-            + b * object_distance(point + b * e, object)
-            + c * object_distance(point + c * e, object)
-            + d * object_distance(point + d * e, object));
+        return normalize(a * object_distance(mirror_point(point + a * e, object), object)
+            + b * object_distance(mirror_point(point + b * e, object), object)
+            + c * object_distance(mirror_point(point + c * e, object), object)
+            + d * object_distance(mirror_point(point + d * e, object), object));
     }
     return normalize(
         a * component_distance(point + a * e, objects[index].component.x, objects[index].component.y).x +
@@ -301,6 +330,7 @@ fn primitive_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -
 
 fn has_analytic_interval(object: Object) -> bool {
     return object.repeat_count.w == 0 && object.state.y <= 3 && object.modifier.x == 0u
+        && all(object.mirror_axes.xyz == vec3<u32>(0u))
         && !(object.state.y == 2 && brick_geometry_visible(object));
 }
 

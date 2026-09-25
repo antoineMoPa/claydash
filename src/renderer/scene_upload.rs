@@ -334,6 +334,14 @@ impl Renderer {
                             modifier_gpu::MODIFIER_LATTICE
                         },
                     ],
+                    mirror_axes: object.mirror.map_or([0; 4], |mirror| {
+                        [
+                            u32::from(mirror.axes[0]),
+                            u32::from(mirror.axes[1]),
+                            u32::from(mirror.axes[2]),
+                            0,
+                        ]
+                    }),
                 }
             })
             .collect();
@@ -366,6 +374,22 @@ impl Renderer {
                 + group.y_axis.truncate().abs() * local_offset.y
                 + group.z_axis.truncate().abs() * local_offset.z;
             bound.radius = bound.half_extent.length();
+        }
+        for (index, object) in objects.iter().enumerate() {
+            if object.boolean_parent.is_some() {
+                continue;
+            }
+            let Some(mirror) = object.mirror else {
+                continue;
+            };
+            let Some(bound) = component_bounds[index].as_mut() else {
+                continue;
+            };
+            *bound = mirrored_bound(
+                *bound,
+                crate::model::group_world_matrix(scene_objects, object.uuid),
+                mirror,
+            );
         }
         let mut group_bounds = Vec::new();
         let mut group_start = 0;
