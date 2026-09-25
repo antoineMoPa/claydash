@@ -521,12 +521,18 @@ impl App {
             let export_version = if capture_render { i32::MIN } else { 0 };
             // Selection is drawn by the editor gizmos. Keep the cached scene
             // image when only selection changes, avoiding a full refinement.
-            let scene_versions = [self.tree.path_version("scene.sdf_objects"), export_version];
+            let scene_versions = [
+                self.tree.path_version("scene.sdf_objects"),
+                self.tree
+                    .path_version("scene.world")
+                    .wrapping_add(export_version),
+            ];
             let captured_frame = renderer.render(
                 &self.camera,
                 objects_ref(&self.tree),
                 &effective_selection,
                 scene_versions,
+                crate::model::world(&self.tree),
                 &self.egui,
                 &mut output,
                 capture_render,

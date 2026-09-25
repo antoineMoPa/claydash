@@ -1,6 +1,9 @@
 // position.w is display exposure: 1.0 in the viewport, brighter in material previews.
 // count: object count, BVH node count, viewport height, orthographic flag.
-struct Camera { inverse_view_projection: mat4x4<f32>, position: vec4<f32>, count: vec4<u32> }
+struct Camera {
+    inverse_view_projection: mat4x4<f32>, position: vec4<f32>, count: vec4<u32>,
+    world_mode: vec4<u32>, world_color: vec4<f32>, sun_direction: vec4<f32>, sky_params: vec4<f32>,
+}
 struct Object {
     state: vec4<i32>,
     color: vec4<f32>,
@@ -407,6 +410,30 @@ fn scene_normal(point: vec3<f32>, index: u32) -> vec3<f32> {
 }
 
 fn background(ray: vec3<f32>) -> vec3<f32> {
+    if camera.world_mode.x == 2u { return camera.world_color.rgb; }
+    if camera.world_mode.x == 3u { return vec3(0.0); }
+    if camera.world_mode.x == 1u {
+        let sun = normalize(camera.sun_direction.xyz);
+        let elevation = sun.y;
+        let daylight = smoothstep(-0.14, 0.20, elevation);
+        let twilight = smoothstep(-0.25, -0.02, elevation) * (1.0 - smoothstep(0.08, 0.42, elevation));
+        let haze = clamp((camera.sky_params.x - 1.0) / 9.0, 0.0, 1.0);
+        let horizon = pow(clamp(ray.y * 0.5 + 0.5, 0.0, 1.0), mix(0.65, 1.4, haze));
+        let zenith = mix(vec3(0.07, 0.19, 0.44), vec3(0.27, 0.40, 0.51), haze);
+        let horizon_color = mix(vec3(0.57, 0.70, 0.87), vec3(0.78, 0.69, 0.56), haze);
+        let day = mix(horizon_color, zenith, horizon);
+        let night = mix(vec3(0.012, 0.018, 0.038), vec3(0.004, 0.010, 0.030), horizon);
+        let sunset = vec3(1.0, 0.28, 0.07) * twilight * exp(-abs(ray.y) * mix(8.0, 3.0, haze));
+        let sun_angle = max(dot(ray, sun), 0.0);
+        let temperature = clamp((camera.sky_params.y - 2000.0) / 8000.0, 0.0, 1.0);
+        let sun_color = mix(vec3(1.0, 0.43, 0.15), vec3(0.87, 0.94, 1.0), temperature);
+        let disc = smoothstep(0.99993, 0.999995, sun_angle);
+        let glow = pow(sun_angle, mix(55.0, 12.0, haze));
+        let above_horizon = smoothstep(-0.025, 0.02, elevation);
+        return mix(night, day, daylight) + sunset
+            + sun_color * (disc * 8.0 + glow * mix(0.35, 1.2, haze))
+                * camera.sun_direction.w * above_horizon;
+    }
     let horizon = clamp(ray.y * 0.5 + 0.5, 0.0, 1.0);
     let sky = mix(vec3(0.055, 0.065, 0.085), vec3(0.38, 0.47, 0.62), horizon);
     let softbox = pow(max(dot(ray, normalize(vec3(-0.5, 0.8, 0.4))), 0.0), 36.0);
@@ -595,7 +622,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
         }
     }
     if !hit {
-        if TRANSPARENT_BACKGROUND { return vec4(0.0); }
+        if TRANSPARENT_BACKGROUND || camera.world_mode.x == 3u { return vec4(0.0); }
         return vec4(background(ray), 1.0);
     }
 

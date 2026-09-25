@@ -8,7 +8,25 @@ impl Renderer {
         selected: &[uuid::Uuid],
         scene_versions: [i32; 2],
     ) {
-        self.upload_scene_with_exposure(camera, objects, selected, scene_versions, 1.0);
+        self.upload_scene_with_world(camera, objects, selected, scene_versions, World::default());
+    }
+
+    pub(super) fn upload_scene_with_world(
+        &mut self,
+        camera: &Camera,
+        objects: &[SdfObject],
+        selected: &[uuid::Uuid],
+        scene_versions: [i32; 2],
+        world: World,
+    ) {
+        self.upload_scene_with_world_exposure(
+            camera,
+            objects,
+            selected,
+            scene_versions,
+            1.0,
+            world,
+        );
     }
 
     pub(super) fn upload_scene_with_exposure(
@@ -18,6 +36,25 @@ impl Renderer {
         selected: &[uuid::Uuid],
         scene_versions: [i32; 2],
         exposure: f32,
+    ) {
+        self.upload_scene_with_world_exposure(
+            camera,
+            objects,
+            selected,
+            scene_versions,
+            exposure,
+            World::default(),
+        );
+    }
+
+    fn upload_scene_with_world_exposure(
+        &mut self,
+        camera: &Camera,
+        objects: &[SdfObject],
+        selected: &[uuid::Uuid],
+        scene_versions: [i32; 2],
+        exposure: f32,
+        world: World,
     ) {
         let scene_changed = self.uploaded_scene_versions != scene_versions;
         let mut gpu_camera = GpuCamera {
@@ -31,6 +68,23 @@ impl Renderer {
                 camera.viewport.y.round().max(1.0) as u32,
                 u32::from(camera.projection_mode == ProjectionMode::Orthographic),
             ],
+            world_mode: [world.background.shader_id(), 0, 0, 0],
+            world_color: [
+                world.flat_color[0],
+                world.flat_color[1],
+                world.flat_color[2],
+                1.0,
+            ],
+            sun_direction: {
+                let direction = world.sun_direction();
+                [
+                    direction[0],
+                    direction[1],
+                    direction[2],
+                    world.sun_intensity,
+                ]
+            },
+            sky_params: [world.turbidity, world.sun_temperature, 0.0, 0.0],
         };
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_camera));

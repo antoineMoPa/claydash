@@ -6,7 +6,7 @@ use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
     camera::{Camera, ProjectionMode},
-    model::{Material, MaterialAsset, MaterialKind, SdfObject, SdfParams, WoodSpecies},
+    model::{Material, MaterialAsset, MaterialKind, SdfObject, SdfParams, WoodSpecies, World},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -36,6 +36,10 @@ struct GpuCamera {
     // xyz is the camera position; w is the display exposure.
     position: [f32; 4],
     count: [u32; 4],
+    world_mode: [u32; 4],
+    world_color: [f32; 4],
+    sun_direction: [f32; 4],
+    sky_params: [f32; 4],
 }
 
 #[repr(C)]

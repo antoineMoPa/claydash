@@ -16,6 +16,7 @@ mod status_bar;
 mod ui_widgets;
 mod viewport_controls;
 mod workspace;
+mod world_panel;
 
 use animation_panel::*;
 use animation_widgets::*;
@@ -33,6 +34,7 @@ use ui_widgets::*;
 #[cfg(test)]
 use viewport_controls::*;
 use workspace::*;
+use world_panel::*;
 
 use egui::{Color32, CornerRadius, RichText, Stroke};
 use egui_command_palette::{Command as PaletteCommand, CommandPalette};
@@ -64,6 +66,7 @@ enum EditorPane {
     Object,
     Materials,
     Operand,
+    World,
 }
 
 impl EditorPane {
@@ -75,6 +78,7 @@ impl EditorPane {
             Self::Object => "Object",
             Self::Materials => "Materials",
             Self::Operand => "Operand",
+            Self::World => "World",
         }
     }
 }
@@ -106,6 +110,7 @@ impl Default for UiState {
         let right = layout.frame_of(inspector).expect("inspector frame");
         layout.add_pane(right, EditorPane::Materials, None);
         layout.add_pane(right, EditorPane::Operand, None);
+        layout.add_pane(right, EditorPane::World, None);
         layout.focus_pane(inspector);
 
         let mut style = FramesStyle::default();
@@ -177,6 +182,7 @@ impl UiState {
             "materials" => EditorPane::Materials,
             "repeat" => EditorPane::Object,
             "operand" => EditorPane::Operand,
+            "world" => EditorPane::World,
             _ => EditorPane::Object,
         };
         if let Some((id, _)) = self.layout.find_pane(|candidate| *candidate == pane) {

@@ -7,12 +7,13 @@ impl Renderer {
         objects: &[SdfObject],
         selected: &[uuid::Uuid],
         scene_versions: [i32; 2],
+        world: World,
         egui: &egui::Context,
         output: &mut egui::FullOutput,
         capture: bool,
         capture_ui: bool,
     ) -> Option<CapturedFrame> {
-        self.upload_scene(camera, objects, selected, scene_versions);
+        self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],

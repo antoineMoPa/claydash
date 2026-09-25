@@ -30,6 +30,7 @@ pub enum ClaydashValue {
     EditorState(EditorState),
     SelectionScope(SelectionScope),
     Bool(bool),
+    World(super::World),
     #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
     None,

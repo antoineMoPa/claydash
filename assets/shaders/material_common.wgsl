@@ -31,7 +31,8 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
     let coat = surface.coat;
     let sheen = surface.sheen;
     let fiber = surface.fiber;
-    let light = normalize(vec3(2.0, 3.0, 2.0) - point);
+    let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
+        normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
     let halfway = normalize(light + view);
     let metallic = surface.metallic;
     let diffuse = max(dot(normalize(mix(shade_normal, normal, 0.35 * coat)), light), 0.0);
@@ -50,8 +51,13 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
     }
     var ao = 1.0;
     if use_ao { ao = ambient_occlusion(point, normal); }
-    let ambient = select(0.13, 0.23, header.kind == MATERIAL_WOOD) * ao;
-    return color * (ambient + diffuse * 0.75 * mix(0.55, 1.0, ao)) * (1.0 - metallic)
+    let sky_daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);
+    let sky_ambient = mix(0.035, 0.20, sky_daylight);
+    let ambient = select(select(0.13, 0.23, header.kind == MATERIAL_WOOD), sky_ambient,
+        camera.world_mode.x == 1u) * ao;
+    let direct_strength = select(0.75, camera.sun_direction.w * sky_daylight,
+        camera.world_mode.x == 1u);
+    return color * (ambient + diffuse * direct_strength * mix(0.55, 1.0, ao)) * (1.0 - metallic)
         + specular_color * specular * (1.0 - roughness * 0.5) * (1.0 - 0.72 * coat)
         + color * fiber_light + vec3(1.0, 0.98, 0.93) * coat_light;
 }
