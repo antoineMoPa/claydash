@@ -303,6 +303,7 @@ impl Renderer {
                     }
                     SdfParams::LoftParams(ref loft) => {
                         let offset = polygon_points.len() as u32;
+                        let profile_count = loft.profile_count();
                         for section in loft
                             .sections
                             .iter()
@@ -317,13 +318,27 @@ impl Renderer {
                             polygon_points.push(GpuPolygonPoint {
                                 position: [section.half_width, 0.0],
                             });
+                            for index in 0..profile_count {
+                                polygon_points.push(GpuPolygonPoint {
+                                    position: crate::model::LoftParams::profile_point(
+                                        section,
+                                        index,
+                                        profile_count,
+                                    )
+                                    .to_array(),
+                                });
+                            }
                         }
-                        let count = (polygon_points.len() as u32 - offset) / 3;
+                        let count = loft
+                            .sections
+                            .len()
+                            .min(crate::model::LoftParams::MAX_SECTIONS)
+                            as u32;
                         (
                             [
                                 f32::from_bits(offset),
                                 f32::from_bits(count),
-                                0.0,
+                                f32::from_bits(profile_count as u32),
                                 distance_scale,
                             ],
                             loft.local_extent().length() * abs_scale.max_element(),

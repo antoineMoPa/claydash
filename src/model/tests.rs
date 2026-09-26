@@ -37,6 +37,37 @@ fn loft_sections_change_the_sdf_without_a_mesh() {
 }
 
 #[test]
+fn custom_loft_profiles_define_closed_cross_sections_and_interpolate() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::Loft);
+    let SdfParams::LoftParams(loft) = &mut object.params else {
+        unreachable!()
+    };
+    let rectangle = vec![
+        Vec2::new(1.0, 1.0),
+        Vec2::new(-1.0, 1.0),
+        Vec2::new(-1.0, -1.0),
+        Vec2::new(1.0, -1.0),
+    ];
+    for section in &mut loft.sections {
+        section.profile = Some(rectangle.clone());
+    }
+    assert!(object.distance(Vec3::new(0.0, 0.37, 0.5)) < 0.0);
+    assert!(object.distance(Vec3::new(0.0, 0.4, 0.5)) > 0.0);
+    assert!(object.distance(Vec3::new(1.2, 0.0, 0.0)) > 0.0);
+    if let SdfParams::LoftParams(loft) = &mut object.params {
+        for point in loft.sections[2].profile.as_mut().unwrap() {
+            if point.x > 0.0 {
+                point.x = 0.5;
+            }
+        }
+    }
+    assert!(object.distance(Vec3::new(0.0, 0.27, 0.0)) < 0.0);
+    assert!(object.distance(Vec3::new(0.0, 0.32, 0.0)) > 0.0);
+    let loaded: SdfObject = serde_json::from_str(&serde_json::to_string(&object).unwrap()).unwrap();
+    assert!(loaded.distance(Vec3::new(0.0, 0.27, 0.0)) < 0.0);
+}
+
+#[test]
 fn surface_inlay_follows_a_host_sdf() {
     let mut host = SdfObject::create_kind(PrimitiveKind::Sphere);
     host.params = SdfParams::SphereParams(SphereParams { radius: 1.0 });

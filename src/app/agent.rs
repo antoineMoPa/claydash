@@ -873,6 +873,7 @@ fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
             }
         }
         if let SdfParams::LoftParams(loft) = &object.params {
+            let profile_count = loft.profile_count();
             if !(2..=model::LoftParams::MAX_SECTIONS).contains(&loft.sections.len())
                 || loft.sections.iter().any(|section| {
                     !section.x.is_finite()
@@ -882,6 +883,11 @@ fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
                         || !section.half_width.is_finite()
                         || section.half_height <= 0.0
                         || section.half_width <= 0.0
+                        || section.profile.as_ref().is_some_and(|profile| {
+                            !(3..=model::LoftParams::MAX_PROFILE_POINTS).contains(&profile.len())
+                                || profile.len() != profile_count
+                                || profile.iter().any(|point| !point.is_finite())
+                        })
                 })
                 || loft.sections.windows(2).any(|pair| pair[0].x >= pair[1].x)
             {
@@ -956,7 +962,7 @@ fn schema() -> Value {
         "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetBoolean", "DeleteObject", "SetWorld", "SetMaterials", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| json!({"kind": kind, "example": SdfObject::create_kind(*kind)})).collect::<Vec<_>>(),
-        "notes": "GetState returns complete typed objects and the raw .claydash scene document. CreateObject accepts an optional position [x,y,z], full transform, and shape params. BoxParams includes corner_radius; LoftParams contains ordered elliptical sections. A PutObject can set surface_inlay to a host object id, offset, and thickness. CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. Apply actions run as one undoable edit. Send expected_revision from GetState to reject stale edits. ReplaceScene accepts the raw document value and must be the sole action."
+        "notes": "GetState returns complete typed objects and the raw .claydash scene document. CreateObject accepts an optional position [x,y,z], full transform, and shape params. BoxParams includes corner_radius; LoftParams contains ordered sections, each with an optional closed profile of 3–32 [Y,Z] points in unit ellipse coordinates. Custom profiles in one loft must have matching point counts. A PutObject can set surface_inlay to a host object id, offset, and thickness. CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. Apply actions run as one undoable edit. Send expected_revision from GetState to reject stale edits. ReplaceScene accepts the raw document value and must be the sole action."
     })
 }
 

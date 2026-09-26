@@ -249,16 +249,18 @@ fn bezier_extrusion_distance(point: vec3<f32>, object: Object) -> f32 {
 fn loft_distance(point: vec3<f32>, object: Object) -> f32 {
     let offset = bitcast<u32>(object.params.x);
     let count = bitcast<u32>(object.params.y);
+    let profile_count = bitcast<u32>(object.params.z);
+    let stride = 3u + profile_count;
     if count < 2u { return 100.0; }
     let first_x = polygon_points[offset].x;
-    let last_x = polygon_points[offset + (count - 1u) * 3u].x;
+    let last_x = polygon_points[offset + (count - 1u) * stride].x;
     var section = 0u;
     for (var i = 0u; i + 1u < count; i++) {
         section = i;
-        if point.x <= polygon_points[offset + (i + 1u) * 3u].x { break; }
+        if point.x <= polygon_points[offset + (i + 1u) * stride].x { break; }
     }
-    let a = offset + section * 3u;
-    let b = a + 3u;
+    let a = offset + section * stride;
+    let b = a + stride;
     let ax = polygon_points[a].x;
     let bx = polygon_points[b].x;
     var t = clamp((point.x - ax) / max(bx - ax, 0.0001), 0.0, 1.0);
@@ -267,7 +269,30 @@ fn loft_distance(point: vec3<f32>, object: Object) -> f32 {
         vec2(polygon_points[b].y, polygon_points[b + 1u].x), t);
     let radii = max(mix(vec2(polygon_points[a + 1u].y, polygon_points[a + 2u].x),
         vec2(polygon_points[b + 1u].y, polygon_points[b + 2u].x), t), vec2(0.001));
-    let radial = (length((point.yz - center) / radii) - 1.0) * min(radii.x, radii.y);
+    var radial = (length((point.yz - center) / radii) - 1.0) * min(radii.x, radii.y);
+    if profile_count >= 3u {
+        var distance_squared = 1e20;
+        var inside = false;
+        for (var index = 0u; index < 32u; index++) {
+            if index >= profile_count { break; }
+            let next = select(index + 1u, 0u, index + 1u == profile_count);
+            let left = center + mix(polygon_points[a + 3u + index], polygon_points[b + 3u + index], t) * radii;
+            let right = center + mix(polygon_points[a + 3u + next], polygon_points[b + 3u + next], t) * radii;
+            let edge = right - left;
+            let relative = point.yz - left;
+            let length_squared = dot(edge, edge);
+            if length_squared > 1e-7 {
+                let closest = left + edge * clamp(dot(relative, edge) / length_squared, 0.0, 1.0);
+                let delta = point.yz - closest;
+                distance_squared = min(distance_squared, dot(delta, delta));
+            }
+            if (left.y > point.z) != (right.y > point.z) {
+                let crossing = left.x + (point.z - left.y) * (right.x - left.x) / (right.y - left.y);
+                if point.y < crossing { inside = !inside; }
+            }
+        }
+        radial = sqrt(distance_squared) * select(1.0, -1.0, inside);
+    }
     let cap = max(first_x - point.x, point.x - last_x);
     let q = vec2(radial, cap);
     return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);

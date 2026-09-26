@@ -540,9 +540,13 @@ pub(super) fn params_editor(
             .add(egui::Slider::new(&mut value.half_depth, 0.005..=4.0).text("Half depth"))
             .changed(),
         SdfParams::LoftParams(value) => {
-            ui.label("Elliptical sections along local X");
+            ui.label("Closed sections along local X");
+            ui.weak("Profile Y/Z values scale with the section's half height and half width. Matching point numbers connect along the loft.");
             let mut changed = false;
             let mut remove = None;
+            let mut add_profile_point = None;
+            let mut remove_profile_point = None;
+            let profile_count = value.profile_count();
             for index in 0..value.sections.len() {
                 let minimum = if index == 0 {
                     -10.0
@@ -595,6 +599,33 @@ pub(super) fn params_editor(
                                 .prefix("Half width "),
                         )
                         .changed();
+                    if section.profile.is_none() {
+                        if ui.button("Draw custom profile").clicked() {
+                            let count = profile_count.max(12);
+                            section.profile = Some((0..count).map(|index| {
+                                let angle = std::f32::consts::TAU * index as f32 / count as f32;
+                                Vec2::new(angle.cos(), angle.sin())
+                            }).collect());
+                            changed = true;
+                        }
+                    } else {
+                        if ui.button("Use ellipse").clicked() {
+                            section.profile = None;
+                            changed = true;
+                        } else if let Some(profile) = &mut section.profile {
+                            changed |= loft_profile_editor(ui, profile, index);
+                            let can_remove_point = profile.len() > 3;
+                            for (point_index, point) in profile.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{}", point_index + 1));
+                                    changed |= ui.add(egui::DragValue::new(&mut point.x).speed(0.01).prefix("Y ")).changed();
+                                    changed |= ui.add(egui::DragValue::new(&mut point.y).speed(0.01).prefix("Z ")).changed();
+                                    if ui.small_button("+").on_hover_text("Insert a point after this point in every custom profile").clicked() { add_profile_point = Some(point_index); }
+                                    if can_remove_point && ui.small_button("−").on_hover_text("Remove this point from every custom profile").clicked() { remove_profile_point = Some(point_index); }
+                                });
+                            }
+                        }
+                    }
                     if can_remove && ui.button("Remove section").clicked() {
                         remove = Some(index);
                     }
@@ -604,12 +635,40 @@ pub(super) fn params_editor(
                 value.sections.remove(index);
                 changed = true;
             }
+            if let Some(index) = add_profile_point {
+                if profile_count < crate::model::LoftParams::MAX_PROFILE_POINTS {
+                    for section in &mut value.sections {
+                        if let Some(profile) = &mut section.profile {
+                            let next = (index + 1) % profile.len();
+                            let point = (profile[index] + profile[next]) * 0.5;
+                            profile.insert(index + 1, point);
+                        }
+                    }
+                    changed = true;
+                }
+            } else if let Some(index) = remove_profile_point {
+                for section in &mut value.sections {
+                    if let Some(profile) = &mut section.profile {
+                        profile.remove(index);
+                    }
+                }
+                changed = true;
+            }
             if value.sections.len() < crate::model::LoftParams::MAX_SECTIONS
                 && ui.button("Add section").clicked()
             {
                 let index = value.sections.len() - 2;
-                let a = value.sections[index];
-                let b = value.sections[index + 1];
+                let a = &value.sections[index];
+                let b = &value.sections[index + 1];
+                let profile = (profile_count > 0).then(|| {
+                    (0..profile_count)
+                        .map(|point| {
+                            (crate::model::LoftParams::profile_point(a, point, profile_count)
+                                + crate::model::LoftParams::profile_point(b, point, profile_count))
+                                * 0.5
+                        })
+                        .collect()
+                });
                 value.sections.insert(
                     index + 1,
                     crate::model::LoftSection {
@@ -618,6 +677,7 @@ pub(super) fn params_editor(
                         center_z: (a.center_z + b.center_z) * 0.5,
                         half_height: (a.half_height + b.half_height) * 0.5,
                         half_width: (a.half_width + b.half_width) * 0.5,
+                        profile,
                     },
                 );
                 changed = true;
@@ -634,4 +694,57 @@ pub(super) fn params_editor(
             false
         }
     }
+}
+
+fn loft_profile_editor(ui: &mut egui::Ui, profile: &mut [Vec2], section_index: usize) -> bool {
+    let size = ui.available_width().min(200.0).max(120.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let center = rect.center();
+    let scale = size / 4.5;
+    let frame = ui.visuals().widgets.noninteractive;
+    painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), center.y),
+            egui::pos2(rect.right(), center.y),
+        ],
+        frame.bg_stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x, rect.top()),
+            egui::pos2(center.x, rect.bottom()),
+        ],
+        frame.bg_stroke,
+    );
+    let position = |point: Vec2| center + egui::vec2(point.x * scale, -point.y * scale);
+    for index in 0..profile.len() {
+        painter.line_segment(
+            [
+                position(profile[index]),
+                position(profile[(index + 1) % profile.len()]),
+            ],
+            egui::Stroke::new(1.5, ui.visuals().selection.stroke.color),
+        );
+    }
+    let mut changed = false;
+    for (index, point) in profile.iter_mut().enumerate() {
+        let handle = position(*point);
+        let hit = egui::Rect::from_center_size(handle, egui::vec2(14.0, 14.0));
+        let response = ui.interact(
+            hit,
+            ui.id().with(("loft point", section_index, index)),
+            egui::Sense::drag(),
+        );
+        if response.dragged() {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                point.x = (pointer.x - center.x) / scale;
+                point.y = (center.y - pointer.y) / scale;
+                changed = true;
+            }
+        }
+        painter.circle_filled(position(*point), 4.0, ui.visuals().selection.stroke.color);
+    }
+    changed
 }

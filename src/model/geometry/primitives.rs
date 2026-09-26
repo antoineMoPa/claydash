@@ -23,14 +23,16 @@ pub struct PolygonPrismParams {
     pub half_depth: f32,
 }
 
-/// Elliptical cross sections along local X; evaluated directly as an SDF.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+/// Closed cross sections along local X. Profile points use unit ellipse coordinates.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoftSection {
     pub x: f32,
     pub center_y: f32,
     pub center_z: f32,
     pub half_height: f32,
     pub half_width: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Vec<Vec2>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,29 +42,72 @@ pub struct LoftParams {
 
 impl LoftParams {
     pub const MAX_SECTIONS: usize = 16;
+    pub const MAX_PROFILE_POINTS: usize = 32;
 
-    /// Conservative step for the changing elliptical field between sections.
+    pub fn profile_count(&self) -> usize {
+        self.sections
+            .iter()
+            .find_map(|section| section.profile.as_ref().map(Vec::len))
+            .unwrap_or(0)
+    }
+
+    pub fn profile_point(section: &LoftSection, index: usize, count: usize) -> Vec2 {
+        if let Some(profile) = &section.profile {
+            if let Some(&point) = profile.get(index) {
+                return point;
+            }
+        }
+        let angle = std::f32::consts::TAU * index as f32 / count as f32;
+        Vec2::new(angle.cos(), angle.sin())
+    }
+
+    /// Conservative step for the changing cross-section field between sections.
     pub fn march_factor(&self) -> f32 {
         let slope = self.sections.windows(2).fold(0.0_f32, |maximum, pair| {
-            let a = pair[0];
-            let b = pair[1];
+            let a = &pair[0];
+            let b = &pair[1];
             let delta = Vec3::new(
                 b.center_y - a.center_y,
                 b.center_z - a.center_z,
                 b.half_height - a.half_height,
             );
             let width_delta = b.half_width - a.half_width;
-            maximum.max((delta.length() + width_delta.abs()) * 1.5 / (b.x - a.x).max(0.01))
+            let count = self.profile_count();
+            let profile_motion = if count > 0 {
+                (0..count)
+                    .map(|index| {
+                        (Self::profile_point(b, index, count)
+                            * Vec2::new(b.half_height, b.half_width)
+                            - Self::profile_point(a, index, count)
+                                * Vec2::new(a.half_height, a.half_width))
+                        .length()
+                    })
+                    .fold(0.0_f32, f32::max)
+            } else {
+                0.0
+            };
+            maximum.max(
+                (delta.length() + width_delta.abs() + profile_motion) * 1.5 / (b.x - a.x).max(0.01),
+            )
         });
         (1.0 / (1.0 + slope)).clamp(0.05, 0.8)
     }
 
     pub fn local_extent(&self) -> Vec3 {
         self.sections.iter().fold(Vec3::ZERO, |extent, section| {
+            let profile_extent = section
+                .profile
+                .as_ref()
+                .map(|profile| {
+                    profile
+                        .iter()
+                        .fold(Vec2::ZERO, |extent, point| extent.max(point.abs()))
+                })
+                .unwrap_or(Vec2::ONE);
             extent.max(Vec3::new(
                 section.x.abs(),
-                section.center_y.abs() + section.half_height,
-                section.center_z.abs() + section.half_width,
+                section.center_y.abs() + section.half_height * profile_extent.x.max(1.0),
+                section.center_z.abs() + section.half_width * profile_extent.y.max(1.0),
             ))
         })
     }
@@ -92,8 +137,41 @@ impl LoftParams {
         let radii = Vec2::new(a.half_height, a.half_width)
             .lerp(Vec2::new(b.half_height, b.half_width), t)
             .max(Vec2::splat(0.001));
-        let radial =
-            (((Vec2::new(point.y, point.z) - center) / radii).length() - 1.0) * radii.min_element();
+        let cross_point = Vec2::new(point.y, point.z);
+        let profile_count = self.profile_count();
+        let radial = if profile_count >= 3 {
+            let mut distance_squared = f32::INFINITY;
+            let mut inside = false;
+            for index in 0..profile_count {
+                let next = (index + 1) % profile_count;
+                let left = center
+                    + Self::profile_point(a, index, profile_count)
+                        .lerp(Self::profile_point(b, index, profile_count), t)
+                        * radii;
+                let right = center
+                    + Self::profile_point(a, next, profile_count)
+                        .lerp(Self::profile_point(b, next, profile_count), t)
+                        * radii;
+                let edge = right - left;
+                let relative = cross_point - left;
+                let length_squared = edge.length_squared();
+                if length_squared > 1e-7 {
+                    let closest =
+                        left + edge * (relative.dot(edge) / length_squared).clamp(0.0, 1.0);
+                    distance_squared = distance_squared.min(cross_point.distance_squared(closest));
+                }
+                if (left.y > cross_point.y) != (right.y > cross_point.y) {
+                    let crossing =
+                        left.x + (cross_point.y - left.y) * (right.x - left.x) / (right.y - left.y);
+                    if cross_point.x < crossing {
+                        inside = !inside;
+                    }
+                }
+            }
+            distance_squared.sqrt() * if inside { -1.0 } else { 1.0 }
+        } else {
+            (((cross_point - center) / radii).length() - 1.0) * radii.min_element()
+        };
         let cap = (first.x - point.x).max(point.x - last.x);
         let q = Vec2::new(radial, cap);
         q.max(Vec2::ZERO).length() + q.max_element().min(0.0)

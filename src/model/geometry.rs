@@ -246,6 +246,7 @@ impl SdfObject {
                             center_z: 0.0,
                             half_height: 0.12,
                             half_width: 0.18,
+                            profile: None,
                         },
                         LoftSection {
                             x: -0.65,
@@ -253,6 +254,7 @@ impl SdfObject {
                             center_z: 0.0,
                             half_height: 0.38,
                             half_width: 0.55,
+                            profile: None,
                         },
                         LoftSection {
                             x: 0.65,
@@ -260,6 +262,7 @@ impl SdfObject {
                             center_z: 0.0,
                             half_height: 0.38,
                             half_width: 0.55,
+                            profile: None,
                         },
                         LoftSection {
                             x: 1.0,
@@ -267,6 +270,7 @@ impl SdfObject {
                             center_z: 0.0,
                             half_height: 0.12,
                             half_width: 0.18,
+                            profile: None,
                         },
                     ],
                 }),
