@@ -146,7 +146,15 @@ pub struct RayHit {
 
 pub fn raymarch_hit(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Option<RayHit> {
     let mut point = origin;
-    for _ in 0..64 {
+    let march_factor = objects.iter().fold(0.8_f32, |factor, object| {
+        if let crate::model::SdfParams::LoftParams(loft) = &object.params {
+            factor.min(loft.march_factor())
+        } else {
+            factor
+        }
+    });
+    let max_steps = if march_factor < 0.5 { 128 } else { 64 };
+    for _ in 0..max_steps {
         let (distance, object) = scene_distance(point, objects)?;
         if distance < 0.01 {
             return Some(RayHit {
@@ -154,7 +162,7 @@ pub fn raymarch_hit(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Opt
                 position: point,
             });
         }
-        point += direction * distance.max(0.003) * 0.8;
+        point += direction * distance.max(0.003) * march_factor;
         if point.distance(origin) > 100.0 {
             return None;
         }

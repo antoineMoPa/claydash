@@ -1,5 +1,5 @@
 use command_central::{CommandBuilder, CommandMap};
-use sdf_consts::{TYPE_BOX, TYPE_CYLINDER, TYPE_SPHERE, TYPE_TORUS};
+use sdf_consts::{TYPE_BOX, TYPE_CYLINDER, TYPE_LOFT, TYPE_SPHERE, TYPE_TORUS};
 
 use crate::{
     animation,
@@ -184,6 +184,14 @@ pub fn register_all(commands: &mut Commands) {
         "Add a torus primitive.",
         "",
         |tree| spawn(tree, TYPE_TORUS),
+    );
+    register(
+        commands,
+        "spawn-loft",
+        "Spawn Loft",
+        "Add a variable-section SDF loft.",
+        "",
+        |tree| spawn(tree, TYPE_LOFT),
     );
     register(
         commands,

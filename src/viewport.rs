@@ -176,7 +176,10 @@ impl Viewport {
         self.completed = 0;
     }
 
-    pub fn prepare(&mut self, device: &wgpu::Device, key: ViewKey) -> Work {
+    pub fn prepare(&mut self, device: &wgpu::Device, key: ViewKey, refine: bool) -> Work {
+        if !refine {
+            self.completed = 0;
+        }
         // Poll is nonblocking. WebGPU delivers map callbacks through its event loop.
         let _ = device.poll(wgpu::PollType::Poll);
         if let Some(milliseconds) = self.timing.lock().unwrap().take() {
@@ -284,6 +287,9 @@ impl Viewport {
             .as_ref()
             .is_some_and(|targets| targets.preview_size == key.size)
         {
+            return Work::Cached;
+        }
+        if !refine {
             return Work::Cached;
         }
         let total = tile_count(key.size);
@@ -436,6 +442,10 @@ impl Viewport {
                     .as_ref()
                     .is_some_and(|targets| targets.preview_size == key.size)
         })
+    }
+
+    pub fn matches(&self, key: &ViewKey) -> bool {
+        self.key.as_ref() == Some(key)
     }
 
     pub fn composite(&self, pass: &mut wgpu::RenderPass<'_>) {

@@ -19,6 +19,13 @@ pub(super) fn draw_file_menu(
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui
+                    .add(egui::Button::new("New").shortcut_text("Cmd/Ctrl+N"))
+                    .clicked()
+                {
+                    action = Some(FileMenuAction::New);
+                    ui.close();
+                }
+                if ui
                     .add(egui::Button::new("Open…").shortcut_text("Cmd/Ctrl+O"))
                     .clicked()
                 {
@@ -119,6 +126,7 @@ pub(super) fn draw_file_menu(
         });
     });
 
+    let new = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::N);
     let open = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
     let save = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
     let save_as = egui::KeyboardShortcut::new(
@@ -130,7 +138,9 @@ pub(super) fn draw_file_menu(
         egui::Key::S,
     );
     viewport_ui.ctx().input_mut(|input| {
-        if input.consume_shortcut(&open) {
+        if input.consume_shortcut(&new) {
+            action = Some(FileMenuAction::New);
+        } else if input.consume_shortcut(&open) {
             action = Some(FileMenuAction::Open);
         } else if input.consume_shortcut(&save_as) {
             action = Some(FileMenuAction::SaveAs);

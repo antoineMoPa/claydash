@@ -200,6 +200,7 @@ pub enum ViewAngle {
     Isometric,
 }
 
+#[derive(Clone)]
 pub struct Camera {
     pub target: Vec3,
     pub position: Vec3,

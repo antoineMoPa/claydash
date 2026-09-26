@@ -387,7 +387,9 @@ impl UiState {
                         };
                         *value = (*value + amount).max(0.01);
                     }
-                    SdfParams::PolygonPrismParams(_) | SdfParams::BezierCurveParams(_) => {}
+                    SdfParams::PolygonPrismParams(_)
+                    | SdfParams::BezierCurveParams(_)
+                    | SdfParams::LoftParams(_) => {}
                 }
                 changed = true;
             }

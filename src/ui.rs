@@ -91,6 +91,7 @@ pub struct UiState {
     palette: CommandPalette,
     regions: Vec<egui::Rect>,
     viewport_rect: Option<egui::Rect>,
+    refine_viewport: bool,
     ghosts: boolean_overlay::Ghosts,
     selection_tools: selection_tools::SelectionTools,
     active_guide: Option<crate::guides::ActiveGuideSet>,
@@ -126,6 +127,7 @@ impl Default for UiState {
             palette: CommandPalette::default(),
             regions: Vec::new(),
             viewport_rect: None,
+            refine_viewport: true,
             ghosts: boolean_overlay::Ghosts::default(),
             selection_tools: selection_tools::SelectionTools::default(),
             active_guide: None,
@@ -141,6 +143,9 @@ impl Default for UiState {
 }
 
 impl UiState {
+    pub fn refine_viewport(&self) -> bool {
+        self.refine_viewport
+    }
     pub fn animation_timeline_contains_pointer(
         &self,
         physical_pointer: Vec2,

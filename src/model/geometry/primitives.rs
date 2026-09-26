@@ -6,6 +6,8 @@ use super::SdfObject;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BoxParams {
     pub box_q: Vec3,
+    #[serde(default)]
+    pub corner_radius: f32,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -19,6 +21,83 @@ pub const MAX_POLYGON_PRISM_VERTICES: usize = 32;
 pub struct PolygonPrismParams {
     pub vertices: Vec<Vec2>,
     pub half_depth: f32,
+}
+
+/// Elliptical cross sections along local X; evaluated directly as an SDF.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct LoftSection {
+    pub x: f32,
+    pub center_y: f32,
+    pub center_z: f32,
+    pub half_height: f32,
+    pub half_width: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LoftParams {
+    pub sections: Vec<LoftSection>,
+}
+
+impl LoftParams {
+    pub const MAX_SECTIONS: usize = 16;
+
+    /// Conservative step for the changing elliptical field between sections.
+    pub fn march_factor(&self) -> f32 {
+        let slope = self.sections.windows(2).fold(0.0_f32, |maximum, pair| {
+            let a = pair[0];
+            let b = pair[1];
+            let delta = Vec3::new(
+                b.center_y - a.center_y,
+                b.center_z - a.center_z,
+                b.half_height - a.half_height,
+            );
+            let width_delta = b.half_width - a.half_width;
+            maximum.max((delta.length() + width_delta.abs()) * 1.5 / (b.x - a.x).max(0.01))
+        });
+        (1.0 / (1.0 + slope)).clamp(0.05, 0.8)
+    }
+
+    pub fn local_extent(&self) -> Vec3 {
+        self.sections.iter().fold(Vec3::ZERO, |extent, section| {
+            extent.max(Vec3::new(
+                section.x.abs(),
+                section.center_y.abs() + section.half_height,
+                section.center_z.abs() + section.half_width,
+            ))
+        })
+    }
+
+    pub fn distance(&self, point: Vec3) -> f32 {
+        let Some(first) = self.sections.first() else {
+            return 100.0;
+        };
+        let Some(last) = self.sections.last() else {
+            return 100.0;
+        };
+        if self.sections.len() < 2 {
+            return 100.0;
+        }
+        let mut a = first;
+        let mut b = &self.sections[1];
+        for pair in self.sections.windows(2) {
+            a = &pair[0];
+            b = &pair[1];
+            if point.x <= b.x {
+                break;
+            }
+        }
+        let t = ((point.x - a.x) / (b.x - a.x).max(0.0001)).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        let center = Vec2::new(a.center_y, a.center_z).lerp(Vec2::new(b.center_y, b.center_z), t);
+        let radii = Vec2::new(a.half_height, a.half_width)
+            .lerp(Vec2::new(b.half_height, b.half_width), t)
+            .max(Vec2::splat(0.001));
+        let radial =
+            (((Vec2::new(point.y, point.z) - center) / radii).length() - 1.0) * radii.min_element();
+        let cap = (first.x - point.x).max(point.x - last.x);
+        let q = Vec2::new(radial, cap);
+        q.max(Vec2::ZERO).length() + q.max_element().min(0.0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +373,7 @@ pub enum SdfParams {
         minor_radius: f32,
     },
     PolygonPrismParams(PolygonPrismParams),
+    LoftParams(LoftParams),
     #[serde(alias = "BezierExtrusionParams")]
     BezierCurveParams(BezierCurveParams),
 }

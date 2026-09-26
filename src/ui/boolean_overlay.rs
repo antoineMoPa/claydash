@@ -247,6 +247,35 @@ fn primitive_segments(params: &SdfParams) -> Vec<[Vec3; 2]> {
                 }
             }
         }
+        SdfParams::LoftParams(loft) => {
+            const STEPS: usize = 24;
+            for section in &loft.sections {
+                let point = |step: usize| {
+                    let angle = std::f32::consts::TAU * step as f32 / STEPS as f32;
+                    Vec3::new(
+                        section.x,
+                        section.center_y + section.half_height * angle.cos(),
+                        section.center_z + section.half_width * angle.sin(),
+                    )
+                };
+                for step in 0..STEPS {
+                    result.push([point(step), point(step + 1)]);
+                }
+            }
+            for pair in loft.sections.windows(2) {
+                for step in (0..STEPS).step_by(4) {
+                    let angle = std::f32::consts::TAU * step as f32 / STEPS as f32;
+                    let point = |section: &crate::model::LoftSection| {
+                        Vec3::new(
+                            section.x,
+                            section.center_y + section.half_height * angle.cos(),
+                            section.center_z + section.half_width * angle.sin(),
+                        )
+                    };
+                    result.push([point(&pair[0]), point(&pair[1])]);
+                }
+            }
+        }
     }
     result
 }

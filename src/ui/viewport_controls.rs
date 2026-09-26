@@ -234,7 +234,7 @@ impl UiState {
         self.regions.push(left.response.rect);
 
         // Move the right-hand group below the tools when space is tight.
-        let projection_y = if viewport.width() < left.response.rect.width() + 130.0 {
+        let projection_y = if viewport.width() < left.response.rect.width() + 166.0 {
             left.response.rect.height() + 10.0
         } else {
             6.0
@@ -263,6 +263,20 @@ impl UiState {
                     if view_button(ui, projection_icon, &tooltip).clicked() {
                         exit_camera_view(tree);
                         camera.toggle_projection();
+                    }
+                    if selectable_view_button(
+                        ui,
+                        egui::include_image!("../../assets/icons/lucide/aperture.svg"),
+                        if self.refine_viewport {
+                            "Full-resolution refinement on — click for fast preview only"
+                        } else {
+                            "Fast preview only — click for full-resolution refinement"
+                        },
+                        self.refine_viewport,
+                    )
+                    .clicked()
+                    {
+                        self.refine_viewport = !self.refine_viewport;
                     }
                     if view_button(
                         ui,

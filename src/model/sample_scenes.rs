@@ -30,6 +30,7 @@ pub fn ui_preview_scene() -> Vec<SdfObject> {
     backdrop.name = "Orange bar behind glass".into();
     backdrop.params = SdfParams::BoxParams(BoxParams {
         box_q: Vec3::new(2.1, 0.12, 0.12),
+        corner_radius: 0.0,
     });
     backdrop.transform.translation = Vec3::new(0.0, 0.7, -0.9);
     backdrop.material.color = Vec4::new(1.0, 0.23, 0.025, 1.0);
@@ -47,6 +48,7 @@ pub fn ui_preview_scene() -> Vec<SdfObject> {
         target.name = format!("{} target", operation.label());
         target.params = SdfParams::BoxParams(BoxParams {
             box_q: Vec3::splat(0.4),
+            corner_radius: 0.0,
         });
         target.transform.translation = Vec3::new((index as f32 - 1.0) * 1.35, -0.65, 0.0);
         target.material.color = Vec4::new(0.15, 0.6, 0.8, 1.0);
@@ -91,15 +93,25 @@ pub fn scene_sample(point: Vec3, scene: &[SdfObject]) -> Option<(f32, uuid::Uuid
             .path_extrusion
             .and_then(|modifier| modifier.profile_curve)
             .and_then(|id| super::profile_curve_vertices(scene, id));
-        let mut result = (
-            object.distance_with_matrix_with_profile(
-                point,
-                matrix,
-                !(has_children && object.repetition.enabled),
-                profile.as_deref(),
-            ),
-            object.uuid,
+        let mut object_distance = object.distance_with_matrix_with_profile(
+            point,
+            matrix,
+            !(has_children && object.repetition.enabled),
+            profile.as_deref(),
         );
+        if let Some(inlay) = object.surface_inlay {
+            if let Some(host_index) = scene
+                .iter()
+                .position(|candidate| candidate.uuid == inlay.host)
+            {
+                let host_distance = subtree(point, scene, host_index, depth + 1).0;
+                object_distance =
+                    object_distance.max((host_distance - inlay.offset).abs() - inlay.thickness);
+            } else {
+                object_distance = 100.0;
+            }
+        }
+        let mut result = (object_distance, object.uuid);
         if depth >= scene.len() {
             return result;
         }
@@ -183,6 +195,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     let mut transparent_lattice = SdfObject::create_kind(PrimitiveKind::Box);
     transparent_lattice.params = SdfParams::BoxParams(BoxParams {
         box_q: Vec3::splat(0.55),
+        corner_radius: 0.0,
     });
     let mut transparent_cage = super::Lattice::new(Vec3::splat(-0.55), Vec3::splat(0.55), 3);
     let transparent_corner = transparent_cage.index(2, 2, 2);
@@ -192,6 +205,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     let mut lattice_reference = SdfObject::create_kind(PrimitiveKind::Box);
     lattice_reference.params = SdfParams::BoxParams(BoxParams {
         box_q: Vec3::splat(1.0),
+        corner_radius: 0.0,
     });
     lattice_reference.material = Material::preset(MaterialKind::Solid);
     lattice_reference.color = lattice_reference.material.color;
@@ -203,7 +217,10 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     cases.push(("lattice-reference".into(), vec![lattice_reference]));
     cases.push(("lattice-deformed".into(), vec![lattice_deformed]));
     let mut dense = SdfObject::create_kind(PrimitiveKind::Box);
-    dense.params = SdfParams::BoxParams(BoxParams { box_q: Vec3::ONE });
+    dense.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::ONE,
+        corner_radius: 0.0,
+    });
     dense.material = Material::preset(MaterialKind::Solid);
     dense.color = dense.material.color;
     let mut dense_lattice = super::Lattice::new(Vec3::splat(-1.0), Vec3::ONE, 9);
@@ -212,7 +229,10 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     dense.lattice = Some(dense_lattice);
     cases.push(("lattice-dense".into(), vec![dense]));
     let mut group = SdfObject::create_kind(PrimitiveKind::Box);
-    group.params = SdfParams::BoxParams(BoxParams { box_q: Vec3::ONE });
+    group.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::ONE,
+        corner_radius: 0.0,
+    });
     group.material = Material::preset(MaterialKind::Solid);
     group.color = group.material.color;
     let mut group_lattice = super::Lattice::new(Vec3::splat(-1.0), Vec3::ONE, 3);
@@ -230,6 +250,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
         let mut object = SdfObject::create_kind(PrimitiveKind::Box);
         object.params = SdfParams::BoxParams(BoxParams {
             box_q: Vec3::splat(0.12),
+            corner_radius: 0.0,
         });
         object.transform.translation = Vec3::new(
             (index % 8) as f32 * 0.32 - 1.12,
@@ -254,6 +275,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
         block.name = species.label().into();
         block.params = SdfParams::BoxParams(BoxParams {
             box_q: Vec3::splat(0.46),
+            corner_radius: 0.0,
         });
         block.transform.translation = Vec3::new((index as f32 - 1.0) * 1.12, 0.0, 0.0);
         block.material = Material::wood_preset(species);
@@ -266,6 +288,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     cut_block.name = "Oak with drilled hole".into();
     cut_block.params = SdfParams::BoxParams(BoxParams {
         box_q: Vec3::splat(0.55),
+        corner_radius: 0.0,
     });
     cut_block.material = Material::wood_preset(WoodSpecies::Oak);
     cut_block.color = cut_block.material.color;
@@ -285,6 +308,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     brick_corner.name = "Brick corner detail".into();
     brick_corner.params = SdfParams::BoxParams(BoxParams {
         box_q: Vec3::splat(0.72),
+        corner_radius: 0.0,
     });
     brick_corner.material = Material::preset(MaterialKind::Brick);
     brick_corner.color = brick_corner.material.color;
@@ -293,12 +317,14 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     brick_wall.name = "Brick wall with opening".into();
     brick_wall.params = SdfParams::BoxParams(BoxParams {
         box_q: Vec3::new(1.05, 0.75, 0.18),
+        corner_radius: 0.0,
     });
     brick_wall.material = Material::preset(MaterialKind::Brick);
     brick_wall.color = brick_wall.material.color;
     let mut opening = SdfObject::create_kind(PrimitiveKind::Box);
     opening.params = SdfParams::BoxParams(BoxParams {
         box_q: Vec3::new(0.28, 0.37, 0.35),
+        corner_radius: 0.0,
     });
     opening.transform.translation = Vec3::new(0.18, -0.04, 0.0);
     opening.boolean_parent = Some(brick_wall.uuid);

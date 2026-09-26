@@ -223,6 +223,30 @@ impl App {
         let offscreen_capture = self.agent_capture.is_some();
         #[cfg(any(target_arch = "wasm32", not(unix)))]
         let offscreen_capture = false;
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        let render_camera = self.agent_capture.as_ref().map_or_else(
+            || self.camera.clone(),
+            |capture| capture.camera(&self.camera),
+        );
+        #[cfg(any(target_arch = "wasm32", not(unix)))]
+        let render_camera = self.camera.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let refine = if self.pending_render.is_some() || self.guide_screenshot.is_some() {
+            true
+        } else {
+            #[cfg(unix)]
+            {
+                self.agent_capture
+                    .as_ref()
+                    .map_or(self.ui.refine_viewport(), |capture| capture.refine)
+            }
+            #[cfg(not(unix))]
+            {
+                self.ui.refine_viewport()
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let refine = self.pending_render.is_some() || self.ui.refine_viewport();
         if let Some(renderer) = &mut self.renderer {
             let export_version = if capture_render { i32::MIN } else { 0 };
             // Selection is drawn by the editor gizmos. Keep the cached scene
@@ -233,9 +257,17 @@ impl App {
                     .path_version("scene.world")
                     .wrapping_add(export_version),
             ];
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            let scene_objects = self
+                .agent_capture
+                .as_ref()
+                .and_then(|capture| capture.objects.as_deref())
+                .unwrap_or_else(|| objects_ref(&self.tree));
+            #[cfg(any(target_arch = "wasm32", not(unix)))]
+            let scene_objects = objects_ref(&self.tree);
             renderer.render(
-                &self.camera,
-                objects_ref(&self.tree),
+                &render_camera,
+                scene_objects,
                 &effective_selection,
                 scene_versions,
                 crate::model::world(&self.tree),
@@ -244,21 +276,22 @@ impl App {
                 capture_render,
                 capture_ui,
                 offscreen_capture,
+                refine,
             );
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(result) = renderer.take_capture() {
                 #[cfg(unix)]
-                let agent_handled = if let Some(reply) = self.agent_capture.take() {
-                    use base64::Engine;
-                    let encoded = result.as_ref().map_err(Clone::clone).and_then(|frame| {
-                        let cropped =
-                            crate::render_export::crop_to_viewport(frame.clone(), &self.camera);
-                        crate::render_export::png_bytes(&cropped).map(|bytes| {
-                            serde_json::json!({"width": cropped.width, "height": cropped.height,
-                                "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
-                        })
-                    });
-                    let _ = reply.send(encoded);
+                let agent_handled = if let Some(mut capture) = self.agent_capture.take() {
+                    let encoded = result
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(|frame| capture.accept_frame(frame.clone(), &render_camera));
+                    if matches!(encoded, Ok(serde_json::Value::Null)) {
+                        self.agent_capture = Some(capture);
+                        renderer.invalidate_scene();
+                    } else {
+                        let _ = capture.reply.send(encoded);
+                    }
                     true
                 } else {
                     false

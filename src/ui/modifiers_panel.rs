@@ -33,6 +33,38 @@ pub(super) fn modifiers_panel(
         })
         .map(|candidate| (candidate.uuid, candidate.display_name()))
         .collect();
+    let parents: std::collections::HashMap<_, _> = scene
+        .iter()
+        .map(|object| (object.uuid, object.boolean_parent))
+        .collect();
+    let root_for = |mut id| {
+        for _ in 0..scene.len() {
+            let Some(Some(parent)) = parents.get(&id) else {
+                break;
+            };
+            id = *parent;
+        }
+        id
+    };
+    let mut unavailable_roots = std::collections::HashSet::new();
+    unavailable_roots.insert(root_for(target));
+    for member in &scene {
+        if member.surface_inlay.is_some()
+            || member.lattice.is_some()
+            || member.mirror.is_some()
+            || member.repetition.enabled
+            || matches!(member.params, SdfParams::BezierCurveParams(_))
+        {
+            unavailable_roots.insert(root_for(member.uuid));
+        }
+    }
+    let surface_hosts: Vec<_> = scene
+        .iter()
+        .filter(|candidate| {
+            candidate.boolean_parent.is_none() && !unavailable_roots.contains(&candidate.uuid)
+        })
+        .map(|candidate| (candidate.uuid, candidate.display_name()))
+        .collect();
     let Some(object) = scene.iter_mut().find(|object| object.uuid == target) else {
         return;
     };
@@ -52,6 +84,29 @@ pub(super) fn modifiers_panel(
                 .clicked()
         {
             object.path_extrusion = Some(crate::model::PathExtrusion::default());
+            changed = true;
+            snapshot = true;
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                !is_curve
+                    && !has_children
+                    && object.boolean_parent.is_none()
+                    && object.surface_inlay.is_none()
+                    && !surface_hosts.is_empty()
+                    && object.lattice.is_none()
+                    && object.mirror.is_none()
+                    && !object.repetition.enabled,
+                egui::Button::new("Surface inlay"),
+            )
+            .clicked()
+        {
+            object.surface_inlay = Some(crate::model::SurfaceInlay {
+                host: surface_hosts[0].0,
+                offset: 0.018,
+                thickness: 0.012,
+            });
             changed = true;
             snapshot = true;
             ui.close();
@@ -101,6 +156,40 @@ pub(super) fn modifiers_panel(
         }
     });
 
+    let mut remove_inlay = false;
+    if let Some(inlay) = &mut object.surface_inlay {
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Surface inlay").strong().size(16.0));
+                remove_inlay = ui.small_button("Remove").clicked();
+            });
+            if !remove_inlay {
+                let selected_name = surface_hosts
+                    .iter()
+                    .find(|(id, _)| *id == inlay.host)
+                    .map_or("Missing host", |(_, name)| name.as_str());
+                egui::ComboBox::from_id_salt("surface-inlay-host")
+                    .selected_text(selected_name)
+                    .show_ui(ui, |ui| {
+                        for (id, name) in &surface_hosts {
+                            changed |= ui.selectable_value(&mut inlay.host, *id, name).changed();
+                        }
+                    });
+                changed |= ui
+                    .add(egui::Slider::new(&mut inlay.offset, -0.2..=0.2).text("Offset"))
+                    .changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut inlay.thickness, 0.001..=0.1).text("Thickness"))
+                    .changed();
+                ui.weak("Uses this object's shape as the inlay boundary on the host surface.");
+            }
+        });
+    }
+    if remove_inlay {
+        object.surface_inlay = None;
+        changed = true;
+        snapshot = true;
+    }
     let mut remove_lattice = false;
     let mut deleted_shape_key = None;
     if let Some(lattice) = &mut object.lattice {

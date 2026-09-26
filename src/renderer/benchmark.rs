@@ -250,6 +250,7 @@ impl Renderer {
                     versions: frame_versions,
                     size: [self.config.width, self.config.height],
                 },
+                true,
             );
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let pipeline = if self.has_booleans {

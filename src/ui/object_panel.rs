@@ -461,7 +461,7 @@ pub(super) fn params_editor(
         }
         SdfParams::BoxParams(value) => {
             ui.label("Half extents");
-            animatable_vec3_editor(
+            let extent_changed = animatable_vec3_editor(
                 ui,
                 tree,
                 runtime,
@@ -474,7 +474,17 @@ pub(super) fn params_editor(
                     AnimatableProperty::BoxHalfExtent(VectorAxis::Z),
                 ],
                 keyframes,
-            )
+            );
+            let radius_changed = ui
+                .add(
+                    egui::Slider::new(
+                        &mut value.corner_radius,
+                        0.0..=value.box_q.min_element().max(0.0),
+                    )
+                    .text("Corner radius"),
+                )
+                .changed();
+            extent_changed | radius_changed
         }
         SdfParams::CylinderParams {
             radius,
@@ -529,6 +539,91 @@ pub(super) fn params_editor(
         SdfParams::PolygonPrismParams(value) => ui
             .add(egui::Slider::new(&mut value.half_depth, 0.005..=4.0).text("Half depth"))
             .changed(),
+        SdfParams::LoftParams(value) => {
+            ui.label("Elliptical sections along local X");
+            let mut changed = false;
+            let mut remove = None;
+            for index in 0..value.sections.len() {
+                let minimum = if index == 0 {
+                    -10.0
+                } else {
+                    value.sections[index - 1].x + 0.01
+                };
+                let maximum = if index + 1 == value.sections.len() {
+                    10.0
+                } else {
+                    value.sections[index + 1].x - 0.01
+                };
+                let can_remove = value.sections.len() > 2;
+                let section = &mut value.sections[index];
+                ui.collapsing(format!("Section {}", index + 1), |ui| {
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut section.x)
+                                .speed(0.01)
+                                .range(minimum..=maximum)
+                                .prefix("X "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut section.center_y)
+                                .speed(0.01)
+                                .prefix("Center Y "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut section.center_z)
+                                .speed(0.01)
+                                .prefix("Center Z "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut section.half_height)
+                                .speed(0.01)
+                                .range(0.01..=10.0)
+                                .prefix("Half height "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut section.half_width)
+                                .speed(0.01)
+                                .range(0.01..=10.0)
+                                .prefix("Half width "),
+                        )
+                        .changed();
+                    if can_remove && ui.button("Remove section").clicked() {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = remove {
+                value.sections.remove(index);
+                changed = true;
+            }
+            if value.sections.len() < crate::model::LoftParams::MAX_SECTIONS
+                && ui.button("Add section").clicked()
+            {
+                let index = value.sections.len() - 2;
+                let a = value.sections[index];
+                let b = value.sections[index + 1];
+                value.sections.insert(
+                    index + 1,
+                    crate::model::LoftSection {
+                        x: (a.x + b.x) * 0.5,
+                        center_y: (a.center_y + b.center_y) * 0.5,
+                        center_z: (a.center_z + b.center_z) * 0.5,
+                        half_height: (a.half_height + b.half_height) * 0.5,
+                        half_width: (a.half_width + b.half_width) * 0.5,
+                    },
+                );
+                changed = true;
+            }
+            changed
+        }
         SdfParams::BezierCurveParams(value) => {
             ui.label(format!(
                 "{} Bézier segment{}",

@@ -246,26 +246,41 @@ fn bezier_extrusion_distance(point: vec3<f32>, object: Object) -> f32 {
     return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
 }
 
-fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
-    let homogeneous = vec4(sample_point, 1.0);
-    var local = vec3(
-        dot(object.inverse_rows[0], homogeneous),
-        dot(object.inverse_rows[1], homogeneous),
-        dot(object.inverse_rows[2], homogeneous)
-    );
-    if object.repeat_count.w != 0 {
-        local = vec3(
-            repeated_axis(local.x, object.repeat_spacing.x, object.repeat_count.x),
-            repeated_axis(local.y, object.repeat_spacing.y, object.repeat_count.y),
-            repeated_axis(local.z, object.repeat_spacing.z, object.repeat_count.z)
-        );
+fn loft_distance(point: vec3<f32>, object: Object) -> f32 {
+    let offset = bitcast<u32>(object.params.x);
+    let count = bitcast<u32>(object.params.y);
+    if count < 2u { return 100.0; }
+    let first_x = polygon_points[offset].x;
+    let last_x = polygon_points[offset + (count - 1u) * 3u].x;
+    var section = 0u;
+    for (var i = 0u; i + 1u < count; i++) {
+        section = i;
+        if point.x <= polygon_points[offset + (i + 1u) * 3u].x { break; }
     }
+    let a = offset + section * 3u;
+    let b = a + 3u;
+    let ax = polygon_points[a].x;
+    let bx = polygon_points[b].x;
+    var t = clamp((point.x - ax) / max(bx - ax, 0.0001), 0.0, 1.0);
+    t = t * t * (3.0 - 2.0 * t);
+    let center = mix(vec2(polygon_points[a].y, polygon_points[a + 1u].x),
+        vec2(polygon_points[b].y, polygon_points[b + 1u].x), t);
+    let radii = max(mix(vec2(polygon_points[a + 1u].y, polygon_points[a + 2u].x),
+        vec2(polygon_points[b + 1u].y, polygon_points[b + 2u].x), t), vec2(0.001));
+    let radial = (length((point.yz - center) / radii) - 1.0) * min(radii.x, radii.y);
+    let cap = max(first_x - point.x, point.x - last_x);
+    let q = vec2(radial, cap);
+    return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
     var distance = 100.0;
     if object.state.y == 1 {
         distance = length(local) - object.params.x;
     } else if object.state.y == 2 {
-        let q = abs(local) - object.params.xyz;
-        distance = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+        let radius = clamp(object.scale.w, 0.0, min(object.params.x, min(object.params.y, object.params.z)));
+        let q = abs(local) - (object.params.xyz - vec3(radius));
+        distance = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0) - radius;
     } else if object.state.y == 3 {
         let q = vec2(length(local.xz) - object.params.x, abs(local.y) - object.params.y);
         distance = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
@@ -283,7 +298,27 @@ fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
         distance = outside + min(max(polygon, depth), 0.0);
     } else if object.state.y == 6 {
         distance = bezier_extrusion_distance(local, object);
+    } else if object.state.y == 7 {
+        distance = loft_distance(local, object);
     }
+    return distance;
+}
+
+fn base_object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
+    let homogeneous = vec4(sample_point, 1.0);
+    var local = vec3(
+        dot(object.inverse_rows[0], homogeneous),
+        dot(object.inverse_rows[1], homogeneous),
+        dot(object.inverse_rows[2], homogeneous)
+    );
+    if object.repeat_count.w != 0 {
+        local = vec3(
+            repeated_axis(local.x, object.repeat_spacing.x, object.repeat_count.x),
+            repeated_axis(local.y, object.repeat_spacing.y, object.repeat_count.y),
+            repeated_axis(local.z, object.repeat_spacing.z, object.repeat_count.z)
+        );
+    }
+    let distance = primitive_distance(local, object);
     var world_distance = distance * object.params.w;
     if object.state.y == 2 && brick_geometry_visible(object) {
         let relief = material_params[material_headers[object.component.w].offset + BRICK_RELIEF];
@@ -298,10 +333,6 @@ fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
         }
     }
     return world_distance;
-}
-
-fn object_distance(point: vec3<f32>, object: Object) -> f32 {
-    return object_distance_at(modifier_point(point, object), object);
 }
 
 fn combine_operand(value: vec2<f32>, child: vec2<f32>, operand: Object, group: Object) -> vec2<f32> {
@@ -321,6 +352,37 @@ fn combine_operand(value: vec2<f32>, child: vec2<f32>, operand: Object, group: O
         result.x += select(blend, -blend, operation == 0);
     }
     return result;
+}
+
+// Inlays evaluate a host Boolean component from its native SDF primitives.
+// Hosts with spatial modifiers are excluded by the editor and scene validator.
+fn inlay_host_distance(point: vec3<f32>, host_index: u32) -> f32 {
+    let host = objects[host_index];
+    let start = host.component.x;
+    let root = host.component.y;
+    var values: array<vec2<f32>, CSG_SIZE>;
+    for (var i = start; i <= root; i++) {
+        values[i - start] = vec2(base_object_distance_at(point, objects[i]), f32(i));
+    }
+    for (var i = start; i < root; i++) {
+        let parent = u32(objects[i].state.w) - start;
+        let child = values[i - start];
+        values[parent] = combine_operand(values[parent], child, objects[i], objects[parent + start]);
+    }
+    return values[root - start].x;
+}
+
+fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
+    let distance = base_object_distance_at(sample_point, object);
+    if object.state.y == 6 || object.mirror_axes.w == 0u { return distance; }
+    if object.mirror_axes.w == 0xffffffffu { return 100.0; }
+    let host_distance = inlay_host_distance(sample_point, object.mirror_axes.w - 1u);
+    let inlay = polygon_points[bitcast<u32>(object.repeat_spacing.w)];
+    return max(distance, abs(host_distance - inlay.x) - inlay.y);
+}
+
+fn object_distance(point: vec3<f32>, object: Object) -> f32 {
+    return object_distance_at(modifier_point(point, object), object);
 }
 
 // Each leaf is a complete boolean component in contiguous postorder.
@@ -483,6 +545,7 @@ fn primitive_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -
 
 fn has_analytic_interval(object: Object) -> bool {
     return object.repeat_count.w == 0 && object.state.y <= 3 && object.modifier.x == 0u
+        && object.mirror_axes.w == 0u
         && all(object.mirror_axes.xyz == vec3<u32>(0u))
         && !(object.state.y == 2 && brick_geometry_visible(object));
 }

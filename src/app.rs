@@ -42,6 +42,15 @@ use crate::{
     ui::UiState,
 };
 
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[derive(Debug)]
+enum AppEvent {
+    AgentRequest,
+}
+
+#[cfg(any(target_arch = "wasm32", not(unix)))]
+type AppEvent = ();
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::document;
 
@@ -76,7 +85,9 @@ pub struct App {
     #[cfg(all(not(target_arch = "wasm32"), unix))]
     agent_requests: Option<Receiver<agent::Inbound>>,
     #[cfg(all(not(target_arch = "wasm32"), unix))]
-    agent_capture: Option<std::sync::mpsc::Sender<agent::AgentResult>>,
+    agent_proxy: Option<winit::event_loop::EventLoopProxy<AppEvent>>,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_capture: Option<agent::AgentCapture>,
     #[cfg(all(not(target_arch = "wasm32"), unix))]
     agent_revision: u64,
     #[cfg(not(target_arch = "wasm32"))]
@@ -199,6 +210,13 @@ impl App {
         }
     }
 
+    fn new_document(&mut self) {
+        let mut scene = DataTree::default();
+        scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(Vec::new()));
+        self.replace_scene(scene);
+        self.document.start_new();
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path(&mut self, path: std::path::PathBuf) {
         match document::read_scene(&path) {
@@ -221,6 +239,7 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_file_action(&mut self, action: FileMenuAction) {
         match action {
+            FileMenuAction::New => self.new_document(),
             FileMenuAction::Open => {
                 if let Some(path) = document::open_dialog() {
                     self.open_path(path);
@@ -285,6 +304,7 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn handle_file_action(&mut self, action: FileMenuAction) {
         match action {
+            FileMenuAction::New => self.new_document(),
             FileMenuAction::Open => {
                 let tx = self.document_tx.clone();
                 wasm_bindgen_futures::spawn_local(async move {
@@ -422,11 +442,33 @@ impl App {
     }
 }
 
+#[cfg(test)]
+mod new_document_tests {
+    use super::*;
+
+    #[test]
+    fn new_creates_empty_saveable_scene() {
+        let mut app = App::new();
+        assert!(!objects_ref(&app.tree).is_empty());
+
+        app.handle_file_action(FileMenuAction::New);
+
+        assert!(objects_ref(&app.tree).is_empty());
+        assert!(app.document.current_path().is_none());
+        let bytes = crate::document::serialize_scene(&app.tree).unwrap();
+        let scene = crate::document::deserialize_scene(&bytes).unwrap();
+        assert!(matches!(
+            scene.get_path("sdf_objects"),
+            ClaydashValue::VecSDFObject(objects) if objects.is_empty()
+        ));
+    }
+}
+
 pub fn run() {
     #[cfg(target_os = "macos")]
     let event_loop = {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-        let mut builder = EventLoop::builder();
+        let mut builder = EventLoop::<AppEvent>::with_user_event();
         if std::env::args().any(|argument| {
             argument.starts_with("--guide-screenshot=") || argument == "--agent-headless"
         }) {
@@ -435,9 +477,18 @@ pub fn run() {
         builder.build().expect("create event loop")
     };
     #[cfg(not(target_os = "macos"))]
-    let event_loop = EventLoop::new().expect("create event loop");
+    let event_loop = EventLoop::<AppEvent>::with_user_event()
+        .build()
+        .expect("create event loop");
     #[cfg(not(target_arch = "wasm32"))]
-    event_loop.run_app(&mut App::new()).expect("run app");
+    {
+        let mut app = App::new();
+        #[cfg(unix)]
+        {
+            app.agent_proxy = Some(event_loop.create_proxy());
+        }
+        event_loop.run_app(&mut app).expect("run app");
+    }
     #[cfg(target_arch = "wasm32")]
     event_loop.spawn_app(App::new());
 }

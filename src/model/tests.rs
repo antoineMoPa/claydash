@@ -3,6 +3,90 @@ use glam::{Quat, Vec2, Vec3};
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 #[test]
+fn rounded_box_keeps_half_extents_and_loads_old_boxes() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+    let SdfParams::BoxParams(params) = &mut object.params else {
+        unreachable!()
+    };
+    params.box_q = Vec3::splat(1.0);
+    params.corner_radius = 0.25;
+    assert!((object.distance(Vec3::new(1.0, 1.0, 1.0)) - 0.1830127).abs() < 0.0001);
+    assert!(object.distance(Vec3::new(1.0, 0.0, 0.0)).abs() < 0.0001);
+    let mut saved = serde_json::to_value(&object).unwrap();
+    saved["params"]["BoxParams"]
+        .as_object_mut()
+        .unwrap()
+        .remove("corner_radius");
+    let old: SdfObject = serde_json::from_value(saved).unwrap();
+    let SdfParams::BoxParams(old_params) = old.params else {
+        unreachable!()
+    };
+    assert_eq!(old_params.corner_radius, 0.0);
+}
+
+#[test]
+fn loft_sections_change_the_sdf_without_a_mesh() {
+    let object = SdfObject::create_kind(PrimitiveKind::Loft);
+    assert!(object.distance(Vec3::new(0.0, 0.0, 0.5)) < 0.0);
+    assert!(object.distance(Vec3::new(0.0, 0.0, 0.6)) > 0.0);
+    assert!(object.distance(Vec3::new(-1.0, 0.0, 0.3)) > 0.0);
+    assert!(object.distance(Vec3::new(1.2, 0.0, 0.0)) > 0.0);
+    let saved = serde_json::to_string(&object).unwrap();
+    let loaded: SdfObject = serde_json::from_str(&saved).unwrap();
+    assert!(loaded.distance(Vec3::new(0.0, 0.0, 0.5)) < 0.0);
+}
+
+#[test]
+fn surface_inlay_follows_a_host_sdf() {
+    let mut host = SdfObject::create_kind(PrimitiveKind::Sphere);
+    host.params = SdfParams::SphereParams(SphereParams { radius: 1.0 });
+    let mut patch = SdfObject::create_kind(PrimitiveKind::Box);
+    patch.transform.translation = Vec3::X;
+    patch.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(0.4),
+        corner_radius: 0.0,
+    });
+    patch.surface_inlay = Some(SurfaceInlay {
+        host: host.uuid,
+        offset: 0.025,
+        thickness: 0.015,
+    });
+    let scene = [host, patch.clone()];
+    let (distance, owner) = scene_sample(Vec3::new(1.025, 0.0, 0.0), &scene).unwrap();
+    assert_eq!(owner, patch.uuid);
+    assert!(distance < 0.0);
+    assert!(scene_sample(Vec3::new(1.025, 0.6, 0.0), &scene).unwrap().0 > 0.0);
+    let loaded: SdfObject = serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+    assert_eq!(loaded.surface_inlay, patch.surface_inlay);
+}
+
+#[test]
+fn surface_inlay_follows_a_smooth_boolean_host() {
+    let mut host = SdfObject::create_kind(PrimitiveKind::Sphere);
+    host.params = SdfParams::SphereParams(SphereParams { radius: 1.0 });
+    host.softness = 0.1;
+    let mut fender = SdfObject::create_kind(PrimitiveKind::Sphere);
+    fender.params = SdfParams::SphereParams(SphereParams { radius: 0.45 });
+    fender.transform.translation = Vec3::X;
+    fender.boolean_parent = Some(host.uuid);
+    let mut patch = SdfObject::create_kind(PrimitiveKind::Box);
+    patch.transform.translation = Vec3::new(1.45, 0.0, 0.0);
+    patch.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(0.3),
+        corner_radius: 0.0,
+    });
+    patch.surface_inlay = Some(SurfaceInlay {
+        host: host.uuid,
+        offset: 0.025,
+        thickness: 0.015,
+    });
+    let scene = [host, fender, patch.clone()];
+    let (distance, owner) = scene_sample(Vec3::new(1.475, 0.0, 0.0), &scene).unwrap();
+    assert_eq!(owner, patch.uuid);
+    assert!(distance < 0.0);
+}
+
+#[test]
 fn selecting_the_same_objects_keeps_the_render_selection_version() {
     let mut tree = DataTree::default();
     let empty_version = tree.path_version("scene.selected_uuids");

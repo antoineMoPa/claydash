@@ -301,6 +301,34 @@ impl Renderer {
                                 * abs_scale.max_element(),
                         )
                     }
+                    SdfParams::LoftParams(ref loft) => {
+                        let offset = polygon_points.len() as u32;
+                        for section in loft
+                            .sections
+                            .iter()
+                            .take(crate::model::LoftParams::MAX_SECTIONS)
+                        {
+                            polygon_points.push(GpuPolygonPoint {
+                                position: [section.x, section.center_y],
+                            });
+                            polygon_points.push(GpuPolygonPoint {
+                                position: [section.center_z, section.half_height],
+                            });
+                            polygon_points.push(GpuPolygonPoint {
+                                position: [section.half_width, 0.0],
+                            });
+                        }
+                        let count = (polygon_points.len() as u32 - offset) / 3;
+                        (
+                            [
+                                f32::from_bits(offset),
+                                f32::from_bits(count),
+                                0.0,
+                                distance_scale,
+                            ],
+                            loft.local_extent().length() * abs_scale.max_element(),
+                        )
+                    }
                     SdfParams::BezierCurveParams(ref curve) => {
                         let offset = polygon_points.len() as u32;
                         for &point in curve.points.iter().take(25) {
@@ -333,6 +361,19 @@ impl Renderer {
                         )
                     }
                 };
+                let inlay_host = object.surface_inlay.and_then(|inlay| {
+                    object_indices
+                        .get(&inlay.host)
+                        .copied()
+                        .map(|host| (host, inlay))
+                });
+                let inlay_parameters = inlay_host.map(|(_, inlay)| {
+                    let offset = polygon_points.len() as u32;
+                    polygon_points.push(GpuPolygonPoint {
+                        position: [inlay.offset, inlay.thickness],
+                    });
+                    offset
+                });
                 let repeated_radius = if object.repetition.enabled && !repeats_group {
                     let extent = Vec3::from_array([
                         if object.repetition.count[0] > 1 {
@@ -383,6 +424,7 @@ impl Renderer {
                             .fold(Vec2::ZERO, |extent, point| extent.max(point.abs()));
                         Vec3::new(planar.x, planar.y, polygon.half_depth)
                     }
+                    SdfParams::LoftParams(ref loft) => loft.local_extent(),
                     SdfParams::BezierCurveParams(ref curve) => {
                         curve.local_extent(path_radius * path_profile_extent)
                     }
@@ -412,7 +454,12 @@ impl Renderer {
                 GpuObject {
                     // Spare component lanes carry blend width and material index.
                     component: [0, 0, object.softness.to_bits(), material_index],
-                    scale: abs_scale.extend(path_profile_count).to_array(),
+                    scale: abs_scale
+                        .extend(match &object.params {
+                            SdfParams::BoxParams(box_params) => box_params.corner_radius,
+                            _ => path_profile_count,
+                        })
+                        .to_array(),
                     meta: [
                         i32::from(selected_ids.contains(&object.uuid)),
                         object.object_type,
@@ -426,7 +473,11 @@ impl Renderer {
                     inverse_rows: inverse_affine_rows(matrix.inverse()),
                     group_inverse_rows: inverse_affine_rows(group_matrix.inverse()),
                     params,
-                    repeat_spacing: object.repetition.spacing.extend(0.0).to_array(),
+                    repeat_spacing: object
+                        .repetition
+                        .spacing
+                        .extend(inlay_parameters.map_or(0.0, f32::from_bits))
+                        .to_array(),
                     repeat_count: if object.repetition.enabled {
                         [
                             object.repetition.count[0] as i32,
@@ -448,6 +499,8 @@ impl Renderer {
                             && path_profile_count != 0.0
                         {
                             march_factor.min(0.5)
+                        } else if let SdfParams::LoftParams(loft) = &object.params {
+                            march_factor.min(loft.march_factor())
                         } else {
                             march_factor
                         })
@@ -478,6 +531,16 @@ impl Renderer {
                                 .min(crate::model::BezierCurveParams::MAX_SEGMENTS)
                                 as u32
                                 | if curve.closed { 0x8000_0000 } else { 0 };
+                        }
+                        if !matches!(object.params, SdfParams::BezierCurveParams(_)) {
+                            axes[3] = inlay_host.map_or(
+                                if object.surface_inlay.is_some() {
+                                    u32::MAX
+                                } else {
+                                    0
+                                },
+                                |(host, _)| host as u32 + 1,
+                            );
                         }
                         axes
                     },

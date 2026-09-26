@@ -1,4 +1,11 @@
 use super::*;
+
+#[test]
+fn raymarch_hits_a_tapered_loft() {
+    let loft = SdfObject::create_kind(crate::model::PrimitiveKind::Loft);
+    let hit = raymarch_hit(Vec3::new(-3.0, 0.0, 0.0), Vec3::X, &[loft.clone()]);
+    assert_eq!(hit.map(|hit| hit.object), Some(loft.uuid));
+}
 use crate::{
     commands,
     model::{BooleanOperation, SdfObject},

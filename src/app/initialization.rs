@@ -10,6 +10,7 @@ fn guide_face_scene() -> Vec<crate::model::SdfObject> {
     cut_source.name = "Face cut source".into();
     cut_source.params = SdfParams::BoxParams(BoxParams {
         box_q: glam::Vec3::splat(0.55),
+        corner_radius: 0.0,
     });
     cut_source.transform.translation = glam::Vec3::new(-1.0, 0.0, 0.0);
     cut_source.softness = 0.0;
@@ -32,6 +33,7 @@ fn guide_face_scene() -> Vec<crate::model::SdfObject> {
     box_source.name = "Box face source".into();
     box_source.params = SdfParams::BoxParams(BoxParams {
         box_q: glam::Vec3::splat(0.5),
+        corner_radius: 0.0,
     });
     box_source.transform.translation = glam::Vec3::new(1.0, -0.15, 0.0);
 
@@ -39,6 +41,7 @@ fn guide_face_scene() -> Vec<crate::model::SdfObject> {
     box_extrusion.name = "Box face extrusion".into();
     box_extrusion.params = SdfParams::BoxParams(BoxParams {
         box_q: glam::Vec3::new(0.32, 0.38, 0.5),
+        corner_radius: 0.0,
     });
     box_extrusion.transform.translation = glam::Vec3::new(1.0, 0.72, 0.0);
 
@@ -112,6 +115,7 @@ impl App {
                 center.name = "Mirrored group".into();
                 center.params = crate::model::SdfParams::BoxParams(crate::model::BoxParams {
                     box_q: glam::Vec3::new(0.2, 0.28, 0.28),
+                    corner_radius: 0.0,
                 });
                 center.mirror = Some(crate::model::Mirror::default());
                 let mut side =
@@ -139,6 +143,7 @@ impl App {
                     crate::model::PrimitiveKind::Box => {
                         crate::model::SdfParams::BoxParams(crate::model::BoxParams {
                             box_q: glam::Vec3::splat(0.55),
+                            corner_radius: 0.0,
                         })
                     }
                     crate::model::PrimitiveKind::Cylinder => {
@@ -301,6 +306,8 @@ impl App {
             document,
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             agent_requests: None,
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_proxy: None,
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             agent_capture: None,
             #[cfg(all(not(target_arch = "wasm32"), unix))]

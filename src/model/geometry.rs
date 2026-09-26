@@ -1,6 +1,7 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use sdf_consts::{
-    TYPE_BEZIER_CURVE, TYPE_BOX, TYPE_CYLINDER, TYPE_POLYGON_PRISM, TYPE_SPHERE, TYPE_TORUS,
+    TYPE_BEZIER_CURVE, TYPE_BOX, TYPE_CYLINDER, TYPE_LOFT, TYPE_POLYGON_PRISM, TYPE_SPHERE,
+    TYPE_TORUS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,23 +75,26 @@ pub enum PrimitiveKind {
     Torus,
     PolygonPrism,
     BezierCurve,
+    Loft,
 }
 
 impl PrimitiveKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Sphere,
         Self::Box,
         Self::Cylinder,
         Self::Torus,
         Self::PolygonPrism,
         Self::BezierCurve,
+        Self::Loft,
     ];
-    pub const SPAWNABLE: [Self; 5] = [
+    pub const SPAWNABLE: [Self; 6] = [
         Self::Sphere,
         Self::Box,
         Self::Cylinder,
         Self::Torus,
         Self::BezierCurve,
+        Self::Loft,
     ];
 
     pub fn label(self) -> &'static str {
@@ -101,6 +105,7 @@ impl PrimitiveKind {
             Self::Torus => "Torus",
             Self::PolygonPrism => "Face shape",
             Self::BezierCurve => "Bézier curve",
+            Self::Loft => "Loft",
         }
     }
 
@@ -112,6 +117,7 @@ impl PrimitiveKind {
             Self::Torus => TYPE_TORUS,
             Self::PolygonPrism => TYPE_POLYGON_PRISM,
             Self::BezierCurve => TYPE_BEZIER_CURVE,
+            Self::Loft => TYPE_LOFT,
         }
     }
 
@@ -122,6 +128,7 @@ impl PrimitiveKind {
             TYPE_TORUS => Self::Torus,
             TYPE_POLYGON_PRISM => Self::PolygonPrism,
             TYPE_BEZIER_CURVE => Self::BezierCurve,
+            TYPE_LOFT => Self::Loft,
             _ => Self::Sphere,
         }
     }
@@ -183,6 +190,8 @@ pub struct SdfObject {
     pub lattice: Option<Lattice>,
     #[serde(default)]
     pub path_extrusion: Option<PathExtrusion>,
+    #[serde(default)]
+    pub surface_inlay: Option<SurfaceInlay>,
 }
 
 impl SdfObject {
@@ -201,6 +210,7 @@ impl SdfObject {
             params: match kind {
                 PrimitiveKind::Box => SdfParams::BoxParams(BoxParams {
                     box_q: Vec3::splat(0.3),
+                    corner_radius: 0.0,
                 }),
                 PrimitiveKind::Sphere => SdfParams::SphereParams(SphereParams { radius: 0.25 }),
                 PrimitiveKind::Cylinder => SdfParams::CylinderParams {
@@ -228,6 +238,38 @@ impl SdfObject {
                     ],
                     closed: false,
                 }),
+                PrimitiveKind::Loft => SdfParams::LoftParams(LoftParams {
+                    sections: vec![
+                        LoftSection {
+                            x: -1.0,
+                            center_y: 0.0,
+                            center_z: 0.0,
+                            half_height: 0.12,
+                            half_width: 0.18,
+                        },
+                        LoftSection {
+                            x: -0.65,
+                            center_y: 0.0,
+                            center_z: 0.0,
+                            half_height: 0.38,
+                            half_width: 0.55,
+                        },
+                        LoftSection {
+                            x: 0.65,
+                            center_y: 0.0,
+                            center_z: 0.0,
+                            half_height: 0.38,
+                            half_width: 0.55,
+                        },
+                        LoftSection {
+                            x: 1.0,
+                            center_y: 0.0,
+                            center_z: 0.0,
+                            half_height: 0.12,
+                            half_width: 0.18,
+                        },
+                    ],
+                }),
             },
             name: kind.label().to_string(),
             operation: BooleanOperation::Union,
@@ -239,6 +281,7 @@ impl SdfObject {
             mirror: None,
             lattice: None,
             path_extrusion: None,
+            surface_inlay: None,
         }
     }
 
@@ -293,8 +336,12 @@ impl SdfObject {
         let distance = match self.params {
             SdfParams::SphereParams(ref params) => local.length() - params.radius,
             SdfParams::BoxParams(ref params) => {
-                let q = local.abs() - params.box_q;
-                q.max(Vec3::ZERO).length() + q.max_element().min(0.0)
+                let radius = params
+                    .corner_radius
+                    .max(0.0)
+                    .min(params.box_q.min_element());
+                let q = local.abs() - (params.box_q - Vec3::splat(radius));
+                q.max(Vec3::ZERO).length() + q.max_element().min(0.0) - radius
             }
             SdfParams::CylinderParams {
                 radius,
@@ -317,6 +364,7 @@ impl SdfObject {
                 let outside = Vec2::new(polygon.max(0.0), depth.max(0.0)).length();
                 outside + polygon.max(depth).min(0.0)
             }
+            SdfParams::LoftParams(ref params) => params.distance(local),
             SdfParams::BezierCurveParams(ref params) => {
                 let Some(modifier) = self.path_extrusion else {
                     return 100.0;

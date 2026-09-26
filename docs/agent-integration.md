@@ -57,9 +57,19 @@ The configuration follows each client's current local MCP documentation:
 3. Call `apply` with one or more typed actions. Pass `expected_revision` from `get_state` so an
    intervening scene edit causes a clear error. Actions in one call form one undo step. A failed
    call leaves the live scene untouched.
-4. Call `set_view` if the camera needs to move, then `capture_viewport` to get a refined PNG image.
+4. Call `set_view` if the camera needs to move, then `capture_viewport` to get a PNG image.
+   The capture renders offscreen even when the native window is unfocused or on another macOS
+   desktop. Pass `object_ids` to show only specific objects or Boolean groups and their surface
+   inlays in that PNG. Captures use the fast preview by default; pass `refine: true` to render the
+   full-resolution pass for close material inspection. The scene and selection stay unchanged.
    Repeat the edit and capture steps until the design looks right.
-5. Call `save` with a `.claydash` path, or use the current document path.
+5. Call `capture_orthographic` for one PNG with X (side), Y (top), and Z (front) orthographic views
+   aimed at the origin. Each panel is 256 px square by default. It accepts the same `object_ids`
+   and `refine` options, plus optional `panel_size` and camera `distance`.
+6. Call `save` with a `.claydash` path, or use the current document path.
+
+The viewport's top-right scan button toggles the full-resolution refinement pass for the live
+editor. Export renders always use full resolution.
 
 For example, the `apply` arguments below create two shapes and make the sphere subtract from the
 box after a subsequent call supplies their generated IDs:
@@ -78,8 +88,13 @@ box after a subsequent call supplies their generated IDs:
 `{"type":"SetBoolean","id":"<cutout-id>","parent":"<body-id>","operation":"Subtract"}`.
 
 `PutObject` replaces a complete object by UUID. It gives agents access to every serialized object
-field, including materials, repetition, mirrors, lattice, and path extrusion. `SetWorld`,
-`SetMaterials`, `SetCameras`, and `SetAnimation` replace the corresponding typed scene values.
+field, including materials, repetition, mirrors, lattice, path extrusion, and surface inlays.
+`BoxParams` accepts `corner_radius` in addition to `box_q`. `LoftParams` accepts 2–16 ordered
+elliptical sections with `x`, `center_y`, `center_z`, `half_height`, and `half_width` fields.
+For a surface inlay, put `surface_inlay: {"host":"<uuid>","offset":0.018,"thickness":0.012}`
+on a separate mask object whose volume crosses the host surface. The host may be a smooth Boolean
+group. The mask and host group cannot have spatial modifiers, and the mask cannot be a curve.
+`SetWorld`, `SetMaterials`, `SetCameras`, and `SetAnimation` replace the corresponding typed scene values.
 `ReplaceScene` accepts the complete `document` value returned by `get_state` and must be its only
 action. `list_commands` and `execute_command` expose the existing command palette; some palette
 commands initiate a mouse gesture, so typed actions are the reliable way to model geometry.

@@ -40,7 +40,7 @@ fn sync_web_canvas(window: &Window) -> Option<winit::dpi::PhysicalSize<u32>> {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -154,11 +154,20 @@ impl ApplicationHandler for App {
         self.window = Some(window);
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         if !self.benchmark && self.ui_benchmark.is_none() && self.guide_screenshot.is_none() {
-            match super::agent::listen(self.window.as_ref().unwrap().clone()) {
+            match super::agent::listen(self.agent_proxy.as_ref().unwrap().clone()) {
                 Ok(receiver) => self.agent_requests = Some(receiver),
                 Err(error) => eprintln!("Claydash agent bridge unavailable: {error}"),
             }
         }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        match event {
+            AppEvent::AgentRequest => self.process_agent_requests(),
+        }
+        #[cfg(any(target_arch = "wasm32", not(unix)))]
+        let _ = event;
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -414,6 +423,17 @@ impl ApplicationHandler for App {
                 std::time::Instant::now() + std::time::Duration::from_millis(16),
             ));
             return;
+        }
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        if self.agent_capture.is_some() {
+            if self.renderer.is_some() {
+                self.redraw();
+            }
+            if self.agent_capture.is_some() {
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+                return;
+            }
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.guide_screenshot.is_some() {

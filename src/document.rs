@@ -11,6 +11,7 @@ const RECENT_PROJECT_LIMIT: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileMenuAction {
+    New,
     Open,
     OpenRecent(PathBuf),
     Save,
@@ -95,6 +96,11 @@ impl Default for DocumentState {
 }
 
 impl DocumentState {
+    pub fn start_new(&mut self) {
+        self.current_path = None;
+        self.error = None;
+    }
+
     pub fn current_path(&self) -> Option<&Path> {
         self.current_path.as_deref()
     }
@@ -159,6 +165,26 @@ impl DocumentState {
             self.recent_paths.truncate(RECENT_PROJECT_LIMIT);
             save_recent_paths(&self.recent_paths);
         }
+    }
+}
+
+#[cfg(test)]
+mod new_document_tests {
+    use super::*;
+
+    #[test]
+    fn starting_new_document_clears_save_target_and_preserves_recent_projects() {
+        let previous = PathBuf::from("previous.claydash");
+        let mut document = DocumentState::default();
+        document.current_path = Some(previous.clone());
+        document.recent_paths = vec![previous.clone()];
+        document.set_error("save the project", "disk full");
+
+        document.start_new();
+
+        assert!(document.current_path().is_none());
+        assert_eq!(document.recent_paths(), &[previous]);
+        assert!(document.error().is_none());
     }
 }
 

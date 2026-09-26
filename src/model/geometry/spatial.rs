@@ -48,6 +48,14 @@ pub struct Mirror {
     pub axes: [bool; 3],
 }
 
+/// Restricts this object's SDF to a thin shell following another SDF primitive.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceInlay {
+    pub host: uuid::Uuid,
+    pub offset: f32,
+    pub thickness: f32,
+}
+
 impl Default for Mirror {
     fn default() -> Self {
         Self {
@@ -392,6 +400,7 @@ pub fn lattice_bounds(scene: &[SdfObject], root: uuid::Uuid) -> Option<(Vec3, Ve
                     .fold(Vec2::ZERO, |size, point| size.max(point.abs()));
                 Vec3::new(planar.x, planar.y, p.half_depth)
             }
+            SdfParams::LoftParams(p) => p.local_extent(),
             SdfParams::BezierCurveParams(p) => p.local_extent(
                 object
                     .path_extrusion

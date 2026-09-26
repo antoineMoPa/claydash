@@ -13,6 +13,7 @@ impl Renderer {
         capture: bool,
         capture_ui: bool,
         offscreen_capture: bool,
+        refine: bool,
     ) {
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
@@ -91,19 +92,19 @@ impl Renderer {
                     ..Default::default()
                 })
             });
-        let work = self.viewport.prepare(
-            &self.device,
-            crate::viewport::ViewKey {
-                matrix: (camera.projection() * camera.view()).to_cols_array_2d(),
-                position: camera.position.to_array(),
-                projection: u32::from(camera.projection_mode == ProjectionMode::Orthographic),
-                versions: scene_versions,
-                size: [
-                    camera.viewport.x.max(1.0) as u32,
-                    camera.viewport.y.max(1.0) as u32,
-                ],
-            },
-        );
+        let view_key = crate::viewport::ViewKey {
+            matrix: (camera.projection() * camera.view()).to_cols_array_2d(),
+            position: camera.position.to_array(),
+            projection: u32::from(camera.projection_mode == ProjectionMode::Orthographic),
+            versions: scene_versions,
+            size: [
+                camera.viewport.x.max(1.0) as u32,
+                camera.viewport.y.max(1.0) as u32,
+            ],
+        };
+        let work = self
+            .viewport
+            .prepare(&self.device, view_key.clone(), refine);
         let scene_pipeline = if self.has_booleans {
             &self.boolean_pipeline.as_ref().expect("boolean pipeline").1
         } else {
@@ -120,7 +121,10 @@ impl Renderer {
         // Export only after the adaptive viewport has rendered every native-
         // resolution tile for this exact camera and scene state. If the final
         // tile is part of this submission, the later texture copy observes it.
-        let capture = capture && self.viewport.is_refined() && !self.capture_pending;
+        let capture = capture
+            && self.viewport.matches(&view_key)
+            && (!refine || self.viewport.is_refined())
+            && !self.capture_pending;
         let workspace_background = match egui.theme() {
             egui::Theme::Dark => wgpu::Color::BLACK,
             egui::Theme::Light => wgpu::Color::WHITE,
