@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[cfg(not(target_arch = "wasm32"))]
 use openh264::{
@@ -28,14 +29,27 @@ pub fn crop_to_viewport(frame: CapturedFrame, camera: &Camera) -> CapturedFrame 
     }
 }
 
+#[cfg(test)]
 pub fn write_render(
     path: &Path,
     format: RenderFormat,
     frame: &CapturedFrame,
 ) -> Result<(), String> {
+    write_render_with_control(path, format, frame, &EncodingControl::default())
+}
+
+pub fn write_render_with_control(
+    path: &Path,
+    format: RenderFormat,
+    frame: &CapturedFrame,
+    control: &EncodingControl,
+) -> Result<(), String> {
+    if control.cancelled.load(Ordering::Relaxed) {
+        return Err("render cancelled".into());
+    }
     let png = png_bytes(frame)?;
     match format {
-        RenderFormat::WebP => convert_webp(path, &png),
+        RenderFormat::WebP => convert_webp(path, &png, control),
         RenderFormat::Mp4 => Err("MP4 export requires an animation frame sequence".into()),
     }
 }
@@ -53,8 +67,21 @@ pub fn write_video_frame(
     std::fs::write(video_frame_path(directory, index), bytes).map_err(|error| error.to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn write_mp4(path: &Path, directory: &Path, fps: f32) -> Result<(), String> {
+#[derive(Default)]
+pub struct EncodingControl {
+    pub completed: AtomicU32,
+    pub cancelled: AtomicBool,
+}
+
+pub fn write_mp4_with_control(
+    path: &Path,
+    directory: &Path,
+    fps: f32,
+    control: &EncodingControl,
+) -> Result<(), String> {
+    if control.cancelled.load(Ordering::Relaxed) {
+        return Err("render cancelled".into());
+    }
     let first = read_video_frame(&video_frame_path(directory, 0))?;
     let first = pad_for_h264(first);
     let width = u16::try_from(first.width).map_err(|_| "video width exceeds 65535 pixels")?;
@@ -113,9 +140,13 @@ pub fn write_mp4(path: &Path, directory: &Path, fps: f32) -> Result<(), String> 
         .add_track(&track)
         .map_err(|error| format!("could not add the MP4 video track: {error}"))?;
     write_mp4_sample(&mut writer, first, 0, sample_duration)?;
+    control.completed.store(1, Ordering::Relaxed);
 
     let mut index = 1;
     loop {
+        if control.cancelled.load(Ordering::Relaxed) {
+            return Err("render cancelled".into());
+        }
         let frame_path = video_frame_path(directory, index);
         if !frame_path.exists() {
             break;
@@ -129,11 +160,20 @@ pub fn write_mp4(path: &Path, directory: &Path, fps: f32) -> Result<(), String> 
         }
         let encoded = encode_frame(&mut encoder, &frame)?;
         write_mp4_sample(&mut writer, encoded, index, sample_duration)?;
+        control.completed.store(index + 1, Ordering::Relaxed);
         index += 1;
+    }
+    if control.cancelled.load(Ordering::Relaxed) {
+        return Err("render cancelled".into());
     }
     writer
         .write_end()
-        .map_err(|error| format!("could not finish the MP4 file: {error}"))
+        .map_err(|error| format!("could not finish the MP4 file: {error}"))?;
+    if control.cancelled.load(Ordering::Relaxed) {
+        Err("render cancelled".into())
+    } else {
+        Ok(())
+    }
 }
 
 fn video_frame_path(directory: &Path, index: u32) -> PathBuf {
@@ -278,17 +318,48 @@ pub(crate) fn png_bytes(frame: &CapturedFrame) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn convert_webp(path: &Path, png: &[u8]) -> Result<(), String> {
+fn convert_webp(path: &Path, png: &[u8], control: &EncodingControl) -> Result<(), String> {
     let source = std::env::temp_dir().join(format!("claydash-render-{}.png", uuid::Uuid::new_v4()));
     std::fs::write(&source, png).map_err(|error| error.to_string())?;
+    if control.cancelled.load(Ordering::Relaxed) {
+        let _ = std::fs::remove_file(&source);
+        return Err("render cancelled".into());
+    }
     let result = std::process::Command::new("cwebp")
         .args(["-quiet", "-q", "90"])
         .arg(&source)
         .arg("-o")
         .arg(path)
-        .output();
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match result {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = std::fs::remove_file(&source);
+            return Err(format!("could not start the format encoder: {error}"));
+        }
+    };
+    loop {
+        if control.cancelled.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&source);
+            return Err("render cancelled".into());
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(30)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&source);
+                return Err(format!("could not wait for the format encoder: {error}"));
+            }
+        }
+    }
+    let output = child.wait_with_output();
     let _ = std::fs::remove_file(&source);
-    let output = result.map_err(|error| format!("could not start the format encoder: {error}"))?;
+    let output = output.map_err(|error| error.to_string())?;
     if output.status.success() {
         Ok(())
     } else {
@@ -350,7 +421,9 @@ mod tests {
             std::fs::read(directory.join("frame-000001.rgba")).unwrap()
         );
         let path = directory.join("render.mp4");
-        write_mp4(&path, &directory, 24.0).unwrap();
+        let control = EncodingControl::default();
+        write_mp4_with_control(&path, &directory, 24.0, &control).unwrap();
+        assert_eq!(control.completed.load(Ordering::Relaxed), 2);
         let file = std::fs::File::open(&path).unwrap();
         let size = file.metadata().unwrap().len();
         let video = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).unwrap();
@@ -359,5 +432,36 @@ mod tests {
         assert_eq!(track.media_type().unwrap(), mp4::MediaType::H264);
         assert_eq!(track.sample_count(), 2);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cancelled_video_export_does_not_create_a_file() {
+        let control = EncodingControl::default();
+        control.cancelled.store(true, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("claydash-cancelled-{}.mp4", uuid::Uuid::new_v4()));
+        assert_eq!(
+            write_mp4_with_control(&path, std::env::temp_dir().as_path(), 24.0, &control),
+            Err("render cancelled".into()),
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn cancelled_image_export_does_not_create_a_file() {
+        let control = EncodingControl::default();
+        control.cancelled.store(true, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("claydash-cancelled-{}.webp", uuid::Uuid::new_v4()));
+        let frame = CapturedFrame {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 255],
+        };
+        assert_eq!(
+            write_render_with_control(&path, RenderFormat::WebP, &frame, &control),
+            Err("render cancelled".into()),
+        );
+        assert!(!path.exists());
     }
 }

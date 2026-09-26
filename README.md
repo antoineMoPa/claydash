@@ -101,12 +101,6 @@ focal distance, and projection live in the regular **Object** inspector and can 
 globe button in the top-right viewport toolbar creates the first camera from the current view and
 toggles the active camera view.
 
-The **Render** menu captures only the rendered scene, excluding editor panels, viewport buttons,
-labels, and transform gizmos. Desktop WebP export uses `cwebp`; MP4 export evaluates and captures
-every frame in the animation range, waiting for full-resolution viewport refinement before each
-capture, and then encodes it with Claydash's bundled H.264 encoder. File-operation errors can be
-copied from their dialog with Cmd/Ctrl+C.
-
 During G/R/S transforms (including the move started by Duplicate), X/Y/Z selects one
 world axis, replacing the previous axis. Press the same axis again to unlock it. Held-key
 repeat is ignored; axis keys take priority over Shift/⌘ undo/redo while transforming.

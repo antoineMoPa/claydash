@@ -2,6 +2,11 @@ use std::sync::Arc;
 
 #[cfg(target_arch = "wasm32")]
 use std::sync::mpsc::{channel, Receiver, Sender};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{
+    atomic::Ordering,
+    mpsc::{channel, Receiver},
+};
 
 use glam::{Vec2, Vec4};
 use observable_key_value_tree::ObservableKVTree;
@@ -39,6 +44,12 @@ enum WebDocumentMessage {
         name: std::path::PathBuf,
         bytes: Vec<u8>,
     },
+    RenderError {
+        id: u64,
+        video: bool,
+        message: String,
+    },
+    RenderFinished(u64),
 }
 
 pub struct App {
@@ -57,6 +68,15 @@ pub struct App {
     document: DocumentState,
     #[cfg(not(target_arch = "wasm32"))]
     pending_render: Option<PendingRender>,
+    #[cfg(not(target_arch = "wasm32"))]
+    encoding: Option<NativeEncoding>,
+    #[cfg(target_arch = "wasm32")]
+    pending_render: Option<WebPendingRender>,
+    #[cfg(target_arch = "wasm32")]
+    encoding: Option<WebEncoding>,
+    #[cfg(target_arch = "wasm32")]
+    next_render_id: u64,
+    discard_capture: bool,
     #[cfg(not(target_arch = "wasm32"))]
     guide_screenshot: Option<std::path::PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -87,12 +107,44 @@ enum PendingRender {
     Video {
         path: std::path::PathBuf,
         frames_directory: std::path::PathBuf,
+        start_frame: u32,
         next_frame: u32,
         end_frame: u32,
         output_index: u32,
         fps: f32,
         restore_frame: f32,
     },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeEncoding {
+    control: Arc<crate::render_export::EncodingControl>,
+    completed: Receiver<Result<(), String>>,
+    total: u32,
+    cancelling: bool,
+    format: crate::document::RenderFormat,
+}
+
+#[cfg(target_arch = "wasm32")]
+enum WebPendingRender {
+    Still {
+        name: String,
+    },
+    Video {
+        name: String,
+        encoder: Option<crate::render_export::WebVideo>,
+        start_frame: u32,
+        next_frame: u32,
+        end_frame: u32,
+        fps: f32,
+        restore_frame: f32,
+    },
+}
+
+#[cfg(target_arch = "wasm32")]
+struct WebEncoding {
+    id: u64,
+    cancel: crate::render_export::WebCancel,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -151,6 +203,136 @@ fn guide_face_scene() -> Vec<crate::model::SdfObject> {
 }
 
 impl App {
+    fn render_progress(&self) -> Option<crate::ui::RenderProgress> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(pending) = &self.pending_render {
+                return Some(match pending {
+                    PendingRender::Still { .. } => crate::ui::RenderProgress::Image,
+                    PendingRender::Video {
+                        start_frame,
+                        next_frame,
+                        end_frame,
+                        ..
+                    } => crate::ui::RenderProgress::Video {
+                        completed: next_frame - start_frame,
+                        total: end_frame - start_frame + 1,
+                    },
+                });
+            }
+            self.encoding.as_ref().map(|job| {
+                if job.cancelling {
+                    crate::ui::RenderProgress::Cancelling
+                } else if job.format == crate::document::RenderFormat::WebP {
+                    crate::ui::RenderProgress::Finalizing
+                } else {
+                    crate::ui::RenderProgress::Encoding {
+                        completed: job.control.completed.load(Ordering::Relaxed),
+                        total: job.total,
+                    }
+                }
+            })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pending_render
+                .as_ref()
+                .map(|pending| match pending {
+                    WebPendingRender::Still { .. } => crate::ui::RenderProgress::Image,
+                    WebPendingRender::Video {
+                        start_frame,
+                        next_frame,
+                        end_frame,
+                        ..
+                    } => crate::ui::RenderProgress::Video {
+                        completed: next_frame - start_frame,
+                        total: end_frame - start_frame + 1,
+                    },
+                })
+                .or_else(|| {
+                    self.encoding
+                        .as_ref()
+                        .map(|_| crate::ui::RenderProgress::Finalizing)
+                })
+        }
+    }
+
+    fn cancel_render(&mut self) {
+        if let Some(renderer) = &self.renderer {
+            self.discard_capture |= renderer.capture_pending();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(pending) = self.pending_render.take() {
+                if let PendingRender::Video {
+                    frames_directory,
+                    restore_frame,
+                    ..
+                } = pending
+                {
+                    let _ = std::fs::remove_dir_all(frames_directory);
+                    self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                }
+            }
+            if let Some(job) = &mut self.encoding {
+                job.control.cancelled.store(true, Ordering::Relaxed);
+                job.cancelling = true;
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(WebPendingRender::Video { restore_frame, .. }) = self.pending_render.take()
+            {
+                self.ui.set_animation_frame(&mut self.tree, restore_frame);
+            }
+            if let Some(job) = self.encoding.take() {
+                job.cancel.cancel();
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_native_encoding(&mut self) {
+        let Some(job) = &self.encoding else {
+            return;
+        };
+        match job.completed.try_recv() {
+            Ok(result) => {
+                let cancelled = job.cancelling;
+                let format = job.format;
+                self.encoding = None;
+                if !cancelled {
+                    if let Err(error) = result {
+                        self.document.set_error(
+                            if format == crate::document::RenderFormat::WebP {
+                                "render the scene"
+                            } else {
+                                "encode the animation"
+                            },
+                            error,
+                        );
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                let format = job.format;
+                let cancelled = job.cancelling;
+                self.encoding = None;
+                if !cancelled {
+                    self.document.set_error(
+                        if format == crate::document::RenderFormat::WebP {
+                            "render the scene"
+                        } else {
+                            "encode the animation"
+                        },
+                        "the encoder stopped unexpectedly",
+                    );
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
     pub fn new() -> Self {
         let scene = serde_json::from_str(duck::DEFAULT_DUCK).expect("parse default scene");
         #[allow(unused_mut)]
@@ -407,6 +589,15 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             pending_render: None,
             #[cfg(not(target_arch = "wasm32"))]
+            encoding: None,
+            #[cfg(target_arch = "wasm32")]
+            pending_render: None,
+            #[cfg(target_arch = "wasm32")]
+            encoding: None,
+            #[cfg(target_arch = "wasm32")]
+            next_render_id: 0,
+            discard_capture: false,
+            #[cfg(not(target_arch = "wasm32"))]
             guide_screenshot: std::env::args().find_map(|argument| {
                 argument
                     .strip_prefix("--guide-screenshot=")
@@ -446,6 +637,8 @@ impl App {
     fn redraw(&mut self) {
         #[cfg(target_arch = "wasm32")]
         self.process_web_document_messages();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_native_encoding();
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -476,17 +669,23 @@ impl App {
             });
         }
         let mut file_action = None;
+        let mut cancel_render = false;
+        let render_progress = self.render_progress();
         let interaction_guide = self.interactions.active_guide();
         let mut output = egui.run_ui(input, |ui| {
-            file_action = self.ui.draw(
+            (file_action, cancel_render) = self.ui.draw(
                 ui,
                 &mut self.tree,
                 &mut self.commands,
                 &mut self.camera,
                 &mut self.document,
                 interaction_guide,
+                render_progress,
             );
         });
+        if cancel_render {
+            self.cancel_render();
+        }
         if let Some(action) = file_action {
             self.handle_file_action(action);
         }
@@ -501,20 +700,17 @@ impl App {
             egui_state.handle_platform_output(&window, std::mem::take(&mut output.platform_output));
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
         let effective_selection = if self.pending_render.is_some() {
             Vec::new()
         } else {
             commands::effective_selected_ids(&self.tree)
         };
-        #[cfg(target_arch = "wasm32")]
-        let effective_selection = commands::effective_selected_ids(&self.tree);
         #[cfg(not(target_arch = "wasm32"))]
         let capture_render = self.pending_render.is_some() || self.guide_screenshot.is_some();
         #[cfg(not(target_arch = "wasm32"))]
         let capture_ui = self.guide_screenshot.is_some();
         #[cfg(target_arch = "wasm32")]
-        let capture_render = false;
+        let capture_render = self.pending_render.is_some();
         #[cfg(target_arch = "wasm32")]
         let capture_ui = false;
         if let Some(renderer) = &mut self.renderer {
@@ -527,7 +723,7 @@ impl App {
                     .path_version("scene.world")
                     .wrapping_add(export_version),
             ];
-            let captured_frame = renderer.render(
+            renderer.render(
                 &self.camera,
                 objects_ref(&self.tree),
                 &effective_selection,
@@ -539,84 +735,282 @@ impl App {
                 capture_ui,
             );
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(frame) = captured_frame {
-                if let Some(path) = self.guide_screenshot.take() {
-                    let result = path
-                        .parent()
-                        .filter(|parent| !parent.as_os_str().is_empty())
-                        .map(std::fs::create_dir_all)
-                        .transpose()
-                        .and_then(|_| {
-                            crate::render_export::png_bytes(&frame).map_err(std::io::Error::other)
-                        })
-                        .and_then(|bytes| std::fs::write(&path, bytes));
-                    result.unwrap_or_else(|error| {
-                        panic!(
-                            "Could not write guide screenshot {}: {error}",
-                            path.display()
-                        )
-                    });
-                    eprintln!("Guide screenshot: {}", path.display());
-                    self.guide_capture_done = true;
-                }
-                if let Some(pending) = self.pending_render.take() {
-                    let frame = crate::render_export::crop_to_viewport(frame, &self.camera);
-                    match pending {
-                        PendingRender::Still { path } => {
-                            if let Err(error) = crate::render_export::write_render(
-                                &path,
-                                crate::document::RenderFormat::WebP,
-                                &frame,
-                            ) {
-                                self.document.set_error("render the scene", error);
-                            }
-                        }
-                        PendingRender::Video {
-                            path,
-                            frames_directory,
-                            next_frame,
-                            end_frame,
-                            output_index,
-                            fps,
-                            restore_frame,
-                        } => {
-                            let write = crate::render_export::write_video_frame(
-                                &frames_directory,
-                                output_index,
-                                &frame,
-                            );
-                            if let Err(error) = write {
-                                self.document.set_error("render the animation", error);
-                                let _ = std::fs::remove_dir_all(&frames_directory);
-                                self.ui.set_animation_frame(&mut self.tree, restore_frame);
-                            } else if next_frame < end_frame {
-                                let next_frame = next_frame + 1;
-                                self.ui
-                                    .set_animation_frame(&mut self.tree, next_frame as f32);
-                                self.pending_render = Some(PendingRender::Video {
-                                    path,
-                                    frames_directory,
-                                    next_frame,
-                                    end_frame,
-                                    output_index: output_index + 1,
-                                    fps,
-                                    restore_frame,
+            if let Some(result) = renderer.take_capture() {
+                if self.discard_capture {
+                    self.discard_capture = false;
+                } else if let Err(error) = result {
+                    if let Some(PendingRender::Video {
+                        frames_directory,
+                        restore_frame,
+                        ..
+                    }) = self.pending_render.take()
+                    {
+                        let _ = std::fs::remove_dir_all(frames_directory);
+                        self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                    }
+                    if self.guide_screenshot.is_some() {
+                        panic!("Could not capture guide screenshot: {error}");
+                    }
+                    self.document.set_error("render the scene", error);
+                } else if let Ok(frame) = result {
+                    if let Some(path) = self.guide_screenshot.take() {
+                        let result = path
+                            .parent()
+                            .filter(|parent| !parent.as_os_str().is_empty())
+                            .map(std::fs::create_dir_all)
+                            .transpose()
+                            .and_then(|_| {
+                                crate::render_export::png_bytes(&frame)
+                                    .map_err(std::io::Error::other)
+                            })
+                            .and_then(|bytes| std::fs::write(&path, bytes));
+                        result.unwrap_or_else(|error| {
+                            panic!(
+                                "Could not write guide screenshot {}: {error}",
+                                path.display()
+                            )
+                        });
+                        eprintln!("Guide screenshot: {}", path.display());
+                        self.guide_capture_done = true;
+                    }
+                    if let Some(pending) = self.pending_render.take() {
+                        let frame = crate::render_export::crop_to_viewport(frame, &self.camera);
+                        match pending {
+                            PendingRender::Still { path } => {
+                                let control =
+                                    Arc::new(crate::render_export::EncodingControl::default());
+                                let worker_control = control.clone();
+                                let (tx, completed) = channel();
+                                std::thread::spawn(move || {
+                                    let staging_path = path.with_extension(format!(
+                                        "webp.partial-{}",
+                                        uuid::Uuid::new_v4()
+                                    ));
+                                    let result = crate::render_export::write_render_with_control(
+                                        &staging_path,
+                                        crate::document::RenderFormat::WebP,
+                                        &frame,
+                                        &worker_control,
+                                    )
+                                    .and_then(|_| {
+                                        if worker_control.cancelled.load(Ordering::Relaxed) {
+                                            return Err("render cancelled".into());
+                                        }
+                                        std::fs::rename(&staging_path, &path)
+                                            .map_err(|error| error.to_string())
+                                    });
+                                    let _ = std::fs::remove_file(&staging_path);
+                                    let _ = tx.send(result);
                                 });
-                            } else {
-                                if let Err(error) =
-                                    crate::render_export::write_mp4(&path, &frames_directory, fps)
-                                {
-                                    self.document.set_error("encode the animation", error);
+                                self.encoding = Some(NativeEncoding {
+                                    control,
+                                    completed,
+                                    total: 0,
+                                    cancelling: false,
+                                    format: crate::document::RenderFormat::WebP,
+                                });
+                            }
+                            PendingRender::Video {
+                                path,
+                                frames_directory,
+                                start_frame,
+                                next_frame,
+                                end_frame,
+                                output_index,
+                                fps,
+                                restore_frame,
+                            } => {
+                                let write = crate::render_export::write_video_frame(
+                                    &frames_directory,
+                                    output_index,
+                                    &frame,
+                                );
+                                if let Err(error) = write {
+                                    self.document.set_error("render the animation", error);
+                                    let _ = std::fs::remove_dir_all(&frames_directory);
+                                    self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                                } else if next_frame < end_frame {
+                                    let next_frame = next_frame + 1;
+                                    self.ui
+                                        .set_animation_frame(&mut self.tree, next_frame as f32);
+                                    self.pending_render = Some(PendingRender::Video {
+                                        path,
+                                        frames_directory,
+                                        start_frame,
+                                        next_frame,
+                                        end_frame,
+                                        output_index: output_index + 1,
+                                        fps,
+                                        restore_frame,
+                                    });
+                                } else {
+                                    self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                                    let control =
+                                        Arc::new(crate::render_export::EncodingControl::default());
+                                    let worker_control = control.clone();
+                                    let (tx, completed) = channel();
+                                    std::thread::spawn(move || {
+                                        let staging_path = path.with_extension(format!(
+                                            "mp4.partial-{}",
+                                            uuid::Uuid::new_v4()
+                                        ));
+                                        let result = crate::render_export::write_mp4_with_control(
+                                            &staging_path,
+                                            &frames_directory,
+                                            fps,
+                                            &worker_control,
+                                        )
+                                        .and_then(|_| {
+                                            if worker_control.cancelled.load(Ordering::Relaxed) {
+                                                return Err("render cancelled".into());
+                                            }
+                                            std::fs::rename(&staging_path, &path)
+                                                .map_err(|error| error.to_string())
+                                        });
+                                        let _ = std::fs::remove_dir_all(&frames_directory);
+                                        let _ = std::fs::remove_file(&staging_path);
+                                        let _ = tx.send(result);
+                                    });
+                                    self.encoding = Some(NativeEncoding {
+                                        control,
+                                        completed,
+                                        total: end_frame - start_frame + 1,
+                                        cancelling: false,
+                                        format: crate::document::RenderFormat::Mp4,
+                                    });
                                 }
-                                let _ = std::fs::remove_dir_all(&frames_directory);
-                                self.ui.set_animation_frame(&mut self.tree, restore_frame);
                             }
                         }
                     }
                 }
             }
             #[cfg(target_arch = "wasm32")]
-            let _ = captured_frame;
+            {
+                if let Some(result) = renderer.take_capture() {
+                    if self.discard_capture {
+                        self.discard_capture = false;
+                    } else if let Some(pending) = self.pending_render.take() {
+                        match result {
+                            Ok(frame) => {
+                                let frame =
+                                    crate::render_export::crop_to_viewport(frame, &self.camera);
+                                match pending {
+                                    WebPendingRender::Still { name } => {
+                                        let cancel = crate::render_export::WebCancel::image();
+                                        let worker_cancel = cancel.clone();
+                                        self.next_render_id = self.next_render_id.wrapping_add(1);
+                                        let id = self.next_render_id;
+                                        self.encoding = Some(WebEncoding { id, cancel });
+                                        let tx = self.document_tx.clone();
+                                        wasm_bindgen_futures::spawn_local(async move {
+                                            let result = crate::render_export::download_webp(
+                                                &name,
+                                                &frame,
+                                                &worker_cancel,
+                                            )
+                                            .await;
+                                            if !worker_cancel.is_cancelled() {
+                                                let message = match result {
+                                                    Ok(()) => {
+                                                        WebDocumentMessage::RenderFinished(id)
+                                                    }
+                                                    Err(message) => {
+                                                        WebDocumentMessage::RenderError {
+                                                            id,
+                                                            video: false,
+                                                            message,
+                                                        }
+                                                    }
+                                                };
+                                                let _ = tx.send(message);
+                                            }
+                                        });
+                                    }
+                                    WebPendingRender::Video {
+                                        name,
+                                        mut encoder,
+                                        start_frame,
+                                        next_frame,
+                                        end_frame,
+                                        fps,
+                                        restore_frame,
+                                    } => {
+                                        let encode = (|| {
+                                            if encoder.is_none() {
+                                                encoder =
+                                                    Some(crate::render_export::WebVideo::new(
+                                                        &frame, fps,
+                                                    )?);
+                                            }
+                                            encoder.as_mut().unwrap().push(&frame)
+                                        })();
+                                        if let Err(error) = encode {
+                                            self.ui
+                                                .set_animation_frame(&mut self.tree, restore_frame);
+                                            self.document.set_error("render the animation", error);
+                                        } else if next_frame < end_frame {
+                                            let next_frame = next_frame + 1;
+                                            self.ui.set_animation_frame(
+                                                &mut self.tree,
+                                                next_frame as f32,
+                                            );
+                                            self.pending_render = Some(WebPendingRender::Video {
+                                                name,
+                                                encoder,
+                                                start_frame,
+                                                next_frame,
+                                                end_frame,
+                                                fps,
+                                                restore_frame,
+                                            });
+                                        } else {
+                                            self.ui
+                                                .set_animation_frame(&mut self.tree, restore_frame);
+                                            let tx = self.document_tx.clone();
+                                            let video = encoder
+                                                .expect("captured frame initialized encoder");
+                                            let cancel =
+                                                crate::render_export::WebCancel::video(&video);
+                                            let worker_cancel = cancel.clone();
+                                            self.next_render_id =
+                                                self.next_render_id.wrapping_add(1);
+                                            let id = self.next_render_id;
+                                            self.encoding = Some(WebEncoding { id, cancel });
+                                            wasm_bindgen_futures::spawn_local(async move {
+                                                let result =
+                                                    video.finish(&name, fps, &worker_cancel).await;
+                                                if !worker_cancel.is_cancelled() {
+                                                    let message = match result {
+                                                        Ok(()) => {
+                                                            WebDocumentMessage::RenderFinished(id)
+                                                        }
+                                                        Err(message) => {
+                                                            WebDocumentMessage::RenderError {
+                                                                id,
+                                                                video: true,
+                                                                message,
+                                                            }
+                                                        }
+                                                    };
+                                                    let _ = tx.send(message);
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                if let WebPendingRender::Video { restore_frame, .. } = pending {
+                                    self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                                    self.document.set_error("render the animation", error);
+                                } else {
+                                    self.document.set_error("render the scene", error);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         self.tree.reset_update_cycle();
     }
@@ -628,6 +1022,7 @@ impl App {
     }
 
     fn replace_scene(&mut self, scene: DataTree) {
+        self.cancel_render();
         self.tree = data_tree_with_scene(scene);
         self.interactions = InteractionState::default();
         self.ui.reset_document_gestures();
@@ -678,6 +1073,9 @@ impl App {
                 }
             }
             FileMenuAction::Render(format) => {
+                if self.pending_render.is_some() || self.encoding.is_some() {
+                    return;
+                }
                 if let Some(path) = document::render_dialog(format) {
                     self.pending_render = Some(match format {
                         crate::document::RenderFormat::WebP => PendingRender::Still { path },
@@ -703,6 +1101,7 @@ impl App {
                                 path,
                                 frames_directory: std::env::temp_dir()
                                     .join(format!("claydash-video-{}", uuid::Uuid::new_v4())),
+                                start_frame: animation.start_frame,
                                 next_frame: animation.start_frame,
                                 end_frame: animation.end_frame.max(animation.start_frame),
                                 output_index: 0,
@@ -744,11 +1143,61 @@ impl App {
             }
             FileMenuAction::SaveNamed(file_name) => self.download_web_project(file_name),
             FileMenuAction::OpenRecent(_) => {}
-            FileMenuAction::Render(_) => {
-                self.document.set_error(
-                    "render the scene",
-                    "render export is currently desktop-only",
-                );
+            FileMenuAction::Render(crate::document::RenderFormat::WebP) => {
+                if self.pending_render.is_some() || self.encoding.is_some() {
+                    return;
+                }
+                let stem = self
+                    .document
+                    .current_path()
+                    .and_then(std::path::Path::file_stem)
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "render".to_owned());
+                self.pending_render = Some(WebPendingRender::Still {
+                    name: format!("{stem}.webp"),
+                });
+            }
+            FileMenuAction::Render(crate::document::RenderFormat::Mp4) => {
+                if self.pending_render.is_some() || self.encoding.is_some() {
+                    return;
+                }
+                let stem = self
+                    .document
+                    .current_path()
+                    .and_then(std::path::Path::file_stem)
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "render".to_owned());
+                let animation = crate::animation::animation_data(&self.tree);
+                let fps = if animation.fps.is_finite() {
+                    animation.fps.clamp(1.0, 240.0)
+                } else {
+                    24.0
+                };
+                let restore_frame = self.ui.animation_frame();
+                self.ui
+                    .set_animation_frame(&mut self.tree, animation.start_frame as f32);
+                if matches!(
+                    self.tree.get_path("editor.camera_view"),
+                    ClaydashValue::Bool(true)
+                ) {
+                    if let Some(active) = crate::model::active_camera_id(&self.tree) {
+                        if let Some(camera) = crate::model::scene_cameras(&self.tree)
+                            .iter()
+                            .find(|camera| camera.uuid == active)
+                        {
+                            camera.apply_to_view(&mut self.camera);
+                        }
+                    }
+                }
+                self.pending_render = Some(WebPendingRender::Video {
+                    name: format!("{stem}.mp4"),
+                    encoder: None,
+                    start_frame: animation.start_frame,
+                    next_frame: animation.start_frame,
+                    end_frame: animation.end_frame.max(animation.start_frame),
+                    fps,
+                    restore_frame,
+                });
             }
         }
     }
@@ -781,6 +1230,24 @@ impl App {
                             self.document.mark_opened(name);
                         }
                         Err(error) => self.document.set_error("open the project", error),
+                    }
+                }
+                WebDocumentMessage::RenderFinished(id) => {
+                    if self.encoding.as_ref().is_some_and(|job| job.id == id) {
+                        self.encoding = None;
+                    }
+                }
+                WebDocumentMessage::RenderError { id, video, message } => {
+                    if self.encoding.as_ref().is_some_and(|job| job.id == id) {
+                        self.encoding = None;
+                        self.document.set_error(
+                            if video {
+                                "render the animation"
+                            } else {
+                                "render the scene"
+                            },
+                            message,
+                        );
                     }
                 }
             }

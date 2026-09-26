@@ -13,6 +13,7 @@ mod scene_panel;
 mod secondary_panels;
 mod selection_tools;
 mod status_bar;
+pub(crate) use status_bar::RenderProgress;
 mod ui_widgets;
 mod viewport_controls;
 mod workspace;
@@ -198,7 +199,8 @@ impl UiState {
         camera: &mut Camera,
         document: &mut DocumentState,
         interaction_guide: Option<crate::guides::ActiveGuideSet>,
-    ) -> Option<FileMenuAction> {
+        render_progress: Option<RenderProgress>,
+    ) -> (Option<FileMenuAction>, bool) {
         self.regions.clear();
         self.active_guide = None;
         self.ghosts = boolean_overlay::Ghosts::default();
@@ -256,7 +258,7 @@ impl UiState {
             }
             file_action
         };
-        self.draw_status_bar(viewport_ui, tree);
+        let cancel_render = self.draw_status_bar(viewport_ui, tree, render_progress);
         let viewport_frame = self
             .layout
             .find_pane(|pane| *pane == EditorPane::Viewport)
@@ -391,7 +393,7 @@ impl UiState {
         if commit_edit {
             tree.make_undo_redo_snapshot();
         }
-        file_action
+        (file_action, cancel_render)
     }
 
     pub fn reset_document_gestures(&mut self) {
@@ -433,12 +435,10 @@ impl UiState {
         self.animation.reset_for_document(tree);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn animation_frame(&self) -> f32 {
         self.animation.current_frame
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_animation_frame(&mut self, tree: &mut DataTree, frame: f32) {
         self.animation.playing = false;
         self.animation.set_frame(tree, frame);

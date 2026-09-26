@@ -194,6 +194,17 @@ pub fn deserialize_scene(bytes: &[u8]) -> Result<ObservableKVTree<ClaydashValue>
 }
 
 #[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export function revokeDownloadUrlLater(url) {
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = revokeDownloadUrlLater)]
+    fn revoke_download_url_later(url: &str);
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn download_bytes(file_name: &str, bytes: &[u8]) -> Result<(), String> {
     use wasm_bindgen::JsCast;
 
@@ -226,7 +237,7 @@ pub fn download_bytes(file_name: &str, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("could not attach download link: {error:?}"))?;
     anchor.click();
     let _ = body.remove_child(&anchor);
-    let _ = web_sys::Url::revoke_object_url(&url);
+    revoke_download_url_later(&url);
     Ok(())
 }
 

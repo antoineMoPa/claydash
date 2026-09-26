@@ -12,7 +12,7 @@ impl Renderer {
         output: &mut egui::FullOutput,
         capture: bool,
         capture_ui: bool,
-    ) -> Option<CapturedFrame> {
+    ) {
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
         let screen = egui_wgpu::ScreenDescriptor {
@@ -36,7 +36,7 @@ impl Renderer {
             &clipped,
             &screen,
         );
-        let offscreen = capture_ui.then(|| {
+        let offscreen = (capture_ui || (cfg!(target_arch = "wasm32") && capture)).then(|| {
             self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("guide screenshot target"),
                 size: wgpu::Extent3d {
@@ -52,7 +52,7 @@ impl Renderer {
                 view_formats: &self.config.view_formats,
             })
         });
-        let frame = if offscreen.is_some() {
+        let frame = if capture_ui {
             None
         } else {
             Some(match self.surface.get_current_texture() {
@@ -61,13 +61,13 @@ impl Renderer {
                 wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                     self.surface.configure(&self.device, &self.config);
                     self.free_textures(output);
-                    return None;
+                    return;
                 }
                 wgpu::CurrentSurfaceTexture::Timeout
                 | wgpu::CurrentSurfaceTexture::Occluded
                 | wgpu::CurrentSurfaceTexture::Validation => {
                     self.free_textures(output);
-                    return None;
+                    return;
                 }
             })
         };
@@ -78,6 +78,15 @@ impl Renderer {
             format: Some(self.render_format),
             ..Default::default()
         });
+        let display_view = offscreen
+            .as_ref()
+            .and_then(|_| frame.as_ref())
+            .map(|frame| {
+                frame.texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(self.render_format),
+                    ..Default::default()
+                })
+            });
         let work = self.viewport.prepare(
             &self.device,
             crate::viewport::ViewKey {
@@ -107,7 +116,7 @@ impl Renderer {
         // Export only after the adaptive viewport has rendered every native-
         // resolution tile for this exact camera and scene state. If the final
         // tile is part of this submission, the later texture copy observes it.
-        let capture = capture && self.viewport.is_refined();
+        let capture = capture && self.viewport.is_refined() && !self.capture_pending;
         let workspace_background = match egui.theme() {
             egui::Theme::Dark => wgpu::Color::BLACK,
             egui::Theme::Light => wgpu::Color::WHITE,
@@ -117,6 +126,35 @@ impl Renderer {
                 label: Some("scene"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(workspace_background),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(
+                camera.viewport_origin.x,
+                camera.viewport_origin.y,
+                camera.viewport.x,
+                camera.viewport.y,
+                0.0,
+                1.0,
+            );
+            self.viewport.composite(&mut pass);
+        }
+        // Browser exports need a separate copyable texture for readback. Draw
+        // the same scene to the surface too, so progress and Cancel repaint.
+        if let Some(display_view) = &display_view {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("display scene"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: display_view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -181,7 +219,7 @@ impl Renderer {
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("egui"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view: display_view.as_ref().unwrap_or(&view),
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
@@ -222,48 +260,62 @@ impl Renderer {
                 );
             }
         }
-        let submission = self
-            .queue
+        self.queue
             .submit(callback_commands.into_iter().chain([encoder.finish()]));
         self.viewport.submitted(&self.queue, work, readback);
         self.free_textures(output);
         if let Some(frame) = frame {
             self.queue.present(frame);
         }
-        let (buffer, padded) = capture_buffer?;
-        let slice = buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: Some(std::time::Duration::from_secs(15)),
-            })
-            .ok()?;
-        rx.recv_timeout(std::time::Duration::from_secs(15))
-            .ok()?
-            .ok()?;
-        let mapped = slice.get_mapped_range().ok()?;
-        let mut rgba = Vec::with_capacity((self.config.width * self.config.height * 4) as usize);
-        for row in mapped.chunks_exact(padded as usize) {
-            rgba.extend_from_slice(&row[..(self.config.width * 4) as usize]);
+        if let Some((buffer, padded)) = capture_buffer {
+            self.capture_pending = true;
+            let result_slot = self.capture_result.clone();
+            let mapped_buffer = buffer.clone();
+            let width = self.config.width;
+            let height = self.config.height;
+            let swap_channels = matches!(
+                self.config.format,
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+            );
+            buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let frame = result.map_err(|error| error.to_string()).and_then(|_| {
+                        let mapped = mapped_buffer
+                            .slice(..)
+                            .get_mapped_range()
+                            .map_err(|error| error.to_string())?;
+                        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+                        for row in mapped.chunks_exact(padded as usize) {
+                            rgba.extend_from_slice(&row[..(width * 4) as usize]);
+                        }
+                        drop(mapped);
+                        if swap_channels {
+                            for pixel in rgba.chunks_exact_mut(4) {
+                                pixel.swap(0, 2);
+                            }
+                        }
+                        Ok(CapturedFrame {
+                            width,
+                            height,
+                            rgba,
+                        })
+                    });
+                    mapped_buffer.unmap();
+                    *result_slot.lock().unwrap() = Some(frame);
+                });
         }
-        drop(mapped);
-        buffer.unmap();
-        if matches!(
-            self.config.format,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        ) {
-            for pixel in rgba.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
+    }
+
+    pub fn capture_pending(&self) -> bool {
+        self.capture_pending
+    }
+
+    pub fn take_capture(&mut self) -> Option<Result<CapturedFrame, String>> {
+        let frame = self.capture_result.lock().unwrap().take();
+        if frame.is_some() {
+            self.capture_pending = false;
         }
-        Some(CapturedFrame {
-            width: self.config.width,
-            height: self.config.height,
-            rgba,
-        })
+        frame
     }
 }

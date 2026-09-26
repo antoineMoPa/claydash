@@ -117,6 +117,8 @@ pub struct Renderer {
     material_preview_pipeline: Option<wgpu::RenderPipeline>,
     material_preview_textures: Vec<wgpu::Texture>,
     material_asset_previews: Vec<MaterialAssetPreview>,
+    capture_result: Arc<std::sync::Mutex<Option<Result<CapturedFrame, String>>>>,
+    capture_pending: bool,
 }
 
 struct MaterialAssetPreview {

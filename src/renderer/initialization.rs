@@ -295,6 +295,8 @@ impl Renderer {
             material_preview_pipeline: None,
             material_preview_textures: Vec::new(),
             material_asset_previews: Vec::new(),
+            capture_result: Arc::new(std::sync::Mutex::new(None)),
+            capture_pending: false,
         };
         renderer.create_material_previews();
         renderer

@@ -630,6 +630,7 @@
                             &mut camera,
                             &mut document,
                             None,
+                            None,
                         );
                     },
                 );
