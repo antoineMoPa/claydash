@@ -332,7 +332,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     opening.material = brick_wall.material;
     opening.color = brick_wall.color;
     cases.push(("brick-window".into(), vec![brick_wall, opening]));
-    for kind in MaterialKind::ALL {
+    for kind in MaterialKind::BUILTINS {
         let mut scene = renderer_stress_scene();
         for object in &mut scene {
             object.material = Material::preset(kind);
@@ -350,6 +350,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
             MaterialKind::Wood => "wood",
             MaterialKind::Brick => "brick",
             MaterialKind::Diagnostic => "diagnostic",
+            MaterialKind::Custom => unreachable!(),
         };
         cases.push((name.into(), scene));
     }
@@ -360,7 +361,8 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
         );
         object.object_type = template.object_type;
         object.params = template.params;
-        object.material = Material::preset(MaterialKind::ALL[i % MaterialKind::ALL.len()]);
+        object.material =
+            Material::preset(MaterialKind::BUILTINS[i % MaterialKind::BUILTINS.len()]);
     }
     cases.push(("mixed".into(), mixed.clone()));
     for pair in mixed.chunks_mut(2) {
@@ -387,7 +389,8 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
         );
         object.object_type = template.object_type;
         object.params = template.params;
-        object.material = Material::preset(MaterialKind::ALL[i % MaterialKind::ALL.len()]);
+        object.material =
+            Material::preset(MaterialKind::BUILTINS[i % MaterialKind::BUILTINS.len()]);
         object.repetition.enabled = true;
         object.repetition.count = [3; 3];
         object.repetition.spacing = Vec3::splat(1.5);

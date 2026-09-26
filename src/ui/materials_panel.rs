@@ -112,8 +112,45 @@ pub(super) fn materials_panel(
     });
     ui.ctx()
         .data_mut(|data| data.insert_temp(picker_id, filter));
-    ui.separator();
     let selection = commands::effective_selected_ids(tree);
+    let custom_count = crate::model::material_assets(tree)
+        .iter()
+        .filter(|asset| asset.material.kind == MaterialKind::Custom)
+        .count();
+    if ui
+        .add_enabled(custom_count < 16, egui::Button::new("New WGSL material"))
+        .on_disabled_hover_text("A scene can contain at most 16 custom WGSL materials")
+        .clicked()
+    {
+        let asset = crate::model::MaterialAsset::custom("Custom WGSL".to_owned());
+        let id = asset.uuid;
+        let material = asset.material;
+        let mut assets = crate::model::material_assets(tree);
+        assets.push(asset);
+        crate::model::set_material_assets(tree, assets);
+        tree.set_path("editor.material_id", crate::model::ClaydashValue::Uuid(id));
+        tree.set_path(
+            "editor.material",
+            crate::model::ClaydashValue::Material(material),
+        );
+        let mut scene = objects(tree);
+        assign_material(&mut scene, &selection, material, Some(id));
+        set_objects(tree, scene);
+        tree.make_undo_redo_snapshot();
+    }
+    let editing_id = objects(tree)
+        .iter()
+        .find(|object| selection.contains(&object.uuid))
+        .and_then(|object| object.material_id)
+        .or_else(|| crate::model::picked_material_id(tree));
+    if let Some(asset) = editing_id.and_then(|id| {
+        crate::model::material_assets(tree)
+            .into_iter()
+            .find(|asset| asset.uuid == id && asset.material.kind == MaterialKind::Custom)
+    }) {
+        custom_shader_editor(ui, tree, &asset);
+    }
+    ui.separator();
     if selection.is_empty() {
         ui.label("Pick a material for new objects, or select objects to edit their material.");
         return;
@@ -126,25 +163,27 @@ pub(super) fn materials_panel(
     let mut material_id = first.material_id;
     let mut material = first.material;
     material.color = first.color;
-    if let Some(id) = material_id {
-        if let Some(asset) = crate::model::material_assets(tree)
-            .into_iter()
-            .find(|asset| asset.uuid == id)
-        {
-            let mut name = asset.name;
-            ui.horizontal(|ui| {
-                ui.label("Name");
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut name)
-                            .desired_width(ui.available_width().max(48.0)),
-                    )
-                    .on_hover_text("Rename this scene material")
-                    .changed()
-                {
-                    crate::model::rename_material_asset(tree, id, name);
-                }
-            });
+    if material.kind != MaterialKind::Custom {
+        if let Some(id) = material_id {
+            if let Some(asset) = crate::model::material_assets(tree)
+                .into_iter()
+                .find(|asset| asset.uuid == id)
+            {
+                let mut name = asset.name;
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut name)
+                                .desired_width(ui.available_width().max(48.0)),
+                        )
+                        .on_hover_text("Rename this scene material")
+                        .changed()
+                    {
+                        crate::model::rename_material_asset(tree, id, name);
+                    }
+                });
+            }
         }
     }
     ui.horizontal_wrapped(|ui| {
@@ -198,7 +237,10 @@ pub(super) fn materials_panel(
             }
         }
         if ui
-            .button("Unlink")
+            .add_enabled(
+                material.kind != MaterialKind::Custom || custom_count < 16,
+                egui::Button::new("Unlink"),
+            )
             .on_hover_text("Make a unique copy that no longer changes with the shared material")
             .clicked()
         {
@@ -503,6 +545,88 @@ pub(super) fn materials_panel(
         set_objects(tree, scene);
     }
     apply_keyframe_requests(tree, runtime, keyframes);
+}
+
+fn custom_shader_editor(
+    ui: &mut egui::Ui,
+    tree: &mut DataTree,
+    asset: &crate::model::MaterialAsset,
+) {
+    ui.separator();
+    ui.label(RichText::new(format!("WGSL · {}", asset.name)).strong());
+    let name_id = ui.id().with(("custom-wgsl-name", asset.uuid));
+    let mut name = ui
+        .ctx()
+        .data(|data| data.get_temp::<String>(name_id))
+        .unwrap_or_else(|| asset.name.clone());
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut name).desired_width(160.0));
+        if ui
+            .add_enabled(
+                !name.trim().is_empty() && name != asset.name,
+                egui::Button::new("Rename"),
+            )
+            .clicked()
+        {
+            crate::model::rename_material_asset(tree, asset.uuid, name.clone());
+            tree.make_undo_redo_snapshot();
+        }
+    });
+    ui.ctx().data_mut(|data| data.insert_temp(name_id, name));
+    ui.small("Write the body of a function returning Surface. Inputs: point, normal, view, base. Set surface.color, normal, roughness, metallic, reflectivity, opacity, ior, coat, sheen, fiber, or figure.");
+    let draft_id = ui.id().with(("custom-wgsl-draft", asset.uuid));
+    let error_id = ui.id().with(("custom-wgsl-error", asset.uuid));
+    let current = asset.wgsl.as_deref().unwrap_or_default();
+    let mut draft = ui
+        .ctx()
+        .data(|data| data.get_temp::<String>(draft_id))
+        .unwrap_or_else(|| current.to_owned());
+    ui.add(
+        egui::TextEdit::multiline(&mut draft)
+            .code_editor()
+            .desired_rows(12)
+            .desired_width(f32::INFINITY),
+    );
+    let dirty = draft != current;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(dirty, egui::Button::new("Apply WGSL"))
+            .clicked()
+        {
+            let mut assets = crate::model::material_assets(tree);
+            if let Some(candidate) = assets
+                .iter_mut()
+                .find(|candidate| candidate.uuid == asset.uuid)
+            {
+                candidate.wgsl = Some(draft.clone());
+            }
+            match crate::renderer::validate_custom_materials(&assets) {
+                Ok(()) => {
+                    crate::model::set_material_assets(tree, assets);
+                    tree.make_undo_redo_snapshot();
+                    ui.ctx().data_mut(|data| data.remove::<String>(error_id));
+                }
+                Err(error) => {
+                    ui.ctx().data_mut(|data| data.insert_temp(error_id, error));
+                }
+            }
+        }
+        if ui.add_enabled(dirty, egui::Button::new("Revert")).clicked() {
+            draft = current.to_owned();
+            ui.ctx().data_mut(|data| data.remove::<String>(error_id));
+        }
+    });
+    if let Some(error) = ui.ctx().data(|data| data.get_temp::<String>(error_id)) {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+    }
+    if let Some(error) = ui
+        .ctx()
+        .data(|data| data.get_temp::<Option<String>>(egui::Id::new("custom-material-render-error")))
+        .flatten()
+    {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(draft_id, draft));
 }
 
 pub(super) fn apply_material(tree: &mut DataTree, material: Material) {

@@ -10,6 +10,7 @@ pub enum MaterialKind {
     Wood,
     Brick,
     Diagnostic,
+    Custom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -166,7 +167,7 @@ impl WoodSettings {
 }
 
 impl MaterialKind {
-    pub const ALL: [Self; 6] = [
+    pub const BUILTINS: [Self; 6] = [
         Self::Transparent,
         Self::Metallic,
         Self::Solid,
@@ -174,7 +175,6 @@ impl MaterialKind {
         Self::Brick,
         Self::Diagnostic,
     ];
-
     pub fn label(self) -> &'static str {
         match self {
             Self::Transparent => "Transparent",
@@ -183,6 +183,7 @@ impl MaterialKind {
             Self::Wood => "Wood",
             Self::Brick => "Brick",
             Self::Diagnostic => "Diagnostic",
+            Self::Custom => "Custom WGSL",
         }
     }
 
@@ -194,6 +195,7 @@ impl MaterialKind {
             Self::Transparent => 2,
             Self::Metallic => 3,
             Self::Diagnostic => 4,
+            Self::Custom => 6,
         }
     }
 }
@@ -218,6 +220,8 @@ pub struct MaterialAsset {
     pub uuid: uuid::Uuid,
     pub name: String,
     pub material: Material,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wgsl: Option<String>,
 }
 
 impl MaterialAsset {
@@ -226,9 +230,22 @@ impl MaterialAsset {
             uuid: uuid::Uuid::new_v4(),
             name: material.display_name().to_string(),
             material,
+            wgsl: None,
+        }
+    }
+
+    pub fn custom(name: String) -> Self {
+        Self {
+            uuid: uuid::Uuid::new_v4(),
+            name,
+            material: Material::preset(MaterialKind::Custom),
+            wgsl: Some(DEFAULT_CUSTOM_WGSL.to_owned()),
         }
     }
 }
+
+/// Body of `fn custom_material_N(point, normal, view, base) -> Surface`.
+pub const DEFAULT_CUSTOM_WGSL: &str = "var surface = base;\nlet bands = sin(point.y * 16.0) * 0.5 + 0.5;\nsurface.color = mix(base.color, vec3<f32>(0.08, 0.42, 0.72), bands);\nreturn surface;";
 
 impl Default for Material {
     fn default() -> Self {
@@ -292,6 +309,10 @@ impl Material {
                 kind,
                 color: Vec4::new(0.51, 0.19, 0.14, 1.0),
                 roughness: 0.88,
+                ..Self::default()
+            },
+            MaterialKind::Custom => Self {
+                kind,
                 ..Self::default()
             },
         }

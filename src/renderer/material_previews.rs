@@ -5,6 +5,56 @@ const PREVIEW_WIDTH: u32 = 112;
 const PREVIEW_HEIGHT: u32 = 72;
 
 impl Renderer {
+    pub(crate) fn sync_custom_materials(&mut self, assets: &[MaterialAsset]) -> Result<(), String> {
+        let sources: Vec<_> = assets
+            .iter()
+            .filter(|asset| asset.material.kind == MaterialKind::Custom)
+            .filter_map(|asset| {
+                asset
+                    .wgsl
+                    .as_ref()
+                    .map(|source| (asset.uuid, source.clone()))
+            })
+            .collect();
+        if sources == self.custom_material_sources {
+            return Ok(());
+        }
+        material_gpu::validate_custom_materials(assets)?;
+        let shader_source = material_gpu::shader_source_for_assets(assets);
+        let pipeline = create_scene_pipeline(
+            &self.device,
+            &shader_source,
+            &self.pipeline_layout,
+            self.render_format,
+            self.use_bvh,
+            1,
+            false,
+            false,
+        );
+        let fast_pipeline = create_scene_pipeline(
+            &self.device,
+            &shader_source,
+            &self.pipeline_layout,
+            self.render_format,
+            self.use_bvh,
+            1,
+            false,
+            true,
+        );
+        self.pipeline = pipeline;
+        self.fast_pipeline = fast_pipeline;
+        self.boolean_pipeline = None;
+        self.fast_boolean_pipeline = None;
+        self.shader_source = shader_source;
+        self.custom_material_sources = sources;
+        for preview in std::mem::take(&mut self.material_asset_previews) {
+            self.egui_renderer.free_texture(&preview.id);
+        }
+        self.create_material_previews();
+        self.invalidate_scene();
+        Ok(())
+    }
+
     pub(crate) fn material_preview_ids(&self) -> Option<MaterialPreviewIds> {
         self.material_preview_ids.clone().map(|mut ids| {
             ids.assets = self
@@ -47,8 +97,12 @@ impl Renderer {
             .expect("material preview pipeline")
             .clone();
         for (index, asset) in missing.into_iter().enumerate() {
-            let (id, texture) =
-                self.render_material_preview(asset.material, index as i32 + 100, &pipeline);
+            let (id, texture) = self.render_material_preview(
+                asset.material,
+                Some(asset.uuid),
+                index as i32 + 100,
+                &pipeline,
+            );
             self.material_asset_previews.push(MaterialAssetPreview {
                 uuid: asset.uuid,
                 material: asset.material,
@@ -60,6 +114,22 @@ impl Renderer {
     }
 
     pub(super) fn create_material_previews(&mut self) {
+        if let Some(ids) = self.material_preview_ids.take() {
+            for id in [
+                ids.transparent,
+                ids.metallic,
+                ids.solid,
+                ids.diagnostic,
+                ids.brick,
+                ids.oak,
+                ids.walnut,
+                ids.pine,
+                ids.maple,
+            ] {
+                self.egui_renderer.free_texture(&id);
+            }
+        }
+        self.material_preview_textures.clear();
         let pipeline = create_scene_pipeline(
             &self.device,
             &self.shader_source,
@@ -83,7 +153,8 @@ impl Renderer {
         ];
         let mut ids = Vec::with_capacity(presets.len());
         for (index, material) in presets.into_iter().enumerate() {
-            let (id, texture) = self.render_material_preview(material, index as i32, &pipeline);
+            let (id, texture) =
+                self.render_material_preview(material, None, index as i32, &pipeline);
             ids.push(id);
             self.material_preview_textures.push(texture);
         }
@@ -107,12 +178,14 @@ impl Renderer {
     fn render_material_preview(
         &mut self,
         material: Material,
+        material_id: Option<uuid::Uuid>,
         index: i32,
         pipeline: &wgpu::RenderPipeline,
     ) -> (egui::TextureId, wgpu::Texture) {
         let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
         object.params = SdfParams::SphereParams(SphereParams { radius: 0.58 });
         object.material = material;
+        object.material_id = material_id;
         object.color = material.color;
         let mut camera = Camera::new();
         camera.position *= 0.52;

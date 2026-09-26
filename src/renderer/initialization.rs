@@ -336,6 +336,7 @@ impl Renderer {
             boolean_pipeline: None,
             fast_boolean_pipeline: None,
             shader_source,
+            custom_material_sources: Vec::new(),
             pipeline_layout,
             use_bvh,
             node_count: 0,

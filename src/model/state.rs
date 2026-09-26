@@ -136,6 +136,7 @@ pub fn update_material_asset(tree: &mut DataTree, id: uuid::Uuid, material: Mate
             uuid: id,
             name: material.display_name().to_string(),
             material,
+            wgsl: None,
         });
     }
     set_material_assets(tree, assets);
@@ -170,6 +171,9 @@ pub fn create_unlinked_material_asset(
         .unwrap_or_else(|| material.display_name().to_owned());
     let mut asset = MaterialAsset::new(material);
     asset.name = format!("{source_name} copy");
+    asset.wgsl = source_id
+        .and_then(|id| assets.iter().find(|source| source.uuid == id))
+        .and_then(|source| source.wgsl.clone());
     let id = asset.uuid;
     assets.push(asset);
     set_material_assets(tree, assets);

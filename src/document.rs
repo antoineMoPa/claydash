@@ -503,6 +503,22 @@ mod tests {
     }
 
     #[test]
+    fn scene_round_trip_keeps_custom_material_source() {
+        let mut tree = DataTree::default();
+        let asset = crate::model::MaterialAsset::custom("Ocean".into());
+        let id = asset.uuid;
+        let source = asset.wgsl.clone();
+        crate::model::set_material_assets(&mut tree, vec![asset]);
+        let bytes = serialize_scene(&tree).unwrap();
+        let scene = deserialize_scene(&bytes).unwrap();
+        let mut restored = DataTree::default();
+        restored.set_tree("scene", scene);
+        let assets = crate::model::material_assets(&restored);
+        assert_eq!(assets[0].uuid, id);
+        assert_eq!(assets[0].wgsl, source);
+    }
+
+    #[test]
     fn scene_round_trip_keeps_camera_objects_and_active_camera() {
         let mut tree = DataTree::default();
         let camera =

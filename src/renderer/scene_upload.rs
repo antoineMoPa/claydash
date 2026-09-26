@@ -510,7 +510,19 @@ impl Renderer {
                     radius: repeated_radius + cage_extent.length(),
                     object_index: index as u32,
                 });
-                let material_index = materials.insert(object.material);
+                let custom_index = if object.material.kind == MaterialKind::Custom {
+                    object
+                        .material_id
+                        .and_then(|id| {
+                            self.custom_material_sources
+                                .iter()
+                                .position(|(asset_id, _)| *asset_id == id)
+                        })
+                        .map_or(0, |index| index as u32 + 1)
+                } else {
+                    0
+                };
+                let material_index = materials.insert_custom(object.material, custom_index);
                 GpuObject {
                     // Spare component lanes carry blend width and material index.
                     component: [0, 0, object.softness.to_bits(), material_index],

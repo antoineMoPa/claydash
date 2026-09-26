@@ -2,6 +2,7 @@
 const MATERIAL_WOOD: u32 = 1u;
 const MATERIAL_DIAGNOSTIC: u32 = 4u;
 const MATERIAL_BRICK: u32 = 5u;
+const MATERIAL_CUSTOM: u32 = 6u;
 struct MaterialHeader { kind: u32, offset: u32, length: u32, reserved: u32 }
 @group(0) @binding(3) var<storage, read> material_headers: array<MaterialHeader>;
 @group(0) @binding(4) var<storage, read> material_params: array<vec4<f32>>;
@@ -20,6 +21,12 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
         case MATERIAL_WOOD: { return evaluate_wood(point, normal, object, base, header.offset); }
         case MATERIAL_DIAGNOSTIC: { return evaluate_diagnostic(point, object, base, header.offset); }
         case MATERIAL_BRICK: { return evaluate_brick(point, normal, view, object, base, header.offset); }
+        case MATERIAL_CUSTOM: {
+            switch header.reserved {
+                // CUSTOM_MATERIAL_CASES
+                default: { return base; }
+            }
+        }
         default: { return base; }
     }
 }

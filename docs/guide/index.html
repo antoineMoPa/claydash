@@ -99,6 +99,7 @@
     <section id="materials">
       <h2>Choose and reuse materials</h2>
       <p>The <strong>Materials</strong> tab offers solid, metallic, transparent, and wood presets. Pick a material for selected objects, or choose one as the active material for new shapes. Adjust its color and other properties in the same tab. Materials are shared scene assets: changing a linked material updates every object using it. Use <strong>Unlink</strong> when one object needs its own copy. You can also copy, paste, and filter materials in the library.</p>
+      <p>Choose <strong>New WGSL material</strong> to make a custom shader. The editor accepts the body of a WGSL function with <code>point</code>, <code>normal</code>, <code>view</code>, and <code>base</code> inputs. Start with <code>var surface = base;</code>, change its fields, and finish with <code>return surface;</code>. Click <strong>Apply WGSL</strong> to compile it. Errors appear below the editor and leave the previous shader in place. Use the material picker to assign the same shader to other objects.</p>
       <figure><img src="materials.webp" alt="Materials tab with presets and settings for a selected transparent sphere" width="1280" height="800"><figcaption>Material presets and properties for the selected object.</figcaption></figure>
     </section>
     <section id="repeat">

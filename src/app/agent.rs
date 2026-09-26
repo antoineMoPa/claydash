@@ -230,6 +230,19 @@ pub enum Action {
     SetMaterials {
         materials: Vec<MaterialAsset>,
     },
+    CreateCustomMaterial {
+        name: String,
+        wgsl: String,
+    },
+    UpdateCustomMaterial {
+        id: uuid::Uuid,
+        name: Option<String>,
+        wgsl: Option<String>,
+    },
+    AssignMaterial {
+        id: uuid::Uuid,
+        object_ids: Vec<uuid::Uuid>,
+    },
     SetCameras {
         cameras: Vec<crate::camera::SceneCamera>,
     },
@@ -637,6 +650,7 @@ impl App {
         }
         let mut draft = self.tree.clone();
         let mut created = Vec::new();
+        let mut created_materials = Vec::new();
         let mut replace = false;
         for action in args.actions {
             match action {
@@ -752,6 +766,51 @@ impl App {
                 Action::SetMaterials { materials } => {
                     model::set_material_assets(&mut draft, materials)
                 }
+                Action::CreateCustomMaterial { name, wgsl } => {
+                    let mut asset = MaterialAsset::custom(name);
+                    asset.wgsl = Some(wgsl);
+                    created_materials.push(asset.uuid);
+                    let mut assets = model::material_assets(&draft);
+                    assets.push(asset);
+                    model::set_material_assets(&mut draft, assets);
+                }
+                Action::UpdateCustomMaterial { id, name, wgsl } => {
+                    let mut assets = model::material_assets(&draft);
+                    let asset = assets
+                        .iter_mut()
+                        .find(|asset| asset.uuid == id)
+                        .ok_or_else(|| format!("material {id} does not exist"))?;
+                    if asset.material.kind != model::MaterialKind::Custom {
+                        return Err(format!("material {id} is not a custom WGSL material"));
+                    }
+                    if let Some(name) = name {
+                        asset.name = name;
+                    }
+                    if let Some(wgsl) = wgsl {
+                        asset.wgsl = Some(wgsl);
+                    }
+                    model::set_material_assets(&mut draft, assets);
+                }
+                Action::AssignMaterial { id, object_ids } => {
+                    let asset = model::material_assets(&draft)
+                        .into_iter()
+                        .find(|asset| asset.uuid == id)
+                        .ok_or_else(|| format!("material {id} does not exist"))?;
+                    if object_ids.is_empty() {
+                        return Err("AssignMaterial needs at least one object id".into());
+                    }
+                    let mut objects = model::objects(&draft);
+                    for object_id in object_ids {
+                        let object = objects
+                            .iter_mut()
+                            .find(|object| object.uuid == object_id)
+                            .ok_or_else(|| format!("object {object_id} does not exist"))?;
+                        object.material_id = Some(id);
+                        object.material = asset.material;
+                        object.color = asset.material.color;
+                    }
+                    model::set_objects(&mut draft, objects);
+                }
                 Action::SetCameras { cameras } => model::set_scene_cameras(&mut draft, cameras),
                 Action::SetAnimation { animation } => draft.set_path(
                     "scene.animation",
@@ -802,7 +861,10 @@ impl App {
         if replace {
             self.agent_revision += 1;
         }
-        Ok(json!({"revision": self.scene_revision(), "created_ids": created}))
+        Ok(
+            json!({"revision": self.scene_revision(), "created_ids": created,
+            "created_material_ids": created_materials}),
+        )
     }
 
     fn agent_set_view(&mut self, args: ViewArgs) -> AgentResult {
@@ -848,9 +910,20 @@ fn params_match(kind: PrimitiveKind, params: &SdfParams) -> bool {
 }
 
 fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
+    let assets = model::material_assets(tree);
+    crate::renderer::validate_custom_materials(&assets)?;
     let objects = model::objects_ref(tree);
     let mut ids = std::collections::HashSet::new();
     for object in objects {
+        if object.material.kind == model::MaterialKind::Custom
+            && !object.material_id.is_some_and(|id| {
+                assets.iter().any(|asset| {
+                    asset.uuid == id && asset.material.kind == model::MaterialKind::Custom
+                })
+            })
+        {
+            return Err(format!("custom material asset missing on {}", object.uuid));
+        }
         if !ids.insert(object.uuid) {
             return Err(format!("duplicate object id {}", object.uuid));
         }
@@ -958,11 +1031,11 @@ fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
 
 fn schema() -> Value {
     json!({
-        "version": 3,
+        "version": 4,
         "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
-        "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetBoolean", "DeleteObject", "SetWorld", "SetMaterials", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
+        "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetBoolean", "DeleteObject", "SetWorld", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| json!({"kind": kind, "example": SdfObject::create_kind(*kind)})).collect::<Vec<_>>(),
-        "notes": "GetState returns complete typed objects and the raw .claydash scene document. CreateObject accepts an optional position [x,y,z], full transform, and shape params. BoxParams includes corner_radius; LoftParams contains ordered sections, each with an optional closed profile of 3–32 [Y,Z] points in unit ellipse coordinates. Custom profiles in one loft must have matching point counts. A PutObject can set surface_inlay to a host object id, offset, and thickness. CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. Apply actions run as one undoable edit. Send expected_revision from GetState to reject stale edits. ReplaceScene accepts the raw document value and must be the sole action."
+        "notes": "GetState returns complete typed objects and the raw .claydash scene document. CreateCustomMaterial takes name and wgsl, returning its UUID in created_material_ids. The WGSL is a function body returning Surface, with point, normal, view, and base inputs. UpdateCustomMaterial edits name and/or wgsl; AssignMaterial links it to object_ids. CreateObject accepts an optional position [x,y,z], full transform, and shape params. BoxParams includes corner_radius; LoftParams contains ordered sections, each with an optional closed profile of 3–32 [Y,Z] points in unit ellipse coordinates. Custom profiles in one loft must have matching point counts. A PutObject can set surface_inlay to a host object id, offset, and thickness. CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. Apply actions run as one undoable edit. Send expected_revision from GetState to reject stale edits. ReplaceScene accepts the raw document value and must be the sole action."
     })
 }
 
@@ -1050,6 +1123,9 @@ fn mcp_tools() -> Vec<Value> {
         {"type": "object", "properties": {"type": {"const": "DeleteObject"}, "id": uuid}, "required": ["type", "id"]},
         {"type": "object", "properties": {"type": {"const": "SetWorld"}, "world": object}, "required": ["type", "world"]},
         {"type": "object", "properties": {"type": {"const": "SetMaterials"}, "materials": {"type": "array", "items": object}}, "required": ["type", "materials"]},
+        {"type": "object", "properties": {"type": {"const": "CreateCustomMaterial"}, "name": {"type": "string"}, "wgsl": {"type": "string"}}, "required": ["type", "name", "wgsl"]},
+        {"type": "object", "properties": {"type": {"const": "UpdateCustomMaterial"}, "id": uuid, "name": {"type": "string"}, "wgsl": {"type": "string"}}, "required": ["type", "id"]},
+        {"type": "object", "properties": {"type": {"const": "AssignMaterial"}, "id": uuid, "object_ids": {"type": "array", "items": uuid, "minItems": 1}}, "required": ["type", "id", "object_ids"]},
         {"type": "object", "properties": {"type": {"const": "SetCameras"}, "cameras": {"type": "array", "items": object}}, "required": ["type", "cameras"]},
         {"type": "object", "properties": {"type": {"const": "SetAnimation"}, "animation": object}, "required": ["type", "animation"]},
         {"type": "object", "properties": {"type": {"const": "SetSelection"}, "ids": {"type": "array", "items": uuid}}, "required": ["type", "ids"]},
@@ -1229,6 +1305,53 @@ mod tests {
             .is_err());
         app.tree.undo();
         assert_eq!(model::objects_ref(&app.tree).len(), original);
+    }
+
+    #[test]
+    fn agent_creates_assigns_and_validates_custom_materials_atomically() {
+        let mut app = App::new();
+        let object_id = model::objects_ref(&app.tree)[0].uuid;
+        let source = model::DEFAULT_CUSTOM_WGSL.to_owned();
+        let result = app
+            .agent_apply(ApplyArgs {
+                expected_revision: Some(app.scene_revision()),
+                actions: vec![Action::CreateCustomMaterial {
+                    name: "Bands".into(),
+                    wgsl: source.clone(),
+                }],
+            })
+            .unwrap();
+        let id: uuid::Uuid =
+            serde_json::from_value(result["created_material_ids"][0].clone()).unwrap();
+        app.agent_apply(ApplyArgs {
+            expected_revision: Some(app.scene_revision()),
+            actions: vec![Action::AssignMaterial {
+                id,
+                object_ids: vec![object_id],
+            }],
+        })
+        .unwrap();
+        let object = model::objects_ref(&app.tree)
+            .iter()
+            .find(|object| object.uuid == object_id)
+            .unwrap();
+        assert_eq!(object.material_id, Some(id));
+        assert_eq!(object.material.kind, model::MaterialKind::Custom);
+        let invalid = app.agent_apply(ApplyArgs {
+            expected_revision: Some(app.scene_revision()),
+            actions: vec![Action::UpdateCustomMaterial {
+                id,
+                name: None,
+                wgsl: Some("return ;".into()),
+            }],
+        });
+        assert!(invalid.is_err());
+        assert_eq!(
+            model::material_assets(&app.tree)[0].wgsl.as_deref(),
+            Some(source.as_str())
+        );
+        app.tree.undo();
+        assert_ne!(model::objects_ref(&app.tree)[0].material_id, Some(id));
     }
 
     #[test]

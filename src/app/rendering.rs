@@ -1,5 +1,16 @@
 use super::*;
 
+fn scene_render_versions(tree: &DataTree, capture_render: bool) -> [i32; 2] {
+    let export_version = if capture_render { i32::MIN } else { 0 };
+    // Material source and parameters both affect the cached viewport image.
+    [
+        tree.path_version("scene.sdf_objects")
+            .wrapping_add(tree.path_version("scene.materials")),
+        tree.path_version("scene.world")
+            .wrapping_add(export_version),
+    ]
+}
+
 impl App {
     pub(super) fn render_progress(&self) -> Option<crate::ui::RenderProgress> {
         #[cfg(not(target_arch = "wasm32"))]
@@ -142,7 +153,12 @@ impl App {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        renderer.sync_material_asset_previews(&crate::model::material_assets(&self.tree));
+        let material_assets = crate::model::material_assets(&self.tree);
+        let shader_error = renderer.sync_custom_materials(&material_assets).err();
+        self.egui.data_mut(|data| {
+            data.insert_temp(egui::Id::new("custom-material-render-error"), shader_error)
+        });
+        renderer.sync_material_asset_previews(&material_assets);
         if self.camera.viewport == Vec2::ONE {
             self.camera.viewport = renderer.size();
         }
@@ -167,6 +183,7 @@ impl App {
         }
         let mut file_action = None;
         let mut cancel_render = false;
+        let material_version_before_ui = self.tree.path_version("scene.materials");
         let render_progress = self.render_progress();
         let interaction_guide = self.interactions.active_guide();
         let mut output = egui.run_ui(input, |ui| {
@@ -180,6 +197,11 @@ impl App {
                 render_progress,
             );
         });
+        // UI edits happen after shader synchronization at the start of this frame.
+        // Schedule one more frame so a newly applied WGSL body is compiled promptly.
+        if self.tree.path_version("scene.materials") != material_version_before_ui {
+            window.request_redraw();
+        }
         if cancel_render {
             self.cancel_render();
         }
@@ -248,15 +270,9 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let refine = self.pending_render.is_some() || self.ui.refine_viewport();
         if let Some(renderer) = &mut self.renderer {
-            let export_version = if capture_render { i32::MIN } else { 0 };
             // Selection is drawn by the editor gizmos. Keep the cached scene
             // image when only selection changes, avoiding a full refinement.
-            let scene_versions = [
-                self.tree.path_version("scene.sdf_objects"),
-                self.tree
-                    .path_version("scene.world")
-                    .wrapping_add(export_version),
-            ];
+            let scene_versions = scene_render_versions(&self.tree, capture_render);
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             let scene_objects = self
                 .agent_capture
@@ -588,5 +604,22 @@ impl App {
             }
         }
         self.tree.reset_update_cycle();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changing_only_wgsl_invalidates_the_viewport_key() {
+        let mut tree = DataTree::default();
+        let mut asset = crate::model::MaterialAsset::custom("Bands".into());
+        crate::model::set_material_assets(&mut tree, vec![asset.clone()]);
+        let before = scene_render_versions(&tree, false);
+        asset.wgsl = Some("return base;".into());
+        crate::model::set_material_assets(&mut tree, vec![asset]);
+        assert_ne!(scene_render_versions(&tree, false), before);
+        assert_ne!(scene_render_versions(&tree, true), before);
     }
 }

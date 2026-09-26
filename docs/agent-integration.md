@@ -98,6 +98,23 @@ For a surface inlay, put `surface_inlay: {"host":"<uuid>","offset":0.018,"thickn
 on a separate mask object whose volume crosses the host surface. The host may be a smooth Boolean
 group. The mask and host group cannot have spatial modifiers, and the mask cannot be a curve.
 `SetWorld`, `SetMaterials`, `SetCameras`, and `SetAnimation` replace the corresponding typed scene values.
+Custom WGSL materials have three focused actions:
+
+```json
+{"actions":[{"type":"CreateCustomMaterial","name":"Blue bands","wgsl":"var surface = base; surface.color = vec3<f32>(0.1, 0.4, 0.9); return surface;"}]}
+```
+
+The response includes `created_material_ids`. Use one of those IDs in
+`{"type":"AssignMaterial","id":"<material-id>","object_ids":["<object-id>"]}`. To edit it,
+send `{"type":"UpdateCustomMaterial","id":"<material-id>","wgsl":"..."}`; `name` may be
+sent in the same action. `get_state` includes the WGSL on each custom material asset. The code
+is the body of a WGSL function with `point`, `normal`, `view`, and `base` inputs and must return
+`Surface`. Its fields are `color`, `normal`, `roughness`, `metallic`, `reflectivity`, `opacity`,
+`ior`, `coat`, `sheen`, `fiber`, and `figure`. For example, start with `var surface = base;`,
+change fields, and finish with `return surface;`. The editor accepts up to 8192 bytes per material
+and 16 custom materials per scene. Invalid WGSL makes the entire `apply` call fail without
+changing the live scene. The Material panel offers the same editor and a sphere preview.
+
 `ReplaceScene` accepts the complete `document` value returned by `get_state` and must be its only
 action. `list_commands` and `execute_command` expose the existing command palette; some palette
 commands initiate a mouse gesture, so typed actions are the reliable way to model geometry.

@@ -96,6 +96,7 @@ pub struct Renderer {
     boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,
     fast_boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,
     shader_source: String,
+    custom_material_sources: Vec<(uuid::Uuid, String)>,
     pipeline_layout: wgpu::PipelineLayout,
     use_bvh: bool,
     node_count: u32,
@@ -166,6 +167,7 @@ impl MaterialPreviewIds {
                 WoodSpecies::Pine => self.pine,
                 WoodSpecies::Maple => self.maple,
             },
+            MaterialKind::Custom => self.solid,
         }
     }
 
@@ -187,6 +189,7 @@ pub struct CapturedFrame {
 mod bvh;
 mod initialization;
 mod material_gpu;
+pub(crate) use material_gpu::validate_custom_materials;
 mod material_previews;
 mod modifier_gpu;
 mod rendering;
