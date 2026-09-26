@@ -97,6 +97,9 @@ impl ApplicationHandler<AppEvent> for App {
             ));
             if self.benchmark {
                 self.camera.viewport = renderer.size();
+                renderer
+                    .sync_custom_materials(&crate::model::material_assets(&self.tree))
+                    .expect("compile benchmark scene materials");
                 let versions = [
                     self.tree.path_version("scene.sdf_objects"),
                     self.tree.path_version("scene.selected_uuids"),
@@ -116,6 +119,7 @@ impl ApplicationHandler<AppEvent> for App {
                             &scene,
                             &[],
                             [i32::MIN + 1, 0],
+                            crate::model::world(&self.tree),
                             &case,
                         );
                     }
@@ -125,6 +129,7 @@ impl ApplicationHandler<AppEvent> for App {
                         objects_ref(&self.tree),
                         &commands::effective_selected_ids(&self.tree),
                         versions,
+                        crate::model::world(&self.tree),
                         "stress",
                     );
                 }
@@ -164,7 +169,14 @@ impl ApplicationHandler<AppEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         match event {
-            AppEvent::AgentRequest => self.process_agent_requests(),
+            AppEvent::AgentRequest => {
+                self.process_agent_requests();
+                if self.agent_redraw_pending {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
         }
         #[cfg(any(target_arch = "wasm32", not(unix)))]
         let _ = event;
@@ -225,7 +237,13 @@ impl ApplicationHandler<AppEvent> for App {
                 };
                 #[cfg(target_arch = "wasm32")]
                 let guide_capture = false;
-                if (!self.window_focused || self.window_occluded) && !guide_capture {
+                #[cfg(all(not(target_arch = "wasm32"), unix))]
+                let agent_redraw_pending = self.agent_redraw_pending;
+                #[cfg(any(target_arch = "wasm32", not(unix)))]
+                let agent_redraw_pending = false;
+                if ((!self.window_focused && !agent_redraw_pending) || self.window_occluded)
+                    && !guide_capture
+                {
                     return;
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -289,7 +307,17 @@ impl ApplicationHandler<AppEvent> for App {
                         return;
                     }
                 }
+                #[cfg(all(not(target_arch = "wasm32"), unix))]
+                let offscreen_agent_capture = self.agent_capture.is_some();
                 self.redraw();
+                #[cfg(all(not(target_arch = "wasm32"), unix))]
+                if self.agent_redraw_pending && !offscreen_agent_capture {
+                    self.agent_redraw_pending = self.ui.refine_viewport()
+                        && self
+                            .renderer
+                            .as_ref()
+                            .is_some_and(|renderer| !renderer.viewport_refined());
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.guide_capture_done {
                     event_loop.exit();
@@ -478,7 +506,12 @@ impl ApplicationHandler<AppEvent> for App {
         };
         #[cfg(target_arch = "wasm32")]
         let guide_capture = false;
-        if self.window_focused && !self.window_occluded || guide_capture {
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        let agent_redraw_pending = self.agent_redraw_pending;
+        #[cfg(any(target_arch = "wasm32", not(unix)))]
+        let agent_redraw_pending = false;
+        if ((self.window_focused || agent_redraw_pending) && !self.window_occluded) || guide_capture
+        {
             let Some(window) = &self.window else {
                 return;
             };

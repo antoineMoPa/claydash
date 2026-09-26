@@ -508,6 +508,15 @@ impl App {
 
     fn process_agent_request(&mut self, inbound: Inbound) {
         let Inbound { request, reply } = inbound;
+        let changes_view = matches!(
+            &request,
+            Request::Apply(_)
+                | Request::ExecuteCommand { .. }
+                | Request::SetView(_)
+                | Request::Undo
+                | Request::Redo
+                | Request::Open { .. }
+        );
         let result = match request {
             Request::GetState => self.agent_state(),
             Request::GetSchema => Ok(schema()),
@@ -601,6 +610,9 @@ impl App {
                 json!({"path": path, "revision": self.scene_revision()})
             }),
         };
+        if changes_view && result.is_ok() {
+            self.agent_redraw_pending = true;
+        }
         let _ = reply.send(result);
     }
 

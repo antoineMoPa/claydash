@@ -1,6 +1,11 @@
 use super::*;
 
 impl Renderer {
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    pub fn viewport_refined(&self) -> bool {
+        self.viewport.is_refined()
+    }
+
     pub fn render(
         &mut self,
         camera: &Camera,

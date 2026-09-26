@@ -90,6 +90,8 @@ pub struct App {
     agent_capture: Option<agent::AgentCapture>,
     #[cfg(all(not(target_arch = "wasm32"), unix))]
     agent_revision: u64,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_redraw_pending: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pending_render: Option<PendingRender>,
     #[cfg(not(target_arch = "wasm32"))]

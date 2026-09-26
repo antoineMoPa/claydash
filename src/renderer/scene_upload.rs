@@ -1,16 +1,6 @@
 use super::*;
 
 impl Renderer {
-    pub(super) fn upload_scene(
-        &mut self,
-        camera: &Camera,
-        objects: &[SdfObject],
-        selected: &[uuid::Uuid],
-        scene_versions: [i32; 2],
-    ) {
-        self.upload_scene_with_world(camera, objects, selected, scene_versions, World::default());
-    }
-
     pub(super) fn upload_scene_with_world(
         &mut self,
         camera: &Camera,

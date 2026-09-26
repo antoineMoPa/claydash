@@ -24,7 +24,7 @@ camera, and viewport-size changes invalidate the cache.
   shrink or become empty. Size shader scratch storage to the largest component, with a
   dedicated two-operand path, rather than the entire object count.
 - Share one secondary-ray tracing call site between reflection and transmission. Preserve
-  six surface interactions, Fresnel response, entry/exit refraction, and total internal
+  up to twelve surface interactions, Fresnel response, entry/exit refraction, and total internal
   reflection. Metal and the first glass interface reflect scene geometry. Later glass
   reflections sample the studio environment; the transmitted path still traces geometry.
   This is a real-time material approximation, not a path tracer.

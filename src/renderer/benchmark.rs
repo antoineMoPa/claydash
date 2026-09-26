@@ -9,12 +9,13 @@ impl Renderer {
         objects: &[SdfObject],
         selected: &[uuid::Uuid],
         scene_versions: [i32; 2],
+        world: World,
         case: &str,
     ) {
         use std::time::{Duration, Instant};
 
         self.uploaded_scene_versions = [i32::MIN; 2];
-        self.upload_scene(camera, objects, selected, scene_versions);
+        self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("SDF stress benchmark target"),
             size: wgpu::Extent3d {
@@ -89,7 +90,7 @@ impl Renderer {
         );
         save_benchmark_image(case, &full_image);
         if std::env::args().any(|arg| arg == "--benchmark-progressive") {
-            self.benchmark_viewport(camera, objects, selected, scene_versions, &target);
+            self.benchmark_viewport(camera, objects, selected, scene_versions, world, &target);
             let refined_image = self.benchmark_pixels(&target);
             let max_error = full_image
                 .iter()
@@ -172,6 +173,7 @@ impl Renderer {
         objects: &[SdfObject],
         selected: &[uuid::Uuid],
         versions: [i32; 2],
+        world: World,
         target: &wgpu::Texture,
     ) {
         use std::time::{Duration, Instant};
@@ -235,11 +237,12 @@ impl Renderer {
                 versions[0].wrapping_add(phase),
                 versions[1].wrapping_add(phase),
             ];
-            self.upload_scene(
+            self.upload_scene_with_world(
                 &current,
                 if phase == 1 { &edited } else { objects },
                 if phase == 2 { &selection } else { selected },
                 frame_versions,
+                world,
             );
             let work = self.viewport.prepare(
                 &self.device,

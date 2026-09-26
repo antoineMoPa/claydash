@@ -178,7 +178,7 @@ The preview's top row compares solid, metallic, and transparent spheres with an 
 behind them; the bottom row compares union, subtraction, and intersection. The glass sphere
 is selected to expose the radius guide. Metal reflects scene objects and the studio environment;
 glass traces entry/exit refraction with Fresnel reflection and total internal reflection.
-This is a bounded real-time approximation (six surface interactions), not a path tracer.
+This is a bounded real-time approximation (up to twelve surface interactions), not a path tracer.
 The first glass interface reflects scene geometry; later glass reflections use the studio
 environment while transmission continues through scene objects.
 

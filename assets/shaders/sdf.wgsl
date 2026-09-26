@@ -594,6 +594,41 @@ fn has_analytic_interval(object: Object) -> bool {
         && !(object.state.y == 2 && brick_geometry_visible(object));
 }
 
+fn analytic_subtraction(start: u32, root: u32) -> bool {
+    return root == start + 1u && objects[start].state.z == 1
+        && bitcast<f32>(objects[root].component.z) == 0.0
+        && has_analytic_interval(objects[start]) && has_analytic_interval(objects[root]);
+}
+
+// A convex solid minus another convex solid has at most two intervals on a ray.
+// The first boundary of each interval comes from the outer entry or inner exit.
+fn subtraction_entry(origin: vec3<f32>, direction: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    let outer = primitive_interval(origin, direction, objects[root]);
+    if outer.x > outer.y { return vec2(100.0, -1.0); }
+    let inner = primitive_interval(origin, direction, objects[start]);
+    let first_end = min(outer.y, inner.x);
+    if first_end >= max(outer.x, 0.0) {
+        return vec2(max(outer.x, 0.0), f32(root));
+    }
+    let second_start = max(outer.x, inner.y);
+    if outer.y >= max(second_start, 0.0) {
+        return vec2(max(second_start, 0.0), f32(root));
+    }
+    return vec2(100.0, -1.0);
+}
+
+fn subtraction_exit(origin: vec3<f32>, direction: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    let outer = primitive_interval(origin, direction, objects[root]);
+    let inner = primitive_interval(origin, direction, objects[start]);
+    if outer.x <= 0.0 && min(outer.y, inner.x) > 0.0 {
+        return vec2(min(outer.y, inner.x), f32(root));
+    }
+    if max(outer.x, inner.y) <= 0.0 && outer.y > 0.0 {
+        return vec2(outer.y, f32(root));
+    }
+    return vec2(100.0, -1.0);
+}
+
 // Traverse bounds once per ray, then march only the intersected primitives.
 // The nearest boundary of a union is the nearest primitive boundary for rays
 // starting outside. Interior rays retain the union marcher to cross overlaps.
@@ -616,6 +651,15 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
         }
         if node.metadata.x != 0xffffffffu {
             let object = objects[node.metadata.x];
+            if analytic_subtraction(node.metadata.z, node.metadata.x) {
+                let interval = subtraction_entry(origin, direction, node.metadata.z, node.metadata.x);
+                if interval.y >= 0.0 && interval.x < closest {
+                    closest = interval.x;
+                    owner = interval.y;
+                }
+                node_index += 1u;
+                continue;
+            }
             if node.metadata.z == node.metadata.x && has_analytic_interval(object) {
                 let interval = primitive_interval(origin, direction, object);
                 let candidate = max(0.0, interval.x);
@@ -673,7 +717,15 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
         for (var step = 0; step < 128; step++) {
             let component = objects[owner].component;
             var sample = vec2(0.0, f32(owner));
-            if component.x == component.y && has_analytic_interval(objects[owner]) {
+            if analytic_subtraction(component.x, component.y) {
+                let exit = subtraction_exit(origin + direction * travel, direction, component.x, component.y);
+                if exit.y >= 0.0 {
+                    travel += exit.x;
+                    sample.y = exit.y;
+                } else {
+                    sample = component_distance(origin + direction * travel, component.x, component.y);
+                }
+            } else if component.x == component.y && has_analytic_interval(objects[owner]) {
                 let interval = primitive_interval(origin, direction, objects[owner]);
                 travel = max(travel, interval.y);
             } else {
@@ -771,7 +823,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 throughput = vec3(0.0);
                 break;
             }
-            if bounce >= 6 { break; }
+            // A habitat may contain several translucent shells (clouds and
+            // canopy) before the landscape. Each shell has two crossings.
+            if bounce >= 12 { break; }
             bounce += 1;
             let object = objects[index];
             let outward = scene_normal(point, index);
@@ -780,14 +834,27 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             if FAST_PREVIEW {
                 let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
                     normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
+                var surface = material_surface(point, normal, -direction, object);
                 let decal = stencil_color(point, normal, object);
                 let shade = 0.22 + 0.78 * max(dot(normal, light), 0.0);
                 if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 {
-                    radiance += mix(background(ray), decal.rgb * shade, decal.a);
-                } else {
-                    radiance += mix(object.color.rgb, decal.rgb, decal.a) * shade;
+                    surface.color = decal.rgb;
+                    surface.opacity = decal.a;
+                } else if decal.a > 0.0 {
+                    surface.color = mix(surface.color, decal.rgb, decal.a);
                 }
-                break;
+                let opacity = clamp(surface.opacity, 0.0, 1.0);
+                radiance += throughput * surface.color * shade * opacity;
+                throughput *= 1.0 - opacity;
+                if opacity >= 0.999 || max(throughput.x, max(throughput.y, throughput.z)) < 0.01 {
+                    break;
+                }
+                let preview_origin = point + direction * 0.007;
+                let next = trace(preview_origin, direction, entering, index);
+                hit = next.y >= 0.0;
+                point = preview_origin + direction * next.x;
+                index = u32(max(next.y, 0.0));
+                continue;
             }
             var surface = material_surface(point, normal, -direction, object);
             let decal = stencil_color(point, normal, object);

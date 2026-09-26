@@ -87,6 +87,20 @@ impl App {
         }
         let camera = Camera::new();
         #[cfg(not(target_arch = "wasm32"))]
+        let camera = if benchmark || std::env::args().any(|arg| arg == "--stress-ui-benchmark") {
+            let mut camera = camera;
+            if let Some(active) = crate::model::active_camera_id(&tree).and_then(|id| {
+                crate::model::scene_cameras(&tree)
+                    .into_iter()
+                    .find(|scene_camera| scene_camera.uuid == id)
+            }) {
+                active.apply_to_view(&mut camera);
+            }
+            camera
+        } else {
+            camera
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         let camera = if std::env::args().any(|arg| arg == "--benchmark-orthographic") {
             Camera {
                 projection_mode: crate::camera::ProjectionMode::Orthographic,
@@ -338,6 +352,8 @@ impl App {
             agent_capture: None,
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             agent_revision: 0,
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_redraw_pending: false,
             #[cfg(not(target_arch = "wasm32"))]
             pending_render: None,
             #[cfg(not(target_arch = "wasm32"))]
