@@ -341,6 +341,8 @@ impl Renderer {
             use_bvh,
             node_count: 0,
             has_booleans: false,
+            scene_shader_features: SceneShaderFeatures::ALL,
+            scene_pipelines_dirty: false,
             bind_group,
             bind_group_layout: layout,
             camera_buffer,

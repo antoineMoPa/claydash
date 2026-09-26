@@ -1,22 +1,40 @@
 // Pre-optimization material renderer, retained for visual comparisons (up to 256 objects).
-// Only the storage-buffer layout was extended to match the current upload ABI.
+// The storage layout follows the current upload ABI; shading retains the old algorithm.
 struct Camera { inverse_view_projection: mat4x4<f32>, position: vec4<f32>, count: vec4<u32> }
 struct Object {
     state: vec4<i32>,
     color: vec4<f32>,
     inverse_rows: array<vec4<f32>, 3>,
+    group_inverse_rows: array<vec4<f32>, 3>,
     params: vec4<f32>,
-    material: vec4<f32>,
     repeat_spacing: vec4<f32>,
     repeat_count: vec4<i32>,
     component: vec4<u32>,
+    scale: vec4<f32>,
+    modifier: vec4<u32>,
+    mirror_axes: vec4<u32>,
+    stencil_placement: vec4<f32>,
+    stencil_meta: vec4<f32>,
+    distance_bound: vec4<f32>,
+    operand_tree: vec4<u32>,
 }
+struct MaterialHeader { kind: u32, offset: u32, length: u32, reserved: u32 }
 struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> objects: array<Object>;
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
+@group(0) @binding(3) var<storage, read> material_headers: array<MaterialHeader>;
+@group(0) @binding(4) var<storage, read> material_params: array<vec4<f32>>;
 override USE_BVH: bool = true;
 override HAS_BOOLEANS: bool = false;
+
+fn reference_material(object: Object) -> vec4<f32> {
+    return material_params[material_headers[object.component.w].offset];
+}
+
+fn reference_ior(object: Object) -> f32 {
+    return material_params[material_headers[object.component.w].offset + 1u].x;
+}
 
 struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) clip: vec2<f32> }
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
@@ -153,13 +171,14 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
 }
 
 fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object) -> vec3<f32> {
+    let material = reference_material(object);
     let light = normalize(vec3(2.0, 3.0, 2.0) - point);
     let halfway = normalize(light + view);
-    let roughness = clamp(object.material.x, 0.03, 1.0);
-    let metallic = object.material.y;
+    let roughness = clamp(material.x, 0.03, 1.0);
+    let metallic = material.y;
     let diffuse = max(dot(normal, light), 0.0);
     let specular = pow(max(dot(normal, halfway), 0.0), mix(256.0, 3.0, roughness * roughness));
-    let specular_color = mix(vec3(object.material.z), object.color.rgb, metallic);
+    let specular_color = mix(vec3(material.z), object.color.rgb, metallic);
     return object.color.rgb * (0.13 + diffuse * 0.75) * (1.0 - metallic)
         + specular_color * specular * (1.0 - roughness * 0.5);
 }
@@ -191,15 +210,16 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
     let selected = f32(objects[index].state.x) * 0.12;
     for (var bounce = 0; bounce < 6; bounce++) {
         let object = objects[index];
+        let material = reference_material(object);
         let outward = scene_normal(point);
         let entering = dot(direction, outward) < 0.0;
         let normal = select(-outward, outward, entering);
-        let ior = max(object.repeat_spacing.w, 1.0);
+        let ior = max(reference_ior(object), 1.0);
         let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
         let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(-direction, normal), 0.0), 5.0);
         let reflection = reflect(direction, normal);
-        let opacity = clamp(object.material.w, 0.0, 1.0);
-        let metallic = clamp(object.material.y, 0.0, 1.0);
+        let opacity = clamp(material.w, 0.0, 1.0);
+        let metallic = clamp(material.y, 0.0, 1.0);
         let eta = select(ior, 1.0 / ior, entering);
         let transmitted = refract(direction, normal, eta);
         // Total internal reflection continues the path without adding the same
@@ -222,9 +242,9 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
             let reflected_point = point + normal * 0.007 + reflection * reflected_hit.x;
             reflected_color = surface_light(reflected_point, scene_normal(reflected_point), -reflection, objects[u32(reflected_hit.y)]);
         }
-        let roughness = clamp(object.material.x, 0.0, 1.0);
+        let roughness = clamp(material.x, 0.0, 1.0);
         reflected_color = mix(reflected_color, vec3(0.22, 0.27, 0.35), roughness * roughness);
-        let reflection_weight = clamp(max(fresnel, object.material.z), 0.0, 1.0);
+        let reflection_weight = clamp(max(fresnel, material.z), 0.0, 1.0);
         let tint = mix(vec3(1.0), object.color.rgb, metallic);
         radiance += throughput * (reflected_color * tint * reflection_weight
             + surface_light(point, normal, -direction, object) * opacity * (1.0 - reflection_weight));

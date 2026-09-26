@@ -13,13 +13,136 @@ use crate::{
 mod benchmark;
 
 const MAX_OBJECTS: usize = 1024;
-const MAX_BVH_NODES: usize = MAX_OBJECTS * 2 - 1;
+// Scene components and eligible operand trees share the same storage buffer.
+const MAX_BVH_NODES: usize = MAX_OBJECTS * 4;
 const MAX_POLYGON_POINTS: usize = MAX_OBJECTS * (16 * (3 + 32));
 const MAX_LATTICE_POINTS: usize = MAX_OBJECTS * 9 * 9 * 9;
 const LATTICE_ATLAS_TILE_PITCH: u32 = 19;
 const LATTICE_ATLAS_TILES_PER_ROW: u32 = 32;
 const LATTICE_ATLAS_WIDTH: u32 = LATTICE_ATLAS_TILE_PITCH * LATTICE_ATLAS_TILES_PER_ROW;
 const BVH_LEAF: u32 = u32::MAX;
+const FLAT_UNION_ROOT: i32 = -2;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct BuiltinMaterialFeatures {
+    wood: bool,
+    brick: bool,
+    diagnostic: bool,
+}
+
+impl BuiltinMaterialFeatures {
+    const ALL: Self = Self {
+        wood: true,
+        brick: true,
+        diagnostic: true,
+    };
+
+    fn for_materials(materials: &[Material]) -> Self {
+        let mut features = Self {
+            wood: false,
+            brick: false,
+            diagnostic: false,
+        };
+        for material in materials {
+            match material.kind {
+                MaterialKind::Wood => features.wood = true,
+                MaterialKind::Brick => features.brick = true,
+                MaterialKind::Diagnostic => features.diagnostic = true,
+                _ => {}
+            }
+        }
+        features
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PrimitiveFeatures {
+    polygon_prisms: bool,
+    bezier_curves: bool,
+    lofts: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SpatialFeatures {
+    lattice: bool,
+    mirror: bool,
+    repetition: bool,
+}
+
+impl SpatialFeatures {
+    const ALL: Self = Self {
+        lattice: true,
+        mirror: true,
+        repetition: true,
+    };
+
+    fn for_objects(objects: &[GpuObject]) -> Self {
+        let mut features = Self {
+            lattice: false,
+            mirror: false,
+            repetition: false,
+        };
+        for object in objects {
+            features.lattice |= object.modifier[0] != 0;
+            features.mirror |= object.mirror_axes[..3].iter().any(|&axis| axis != 0);
+            features.repetition |= object.repeat_count[3] != 0;
+        }
+        features
+    }
+}
+
+impl PrimitiveFeatures {
+    const ALL: Self = Self {
+        polygon_prisms: true,
+        bezier_curves: true,
+        lofts: true,
+    };
+
+    fn for_objects(objects: &[GpuObject]) -> Self {
+        let mut features = Self {
+            polygon_prisms: false,
+            bezier_curves: false,
+            lofts: false,
+        };
+        for object in objects {
+            match object.meta[1] {
+                sdf_consts::TYPE_POLYGON_PRISM => features.polygon_prisms = true,
+                sdf_consts::TYPE_BEZIER_CURVE => features.bezier_curves = true,
+                sdf_consts::TYPE_LOFT => features.lofts = true,
+                _ => {}
+            }
+        }
+        features
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SceneShaderFeatures {
+    materials: BuiltinMaterialFeatures,
+    primitives: PrimitiveFeatures,
+    spatial: SpatialFeatures,
+    flat_unions: bool,
+}
+
+impl SceneShaderFeatures {
+    const ALL: Self = Self {
+        materials: BuiltinMaterialFeatures::ALL,
+        primitives: PrimitiveFeatures::ALL,
+        spatial: SpatialFeatures::ALL,
+        flat_unions: true,
+    };
+
+    fn for_scene(materials: &[Material], objects: &[GpuObject]) -> Self {
+        Self {
+            materials: BuiltinMaterialFeatures::for_materials(materials),
+            primitives: PrimitiveFeatures::for_objects(objects),
+            spatial: SpatialFeatures::for_objects(objects),
+            flat_unions: objects
+                .iter()
+                .any(|object| object.meta[3] == FLAT_UNION_ROOT),
+        }
+    }
+}
 
 fn render_format_for_surface(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
     match format {
@@ -58,6 +181,8 @@ struct GpuObject {
     mirror_axes: [u32; 4],
     stencil_placement: [f32; 4],
     stencil_meta: [f32; 4],
+    distance_bound: [f32; 4],
+    operand_tree: [u32; 4],
 }
 
 #[repr(C)]
@@ -101,6 +226,8 @@ pub struct Renderer {
     use_bvh: bool,
     node_count: u32,
     has_booleans: bool,
+    scene_shader_features: SceneShaderFeatures,
+    scene_pipelines_dirty: bool,
     bind_group: wgpu::BindGroup,
     bind_group_layout: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,

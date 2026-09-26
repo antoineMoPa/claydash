@@ -11,7 +11,10 @@ fn ambient_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
         let direction = normalize(normal * 0.75 + tangent * cos(angle) + bitangent * sin(angle));
         let reach = 0.12;
         let expected = reach * dot(direction, normal);
-        let distance_to_scene = scene_distance(point + normal * 0.008 + direction * reach).x;
+        // Distances beyond expected contribute zero occlusion. Once any
+        // component contains the probe, the contribution is already one.
+        let distance_to_scene = scene_distance_limit(
+            point + normal * 0.008 + direction * reach, expected, true).x;
         occlusion += clamp((expected - distance_to_scene) / expected, 0.0, 1.0);
     }
     return clamp(1.0 - occlusion * 0.52, 0.25, 1.0);

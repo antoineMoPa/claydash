@@ -494,12 +494,25 @@ impl Renderer {
                     + matrix.y_axis.truncate().abs() * repeated_extent.y
                     + matrix.z_axis.truncate().abs() * repeated_extent.z
                     + cage_extent;
-                bounds.push(ObjectBound {
+                let bound = ObjectBound {
                     half_extent,
                     center: matrix.transform_point3(Vec3::ZERO),
                     radius: repeated_radius + cage_extent.length(),
                     object_index: index as u32,
-                });
+                };
+                bounds.push(bound);
+                let uniform_scale = (abs_scale.max_element() - abs_scale.min_element())
+                    <= abs_scale.max_element() * 0.00001;
+                let safe_distance_bound = modifier_index == 0
+                    && uniform_scale
+                    && matches!(
+                        &object.params,
+                        SdfParams::SphereParams(_)
+                            | SdfParams::BoxParams(_)
+                            | SdfParams::CylinderParams { .. }
+                            | SdfParams::TorusParams { .. }
+                            | SdfParams::PolygonPrismParams(_)
+                    );
                 let custom_index = if object.material.kind == MaterialKind::Custom {
                     object
                         .material_id
@@ -514,6 +527,15 @@ impl Renderer {
                 };
                 let material_index = materials.insert_custom(object.material, custom_index);
                 GpuObject {
+                    distance_bound: bound
+                        .center
+                        .extend(if safe_distance_bound {
+                            bound.radius + 0.01
+                        } else {
+                            -1.0
+                        })
+                        .to_array(),
+                    operand_tree: [0; 4],
                     // Spare component lanes carry blend width and material index.
                     component: [0, 0, object.softness.to_bits(), material_index],
                     scale: abs_scale
@@ -686,6 +708,16 @@ impl Renderer {
                     .iter()
                     .map(|object| f32::from_bits(object.modifier[1]))
                     .fold(1.0_f32, f32::min);
+                // A flat hard union needs only a running minimum. Nested or
+                // smooth components still use the general CSG evaluation.
+                if index > group_start
+                    && gpu_objects[index].component[2] == 0
+                    && gpu_objects[group_start..index]
+                        .iter()
+                        .all(|object| object.meta[2] == 0 && object.meta[3] == index as i32)
+                {
+                    gpu_objects[index].meta[3] = FLAT_UNION_ROOT;
+                }
                 gpu_objects[index].modifier[1] = march_factor.to_bits();
                 starts[index] = group_start as u32;
                 capacity = capacity.max((index - group_start + 1).next_power_of_two() as u32);
@@ -707,10 +739,13 @@ impl Renderer {
             }
         }
         self.node_count = bvh.len() as u32;
+        append_operand_bvhs(&mut bvh, &mut gpu_objects, &starts);
+        debug_assert!(bvh.len() <= MAX_BVH_NODES);
         gpu_camera.count[1] = self.node_count;
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_camera));
         // Specialize scratch storage to the largest component, not scene size.
+        let was_boolean = self.has_booleans;
         self.has_booleans = capacity > 1;
         let transmitted_instances: u64 = gpu_objects
             .iter()
@@ -737,6 +772,40 @@ impl Renderer {
             };
         self.viewport.set_initial_budget(self.initial_pixel_budget);
         self.resize_lattice_atlas_for(lattice_atlas_uploads.len());
+        let shader_features = SceneShaderFeatures::for_scene(&materials.materials, &gpu_objects);
+        let shader_features_changed = shader_features != self.scene_shader_features;
+        if shader_features_changed || self.scene_pipelines_dirty {
+            self.boolean_pipeline = None;
+            self.fast_boolean_pipeline = None;
+        }
+        if !self.has_booleans
+            && (shader_features_changed || self.scene_pipelines_dirty || was_boolean)
+        {
+            self.pipeline = create_scene_pipeline_for_materials(
+                &self.device,
+                &self.shader_source,
+                &self.pipeline_layout,
+                self.render_format,
+                self.use_bvh,
+                1,
+                false,
+                false,
+                shader_features,
+            );
+            self.fast_pipeline = create_scene_pipeline_for_materials(
+                &self.device,
+                &self.shader_source,
+                &self.pipeline_layout,
+                self.render_format,
+                self.use_bvh,
+                1,
+                false,
+                true,
+                shader_features,
+            );
+        }
+        self.scene_shader_features = shader_features;
+        self.scene_pipelines_dirty = false;
         if self.has_booleans
             && self
                 .boolean_pipeline
@@ -745,7 +814,7 @@ impl Renderer {
         {
             self.boolean_pipeline = Some((
                 capacity,
-                create_scene_pipeline(
+                create_scene_pipeline_for_materials(
                     &self.device,
                     &self.shader_source,
                     &self.pipeline_layout,
@@ -754,6 +823,7 @@ impl Renderer {
                     capacity,
                     false,
                     false,
+                    shader_features,
                 ),
             ));
         }
@@ -765,7 +835,7 @@ impl Renderer {
         {
             self.fast_boolean_pipeline = Some((
                 capacity,
-                create_scene_pipeline(
+                create_scene_pipeline_for_materials(
                     &self.device,
                     &self.shader_source,
                     &self.pipeline_layout,
@@ -774,6 +844,7 @@ impl Renderer {
                     capacity,
                     false,
                     true,
+                    shader_features,
                 ),
             ));
         }

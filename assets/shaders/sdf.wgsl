@@ -18,6 +18,8 @@ struct Object {
     mirror_axes: vec4<u32>,
     stencil_placement: vec4<f32>,
     stencil_meta: vec4<f32>,
+    distance_bound: vec4<f32>,
+    operand_tree: vec4<u32>,
 }
 struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -30,6 +32,13 @@ override USE_BVH: bool = true;
 override HAS_BOOLEANS: bool = false;
 override TRANSPARENT_BACKGROUND: bool = false;
 override FAST_PREVIEW: bool = false;
+override HAS_POLYGON_PRISMS: bool = true;
+override HAS_BEZIER_CURVES: bool = true;
+override HAS_LOFTS: bool = true;
+override HAS_LATTICE_MODIFIERS: bool = true;
+override HAS_MIRRORS: bool = true;
+override HAS_REPETITION: bool = true;
+override HAS_FLAT_UNIONS: bool = true;
 
 fn stencil_color(point: vec3<f32>, normal: vec3<f32>, object: Object) -> vec4<f32> {
     if object.stencil_meta.x < 0.5 { return vec4(0.0); }
@@ -45,6 +54,7 @@ fn stencil_color(point: vec3<f32>, normal: vec3<f32>, object: Object) -> vec4<f3
     return textureSampleLevel(image_atlas, image_sampler, uv, i32(object.stencil_meta.x) - 1, 0.0);
 }
 const CSG_SIZE: u32 = 256u;
+const FLAT_UNION_ROOT: i32 = -2;
 
 struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) clip: vec2<f32> }
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
@@ -64,6 +74,7 @@ fn repeated_axis(value: f32, spacing: f32, count: i32) -> f32 {
 }
 
 fn group_repeat_point(point: vec3<f32>, root: Object) -> vec3<f32> {
+    if !HAS_REPETITION { return point; }
     let homogeneous = vec4(point, 1.0);
     let local = vec3(
         dot(root.group_inverse_rows[0], homogeneous),
@@ -90,6 +101,7 @@ fn group_repeat_point(point: vec3<f32>, root: Object) -> vec3<f32> {
 }
 
 fn mirror_point(point: vec3<f32>, root: Object) -> vec3<f32> {
+    if !HAS_MIRRORS { return point; }
     if all(root.mirror_axes.xyz == vec3<u32>(0u)) { return point; }
     let homogeneous = vec4(point, 1.0);
     let local = vec3(
@@ -120,10 +132,10 @@ fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
     if count < 3u { return 100.0; }
     var distance_squared = 1e20;
     var inside = false;
+    var a = polygon_points[offset];
     for (var index = 0u; index < 65u; index++) {
         if index >= count { break; }
         let next = select(index + 1u, 0u, index + 1u == count);
-        let a = polygon_points[offset + index];
         let b = polygon_points[offset + next];
         let edge = b - a;
         let relative = point - a;
@@ -137,6 +149,7 @@ fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
             let crossing_x = a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y);
             if point.x < crossing_x { inside = !inside; }
         }
+        a = b;
     }
     return sqrt(distance_squared) * select(1.0, -1.0, inside);
 }
@@ -331,7 +344,7 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
     } else if object.state.y == 4 {
         let q = vec2(length(local.xz) - object.params.x, local.y);
         distance = length(q) - object.params.y;
-    } else if object.state.y == 5 {
+    } else if HAS_POLYGON_PRISMS && object.state.y == 5 {
         let polygon = polygon_distance(
             local.xy,
             bitcast<u32>(object.params.y),
@@ -340,9 +353,9 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
         let depth = abs(local.z) - object.params.x;
         let outside = length(max(vec2(polygon, depth), vec2(0.0)));
         distance = outside + min(max(polygon, depth), 0.0);
-    } else if object.state.y == 6 {
+    } else if HAS_BEZIER_CURVES && object.state.y == 6 {
         distance = bezier_extrusion_distance(local, object);
-    } else if object.state.y == 7 {
+    } else if HAS_LOFTS && object.state.y == 7 {
         distance = loft_distance(local, object);
     }
     return distance;
@@ -439,7 +452,7 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     if CSG_SIZE == 2u {
         let parent = objects[root];
         let operand = objects[start];
-        let group_repeated = parent.repeat_count.w != 0;
+        let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
         let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
         let parent_point = modifier_point(group_point, parent);
         var operand_point = parent_point;
@@ -453,9 +466,56 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
         value = combine_operand(value, child, operand, parent);
         return value;
     }
-    var values: array<vec2<f32>, CSG_SIZE>;
     let parent = objects[root];
-    let group_repeated = parent.repeat_count.w != 0;
+    if HAS_FLAT_UNIONS && parent.state.w == FLAT_UNION_ROOT {
+        let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+        let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
+        let parent_point = modifier_point(group_point, parent);
+        var parent_shape = parent;
+        if group_repeated { parent_shape.repeat_count.w = 0; }
+        var closest = vec2(object_distance_at(parent_point, parent_shape), f32(root));
+        if parent.operand_tree.y > parent.operand_tree.x {
+            var node_index = parent.operand_tree.x;
+            while node_index < parent.operand_tree.y {
+                let node = bvh[node_index];
+                let lower_bound = distance(group_point, node.center_radius.xyz) - node.center_radius.w;
+                if lower_bound > closest.x {
+                    node_index = node.metadata.y;
+                    continue;
+                }
+                if node.metadata.x != 0xffffffffu {
+                    let child = objects[node.metadata.x];
+                    let distance_to_child = object_distance_at(parent_point, child);
+                    // The linear path checks the root first, then children in
+                    // object order. Preserve that owner when distances tie.
+                    if distance_to_child < closest.x
+                        || (distance_to_child == closest.x && closest.y != f32(root)
+                            && node.metadata.x < u32(closest.y)) {
+                        closest = vec2(distance_to_child, f32(node.metadata.x));
+                    }
+                }
+                node_index += 1u;
+            }
+            return closest;
+        }
+        for (var i = start; i < root; i++) {
+            let child = objects[i];
+            if parent.modifier.x == 0u && child.distance_bound.w > 0.0 {
+                let reach = child.distance_bound.w + closest.x;
+                let offset = group_point - child.distance_bound.xyz;
+                if reach <= 0.0 || dot(offset, offset) > reach * reach { continue; }
+            }
+            var child_point = parent_point;
+            if child.modifier.x != parent.modifier.x {
+                child_point = modifier_point(group_point, child);
+            }
+            let distance = object_distance_at(child_point, child);
+            if distance < closest.x { closest = vec2(distance, f32(i)); }
+        }
+        return closest;
+    }
+    var values: array<vec2<f32>, CSG_SIZE>;
+    let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
     let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
     let parent_point = modifier_point(group_point, parent);
     for (var i = start; i <= root; i++) {
@@ -477,16 +537,23 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     return values[root - start];
 }
 
-fn scene_distance(point: vec3<f32>) -> vec2<f32> {
-    var closest = vec2(100.0, 0.0);
+fn scene_distance_limit(point: vec3<f32>, limit: f32, stop_on_inside: bool) -> vec2<f32> {
+    var closest = vec2(limit, 0.0);
     var node_index = 0u;
     while node_index < camera.count.y {
         let node = bvh[node_index];
         let lower_bound = distance(point, node.center_radius.xyz) - node.center_radius.w;
         if !USE_BVH || lower_bound < closest.x {
             if node.metadata.x != 0xffffffffu {
-                let candidate = component_distance(point, node.metadata.z, node.metadata.x);
+                var candidate: vec2<f32>;
+                if HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x)
+                    && !hard_subtraction(node.metadata.z, node.metadata.x) {
+                    candidate = smooth_subtraction_distance(point, node.metadata.z, node.metadata.x);
+                } else {
+                    candidate = component_distance(point, node.metadata.z, node.metadata.x);
+                }
                 if candidate.x < closest.x { closest = candidate; }
+                if stop_on_inside && closest.x <= 0.0 { return closest; }
             }
             node_index += 1u;
         } else { node_index = node.metadata.y; }
@@ -494,7 +561,64 @@ fn scene_distance(point: vec3<f32>) -> vec2<f32> {
     return closest;
 }
 
+fn scene_distance(point: vec3<f32>) -> vec2<f32> {
+    return scene_distance_limit(point, 100.0, false);
+}
+
+fn convex_primitive_normal(point: vec3<f32>, object: Object) -> vec3<f32> {
+    let p = vec4(point, 1.0);
+    let local = vec3(dot(object.inverse_rows[0], p),
+        dot(object.inverse_rows[1], p), dot(object.inverse_rows[2], p));
+    var gradient = vec3(0.0);
+    if object.state.y == 1 {
+        gradient = local / max(length(local), 0.000001);
+    } else if object.state.y == 2 {
+        let radius = clamp(object.scale.w, 0.0,
+            min(object.params.x, min(object.params.y, object.params.z)));
+        let q = abs(local) - (object.params.xyz - vec3(radius));
+        let outside = max(q, vec3(0.0));
+        if dot(outside, outside) > 0.00000001 {
+            gradient = normalize(outside * sign(local));
+        } else {
+            let major = max(q.x, max(q.y, q.z));
+            let axes = select(vec3(0.0), sign(local), q >= vec3(major - 0.00001));
+            gradient = axes / max(length(axes), 0.000001);
+        }
+    } else {
+        let radial = length(local.xz);
+        let q = vec2(radial - object.params.x, abs(local.y) - object.params.y);
+        let radial_gradient = vec3(local.x / max(radial, 0.000001), 0.0,
+            local.z / max(radial, 0.000001));
+        let cap_gradient = vec3(0.0, sign(local.y), 0.0);
+        if q.x > 0.0 && q.y > 0.0 {
+            gradient = normalize(radial_gradient * q.x + cap_gradient * q.y);
+        } else {
+            gradient = select(cap_gradient, radial_gradient, q.x >= q.y);
+        }
+    }
+    let world = vec3(
+        dot(gradient, vec3(object.inverse_rows[0].x, object.inverse_rows[1].x, object.inverse_rows[2].x)),
+        dot(gradient, vec3(object.inverse_rows[0].y, object.inverse_rows[1].y, object.inverse_rows[2].y)),
+        dot(gradient, vec3(object.inverse_rows[0].z, object.inverse_rows[1].z, object.inverse_rows[2].z)));
+    return world / max(length(world), 0.000001);
+}
+
 fn scene_normal(point: vec3<f32>, index: u32) -> vec3<f32> {
+    let component = objects[index].component;
+    if HAS_BOOLEANS && analytic_subtraction(component.x, component.y) {
+        let parent = objects[component.y];
+        let child = objects[component.x];
+        let parent_distance = convex_distance_at(point, parent);
+        let child_distance = convex_distance_at(point, child);
+        let softness = bitcast<f32>(parent.component.z);
+        var parent_weight = select(0.0, 1.0, parent_distance >= -child_distance);
+        if softness > 0.0 {
+            parent_weight = clamp(0.5 + (parent_distance + child_distance) / (2.0 * softness), 0.0, 1.0);
+        }
+        let gradient = parent_weight * convex_primitive_normal(point, parent)
+            - (1.0 - parent_weight) * convex_primitive_normal(point, child);
+        if dot(gradient, gradient) > 0.00000001 { return normalize(gradient); }
+    }
     let e = 0.003;
     let a = vec3(1.0, -1.0, -1.0);
     let b = vec3(-1.0, -1.0, 1.0);
@@ -591,13 +715,38 @@ fn has_analytic_interval(object: Object) -> bool {
     return object.repeat_count.w == 0 && object.state.y <= 3 && object.modifier.x == 0u
         && object.mirror_axes.w == 0u
         && all(object.mirror_axes.xyz == vec3<u32>(0u))
+        && !(object.state.y == 2 && object.scale.w > 0.0)
         && !(object.state.y == 2 && brick_geometry_visible(object));
 }
 
 fn analytic_subtraction(start: u32, root: u32) -> bool {
     return root == start + 1u && objects[start].state.z == 1
-        && bitcast<f32>(objects[root].component.z) == 0.0
         && has_analytic_interval(objects[start]) && has_analytic_interval(objects[root]);
+}
+
+fn hard_subtraction(start: u32, root: u32) -> bool {
+    return analytic_subtraction(start, root)
+        && bitcast<f32>(objects[root].component.z) == 0.0;
+}
+
+// The interval path establishes that these primitives have no spatial
+// modifiers, repetition, inlays, or geometry-changing materials.
+fn convex_distance_at(point: vec3<f32>, object: Object) -> f32 {
+    let p = vec4(point, 1.0);
+    let local = vec3(dot(object.inverse_rows[0], p),
+        dot(object.inverse_rows[1], p), dot(object.inverse_rows[2], p));
+    return primitive_distance(local, object) * object.params.w;
+}
+
+fn smooth_subtraction_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    let outer = objects[root];
+    let inner = objects[start];
+    let outer_distance = convex_distance_at(point, outer);
+    let carved_distance = -convex_distance_at(point, inner);
+    let softness = bitcast<f32>(outer.component.z);
+    let h = max(softness - abs(outer_distance - carved_distance), 0.0) / softness;
+    let distance = max(outer_distance, carved_distance) + softness * h * h * 0.25;
+    return vec2(distance, f32(root));
 }
 
 // A convex solid minus another convex solid has at most two intervals on a ray.
@@ -617,16 +766,18 @@ fn subtraction_entry(origin: vec3<f32>, direction: vec3<f32>, start: u32, root: 
     return vec2(100.0, -1.0);
 }
 
-fn subtraction_exit(origin: vec3<f32>, direction: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+fn subtraction_exit(origin: vec3<f32>, direction: vec3<f32>, start: u32, root: u32) -> vec3<f32> {
     let outer = primitive_interval(origin, direction, objects[root]);
     let inner = primitive_interval(origin, direction, objects[start]);
+    let overlapping = select(0.0, 1.0,
+        inner.x <= inner.y && inner.x < outer.y && inner.y > outer.x);
     if outer.x <= 0.0 && min(outer.y, inner.x) > 0.0 {
-        return vec2(min(outer.y, inner.x), f32(root));
+        return vec3(min(outer.y, inner.x), f32(root), overlapping);
     }
     if max(outer.x, inner.y) <= 0.0 && outer.y > 0.0 {
-        return vec2(outer.y, f32(root));
+        return vec3(outer.y, f32(root), overlapping);
     }
-    return vec2(100.0, -1.0);
+    return vec3(100.0, -1.0, 0.0);
 }
 
 // Traverse bounds once per ray, then march only the intersected primitives.
@@ -651,14 +802,25 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
         }
         if node.metadata.x != 0xffffffffu {
             let object = objects[node.metadata.x];
-            if analytic_subtraction(node.metadata.z, node.metadata.x) {
+            var travel = start;
+            if HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x) {
                 let interval = subtraction_entry(origin, direction, node.metadata.z, node.metadata.x);
-                if interval.y >= 0.0 && interval.x < closest {
-                    closest = interval.x;
-                    owner = interval.y;
+                if interval.y < 0.0 || interval.x > end {
+                    node_index += 1u;
+                    continue;
                 }
-                node_index += 1u;
-                continue;
+                if hard_subtraction(node.metadata.z, node.metadata.x) {
+                    if interval.x < closest {
+                        closest = interval.x;
+                        owner = interval.y;
+                    }
+                    node_index += 1u;
+                    continue;
+                }
+                // Smooth subtraction only removes points from the hard result.
+                // Its first hit cannot precede the exact hard interval entry;
+                // start the original SDF marcher there to preserve the blend.
+                travel = max(start, interval.x - epsilon);
             }
             if node.metadata.z == node.metadata.x && has_analytic_interval(object) {
                 let interval = primitive_interval(origin, direction, object);
@@ -670,9 +832,15 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
                 node_index += 1u;
                 continue;
             }
-            var travel = start;
+            let smooth_pair = HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x);
             for (var step = 0; step < 128; step++) {
-                let sample = component_distance(origin + direction * travel, node.metadata.z, node.metadata.x);
+                let point = origin + direction * travel;
+                var sample: vec2<f32>;
+                if smooth_pair {
+                    sample = smooth_subtraction_distance(point, node.metadata.z, node.metadata.x);
+                } else {
+                    sample = component_distance(point, node.metadata.z, node.metadata.x);
+                }
                 let value = sample.x;
                 if value < epsilon {
                     closest = travel;
@@ -699,7 +867,13 @@ fn containing_component(point: vec3<f32>) -> vec2<f32> {
             continue;
         }
         if node.metadata.x != 0xffffffffu {
-            let sample = component_distance(point, node.metadata.z, node.metadata.x);
+            var sample: vec2<f32>;
+            if HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x)
+                && !hard_subtraction(node.metadata.z, node.metadata.x) {
+                sample = smooth_subtraction_distance(point, node.metadata.z, node.metadata.x);
+            } else {
+                sample = component_distance(point, node.metadata.z, node.metadata.x);
+            }
             if sample.x < -0.0015 { return sample; }
         }
         node_index += 1u;
@@ -717,7 +891,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
         for (var step = 0; step < 128; step++) {
             let component = objects[owner].component;
             var sample = vec2(0.0, f32(owner));
-            if analytic_subtraction(component.x, component.y) {
+            if HAS_BOOLEANS && hard_subtraction(component.x, component.y) {
                 let exit = subtraction_exit(origin + direction * travel, direction, component.x, component.y);
                 if exit.y >= 0.0 {
                     travel += exit.x;
@@ -729,7 +903,48 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 let interval = primitive_interval(origin, direction, objects[owner]);
                 travel = max(travel, interval.y);
             } else {
-                sample = component_distance(origin + direction * travel, component.x, component.y);
+                if HAS_BOOLEANS && analytic_subtraction(component.x, component.y) {
+                    sample = smooth_subtraction_distance(origin + direction * travel,
+                        component.x, component.y);
+                } else {
+                    sample = component_distance(origin + direction * travel, component.x, component.y);
+                }
+                if HAS_BOOLEANS && step == 0 && analytic_subtraction(component.x, component.y) {
+                    // Most inside rays leave quickly through the smooth SDF.
+                    // For a slow ray, the exact convex exit is an outside
+                    // bracket for the smooth exit. Refine it with secants.
+                    let exit = subtraction_exit(origin + direction * travel,
+                        direction, component.x, component.y);
+                    if exit.y >= 0.0 && exit.z > 0.0 && sample.x < 0.0 {
+                        var low_t = travel;
+                        var low_value = sample.x;
+                        var high_t = travel + exit.x;
+                        var high_value = smooth_subtraction_distance(origin + direction * high_t,
+                            component.x, component.y).x;
+                        if high_value >= 0.0 {
+                            for (var refine = 0; refine < 6; refine++) {
+                                let candidate = clamp(
+                                    (low_t * high_value - high_t * low_value)
+                                        / max(high_value - low_value, 0.000001),
+                                    low_t, high_t);
+                                let value = smooth_subtraction_distance(origin + direction * candidate,
+                                    component.x, component.y).x;
+                                if abs(value) < 0.0015 {
+                                    travel = candidate;
+                                    sample = vec2(0.0, exit.y);
+                                    break;
+                                }
+                                if value < 0.0 {
+                                    low_t = candidate;
+                                    low_value = value;
+                                } else {
+                                    high_t = candidate;
+                                    high_value = value;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if abs(sample.x) < 0.0015 {
                 let other = containing_component(origin + direction * travel);
@@ -867,7 +1082,11 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             }
             let ior = max(surface.ior, 1.0);
             let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
-            let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(-direction, normal), 0.0), 5.0);
+            // Matched refractive indices have zero interface reflectance at
+            // every angle; Schlick's approximation alone misses this case.
+            let fresnel = select(
+                f0 + (1.0 - f0) * pow(1.0 - max(dot(-direction, normal), 0.0), 5.0),
+                0.0, ior == 1.0);
             let reflection = reflect(direction, normal);
             let opacity = clamp(surface.opacity, 0.0, 1.0);
             let metallic = clamp(surface.metallic, 0.0, 1.0);
@@ -881,8 +1100,12 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 let weight = clamp(max(fresnel, surface.reflectivity), 0.0, 1.0);
                 let tint = mix(vec3(1.0), object.color.rgb, metallic);
                 reflection_weight = throughput * tint * weight * (1.0 - roughness * roughness);
+                var lit_surface = vec3(0.0);
+                if opacity > 0.0 {
+                    lit_surface = surface_light(point, normal, -direction, object, surface, bounce == 1);
+                }
                 radiance += throughput * (vec3(0.22, 0.27, 0.35) * roughness * roughness * tint * weight
-                    + surface_light(point, normal, -direction, object, surface, bounce == 1) * opacity * (1.0 - weight));
+                    + lit_surface * opacity * (1.0 - weight));
                 transmission_direction = transmitted;
                 transmission_origin = point - normal * 0.007;
                 transmission_inside = entering;

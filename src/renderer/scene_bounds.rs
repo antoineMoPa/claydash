@@ -145,7 +145,78 @@ pub(super) fn create_scene_pipeline(
     transparent_background: bool,
     fast_preview: bool,
 ) -> wgpu::RenderPipeline {
+    create_scene_pipeline_for_materials(
+        device,
+        shader_source,
+        pipeline_layout,
+        format,
+        use_bvh,
+        capacity,
+        transparent_background,
+        fast_preview,
+        SceneShaderFeatures::ALL,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn create_scene_pipeline_for_materials(
+    device: &wgpu::Device,
+    shader_source: &str,
+    pipeline_layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+    use_bvh: bool,
+    capacity: u32,
+    transparent_background: bool,
+    fast_preview: bool,
+    features: SceneShaderFeatures,
+) -> wgpu::RenderPipeline {
     let source = specialized_shader_source(shader_source, capacity);
+    let mut constants = Vec::new();
+    if shader_source.contains("override USE_BVH") {
+        constants.push(("USE_BVH", f64::from(use_bvh)));
+    }
+    if shader_source.contains("override HAS_BOOLEANS") {
+        constants.push(("HAS_BOOLEANS", f64::from(capacity > 1)));
+    }
+    if shader_source.contains("override TRANSPARENT_BACKGROUND") {
+        constants.push(("TRANSPARENT_BACKGROUND", f64::from(transparent_background)));
+    }
+    if shader_source.contains("override FAST_PREVIEW") {
+        constants.push(("FAST_PREVIEW", f64::from(fast_preview)));
+    }
+    if shader_source.contains("override HAS_WOOD_MATERIAL") {
+        constants.extend_from_slice(&[
+            ("HAS_WOOD_MATERIAL", f64::from(features.materials.wood)),
+            ("HAS_BRICK_MATERIAL", f64::from(features.materials.brick)),
+            (
+                "HAS_DIAGNOSTIC_MATERIAL",
+                f64::from(features.materials.diagnostic),
+            ),
+        ]);
+    }
+    if shader_source.contains("override HAS_POLYGON_PRISMS") {
+        constants.extend_from_slice(&[
+            (
+                "HAS_POLYGON_PRISMS",
+                f64::from(features.primitives.polygon_prisms),
+            ),
+            (
+                "HAS_BEZIER_CURVES",
+                f64::from(features.primitives.bezier_curves),
+            ),
+            ("HAS_LOFTS", f64::from(features.primitives.lofts)),
+        ]);
+    }
+    if shader_source.contains("override HAS_LATTICE_MODIFIERS") {
+        constants.extend_from_slice(&[
+            ("HAS_LATTICE_MODIFIERS", f64::from(features.spatial.lattice)),
+            ("HAS_MIRRORS", f64::from(features.spatial.mirror)),
+            ("HAS_REPETITION", f64::from(features.spatial.repetition)),
+        ]);
+    }
+    if shader_source.contains("override HAS_FLAT_UNIONS") {
+        constants.push(("HAS_FLAT_UNIONS", f64::from(features.flat_unions)));
+    }
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("specialized SDF shader"),
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -168,12 +239,7 @@ pub(super) fn create_scene_pipeline(
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &[
-                    ("USE_BVH", f64::from(use_bvh)),
-                    ("HAS_BOOLEANS", f64::from(capacity > 1)),
-                    ("TRANSPARENT_BACKGROUND", f64::from(transparent_background)),
-                    ("FAST_PREVIEW", f64::from(fast_preview)),
-                ],
+                constants: &constants,
                 ..Default::default()
             },
         }),

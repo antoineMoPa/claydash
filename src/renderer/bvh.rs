@@ -8,6 +8,62 @@ pub(super) fn build_bvh(bounds: &mut [ObjectBound]) -> Vec<GpuBvhNode> {
     nodes
 }
 
+// A top-level BVH leaf covers a whole Boolean component. Flat hard unions can
+// also use a point-query tree over their operands, avoiding a linear scan for
+// every ray-march and contact-shading sample. Only use operands whose uploaded
+// sphere is a conservative distance bound; other groups keep the linear path.
+pub(super) fn append_operand_bvhs(
+    nodes: &mut Vec<GpuBvhNode>,
+    objects: &mut [GpuObject],
+    starts: &[u32],
+) {
+    for root in 0..objects.len() {
+        let parent = objects[root];
+        if parent.meta[3] != FLAT_UNION_ROOT
+            || parent.modifier[0] != 0
+            || parent.repeat_count[3] != 0
+            || parent.mirror_axes[..3].iter().any(|&axis| axis != 0)
+        {
+            continue;
+        }
+        let start = starts[root] as usize;
+        let children = &objects[start..root];
+        // A handful of operands is cheaper to scan directly than to traverse
+        // another tree at every distance sample.
+        if children.len() < 8
+            || children
+                .iter()
+                .any(|child| !child.distance_bound[3].is_finite() || child.distance_bound[3] <= 0.0)
+        {
+            continue;
+        }
+        let mut bounds: Vec<_> = children
+            .iter()
+            .enumerate()
+            .map(|(offset, child)| {
+                let radius = child.distance_bound[3];
+                ObjectBound {
+                    center: Vec3::new(
+                        child.distance_bound[0],
+                        child.distance_bound[1],
+                        child.distance_bound[2],
+                    ),
+                    radius,
+                    object_index: (start + offset) as u32,
+                    half_extent: Vec3::splat(radius),
+                }
+            })
+            .collect();
+        let offset = nodes.len() as u32;
+        let mut tree = build_bvh(&mut bounds);
+        for node in &mut tree {
+            node.metadata[1] += offset;
+        }
+        nodes.extend(tree);
+        objects[root].operand_tree = [offset, nodes.len() as u32, 0, 0];
+    }
+}
+
 pub(super) fn boolean_postorder(objects: &[SdfObject]) -> Vec<&SdfObject> {
     let indices: std::collections::HashMap<_, _> = objects
         .iter()

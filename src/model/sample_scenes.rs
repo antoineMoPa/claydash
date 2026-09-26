@@ -1,9 +1,9 @@
-use glam::{Quat, Vec3, Vec4};
+use glam::{Quat, Vec2, Vec3, Vec4};
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 use super::{
     boolean_distance, object_world_matrix, BooleanOperation, BoxParams, Material, MaterialKind,
-    PrimitiveKind, SdfObject, SdfParams, SphereParams, WoodSpecies,
+    PolygonPrismParams, PrimitiveKind, SdfObject, SdfParams, SphereParams, WoodSpecies,
 };
 
 /// Deterministic visual QA scene: materials above, boolean operations below.
@@ -192,6 +192,187 @@ pub fn renderer_stress_scene() -> Vec<SdfObject> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     let mut cases = Vec::new();
+    let mut shell = SdfObject::create_kind(PrimitiveKind::Cylinder);
+    shell.params = SdfParams::CylinderParams {
+        radius: 1.0,
+        half_height: 1.0,
+    };
+    shell.transform.rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    shell.softness = 0.05;
+    let mut cavity = SdfObject::create_kind(PrimitiveKind::Cylinder);
+    cavity.params = SdfParams::CylinderParams {
+        radius: 0.8,
+        half_height: 1.1,
+    };
+    cavity.transform.rotation = shell.transform.rotation;
+    cavity.boolean_parent = Some(shell.uuid);
+    cavity.operation = BooleanOperation::Subtract;
+    cases.push(("soft-cylinder".into(), vec![shell, cavity]));
+    let mut layers = Vec::new();
+    for index in 0..4 {
+        let radius = 1.0 - index as f32 * 0.11;
+        let mut shell = SdfObject::create_kind(PrimitiveKind::Cylinder);
+        shell.params = SdfParams::CylinderParams {
+            radius,
+            half_height: 1.0,
+        };
+        shell.transform.rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        shell.softness = 0.05;
+        shell.material = Material::preset(MaterialKind::Transparent);
+        shell.material.opacity = 0.3;
+        shell.material.refractive_index = 1.0;
+        shell.material.reflectivity = 0.0;
+        let mut cavity = SdfObject::create_kind(PrimitiveKind::Cylinder);
+        cavity.params = SdfParams::CylinderParams {
+            radius: radius - 0.06,
+            half_height: 1.1,
+        };
+        cavity.transform.rotation = shell.transform.rotation;
+        cavity.boolean_parent = Some(shell.uuid);
+        cavity.operation = BooleanOperation::Subtract;
+        layers.extend([shell, cavity]);
+    }
+    cases.push(("soft-cylinder-layers".into(), layers));
+    let mut sphere = SdfObject::create_kind(PrimitiveKind::Sphere);
+    sphere.params = SdfParams::SphereParams(SphereParams { radius: 1.0 });
+    sphere.softness = 0.05;
+    let mut sphere_cavity = SdfObject::create_kind(PrimitiveKind::Sphere);
+    sphere_cavity.params = SdfParams::SphereParams(SphereParams { radius: 0.8 });
+    sphere_cavity.boolean_parent = Some(sphere.uuid);
+    sphere_cavity.operation = BooleanOperation::Subtract;
+    cases.push(("soft-sphere".into(), vec![sphere, sphere_cavity]));
+    let mut block = SdfObject::create_kind(PrimitiveKind::Box);
+    block.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(1.0),
+        corner_radius: 0.0,
+    });
+    block.softness = 0.05;
+    let mut box_cavity = SdfObject::create_kind(PrimitiveKind::Box);
+    box_cavity.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(0.8),
+        corner_radius: 0.0,
+    });
+    box_cavity.boolean_parent = Some(block.uuid);
+    box_cavity.operation = BooleanOperation::Subtract;
+    let mut rounded_block = block.clone();
+    let mut rounded_cavity = box_cavity.clone();
+    if let SdfParams::BoxParams(params) = &mut rounded_block.params {
+        params.corner_radius = 0.12;
+    }
+    if let SdfParams::BoxParams(params) = &mut rounded_cavity.params {
+        params.corner_radius = 0.1;
+    }
+    cases.push(("soft-box".into(), vec![block, box_cavity]));
+    cases.push((
+        "soft-rounded-box".into(),
+        vec![rounded_block, rounded_cavity],
+    ));
+    let mut rotated_shell = SdfObject::create_kind(PrimitiveKind::Box);
+    rotated_shell.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(1.0),
+        corner_radius: 0.0,
+    });
+    rotated_shell.transform.rotation = Quat::from_rotation_x(0.32) * Quat::from_rotation_y(-0.26);
+    rotated_shell.transform.scale = Vec3::new(1.35, 0.85, 1.1);
+    rotated_shell.softness = 0.1;
+    let mut angled_cavity = SdfObject::create_kind(PrimitiveKind::Cylinder);
+    angled_cavity.params = SdfParams::CylinderParams {
+        radius: 0.6,
+        half_height: 1.25,
+    };
+    angled_cavity.transform.translation = Vec3::new(0.2, 0.1, 0.0);
+    angled_cavity.transform.rotation = Quat::from_rotation_z(0.42);
+    angled_cavity.boolean_parent = Some(rotated_shell.uuid);
+    angled_cavity.operation = BooleanOperation::Subtract;
+    cases.push((
+        "soft-transformed-pair".into(),
+        vec![rotated_shell, angled_cavity],
+    ));
+    let mut mixed_shell = SdfObject::create_kind(PrimitiveKind::Sphere);
+    mixed_shell.params = SdfParams::SphereParams(SphereParams { radius: 1.0 });
+    mixed_shell.transform.scale = Vec3::new(1.15, 0.9, 1.3);
+    mixed_shell.softness = 0.08;
+    let mut mixed_cavity = SdfObject::create_kind(PrimitiveKind::Box);
+    mixed_cavity.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::new(0.6, 0.8, 0.55),
+        corner_radius: 0.0,
+    });
+    mixed_cavity.transform.translation = Vec3::new(-0.2, 0.12, 0.05);
+    mixed_cavity.transform.rotation = Quat::from_rotation_y(0.35);
+    mixed_cavity.boolean_parent = Some(mixed_shell.uuid);
+    mixed_cavity.operation = BooleanOperation::Subtract;
+    cases.push(("soft-mixed-pair".into(), vec![mixed_shell, mixed_cavity]));
+    let mut union_root = SdfObject::create_kind(PrimitiveKind::Box);
+    union_root.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::new(0.5, 0.4, 0.5),
+        corner_radius: 0.0,
+    });
+    union_root.softness = 0.0;
+    let mut union_sphere = SdfObject::create_kind(PrimitiveKind::Sphere);
+    union_sphere.params = SdfParams::SphereParams(SphereParams { radius: 0.48 });
+    union_sphere.transform.translation = Vec3::new(0.65, 0.2, 0.0);
+    union_sphere.boolean_parent = Some(union_root.uuid);
+    let mut union_cylinder = SdfObject::create_kind(PrimitiveKind::Cylinder);
+    union_cylinder.params = SdfParams::CylinderParams {
+        radius: 0.35,
+        half_height: 0.7,
+    };
+    union_cylinder.transform.translation = Vec3::new(-0.6, 0.0, 0.0);
+    union_cylinder.boolean_parent = Some(union_root.uuid);
+    cases.push((
+        "flat-hard-union".into(),
+        vec![union_root, union_sphere, union_cylinder],
+    ));
+    let mut wide_root = SdfObject::create_kind(PrimitiveKind::Box);
+    wide_root.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::splat(0.24),
+        corner_radius: 0.0,
+    });
+    wide_root.softness = 0.0;
+    let wide_root_id = wide_root.uuid;
+    let mut wide_union = vec![wide_root];
+    for index in 0..12 {
+        let kind = match index % 3 {
+            0 => PrimitiveKind::Sphere,
+            1 => PrimitiveKind::Box,
+            _ => PrimitiveKind::Cylinder,
+        };
+        let mut operand = SdfObject::create_kind(kind);
+        operand.boolean_parent = Some(wide_root_id);
+        operand.operation = BooleanOperation::Union;
+        operand.transform.translation = Vec3::new(
+            (index % 4) as f32 * 0.75 - 1.125,
+            (index / 4) as f32 * 0.75 - 0.75,
+            0.0,
+        );
+        wide_union.push(operand);
+    }
+    cases.push(("flat-hard-union-wide".into(), wide_union));
+    let mut polygon_prism = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+    polygon_prism.params = SdfParams::PolygonPrismParams(PolygonPrismParams {
+        vertices: vec![
+            Vec2::new(-0.8, -0.7),
+            Vec2::new(0.8, -0.7),
+            Vec2::new(0.25, 0.0),
+            Vec2::new(0.8, 0.7),
+            Vec2::new(-0.8, 0.7),
+        ],
+        half_depth: 0.35,
+    });
+    polygon_prism.transform.rotation = Quat::from_rotation_y(0.35);
+    cases.push(("polygon-prism".into(), vec![polygon_prism]));
+    let mut mirrored_box = SdfObject::create_kind(PrimitiveKind::Box);
+    mirrored_box.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::new(0.8, 0.6, 0.45),
+        corner_radius: 0.0,
+    });
+    mirrored_box.mirror = Some(super::Mirror::default());
+    let mut mirrored_cut = SdfObject::create_kind(PrimitiveKind::Sphere);
+    mirrored_cut.params = SdfParams::SphereParams(SphereParams { radius: 0.4 });
+    mirrored_cut.transform.translation = Vec3::new(0.45, 0.2, 0.0);
+    mirrored_cut.boolean_parent = Some(mirrored_box.uuid);
+    mirrored_cut.operation = BooleanOperation::Subtract;
+    cases.push(("mirrored-boolean".into(), vec![mirrored_box, mirrored_cut]));
     let mut transparent_lattice = SdfObject::create_kind(PrimitiveKind::Box);
     transparent_lattice.params = SdfParams::BoxParams(BoxParams {
         box_q: Vec3::splat(0.55),

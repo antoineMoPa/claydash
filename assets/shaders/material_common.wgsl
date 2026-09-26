@@ -3,6 +3,9 @@ const MATERIAL_WOOD: u32 = 1u;
 const MATERIAL_DIAGNOSTIC: u32 = 4u;
 const MATERIAL_BRICK: u32 = 5u;
 const MATERIAL_CUSTOM: u32 = 6u;
+override HAS_WOOD_MATERIAL: bool = true;
+override HAS_BRICK_MATERIAL: bool = true;
+override HAS_DIAGNOSTIC_MATERIAL: bool = true;
 struct MaterialHeader { kind: u32, offset: u32, length: u32, reserved: u32 }
 @group(0) @binding(3) var<storage, read> material_headers: array<MaterialHeader>;
 @group(0) @binding(4) var<storage, read> material_params: array<vec4<f32>>;
@@ -18,9 +21,18 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
     let base = Surface(object.color.rgb, normal, clamp(common_values.x, 0.03, 1.0), common_values.y,
         common_values.z, common_values.w, optics.x, 0.0, 0.0, vec3(0.0, 1.0, 0.0), 0.0);
     switch header.kind {
-        case MATERIAL_WOOD: { return evaluate_wood(point, normal, object, base, header.offset); }
-        case MATERIAL_DIAGNOSTIC: { return evaluate_diagnostic(point, object, base, header.offset); }
-        case MATERIAL_BRICK: { return evaluate_brick(point, normal, view, object, base, header.offset); }
+        case MATERIAL_WOOD: {
+            if HAS_WOOD_MATERIAL { return evaluate_wood(point, normal, object, base, header.offset); }
+            return base;
+        }
+        case MATERIAL_DIAGNOSTIC: {
+            if HAS_DIAGNOSTIC_MATERIAL { return evaluate_diagnostic(point, object, base, header.offset); }
+            return base;
+        }
+        case MATERIAL_BRICK: {
+            if HAS_BRICK_MATERIAL { return evaluate_brick(point, normal, view, object, base, header.offset); }
+            return base;
+        }
         case MATERIAL_CUSTOM: {
             switch header.reserved {
                 // CUSTOM_MATERIAL_CASES
@@ -47,7 +59,7 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
     let specular_color = mix(vec3(surface.reflectivity), color, metallic);
     var fiber_light = 0.0;
     var coat_light = 0.0;
-    if header.kind == MATERIAL_WOOD {
+    if HAS_WOOD_MATERIAL && header.kind == MATERIAL_WOOD {
         fiber_light = pow(max(1.0 - abs(dot(halfway, fiber)), 0.0), 18.0) * surface.figure * 0.11 * diffuse;
         let coat_normal = normalize(mix(shade_normal, normal, 0.58 * coat));
         let reflection = reflect(-view, coat_normal);

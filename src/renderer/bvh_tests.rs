@@ -1,4 +1,36 @@
 use super::*;
+
+#[test]
+fn operand_bvh_indexes_safe_flat_union_children() {
+    let mut objects = vec![GpuObject::zeroed(); 9];
+    for (index, object) in objects.iter_mut().take(8).enumerate() {
+        object.distance_bound = [index as f32 * 10.0, 0.0, 0.0, 1.0];
+    }
+    objects[8].meta[3] = FLAT_UNION_ROOT;
+    let mut nodes = Vec::new();
+    append_operand_bvhs(&mut nodes, &mut objects, &[0; 9]);
+    let [start, end, _, _] = objects[8].operand_tree;
+    assert_eq!(start, 0);
+    assert_eq!(end, 15);
+    let mut leaves: Vec<_> = nodes
+        .iter()
+        .filter(|node| node.metadata[0] != BVH_LEAF)
+        .map(|node| node.metadata[0])
+        .collect();
+    leaves.sort_unstable();
+    assert_eq!(leaves, [0, 1, 2, 3, 4, 5, 6, 7]);
+    for (index, node) in nodes.iter().enumerate() {
+        assert!(node.metadata[1] > index as u32);
+        assert!(node.metadata[1] <= end);
+    }
+
+    objects[1].distance_bound[3] = -1.0;
+    objects[8].operand_tree = [0; 4];
+    nodes.clear();
+    append_operand_bvhs(&mut nodes, &mut objects, &[0; 9]);
+    assert!(nodes.is_empty());
+    assert_eq!(objects[8].operand_tree, [0; 4]);
+}
 use glam::Vec4;
 
 #[test]

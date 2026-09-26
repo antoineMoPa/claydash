@@ -21,32 +21,12 @@ impl Renderer {
         }
         material_gpu::validate_custom_materials(assets)?;
         let shader_source = material_gpu::shader_source_for_assets(assets);
-        let pipeline = create_scene_pipeline(
-            &self.device,
-            &shader_source,
-            &self.pipeline_layout,
-            self.render_format,
-            self.use_bvh,
-            1,
-            false,
-            false,
-        );
-        let fast_pipeline = create_scene_pipeline(
-            &self.device,
-            &shader_source,
-            &self.pipeline_layout,
-            self.render_format,
-            self.use_bvh,
-            1,
-            false,
-            true,
-        );
-        self.pipeline = pipeline;
-        self.fast_pipeline = fast_pipeline;
         self.boolean_pipeline = None;
         self.fast_boolean_pipeline = None;
+        self.scene_pipelines_dirty = true;
         self.shader_source = shader_source;
         self.custom_material_sources = sources;
+        self.uploaded_scene_versions = [i32::MIN; 2];
         for preview in std::mem::take(&mut self.material_asset_previews) {
             self.egui_renderer.free_texture(&preview.id);
         }

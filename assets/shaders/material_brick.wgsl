@@ -75,6 +75,7 @@ fn brick_structure_height(face: vec2<f32>, bond: vec4<f32>, relief: vec4<f32>) -
 }
 
 fn brick_geometry_visible(object: Object) -> bool {
+    if !HAS_BRICK_MATERIAL { return false; }
     let header = material_headers[object.component.w];
     if header.kind != MATERIAL_BRICK { return false; }
     let bond = material_params[header.offset + BRICK_BOND];
