@@ -192,9 +192,53 @@ pub struct SdfObject {
     pub path_extrusion: Option<PathExtrusion>,
     #[serde(default)]
     pub surface_inlay: Option<SurfaceInlay>,
+    #[serde(default)]
+    pub image_stencil: Option<ImageStencil>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ImageStencil {
+    pub name: String,
+    pub image: Vec<u8>,
+    pub offset: Vec2,
+    pub size: Vec2,
+    pub rotation: f32,
+    pub both_sides: bool,
+    #[serde(default)]
+    pub image_plane: bool,
+}
+
+impl ImageStencil {
+    pub fn new(name: String, image: Vec<u8>, both_sides: bool) -> Self {
+        let size = image::load_from_memory(&image).map_or(Vec2::ONE, |decoded| {
+            let width = decoded.width() as f32;
+            let height = decoded.height() as f32;
+            Vec2::new(width, height) / width.max(height).max(1.0)
+        });
+        Self {
+            name,
+            image,
+            offset: Vec2::ZERO,
+            size,
+            rotation: 0.0,
+            both_sides,
+            image_plane: both_sides,
+        }
+    }
 }
 
 impl SdfObject {
+    pub fn create_image_plane() -> Self {
+        let mut plane = Self::create_kind(PrimitiveKind::Box);
+        plane.name = "Image plane".into();
+        plane.params = SdfParams::BoxParams(BoxParams {
+            box_q: Vec3::new(0.5, 0.5, 0.005),
+            corner_radius: 0.0,
+        });
+        plane.image_stencil = Some(ImageStencil::new("Choose image…".into(), Vec::new(), true));
+        plane
+    }
+
     pub fn create(object_type: i32) -> Self {
         Self::create_kind(PrimitiveKind::from_object_type(object_type))
     }
@@ -286,6 +330,7 @@ impl SdfObject {
             lattice: None,
             path_extrusion: None,
             surface_inlay: None,
+            image_stencil: None,
         }
     }
 

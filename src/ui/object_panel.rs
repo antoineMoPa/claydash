@@ -124,7 +124,87 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
         object_id,
         &mut keyframes,
     );
+    ui.separator();
+    ui.label(RichText::new("Image stencil").strong());
+    if ui
+        .button(if object.image_stencil.is_some() {
+            "Replace image…"
+        } else {
+            "Add image…"
+        })
+        .clicked()
+    {
+        if let Some((name, bytes)) = request_image(ui.ctx(), object_id) {
+            let mut replacement = crate::model::ImageStencil::new(name, bytes, false);
+            if let Some(previous) = &object.image_stencil {
+                replacement.offset = previous.offset;
+                if !previous.image.is_empty() {
+                    replacement.size = previous.size;
+                }
+                replacement.rotation = previous.rotation;
+                replacement.both_sides = previous.both_sides;
+                replacement.image_plane = previous.image_plane;
+            }
+            object.image_stencil = Some(replacement);
+            changed = true;
+        }
+    }
+    if let Some(stencil) = &mut object.image_stencil {
+        ui.label(&stencil.name);
+        changed |= ui
+            .add(
+                egui::DragValue::new(&mut stencil.offset.x)
+                    .speed(0.01)
+                    .prefix("X "),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                egui::DragValue::new(&mut stencil.offset.y)
+                    .speed(0.01)
+                    .prefix("Y "),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                egui::DragValue::new(&mut stencil.size.x)
+                    .range(0.01..=100.0)
+                    .speed(0.01)
+                    .prefix("Width "),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                egui::DragValue::new(&mut stencil.size.y)
+                    .range(0.01..=100.0)
+                    .speed(0.01)
+                    .prefix("Height "),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                egui::DragValue::new(&mut stencil.rotation)
+                    .speed(1.0)
+                    .suffix("°"),
+            )
+            .changed();
+        changed |= ui
+            .checkbox(&mut stencil.both_sides, "Show on both sides")
+            .changed();
+        if ui.button("Remove image").clicked() {
+            object.image_stencil = None;
+            changed = true;
+        }
+    }
     if changed {
+        if let Some(stencil) = &object.image_stencil {
+            if stencil.image_plane {
+                if let SdfParams::BoxParams(box_params) = &mut object.params {
+                    box_params.box_q.x = stencil.size.x * 0.5;
+                    box_params.box_q.y = stencil.size.y * 0.5;
+                }
+            }
+        }
         set_objects(tree, scene);
         if reset_position || reset_rotation {
             tree.make_undo_redo_snapshot();

@@ -16,15 +16,34 @@ struct Object {
     scale: vec4<f32>,
     modifier: vec4<u32>,
     mirror_axes: vec4<u32>,
+    stencil_placement: vec4<f32>,
+    stencil_meta: vec4<f32>,
 }
 struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> objects: array<Object>;
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
 @group(0) @binding(5) var<storage, read> polygon_points: array<vec2<f32>>;
+@group(0) @binding(11) var image_atlas: texture_2d_array<f32>;
+@group(0) @binding(12) var image_sampler: sampler;
 override USE_BVH: bool = true;
 override HAS_BOOLEANS: bool = false;
 override TRANSPARENT_BACKGROUND: bool = false;
+override FAST_PREVIEW: bool = false;
+
+fn stencil_color(point: vec3<f32>, normal: vec3<f32>, object: Object) -> vec4<f32> {
+    if object.stencil_meta.x < 0.5 { return vec4(0.0); }
+    let front = normalize(object.inverse_rows[2].xyz);
+    if object.stencil_meta.z < 0.5 && dot(normal, front) <= 0.0 { return vec4(0.0); }
+    let p = vec4(point, 1.0);
+    let local = vec2(dot(object.inverse_rows[0], p), dot(object.inverse_rows[1], p)) - object.stencil_placement.zw;
+    let angle = object.stencil_meta.y;
+    let rotated = vec2(cos(angle) * local.x + sin(angle) * local.y,
+        -sin(angle) * local.x + cos(angle) * local.y);
+    let uv = rotated / max(object.stencil_placement.xy, vec2(0.001)) + vec2(0.5);
+    if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) { return vec4(0.0); }
+    return textureSampleLevel(image_atlas, image_sampler, uv, i32(object.stencil_meta.x) - 1, 0.0);
+}
 const CSG_SIZE: u32 = 256u;
 
 struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) clip: vec2<f32> }
@@ -758,7 +777,27 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             let outward = scene_normal(point, index);
             let entering = dot(direction, outward) < 0.0;
             let normal = select(-outward, outward, entering);
-            let surface = material_surface(point, normal, -direction, object);
+            if FAST_PREVIEW {
+                let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
+                    normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
+                let decal = stencil_color(point, normal, object);
+                let shade = 0.22 + 0.78 * max(dot(normal, light), 0.0);
+                if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 {
+                    radiance += mix(background(ray), decal.rgb * shade, decal.a);
+                } else {
+                    radiance += mix(object.color.rgb, decal.rgb, decal.a) * shade;
+                }
+                break;
+            }
+            var surface = material_surface(point, normal, -direction, object);
+            let decal = stencil_color(point, normal, object);
+            surface.color = mix(surface.color, decal.rgb, decal.a);
+            if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 {
+                surface.opacity = decal.a;
+                surface.reflectivity = 0.0;
+                surface.ior = 1.0;
+                surface.metallic = 0.0;
+            }
             let ior = max(surface.ior, 1.0);
             let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
             let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(-direction, normal), 0.0), 5.0);

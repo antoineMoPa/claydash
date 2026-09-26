@@ -68,6 +68,7 @@ impl Renderer {
             self.use_bvh,
             1,
             true,
+            false,
         );
         let presets = [
             Material::preset(MaterialKind::Transparent),

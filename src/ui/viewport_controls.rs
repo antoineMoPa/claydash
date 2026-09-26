@@ -1,5 +1,13 @@
 use super::*;
 
+const TOOLBAR_PRIMITIVES: [PrimitiveKind; 5] = [
+    PrimitiveKind::Sphere,
+    PrimitiveKind::Box,
+    PrimitiveKind::Cylinder,
+    PrimitiveKind::Torus,
+    PrimitiveKind::BezierCurve,
+];
+
 impl UiState {
     pub(super) fn handle_animation_shortcuts(&mut self, ctx: &egui::Context, tree: &mut DataTree) {
         if ctx.egui_wants_keyboard_input() {
@@ -162,7 +170,7 @@ impl UiState {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     ui.horizontal_wrapped(|ui| {
                         if viewport.width() >= 400.0 {
-                            for kind in PrimitiveKind::SPAWNABLE {
+                            for kind in TOOLBAR_PRIMITIVES {
                                 if view_button(
                                     ui,
                                     primitive_icon_source(kind),
@@ -181,7 +189,7 @@ impl UiState {
                                     false,
                                 ))
                                 .ui(ui, |ui| {
-                                    for kind in PrimitiveKind::SPAWNABLE {
+                                    for kind in TOOLBAR_PRIMITIVES {
                                         if ui
                                             .add(egui::Button::image_and_text(
                                                 icon_image(
@@ -268,9 +276,9 @@ impl UiState {
                         ui,
                         egui::include_image!("../../assets/icons/lucide/aperture.svg"),
                         if self.refine_viewport {
-                            "Full-resolution refinement on — click for fast preview only"
+                            "Full material rendering on — click for native resolution with simple shading"
                         } else {
-                            "Fast preview only — click for full-resolution refinement"
+                            "Native resolution with simple shading — click for full material rendering"
                         },
                         self.refine_viewport,
                     )

@@ -143,6 +143,7 @@ pub(super) fn create_scene_pipeline(
     use_bvh: bool,
     capacity: u32,
     transparent_background: bool,
+    fast_preview: bool,
 ) -> wgpu::RenderPipeline {
     let source = specialized_shader_source(shader_source, capacity);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -171,6 +172,7 @@ pub(super) fn create_scene_pipeline(
                     ("USE_BVH", f64::from(use_bvh)),
                     ("HAS_BOOLEANS", f64::from(capacity > 1)),
                     ("TRANSPARENT_BACKGROUND", f64::from(transparent_background)),
+                    ("FAST_PREVIEW", f64::from(fast_preview)),
                 ],
                 ..Default::default()
             },

@@ -102,6 +102,51 @@ impl Renderer {
             .collect();
         let ordered = boolean_postorder(scene_objects);
         let objects = &ordered;
+        let mut stencil_layers = std::collections::HashMap::new();
+        for object in objects
+            .iter()
+            .filter(|object| object.image_stencil.is_some())
+            .take(32)
+        {
+            let stencil = object.image_stencil.as_ref().unwrap();
+            if stencil.image.len() > 16 * 1024 * 1024 {
+                continue;
+            }
+            let Ok(image) = image::load_from_memory(&stencil.image) else {
+                continue;
+            };
+            let layer = stencil_layers.len() as u32;
+            let rgba = image::imageops::resize(
+                &image.to_rgba8(),
+                512,
+                512,
+                image::imageops::FilterType::Triangle,
+            );
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.image_atlas,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba.as_raw(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(512 * 4),
+                    rows_per_image: Some(512),
+                },
+                wgpu::Extent3d {
+                    width: 512,
+                    height: 512,
+                    depth_or_array_layers: 1,
+                },
+            );
+            stencil_layers.insert(object.uuid, layer);
+        }
         let object_indices: std::collections::HashMap<_, _> = objects
             .iter()
             .enumerate()
@@ -485,6 +530,24 @@ impl Renderer {
                             .unwrap_or(-1),
                     ],
                     color: object.color.to_array(),
+                    stencil_placement: object.image_stencil.as_ref().map_or([0.0; 4], |stencil| {
+                        [
+                            stencil.size.x,
+                            stencil.size.y,
+                            stencil.offset.x,
+                            stencil.offset.y,
+                        ]
+                    }),
+                    stencil_meta: object.image_stencil.as_ref().map_or([0.0; 4], |stencil| {
+                        [
+                            stencil_layers
+                                .get(&object.uuid)
+                                .map_or(0.0, |layer| *layer as f32 + 1.0),
+                            stencil.rotation.to_radians(),
+                            f32::from(stencil.both_sides),
+                            f32::from(stencil.image_plane),
+                        ]
+                    }),
                     inverse_rows: inverse_affine_rows(matrix.inverse()),
                     group_inverse_rows: inverse_affine_rows(group_matrix.inverse()),
                     params,
@@ -688,6 +751,27 @@ impl Renderer {
                     self.use_bvh,
                     capacity,
                     false,
+                    false,
+                ),
+            ));
+        }
+        if self.has_booleans
+            && self
+                .fast_boolean_pipeline
+                .as_ref()
+                .is_none_or(|(size, _)| *size != capacity)
+        {
+            self.fast_boolean_pipeline = Some((
+                capacity,
+                create_scene_pipeline(
+                    &self.device,
+                    &self.shader_source,
+                    &self.pipeline_layout,
+                    self.render_format,
+                    self.use_bvh,
+                    capacity,
+                    false,
+                    true,
                 ),
             ));
         }

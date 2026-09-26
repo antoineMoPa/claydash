@@ -13,6 +13,7 @@ pub struct ViewKey {
     pub projection: u32,
     pub versions: [i32; 2],
     pub size: [u32; 2],
+    pub refine: bool,
 }
 
 struct Targets {
@@ -207,7 +208,11 @@ impl Viewport {
             // Object transforms invalidate the image, not the GPU's measured throughput.
             // Keep the learned budget while editing. More expensive scene classes
             // still lower it through set_initial_budget, and GPU timings adapt per batch.
-            let mut preview_size = preview_size(key.size, self.pixel_budget);
+            let mut preview_size = if refine {
+                preview_size(key.size, self.pixel_budget)
+            } else {
+                key.size
+            };
             if let Some(targets) = &self.targets {
                 let previous = targets.preview_size[0] * targets.preview_size[1];
                 let next = preview_size[0] * preview_size[1];

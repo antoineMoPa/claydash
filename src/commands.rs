@@ -195,6 +195,16 @@ pub fn register_all(commands: &mut Commands) {
     );
     register(
         commands,
+        "add-image-plane",
+        "Add Image Plane",
+        "Create an image plane. Set or replace its texture in Object settings.",
+        "",
+        |tree| {
+            create_image_plane(tree);
+        },
+    );
+    register(
+        commands,
         "undo",
         "Undo",
         "Undo last action.",
@@ -1210,6 +1220,17 @@ mod tests {
         };
         assert_eq!(curve.segment_count(), 3);
     }
+}
+
+pub fn create_image_plane(tree: &mut DataTree) -> uuid::Uuid {
+    let plane = SdfObject::create_image_plane();
+    let id = plane.uuid;
+    let mut scene = objects(tree);
+    scene.push(plane);
+    set_objects(tree, scene);
+    set_selected(tree, vec![id]);
+    tree.make_undo_redo_snapshot();
+    id
 }
 
 pub fn spawn(tree: &mut DataTree, kind: i32) {

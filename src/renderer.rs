@@ -56,6 +56,8 @@ struct GpuObject {
     scale: [f32; 4],
     modifier: [u32; 4],
     mirror_axes: [u32; 4],
+    stencil_placement: [f32; 4],
+    stencil_meta: [f32; 4],
 }
 
 #[repr(C)]
@@ -90,7 +92,9 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     render_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
+    fast_pipeline: wgpu::RenderPipeline,
     boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,
+    fast_boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,
     shader_source: String,
     pipeline_layout: wgpu::PipelineLayout,
     use_bvh: bool,
@@ -108,6 +112,8 @@ pub struct Renderer {
     lattice_atlas: wgpu::Texture,
     lattice_atlas_rows: u32,
     lattice_sampler: wgpu::Sampler,
+    image_atlas: wgpu::Texture,
+    image_sampler: wgpu::Sampler,
     modifier_params_buffer: wgpu::Buffer,
     uploaded_scene_versions: [i32; 2],
     egui_renderer: egui_wgpu::Renderer,

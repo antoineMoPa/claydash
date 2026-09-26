@@ -101,14 +101,22 @@ impl Renderer {
                 camera.viewport.x.max(1.0) as u32,
                 camera.viewport.y.max(1.0) as u32,
             ],
+            refine,
         };
         let work = self
             .viewport
             .prepare(&self.device, view_key.clone(), refine);
-        let scene_pipeline = if self.has_booleans {
-            &self.boolean_pipeline.as_ref().expect("boolean pipeline").1
-        } else {
-            &self.pipeline
+        let scene_pipeline = match (refine, self.has_booleans) {
+            (true, true) => &self.boolean_pipeline.as_ref().expect("boolean pipeline").1,
+            (true, false) => &self.pipeline,
+            (false, true) => {
+                &self
+                    .fast_boolean_pipeline
+                    .as_ref()
+                    .expect("fast boolean pipeline")
+                    .1
+            }
+            (false, false) => &self.fast_pipeline,
         };
         let readback = self.viewport.encode(
             &self.device,

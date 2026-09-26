@@ -249,6 +249,7 @@ impl Renderer {
                     projection: u32::from(current.projection_mode == ProjectionMode::Orthographic),
                     versions: frame_versions,
                     size: [self.config.width, self.config.height],
+                    refine: true,
                 },
                 true,
             );

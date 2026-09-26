@@ -9,6 +9,7 @@ pub(super) enum CursorMenuAction {
 pub(super) fn draw_file_menu(
     viewport_ui: &mut egui::Ui,
     document: &DocumentState,
+    tree: &mut DataTree,
     layout: &mut Layout<EditorPane>,
     cursor_target_available: bool,
     placing_cursor: bool,
@@ -67,6 +68,7 @@ pub(super) fn draw_file_menu(
                     ui.close();
                 }
             });
+            draw_edit_menu(ui, tree, document.error().is_some());
             ui.menu_button("Panels", |ui| {
                 let animation_open = layout
                     .find_pane(|pane| *pane == EditorPane::Animation)

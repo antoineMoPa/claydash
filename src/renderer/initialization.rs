@@ -23,8 +23,14 @@ fn create_scene_bind_group(
     buffers: [&wgpu::Buffer; 8],
     atlas: &wgpu::Texture,
     sampler: &wgpu::Sampler,
+    image_atlas: &wgpu::Texture,
+    image_sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     let view = atlas.create_view(&Default::default());
+    let image_view = image_atlas.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
     let mut entries: Vec<_> = buffers
         .into_iter()
         .enumerate()
@@ -40,6 +46,14 @@ fn create_scene_bind_group(
     entries.push(wgpu::BindGroupEntry {
         binding: 10,
         resource: wgpu::BindingResource::Sampler(sampler),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 11,
+        resource: wgpu::BindingResource::TextureView(&image_view),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 12,
+        resource: wgpu::BindingResource::Sampler(image_sampler),
     });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("scene bind group"),
@@ -171,6 +185,25 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
+        let image_atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("image stencil atlas"),
+            size: wgpu::Extent3d {
+                width: 512,
+                height: 512,
+                depth_or_array_layers: 32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let modifier_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("modifier parameters"),
             size: (MAX_OBJECTS * modifier_gpu::MAX_PARAM_SLOTS * 16) as u64,
@@ -212,6 +245,22 @@ impl Renderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ])
                 .collect::<Vec<_>>(),
         });
@@ -230,6 +279,8 @@ impl Renderer {
             ],
             &lattice_atlas,
             &lattice_sampler,
+            &image_atlas,
+            &image_sampler,
         );
         let shader_source = super::material_gpu::shader_source();
         #[cfg(not(target_arch = "wasm32"))]
@@ -254,6 +305,17 @@ impl Renderer {
             use_bvh,
             1,
             false,
+            false,
+        );
+        let fast_pipeline = create_scene_pipeline(
+            &device,
+            &shader_source,
+            &pipeline_layout,
+            render_format,
+            use_bvh,
+            1,
+            false,
+            true,
         );
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
@@ -270,7 +332,9 @@ impl Renderer {
             config,
             render_format,
             pipeline,
+            fast_pipeline,
             boolean_pipeline: None,
+            fast_boolean_pipeline: None,
             shader_source,
             pipeline_layout,
             use_bvh,
@@ -288,6 +352,8 @@ impl Renderer {
             lattice_atlas,
             lattice_atlas_rows: 1,
             lattice_sampler,
+            image_atlas,
+            image_sampler,
             modifier_params_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
             egui_renderer,
@@ -327,6 +393,8 @@ impl Renderer {
             ],
             &self.lattice_atlas,
             &self.lattice_sampler,
+            &self.image_atlas,
+            &self.image_sampler,
         );
     }
 

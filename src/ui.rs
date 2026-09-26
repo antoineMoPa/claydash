@@ -3,7 +3,9 @@ mod animation_widgets;
 mod boolean_overlay;
 mod camera_overlay;
 mod camera_panel;
+mod edit_menu;
 mod file_menu;
+mod image_stencils;
 mod materials_panel;
 mod modifiers_panel;
 mod object_gizmos;
@@ -23,7 +25,9 @@ use animation_panel::*;
 use animation_widgets::*;
 pub(crate) use camera_panel::exit_camera_view;
 use camera_panel::{sync_camera_view, toggle_camera_view};
+use edit_menu::*;
 use file_menu::*;
+use image_stencils::*;
 use materials_panel::*;
 use modifiers_panel::*;
 #[cfg(test)]
@@ -207,6 +211,7 @@ impl UiState {
         render_progress: Option<RenderProgress>,
     ) -> (Option<FileMenuAction>, bool) {
         self.regions.clear();
+        apply_pending_image(viewport_ui.ctx(), tree);
         self.active_guide = None;
         self.ghosts = boolean_overlay::Ghosts::default();
         egui_extras::install_image_loaders(viewport_ui.ctx());
@@ -219,6 +224,7 @@ impl UiState {
         let (file_action, cursor_action) = draw_file_menu(
             viewport_ui,
             document,
+            tree,
             &mut self.layout,
             cursor_targets.len() == 1,
             matches!(
@@ -383,6 +389,13 @@ impl UiState {
             .collect::<Vec<_>>();
         if let Some(command) = self.palette.show(viewport_ui.ctx(), &palette_commands) {
             commands::execute(command_map, &command, tree);
+            if command == "add-image-plane" {
+                if let Some(id) = selected(tree).first().copied() {
+                    if let Some((name, bytes)) = request_image(viewport_ui.ctx(), id) {
+                        apply_image(tree, id, name, bytes);
+                    }
+                }
+            }
         }
         if let Some(rect) = self.palette.rect() {
             self.regions.push(rect);
