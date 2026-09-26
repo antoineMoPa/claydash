@@ -12,6 +12,7 @@ impl Renderer {
         output: &mut egui::FullOutput,
         capture: bool,
         capture_ui: bool,
+        offscreen_capture: bool,
     ) {
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
@@ -36,23 +37,26 @@ impl Renderer {
             &clipped,
             &screen,
         );
-        let offscreen = (capture_ui || (cfg!(target_arch = "wasm32") && capture)).then(|| {
-            self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("guide screenshot target"),
-                size: wgpu::Extent3d {
-                    width: self.config.width,
-                    height: self.config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.config.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &self.config.view_formats,
-            })
-        });
-        let frame = if capture_ui {
+        let offscreen = (capture_ui
+            || offscreen_capture
+            || (cfg!(target_arch = "wasm32") && capture))
+            .then(|| {
+                self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("guide screenshot target"),
+                    size: wgpu::Extent3d {
+                        width: self.config.width,
+                        height: self.config.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.config.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &self.config.view_formats,
+                })
+            });
+        let frame = if capture_ui || offscreen_capture {
             None
         } else {
             Some(match self.surface.get_current_texture() {

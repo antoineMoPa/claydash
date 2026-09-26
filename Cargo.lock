@@ -268,6 +268,7 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 name = "claydash"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "bytemuck",
  "command_central",
  "console_error_panic_hook",

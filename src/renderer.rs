@@ -171,6 +171,7 @@ impl MaterialPreviewIds {
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[derive(Clone)]
 pub struct CapturedFrame {
     pub width: u32,
     pub height: u32,

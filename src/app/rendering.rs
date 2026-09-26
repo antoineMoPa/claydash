@@ -203,13 +203,26 @@ impl App {
             commands::effective_selected_ids(&self.tree)
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let capture_render = self.pending_render.is_some() || self.guide_screenshot.is_some();
+        let capture_render = self.pending_render.is_some() || self.guide_screenshot.is_some() || {
+            #[cfg(unix)]
+            {
+                self.agent_capture.is_some()
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        };
         #[cfg(not(target_arch = "wasm32"))]
         let capture_ui = self.guide_screenshot.is_some();
         #[cfg(target_arch = "wasm32")]
         let capture_render = self.pending_render.is_some();
         #[cfg(target_arch = "wasm32")]
         let capture_ui = false;
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        let offscreen_capture = self.agent_capture.is_some();
+        #[cfg(any(target_arch = "wasm32", not(unix)))]
+        let offscreen_capture = false;
         if let Some(renderer) = &mut self.renderer {
             let export_version = if capture_render { i32::MIN } else { 0 };
             // Selection is drawn by the editor gizmos. Keep the cached scene
@@ -230,151 +243,183 @@ impl App {
                 &mut output,
                 capture_render,
                 capture_ui,
+                offscreen_capture,
             );
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(result) = renderer.take_capture() {
-                if self.discard_capture {
-                    self.discard_capture = false;
-                } else if let Err(error) = result {
-                    if let Some(PendingRender::Video {
-                        frames_directory,
-                        restore_frame,
-                        ..
-                    }) = self.pending_render.take()
-                    {
-                        let _ = std::fs::remove_dir_all(frames_directory);
-                        self.ui.set_animation_frame(&mut self.tree, restore_frame);
-                    }
-                    if self.guide_screenshot.is_some() {
-                        panic!("Could not capture guide screenshot: {error}");
-                    }
-                    self.document.set_error("render the scene", error);
-                } else if let Ok(frame) = result {
-                    if let Some(path) = self.guide_screenshot.take() {
-                        let result = path
-                            .parent()
-                            .filter(|parent| !parent.as_os_str().is_empty())
-                            .map(std::fs::create_dir_all)
-                            .transpose()
-                            .and_then(|_| {
-                                crate::render_export::png_bytes(&frame)
-                                    .map_err(std::io::Error::other)
-                            })
-                            .and_then(|bytes| std::fs::write(&path, bytes));
-                        result.unwrap_or_else(|error| {
-                            panic!(
-                                "Could not write guide screenshot {}: {error}",
-                                path.display()
-                            )
-                        });
-                        eprintln!("Guide screenshot: {}", path.display());
-                        self.guide_capture_done = true;
-                    }
-                    if let Some(pending) = self.pending_render.take() {
-                        let frame = crate::render_export::crop_to_viewport(frame, &self.camera);
-                        match pending {
-                            PendingRender::Still { path } => {
-                                let control =
-                                    Arc::new(crate::render_export::EncodingControl::default());
-                                let worker_control = control.clone();
-                                let (tx, completed) = channel();
-                                std::thread::spawn(move || {
-                                    let staging_path = path.with_extension(format!(
-                                        "webp.partial-{}",
-                                        uuid::Uuid::new_v4()
-                                    ));
-                                    let result = crate::render_export::write_render_with_control(
-                                        &staging_path,
-                                        crate::document::RenderFormat::WebP,
-                                        &frame,
-                                        &worker_control,
-                                    )
-                                    .and_then(|_| {
-                                        if worker_control.cancelled.load(Ordering::Relaxed) {
-                                            return Err("render cancelled".into());
-                                        }
-                                        std::fs::rename(&staging_path, &path)
-                                            .map_err(|error| error.to_string())
-                                    });
-                                    let _ = std::fs::remove_file(&staging_path);
-                                    let _ = tx.send(result);
-                                });
-                                self.encoding = Some(NativeEncoding {
-                                    control,
-                                    completed,
-                                    total: 0,
-                                    cancelling: false,
-                                    format: crate::document::RenderFormat::WebP,
-                                });
-                            }
-                            PendingRender::Video {
-                                path,
-                                frames_directory,
-                                start_frame,
-                                next_frame,
-                                end_frame,
-                                output_index,
-                                fps,
-                                restore_frame,
-                            } => {
-                                let write = crate::render_export::write_video_frame(
-                                    &frames_directory,
-                                    output_index,
-                                    &frame,
-                                );
-                                if let Err(error) = write {
-                                    self.document.set_error("render the animation", error);
-                                    let _ = std::fs::remove_dir_all(&frames_directory);
-                                    self.ui.set_animation_frame(&mut self.tree, restore_frame);
-                                } else if next_frame < end_frame {
-                                    let next_frame = next_frame + 1;
-                                    self.ui
-                                        .set_animation_frame(&mut self.tree, next_frame as f32);
-                                    self.pending_render = Some(PendingRender::Video {
-                                        path,
-                                        frames_directory,
-                                        start_frame,
-                                        next_frame,
-                                        end_frame,
-                                        output_index: output_index + 1,
-                                        fps,
-                                        restore_frame,
-                                    });
-                                } else {
-                                    self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                #[cfg(unix)]
+                let agent_handled = if let Some(reply) = self.agent_capture.take() {
+                    use base64::Engine;
+                    let encoded = result.as_ref().map_err(Clone::clone).and_then(|frame| {
+                        let cropped =
+                            crate::render_export::crop_to_viewport(frame.clone(), &self.camera);
+                        crate::render_export::png_bytes(&cropped).map(|bytes| {
+                            serde_json::json!({"width": cropped.width, "height": cropped.height,
+                                "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
+                        })
+                    });
+                    let _ = reply.send(encoded);
+                    true
+                } else {
+                    false
+                };
+                #[cfg(not(unix))]
+                let agent_handled = false;
+                if !agent_handled {
+                    if self.discard_capture {
+                        self.discard_capture = false;
+                    } else if let Err(error) = result {
+                        if let Some(PendingRender::Video {
+                            frames_directory,
+                            restore_frame,
+                            ..
+                        }) = self.pending_render.take()
+                        {
+                            let _ = std::fs::remove_dir_all(frames_directory);
+                            self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                        }
+                        if self.guide_screenshot.is_some() {
+                            panic!("Could not capture guide screenshot: {error}");
+                        }
+                        self.document.set_error("render the scene", error);
+                    } else if let Ok(frame) = result {
+                        if let Some(path) = self.guide_screenshot.take() {
+                            let result = path
+                                .parent()
+                                .filter(|parent| !parent.as_os_str().is_empty())
+                                .map(std::fs::create_dir_all)
+                                .transpose()
+                                .and_then(|_| {
+                                    crate::render_export::png_bytes(&frame)
+                                        .map_err(std::io::Error::other)
+                                })
+                                .and_then(|bytes| std::fs::write(&path, bytes));
+                            result.unwrap_or_else(|error| {
+                                panic!(
+                                    "Could not write guide screenshot {}: {error}",
+                                    path.display()
+                                )
+                            });
+                            eprintln!("Guide screenshot: {}", path.display());
+                            self.guide_capture_done = true;
+                        }
+                        if let Some(pending) = self.pending_render.take() {
+                            let frame = crate::render_export::crop_to_viewport(frame, &self.camera);
+                            match pending {
+                                PendingRender::Still { path } => {
                                     let control =
                                         Arc::new(crate::render_export::EncodingControl::default());
                                     let worker_control = control.clone();
                                     let (tx, completed) = channel();
                                     std::thread::spawn(move || {
                                         let staging_path = path.with_extension(format!(
-                                            "mp4.partial-{}",
+                                            "webp.partial-{}",
                                             uuid::Uuid::new_v4()
                                         ));
-                                        let result = crate::render_export::write_mp4_with_control(
-                                            &staging_path,
-                                            &frames_directory,
-                                            fps,
-                                            &worker_control,
-                                        )
-                                        .and_then(|_| {
-                                            if worker_control.cancelled.load(Ordering::Relaxed) {
-                                                return Err("render cancelled".into());
-                                            }
-                                            std::fs::rename(&staging_path, &path)
-                                                .map_err(|error| error.to_string())
-                                        });
-                                        let _ = std::fs::remove_dir_all(&frames_directory);
+                                        let result =
+                                            crate::render_export::write_render_with_control(
+                                                &staging_path,
+                                                crate::document::RenderFormat::WebP,
+                                                &frame,
+                                                &worker_control,
+                                            )
+                                            .and_then(
+                                                |_| {
+                                                    if worker_control
+                                                        .cancelled
+                                                        .load(Ordering::Relaxed)
+                                                    {
+                                                        return Err("render cancelled".into());
+                                                    }
+                                                    std::fs::rename(&staging_path, &path)
+                                                        .map_err(|error| error.to_string())
+                                                },
+                                            );
                                         let _ = std::fs::remove_file(&staging_path);
                                         let _ = tx.send(result);
                                     });
                                     self.encoding = Some(NativeEncoding {
                                         control,
                                         completed,
-                                        total: end_frame - start_frame + 1,
+                                        total: 0,
                                         cancelling: false,
-                                        format: crate::document::RenderFormat::Mp4,
+                                        format: crate::document::RenderFormat::WebP,
                                     });
+                                }
+                                PendingRender::Video {
+                                    path,
+                                    frames_directory,
+                                    start_frame,
+                                    next_frame,
+                                    end_frame,
+                                    output_index,
+                                    fps,
+                                    restore_frame,
+                                } => {
+                                    let write = crate::render_export::write_video_frame(
+                                        &frames_directory,
+                                        output_index,
+                                        &frame,
+                                    );
+                                    if let Err(error) = write {
+                                        self.document.set_error("render the animation", error);
+                                        let _ = std::fs::remove_dir_all(&frames_directory);
+                                        self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                                    } else if next_frame < end_frame {
+                                        let next_frame = next_frame + 1;
+                                        self.ui
+                                            .set_animation_frame(&mut self.tree, next_frame as f32);
+                                        self.pending_render = Some(PendingRender::Video {
+                                            path,
+                                            frames_directory,
+                                            start_frame,
+                                            next_frame,
+                                            end_frame,
+                                            output_index: output_index + 1,
+                                            fps,
+                                            restore_frame,
+                                        });
+                                    } else {
+                                        self.ui.set_animation_frame(&mut self.tree, restore_frame);
+                                        let control = Arc::new(
+                                            crate::render_export::EncodingControl::default(),
+                                        );
+                                        let worker_control = control.clone();
+                                        let (tx, completed) = channel();
+                                        std::thread::spawn(move || {
+                                            let staging_path = path.with_extension(format!(
+                                                "mp4.partial-{}",
+                                                uuid::Uuid::new_v4()
+                                            ));
+                                            let result =
+                                                crate::render_export::write_mp4_with_control(
+                                                    &staging_path,
+                                                    &frames_directory,
+                                                    fps,
+                                                    &worker_control,
+                                                )
+                                                .and_then(|_| {
+                                                    if worker_control
+                                                        .cancelled
+                                                        .load(Ordering::Relaxed)
+                                                    {
+                                                        return Err("render cancelled".into());
+                                                    }
+                                                    std::fs::rename(&staging_path, &path)
+                                                        .map_err(|error| error.to_string())
+                                                });
+                                            let _ = std::fs::remove_dir_all(&frames_directory);
+                                            let _ = std::fs::remove_file(&staging_path);
+                                            let _ = tx.send(result);
+                                        });
+                                        self.encoding = Some(NativeEncoding {
+                                            control,
+                                            completed,
+                                            total: end_frame - start_frame + 1,
+                                            cancelling: false,
+                                            format: crate::document::RenderFormat::Mp4,
+                                        });
+                                    }
                                 }
                             }
                         }

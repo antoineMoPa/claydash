@@ -299,6 +299,12 @@ impl App {
             interactions: InteractionState::default(),
             ui,
             document,
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_requests: None,
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_capture: None,
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_revision: 0,
             #[cfg(not(target_arch = "wasm32"))]
             pending_render: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -318,6 +324,8 @@ impl App {
             }),
             #[cfg(not(target_arch = "wasm32"))]
             guide_capture_done: false,
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_headless: std::env::args().any(|argument| argument == "--agent-headless"),
             window_focused: true,
             window_occluded: false,
             #[cfg(not(target_arch = "wasm32"))]

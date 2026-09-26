@@ -21,6 +21,10 @@ mod web_input;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    #[cfg(unix)]
+    if app::agent::run_from_args() {
+        return;
+    }
     app::run();
 }
 

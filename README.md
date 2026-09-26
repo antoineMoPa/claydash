@@ -6,6 +6,8 @@ https://app.claydash.com/ - note: live version does not always point to main bra
 
 [User guide](docs/guide/index.html)
 
+[Connect local coding agents to the native viewport](docs/agent-integration.md)
+
 # What we can do so far
 
 * Add spheres, boxes, cylinders, and tori from the shape toolbar (Add menu in narrow viewports) or the `⌘⇧P` / `Ctrl+Shift+P`

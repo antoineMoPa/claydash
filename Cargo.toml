@@ -49,6 +49,7 @@ mp4 = "0.14.0"
 pollster = "0.4.0"
 openh264 = "0.9.8"
 egui-winit = { version = "0.36.2", default-features = false }
+base64 = "0.22"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.128"

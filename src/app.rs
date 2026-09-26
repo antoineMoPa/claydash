@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+pub(crate) mod agent;
 mod events;
 mod initialization;
 mod rendering;
@@ -71,6 +73,12 @@ pub struct App {
     interactions: InteractionState,
     ui: UiState,
     document: DocumentState,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_requests: Option<Receiver<agent::Inbound>>,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_capture: Option<std::sync::mpsc::Sender<agent::AgentResult>>,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_revision: u64,
     #[cfg(not(target_arch = "wasm32"))]
     pending_render: Option<PendingRender>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -86,6 +94,8 @@ pub struct App {
     guide_screenshot: Option<std::path::PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
     guide_capture_done: bool,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_headless: bool,
     window_focused: bool,
     window_occluded: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -102,6 +112,15 @@ pub struct App {
     document_tx: Sender<WebDocumentMessage>,
     #[cfg(target_arch = "wasm32")]
     document_rx: Receiver<WebDocumentMessage>,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+impl Drop for App {
+    fn drop(&mut self) {
+        if self.agent_requests.is_some() {
+            agent::cleanup_socket();
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -408,7 +427,9 @@ pub fn run() {
     let event_loop = {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
         let mut builder = EventLoop::builder();
-        if std::env::args().any(|argument| argument.starts_with("--guide-screenshot=")) {
+        if std::env::args().any(|argument| {
+            argument.starts_with("--guide-screenshot=") || argument == "--agent-headless"
+        }) {
             builder.with_activation_policy(ActivationPolicy::Prohibited);
         }
         builder.build().expect("create event loop")
