@@ -39,7 +39,7 @@
   <header>
     <h1>Claydash user guide</h1>
     <nav aria-label="Guide sections">
-      <span class="nav-title">On this page</span><a href="#window">App window</a><a href="#sdf">A word about SDF</a><a href="#shapes">Shapes</a><a href="#gizmos">Viewport gizmos</a><a href="#face-cut">Face cutting and extrusion</a><a href="#booleans">Boolean groups</a><a href="#materials">Materials</a><a href="#repeat">Repeat modifier</a><a href="#mirror">Mirror modifier</a><a href="#modifiers">Lattice modifier</a><a href="#camera">Cameras</a><a href="#animation">Animation</a><a href="#files">Files and renders</a>
+      <span class="nav-title">On this page</span><a href="#window">App window</a><a href="#sdf">A word about SDF</a><a href="#shapes">Shapes</a><a href="#gizmos">Viewport gizmos</a><a href="#face-cut">Face cutting and extrusion</a><a href="#path-extrusion">Path extrusion</a><a href="#booleans">Boolean groups</a><a href="#materials">Materials</a><a href="#repeat">Repeat modifier</a><a href="#mirror">Mirror modifier</a><a href="#modifiers">Lattice modifier</a><a href="#camera">Cameras</a><a href="#animation">Animation</a><a href="#files">Files and renders</a><a href="#agents">Native app and MCP</a>
     </nav>
   </header>
   <main>
@@ -56,7 +56,7 @@
       </figure>
       <div class="grid">
         <div class="card"><h3>Top menu</h3><p><strong>File</strong> opens and saves projects, <strong>Panels</strong> opens the timeline, and <strong>Render</strong> exports a still or animation.</p></div>
-        <div class="card"><h3>Viewport controls</h3><p>Use the top-left buttons to add shapes, open the command palette, undo, and redo. The top-right buttons switch projection, snap to an isometric view, and enter the active camera view. The sun or moon in the Viewport frame header switches between light and dark mode.</p></div>
+        <div class="card"><h3>Viewport controls</h3><p>Use the top-left buttons to add shapes, open the command palette, undo, and redo. The top-right buttons switch projection, toggle full-resolution refinement with the aperture icon, snap to an isometric view, and enter the active camera view. Refinement sharpens the live viewport after movement stops; turn it off for a faster preview. The sun or moon in the Viewport frame header switches between light and dark mode.</p></div>
         <div class="card"><h3>Selection and view</h3><p>Click an object in the viewport or Scene tree to select it. Use the viewport's selection and transform tools to work directly on the model. The orientation gizmo in the lower-left corner helps you snap the view.</p></div>
       </div>
     </section>
@@ -83,6 +83,12 @@
       <p>Select a box or cylinder, click it again to enter its exact selection, then click the face or cap you want. Press <kbd class="key">E</kbd> to extrude it. Move the pointer to set the depth, then click or press <kbd class="key">Enter</kbd> to confirm. The selected face stays available for further editing; <kbd class="key">Esc</kbd> cancels the current extrusion.</p>
       <p>For a custom outline, select a box or generated extrusion face and choose the scissors <strong>Face Cut</strong> tool in the viewport's lower-right corner. Click the outline's corners, then click the first corner or press <kbd class="key">Enter</kbd> to close it. Choose a face region if prompted. Move the pointer away from the face for a raised shape or through it for a cut, then click or press <kbd class="key">Enter</kbd> to finish. <kbd class="key">Backspace</kbd> removes the latest point, <kbd class="key">Esc</kbd> cancels, and holding <kbd class="key">Alt</kbd> bypasses snapping guides.</p>
       <figure><img class="detail" src="face-cut.webp" alt="A polygon extruded from a box face alongside a box face extrusion, with the selected polygon cap outlined" width="1280" height="800" loading="lazy"><figcaption>A polygon face extrusion and a box face extrusion.</figcaption></figure>
+    </section>
+    <section id="path-extrusion">
+      <h2>Extrude a path</h2>
+      <p>Add a <strong>Bézier curve</strong>, select it, then choose <strong>Object → Modifiers → + Add modifier → Path Extrusion</strong>. The curve becomes a solid tube. Set <strong>Profile size</strong> to change its thickness, and choose a round or square cross section. To sweep a custom shape, create another curve and choose it under <strong>Profile curve</strong>; its local XY outline is closed automatically.</p>
+      <p>Drag the curve's anchors and handles in the viewport to shape the path. Select an end anchor and press <kbd class="key">E</kbd> to extend it; move the pointer and click to place the next anchor. Press <kbd class="key">G</kbd> to move a selected point, <kbd class="key">Backspace</kbd> to remove an anchor, or <kbd class="key">Enter</kbd> on the last anchor to close the path. <kbd class="key">Esc</kbd> cancels an extension in progress.</p>
+      <figure><img class="detail" src="path-extrusion.webp" alt="Selected Bézier curve swept into a round solid, with its control points in the viewport and Path Extrusion settings in the Object tab" width="1280" height="800" loading="lazy"><figcaption>A Bézier path with a round profile and editable control points.</figcaption></figure>
     </section>
     <section id="booleans">
       <h2>Combine shapes with Boolean groups</h2>
@@ -124,6 +130,10 @@
       <h2>Save and render</h2>
       <p><strong>File → Save</strong> stores the editable scene in a <code>.claydash</code> project; <strong>Open</strong> and <strong>Open Recent</strong> bring projects back. Use <strong>Render</strong> to export a WebP still or an MP4 of the animation range. Exports contain the rendered scene, without editor panels, handles, or labels. Dense scenes may take a little longer to finish sharpening before capture.</p>
       <figure><img class="detail" src="window.webp" alt="Claydash top menu showing File, Panels, and Render" width="1280" height="800" loading="lazy"><figcaption>File and Render are in the top menu bar.</figcaption></figure>
+    </section>
+    <section id="agents">
+      <h2>Connect an agent to the native app</h2>
+      <p>The native Claydash app includes a local MCP server for coding agents. With the native window running, an agent can inspect and edit the live scene, capture viewport images, and save the project. Connect the agent to the <code>claydash mcp</code> command using the absolute path to your native binary. See the <a href="https://github.com/antoineMoPa/claydash/blob/main/docs/agent-integration.md">agent setup and tool guide</a> for configuration examples and the available actions.</p>
     </section>
   </main>
   <footer><p>Claydash is experimental. This guide describes the current editing workflow and its controls.</p></footer>

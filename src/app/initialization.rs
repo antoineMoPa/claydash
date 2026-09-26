@@ -103,13 +103,37 @@ impl App {
                 std::env::args().any(|argument| argument == "--guide-panel=repeat");
             let mirror_preview =
                 std::env::args().any(|argument| argument == "--guide-panel=mirror");
+            let path_preview =
+                std::env::args().any(|argument| argument == "--guide-panel=path-extrusion");
             let simple_kind = std::env::args().find_map(|argument| match argument.as_str() {
                 "--guide-panel=shapes" => Some(crate::model::PrimitiveKind::Box),
                 "--guide-panel=gizmos" => Some(crate::model::PrimitiveKind::Cylinder),
                 "--guide-panel=modifiers" => Some(crate::model::PrimitiveKind::Sphere),
                 _ => None,
             });
-            let mut scene = if mirror_preview {
+            let mut scene = if path_preview {
+                let mut curve =
+                    crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+                curve.name = "Extruded path".into();
+                curve.params =
+                    crate::model::SdfParams::BezierCurveParams(crate::model::BezierCurveParams {
+                        points: vec![
+                            glam::Vec3::new(-1.25, -0.55, 0.0),
+                            glam::Vec3::new(-0.95, 0.6, 0.0),
+                            glam::Vec3::new(-0.35, 0.65, 0.0),
+                            glam::Vec3::new(-0.2, 0.0, 0.0),
+                            glam::Vec3::new(0.0, -0.85, 0.0),
+                            glam::Vec3::new(0.8, -0.75, 0.0),
+                            glam::Vec3::new(1.2, 0.5, 0.0),
+                        ],
+                        closed: false,
+                    });
+                curve.path_extrusion = Some(crate::model::PathExtrusion {
+                    radius: 0.2,
+                    ..crate::model::PathExtrusion::default()
+                });
+                vec![curve]
+            } else if mirror_preview {
                 let mut center =
                     crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
                 center.name = "Mirrored group".into();
@@ -180,7 +204,7 @@ impl App {
                 1
             } else if operand_preview {
                 7
-            } else if simple_kind.is_some() || repeat_preview || mirror_preview {
+            } else if simple_kind.is_some() || repeat_preview || mirror_preview || path_preview {
                 0
             } else {
                 2
@@ -215,7 +239,9 @@ impl App {
             }
             tree.make_undo_redo_snapshot();
             Camera {
-                position: if simple_kind.is_some() || mirror_preview {
+                position: if path_preview {
+                    glam::Vec3::new(0.0, 0.0, 4.5)
+                } else if simple_kind.is_some() || mirror_preview {
                     glam::Vec3::new(0.0, 1.3, 4.5)
                 } else {
                     glam::Vec3::new(0.0, 1.6, 8.5)

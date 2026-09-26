@@ -49,6 +49,7 @@ capture light --guide-theme=light
 capture shapes --guide-theme=dark --ui-preview --guide-panel=shapes
 capture gizmos --guide-theme=dark --ui-preview --guide-panel=gizmos
 capture face-cut --guide-theme=dark --ui-preview --guide-panel=face-cut
+capture path-extrusion --guide-theme=dark --ui-preview --guide-panel=path-extrusion
 capture boolean --guide-theme=dark --ui-preview --guide-panel=operand
 capture materials --guide-theme=dark --ui-preview --guide-panel=materials
 capture repeat --guide-theme=dark --ui-preview --guide-panel=repeat
