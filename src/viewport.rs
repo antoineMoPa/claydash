@@ -317,8 +317,15 @@ impl Viewport {
         scene: &wgpu::RenderPipeline,
         scene_bind_group: &wgpu::BindGroup,
     ) -> Option<wgpu::Buffer> {
-        let targets = self.targets.as_ref().expect("prepared viewport");
-        let size = self.key.as_ref().unwrap().size;
+        // A material pipeline change can invalidate the view while a previous
+        // GPU timing query is still pending. prepare() then returns Cached
+        // before installing a new key; there is no frame to encode yet.
+        let Some(targets) = self.targets.as_ref() else {
+            return None;
+        };
+        let Some(size) = self.key.as_ref().map(|key| key.size) else {
+            return None;
+        };
         if work != Work::Cached {
             let view = if work == Work::Preview {
                 &targets.preview
