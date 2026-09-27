@@ -6,10 +6,12 @@ use sdf_consts::{
 use serde::{Deserialize, Serialize};
 
 mod materials;
+mod optimization;
 mod primitives;
 mod spatial;
 
 pub use materials::*;
+pub use optimization::*;
 use primitives::curve_profile_frame;
 pub use primitives::*;
 pub use spatial::*;
@@ -194,6 +196,8 @@ pub struct SdfObject {
     pub surface_inlay: Option<SurfaceInlay>,
     #[serde(default)]
     pub image_stencil: Option<ImageStencil>,
+    #[serde(default, skip_serializing_if = "GroupRenderRepresentation::is_exact")]
+    pub render_representation: GroupRenderRepresentation,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -249,6 +253,7 @@ impl SdfObject {
             uuid: uuid::Uuid::new_v4(),
             transform: Transform::default(),
             group_transform: Transform::default(),
+            render_representation: GroupRenderRepresentation::default(),
             color: material.color,
             object_type: kind.object_type(),
             params: match kind {

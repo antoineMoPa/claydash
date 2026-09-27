@@ -103,6 +103,43 @@ pub(super) fn boolean_postorder(objects: &[SdfObject]) -> Vec<&SdfObject> {
     result
 }
 
+// World transforms are already baked into each operand. A component made only
+// of hard unions has the same distance as the minimum of its primitive SDFs,
+// regardless of how the editable Boolean groups are nested. Reparenting the
+// GPU copy lets the existing flat-union BVH skip distant operands. Keep the
+// source tree intact for editing and serialization.
+pub(super) fn flatten_nested_hard_unions(objects: &mut [GpuObject]) {
+    let mut has_children = vec![false; objects.len()];
+    for object in objects.iter() {
+        if object.meta[3] >= 0 {
+            has_children[object.meta[3] as usize] = true;
+        }
+    }
+    let mut start = 0;
+    for root in 0..objects.len() {
+        if objects[root].meta[3] >= 0 {
+            continue;
+        }
+        if root > start
+            && objects[start..=root]
+                .iter()
+                .enumerate()
+                .all(|(offset, object)| {
+                    let index = start + offset;
+                    object.meta[2] == 0
+                        && (!has_children[index] || object.component[2] == 0)
+                        && object.repeat_count[3] == 0
+                        && object.mirror_axes[..3].iter().all(|&axis| axis == 0)
+                })
+        {
+            for object in &mut objects[start..root] {
+                object.meta[3] = root as i32;
+            }
+        }
+        start = root + 1;
+    }
+}
+
 pub(super) fn inverse_affine_rows(inverse: glam::Mat4) -> [[f32; 4]; 3] {
     let columns = inverse.to_cols_array_2d();
     [

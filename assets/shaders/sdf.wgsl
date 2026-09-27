@@ -20,12 +20,16 @@ struct Object {
     stencil_meta: vec4<f32>,
     distance_bound: vec4<f32>,
     operand_tree: vec4<u32>,
+    box_depth_meta: vec4<u32>,
+    box_depth_min: vec4<f32>,
+    box_depth_max: vec4<f32>,
 }
 struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> objects: array<Object>;
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
 @group(0) @binding(5) var<storage, read> polygon_points: array<vec2<f32>>;
+@group(0) @binding(13) var<storage, read> box_depth_texels: array<vec4<f32>>;
 @group(0) @binding(11) var image_atlas: texture_2d_array<f32>;
 @group(0) @binding(12) var image_sampler: sampler;
 override USE_BVH: bool = true;
@@ -330,6 +334,193 @@ fn loft_distance(point: vec3<f32>, object: Object) -> f32 {
     return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
 }
 
+// Each box face captures the first surface along its inward axis. The face
+// nearest the viewer supplies a depth field; empty texels leave the ray free
+// to continue through the box.
+struct BoxDepthFaceSample {
+    capture: vec4<f32>,
+    material_index: u32,
+}
+
+fn box_depth_face_uv(local: vec3<f32>, object: Object, face: u32) -> vec2<f32> {
+    let minimum = object.box_depth_min.xyz;
+    let maximum = object.box_depth_max.xyz;
+    if face < 2u {
+        return (local.yz - minimum.yz) / (maximum.yz - minimum.yz);
+    }
+    if face < 4u {
+        return (local.xz - minimum.xz) / (maximum.xz - minimum.xz);
+    }
+    return (local.xy - minimum.xy) / (maximum.xy - minimum.xy);
+}
+
+fn box_depth_texel_offset(object: Object, face: u32, pixel: vec2<i32>) -> u32 {
+    let resolution = i32(object.box_depth_meta.y);
+    let clamped = clamp(pixel, vec2<i32>(0), vec2<i32>(resolution - 1));
+    return object.box_depth_meta.x + 2u * (face * object.box_depth_meta.y * object.box_depth_meta.y
+        + u32(clamped.y) * object.box_depth_meta.y + u32(clamped.x));
+}
+
+fn box_depth_face_sample(local: vec3<f32>, object: Object, face: u32) -> BoxDepthFaceSample {
+    let uv = box_depth_face_uv(local, object, face);
+    if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) {
+        return BoxDepthFaceSample(vec4(-1.0, 0.0, 0.0, 0.0), 0u);
+    }
+    let pixel = vec2<i32>(floor(uv * f32(object.box_depth_meta.y)));
+    let offset = box_depth_texel_offset(object, face, pixel);
+    return BoxDepthFaceSample(box_depth_texels[offset], u32(box_depth_texels[offset + 1u].x));
+}
+
+fn box_depth_face_depth(local: vec3<f32>, object: Object, face: u32) -> f32 {
+    let uv = box_depth_face_uv(local, object, face);
+    if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) { return -1.0; }
+    let resolution = f32(object.box_depth_meta.y);
+    let nearest = box_depth_texels[box_depth_texel_offset(object, face, vec2<i32>(floor(uv * resolution)))];
+    if nearest.x < 0.0 { return nearest.x; }
+    let coordinate = uv * resolution - vec2(0.5);
+    let lower = vec2<i32>(floor(coordinate));
+    let blend = fract(coordinate);
+    let a = box_depth_texels[box_depth_texel_offset(object, face, lower)];
+    let b = box_depth_texels[box_depth_texel_offset(object, face, lower + vec2<i32>(1, 0))];
+    let c = box_depth_texels[box_depth_texel_offset(object, face, lower + vec2<i32>(0, 1))];
+    let d = box_depth_texels[box_depth_texel_offset(object, face, lower + vec2<i32>(1, 1))];
+    if min(min(a.x, b.x), min(c.x, d.x)) < 0.0 { return nearest.x; }
+    let size = object.box_depth_max.xyz - object.box_depth_min.xyz;
+    let depth_limit = max(size.x, max(size.y, size.z)) / resolution * 3.0;
+    if max(max(a.x, b.x), max(c.x, d.x)) - min(min(a.x, b.x), min(c.x, d.x)) > depth_limit {
+        return nearest.x;
+    }
+    if any(a.yzw != nearest.yzw) || any(b.yzw != nearest.yzw)
+        || any(c.yzw != nearest.yzw) || any(d.yzw != nearest.yzw) {
+        return nearest.x;
+    }
+    return mix(mix(a.x, b.x, blend.x), mix(c.x, d.x, blend.x), blend.y);
+}
+
+fn box_depth_face_plane(local: vec3<f32>, object: Object, face: u32, depth: f32) -> f32 {
+    if face == 0u { return local.x - object.box_depth_max.x + depth; }
+    if face == 1u { return object.box_depth_min.x - local.x + depth; }
+    if face == 2u { return local.y - object.box_depth_max.y + depth; }
+    if face == 3u { return object.box_depth_min.y - local.y + depth; }
+    if face == 4u { return local.z - object.box_depth_max.z + depth; }
+    return object.box_depth_min.z - local.z + depth;
+}
+
+fn box_depth_view_face(local: vec3<f32>, object: Object) -> u32 {
+    let eye = vec4(camera.position.xyz, 1.0);
+    let local_eye = vec3(
+        dot(object.inverse_rows[0], eye),
+        dot(object.inverse_rows[1], eye),
+        dot(object.inverse_rows[2], eye)
+    );
+    let view = local_eye - local;
+    let axis = abs(view);
+    if axis.x >= axis.y && axis.x >= axis.z {
+        return select(1u, 0u, view.x >= 0.0);
+    }
+    if axis.y >= axis.z {
+        return select(3u, 2u, view.y >= 0.0);
+    }
+    return select(5u, 4u, view.z >= 0.0);
+}
+
+fn box_depth_shape(local: vec3<f32>, object: Object) -> f32 {
+    let q = max(object.box_depth_min.xyz - local, local - object.box_depth_max.xyz);
+    let box_distance = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+    // Near the cube boundary, sample the capture before the marcher reaches
+    // its hit threshold. Otherwise the empty bounding face appears opaque.
+    if box_distance > 0.01 { return box_distance; }
+    let face = box_depth_view_face(local, object);
+    let depth = box_depth_face_depth(local, object, face);
+    if depth < 0.0 {
+        let box_width = object.box_depth_max.xyz - object.box_depth_min.xyz;
+        return max(-depth, min(box_width.x, min(box_width.y, box_width.z)) * 0.05);
+    }
+    return box_depth_face_plane(local, object, face, depth);
+}
+
+fn box_depth_surface_sample(point: vec3<f32>, object: Object) -> BoxDepthFaceSample {
+    let homogeneous = vec4(point, 1.0);
+    let local = vec3(
+        dot(object.inverse_rows[0], homogeneous),
+        dot(object.inverse_rows[1], homogeneous),
+        dot(object.inverse_rows[2], homogeneous)
+    );
+    let sample = box_depth_face_sample(local, object, box_depth_view_face(local, object));
+    if sample.capture.x >= 0.0 {
+        return sample;
+    }
+    return BoxDepthFaceSample(vec4(0.0, object.color.rgb), object.component.w);
+}
+
+// Sphere captures use a seamless azimuth and a clamped polar axis.
+fn sphere_depth_uv(local: vec3<f32>) -> vec2<f32> {
+    let radius = length(local);
+    let direction = select(vec3(0.0, 1.0, 0.0), local / max(radius, 0.000001), radius > 0.000001);
+    let azimuth = atan2(direction.z, direction.x);
+    return vec2(fract(azimuth / 6.28318530718 + 0.5), acos(clamp(direction.y, -1.0, 1.0)) / 3.14159265359);
+}
+
+fn sphere_depth_texel_offset(object: Object, pixel: vec2<i32>) -> u32 {
+    let width = i32(object.box_depth_meta.y);
+    let height = i32(object.box_depth_meta.z);
+    let wrapped_x = ((pixel.x % width) + width) % width;
+    let y = clamp(pixel.y, 0, height - 1);
+    return object.box_depth_meta.x + 2u * (u32(y) * object.box_depth_meta.y + u32(wrapped_x));
+}
+
+fn sphere_depth_sample(local: vec3<f32>, object: Object) -> BoxDepthFaceSample {
+    let uv = sphere_depth_uv(local);
+    let pixel = vec2<i32>(floor(uv * vec2<f32>(f32(object.box_depth_meta.y), f32(object.box_depth_meta.z))));
+    let offset = sphere_depth_texel_offset(object, pixel);
+    return BoxDepthFaceSample(box_depth_texels[offset], u32(box_depth_texels[offset + 1u].x));
+}
+
+fn sphere_depth_at(local: vec3<f32>, object: Object) -> f32 {
+    let uv = sphere_depth_uv(local);
+    let dimensions = vec2<f32>(f32(object.box_depth_meta.y), f32(object.box_depth_meta.z));
+    let nearest = sphere_depth_sample(local, object).capture;
+    if nearest.x < 0.0 { return nearest.x; }
+    let coordinate = uv * dimensions - vec2(0.5);
+    let lower = vec2<i32>(floor(coordinate));
+    let blend = fract(coordinate);
+    let a = box_depth_texels[sphere_depth_texel_offset(object, lower)];
+    let b = box_depth_texels[sphere_depth_texel_offset(object, lower + vec2<i32>(1, 0))];
+    let c = box_depth_texels[sphere_depth_texel_offset(object, lower + vec2<i32>(0, 1))];
+    let d = box_depth_texels[sphere_depth_texel_offset(object, lower + vec2<i32>(1, 1))];
+    if min(min(a.x, b.x), min(c.x, d.x)) < 0.0 { return nearest.x; }
+    let depth_limit = object.box_depth_max.x * 6.0 / dimensions.y;
+    if max(max(a.x, b.x), max(c.x, d.x)) - min(min(a.x, b.x), min(c.x, d.x)) > depth_limit {
+        return nearest.x;
+    }
+    if any(a.yzw != nearest.yzw) || any(b.yzw != nearest.yzw)
+        || any(c.yzw != nearest.yzw) || any(d.yzw != nearest.yzw) {
+        return nearest.x;
+    }
+    return mix(mix(a.x, b.x, blend.x), mix(c.x, d.x, blend.x), blend.y);
+}
+
+fn sphere_depth_shape(local: vec3<f32>, object: Object) -> f32 {
+    let radius = object.box_depth_max.x;
+    let sphere_distance = length(local) - radius;
+    if sphere_distance > 0.01 { return sphere_distance; }
+    let depth = sphere_depth_at(local, object);
+    if depth < 0.0 { return max(-depth, radius * 0.05); }
+    return sphere_distance + depth;
+}
+
+fn sphere_depth_surface_sample(point: vec3<f32>, object: Object) -> BoxDepthFaceSample {
+    let homogeneous = vec4(point, 1.0);
+    let local = vec3(
+        dot(object.inverse_rows[0], homogeneous),
+        dot(object.inverse_rows[1], homogeneous),
+        dot(object.inverse_rows[2], homogeneous)
+    );
+    let sample = sphere_depth_sample(local, object);
+    if sample.capture.x >= 0.0 { return sample; }
+    return BoxDepthFaceSample(vec4(0.0, object.color.rgb), object.component.w);
+}
+
 fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
     var distance = 100.0;
     if object.state.y == 1 {
@@ -357,6 +548,10 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
         distance = bezier_extrusion_distance(local, object);
     } else if HAS_LOFTS && object.state.y == 7 {
         distance = loft_distance(local, object);
+    } else if object.state.y == 8 {
+        distance = box_depth_shape(local, object);
+    } else if object.state.y == 9 {
+        distance = sphere_depth_shape(local, object);
     }
     return distance;
 }

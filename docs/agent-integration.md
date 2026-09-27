@@ -89,6 +89,21 @@ box after a subsequent call supplies their generated IDs:
 
 `PutObject` replaces a complete object by UUID. It gives agents access to every serialized object
 field, including materials, repetition, mirrors, lattice, path extrusion, and surface inlays.
+`CreateObject` also accepts `render_representation`, and `SetRenderRepresentation` changes that
+choice on an existing object, including a Boolean group root or leaf. The choices are `exact_sdf`, `box_depth_atlas`, and `sphere_depth_atlas`. The atlases capture
+depth and the hit material from box faces or radial sphere rays, then render an approximate surface.
+For example, after joining objects into a Boolean group, set the choice on its root:
+
+```json
+{"actions":[{"type":"SetRenderRepresentation","id":"<group-root-id>","render_representation":"box_depth_atlas"}]}
+```
+
+To compose groups, use `SetBoolean` with a child **group root** as `id`, the outer group's root
+as `parent`, and `"operation":"Union"`. Repeat this at any depth. The group hierarchy remains
+editable. Hard nested unions use the exact renderer's flat-union acceleration when eligible;
+set `softness` to `0` on every group root for that path. Older saved choices that have been removed
+load as `exact_sdf`.
+
 `BoxParams` accepts `corner_radius` in addition to `box_q`. `LoftParams` accepts 2–16 ordered
 sections with `x`, `center_y`, `center_z`, `half_height`, and `half_width` fields. Each section
 can also have a `profile` array of 3–32 `[Y,Z]` points in unit ellipse coordinates. The points

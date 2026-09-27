@@ -819,6 +819,11 @@
         let group_labels = labels(&mut tree, &mut runtime);
         assert!(group_labels.iter().any(|label| label == "Group transform"));
         assert!(group_labels.iter().any(|label| label == "Modifiers"));
+        assert!(group_labels.iter().any(|label| label == "Group optimizations"));
+        assert!(
+            group_labels.iter().position(|label| label == "Group optimizations")
+                > group_labels.iter().position(|label| label == "Modifiers")
+        );
         assert!(!group_labels.iter().any(|label| label == "Object settings"));
         assert!(!group_labels.iter().any(|label| label.contains("Radius")));
 
@@ -826,7 +831,51 @@
         let object_labels = labels(&mut tree, &mut runtime);
         assert!(object_labels.iter().any(|label| label == "Object settings"));
         assert!(object_labels.iter().any(|label| label == "Modifiers"));
+        assert!(object_labels.iter().any(|label| label == "Group optimizations"));
+        assert!(
+            object_labels.iter().position(|label| label == "Group optimizations")
+                > object_labels.iter().position(|label| label == "Modifiers")
+        );
         assert!(object_labels.iter().any(|label| label.contains("Radius")));
+    }
+
+    #[test]
+    fn nested_union_group_exposes_its_own_optimization_choice() {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let outer = SdfObject::create_kind(PrimitiveKind::Box);
+        let mut inner = SdfObject::create_kind(PrimitiveKind::Sphere);
+        inner.boolean_parent = Some(outer.uuid);
+        let mut leaf = SdfObject::create_kind(PrimitiveKind::Box);
+        leaf.boolean_parent = Some(inner.uuid);
+        let leaf_id = leaf.uuid;
+        set_objects(&mut tree, vec![outer, inner.clone(), leaf]);
+        set_selected(&mut tree, vec![inner.uuid]);
+        assert_eq!(commands::selected_group_id(&tree), Some(inner.uuid));
+        let mut runtime = AnimationRuntime::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            object_panel(ui, &mut tree, &mut runtime);
+        });
+        output.textures_delta.clear();
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(labels.iter().any(|label| label == "Group optimizations"));
+
+        crate::model::set_selected_exact(&mut tree, vec![leaf_id]);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            object_panel(ui, &mut tree, &mut runtime);
+        });
+        output.textures_delta.clear();
+        assert!(output.shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Text(text) => text.galley.text() == "Group optimizations",
+            _ => false,
+        }));
     }
 
     #[test]

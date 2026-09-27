@@ -25,6 +25,7 @@ fn create_scene_bind_group(
     sampler: &wgpu::Sampler,
     image_atlas: &wgpu::Texture,
     image_sampler: &wgpu::Sampler,
+    box_depth_buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     let view = atlas.create_view(&Default::default());
     let image_view = image_atlas.create_view(&wgpu::TextureViewDescriptor {
@@ -54,6 +55,10 @@ fn create_scene_bind_group(
     entries.push(wgpu::BindGroupEntry {
         binding: 12,
         resource: wgpu::BindingResource::Sampler(image_sampler),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 13,
+        resource: box_depth_buffer.as_entire_binding(),
     });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("scene bind group"),
@@ -172,6 +177,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let box_depth_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("box depth capture texels"),
+            size: (MAX_BOX_DEPTH_TEXELS * 16) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let lattice_points_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lattice control offsets"),
             size: (MAX_LATTICE_POINTS * 16) as u64,
@@ -261,6 +272,16 @@ impl Renderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ])
                 .collect::<Vec<_>>(),
         });
@@ -281,6 +302,7 @@ impl Renderer {
             &lattice_sampler,
             &image_atlas,
             &image_sampler,
+            &box_depth_buffer,
         );
         let shader_source = super::material_gpu::shader_source();
         #[cfg(not(target_arch = "wasm32"))]
@@ -340,6 +362,7 @@ impl Renderer {
             pipeline_layout,
             use_bvh,
             node_count: 0,
+            uploaded_object_count: 0,
             has_booleans: false,
             scene_shader_features: SceneShaderFeatures::ALL,
             scene_pipelines_dirty: false,
@@ -351,6 +374,7 @@ impl Renderer {
             material_headers_buffer,
             material_params_buffer,
             polygon_points_buffer,
+            box_depth_buffer,
             lattice_points_buffer,
             lattice_atlas,
             lattice_atlas_rows: 1,
@@ -398,6 +422,7 @@ impl Renderer {
             &self.lattice_sampler,
             &self.image_atlas,
             &self.image_sampler,
+            &self.box_depth_buffer,
         );
     }
 

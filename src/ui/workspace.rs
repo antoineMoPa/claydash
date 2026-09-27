@@ -73,7 +73,11 @@ impl PaneView<EditorPane> for WorkspaceView<'_> {
                         match pane {
                             EditorPane::Animation => {}
                             EditorPane::Scene => scene_panel(ui, self.tree),
-                            EditorPane::Object => object_panel(ui, self.tree, self.animation),
+                            EditorPane::Object => {
+                                ui.push_id(("object-inspector", id), |ui| {
+                                    object_panel(ui, self.tree, self.animation)
+                                });
+                            }
                             EditorPane::Materials => materials_panel(ui, self.tree, self.animation),
                             EditorPane::Operand => operand_panel(ui, self.tree, self.animation),
                             EditorPane::World => world_panel(ui, self.tree),

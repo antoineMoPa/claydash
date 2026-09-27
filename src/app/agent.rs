@@ -23,8 +23,8 @@ use crate::{
     camera::{Camera, ProjectionMode},
     commands, document,
     model::{
-        self, AnimationData, BooleanOperation, MaterialAsset, PrimitiveKind, SdfObject, SdfParams,
-        Transform, World,
+        self, AnimationData, BooleanOperation, GroupRenderRepresentation, MaterialAsset,
+        PrimitiveKind, SdfObject, SdfParams, Transform, World,
     },
 };
 
@@ -199,6 +199,7 @@ pub enum Action {
         transform: Option<Transform>,
         position: Option<[f32; 3]>,
         params: Option<SdfParams>,
+        render_representation: Option<GroupRenderRepresentation>,
     },
     PutObject {
         object: SdfObject,
@@ -214,6 +215,10 @@ pub enum Action {
     SetObjectParams {
         id: uuid::Uuid,
         params: SdfParams,
+    },
+    SetRenderRepresentation {
+        id: uuid::Uuid,
+        render_representation: GroupRenderRepresentation,
     },
     SetBoolean {
         id: uuid::Uuid,
@@ -672,6 +677,7 @@ impl App {
                     transform,
                     position,
                     params,
+                    render_representation,
                 } => {
                     let mut object = SdfObject::create_kind(kind);
                     object.material = model::picked_material(&draft);
@@ -691,6 +697,9 @@ impl App {
                             return Err("params do not match primitive kind".to_string());
                         }
                         object.params = params;
+                    }
+                    if let Some(render_representation) = render_representation {
+                        object.render_representation = render_representation;
                     }
                     created.push(object.uuid);
                     let mut objects = model::objects(&draft);
@@ -733,6 +742,18 @@ impl App {
                         .find(|object| object.uuid == id)
                         .ok_or_else(|| format!("object {id} does not exist"))?;
                     object.params = params;
+                    model::set_objects(&mut draft, objects);
+                }
+                Action::SetRenderRepresentation {
+                    id,
+                    render_representation,
+                } => {
+                    let mut objects = model::objects(&draft);
+                    let object = objects
+                        .iter_mut()
+                        .find(|object| object.uuid == id)
+                        .ok_or_else(|| format!("object {id} does not exist"))?;
+                    object.render_representation = render_representation;
                     model::set_objects(&mut draft, objects);
                 }
                 Action::SetBoolean {
@@ -1043,11 +1064,12 @@ fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
 
 fn schema() -> Value {
     json!({
-        "version": 4,
+        "version": 7,
         "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
-        "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetBoolean", "DeleteObject", "SetWorld", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
+        "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| json!({"kind": kind, "example": SdfObject::create_kind(*kind)})).collect::<Vec<_>>(),
-        "notes": "GetState returns complete typed objects and the raw .claydash scene document. CreateCustomMaterial takes name and wgsl, returning its UUID in created_material_ids. The WGSL is a function body returning Surface, with point, normal, view, and base inputs. UpdateCustomMaterial edits name and/or wgsl; AssignMaterial links it to object_ids. CreateObject accepts an optional position [x,y,z], full transform, and shape params. BoxParams includes corner_radius; LoftParams contains ordered sections, each with an optional closed profile of 3–32 [Y,Z] points in unit ellipse coordinates. Custom profiles in one loft must have matching point counts. A PutObject can set surface_inlay to a host object id, offset, and thickness. CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. Apply actions run as one undoable edit. Send expected_revision from GetState to reject stale edits. ReplaceScene accepts the raw document value and must be the sole action."
+        "render_representations": GroupRenderRepresentation::ALL.iter().map(|mode| json!({"value": mode, "label": mode.label(), "description": mode.description(), "limitation": mode.limitation()})).collect::<Vec<_>>(),
+        "notes": "GetState returns complete typed objects and the raw .claydash scene document. CreateCustomMaterial takes name and wgsl, returning its UUID in created_material_ids. The WGSL is a function body returning Surface, with point, normal, view, and base inputs. UpdateCustomMaterial edits name and/or wgsl; AssignMaterial links it to object_ids. CreateObject accepts an optional position [x,y,z], full transform, shape params, and render_representation. SetRenderRepresentation accepts an object or Boolean group root id. ExactSdf uses the source; BoxDepthAtlas captures from six box faces; SphereDepthAtlas captures with radial rays. Both retain depth, base color, and the hit material. Older documents with removed choices load as ExactSdf. BoxParams includes corner_radius; LoftParams contains ordered sections, each with an optional closed profile of 3–32 [Y,Z] points in unit ellipse coordinates. Custom profiles in one loft must have matching point counts. A PutObject can set surface_inlay to a host object id, offset, and thickness. CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. Apply actions run as one undoable edit. Send expected_revision from GetState to reject stale edits. ReplaceScene accepts the raw document value and must be the sole action."
     })
 }
 
@@ -1125,12 +1147,17 @@ fn run_mcp() {
 fn mcp_tools() -> Vec<Value> {
     let object = json!({"type": "object", "additionalProperties": true});
     let uuid = json!({"type": "string", "format": "uuid"});
+    let representations = json!({
+        "type": "string",
+        "enum": GroupRenderRepresentation::ALL
+    });
     let action = json!({"oneOf": [
-        {"type": "object", "properties": {"type": {"const": "CreateObject"}, "kind": {"enum": ["Sphere", "Box", "Cylinder", "Torus", "PolygonPrism", "BezierCurve", "Loft"]}, "name": {"type": "string"}, "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "transform": object, "params": object}, "required": ["type", "kind"]},
+        {"type": "object", "properties": {"type": {"const": "CreateObject"}, "kind": {"enum": ["Sphere", "Box", "Cylinder", "Torus", "PolygonPrism", "BezierCurve", "Loft"]}, "name": {"type": "string"}, "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "transform": object, "params": object, "render_representation": representations}, "required": ["type", "kind"]},
         {"type": "object", "properties": {"type": {"const": "PutObject"}, "object": object}, "required": ["type", "object"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectName"}, "id": uuid, "name": {"type": "string"}}, "required": ["type", "id", "name"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectTransform"}, "id": uuid, "transform": object}, "required": ["type", "id", "transform"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectParams"}, "id": uuid, "params": object}, "required": ["type", "id", "params"]},
+        {"type": "object", "properties": {"type": {"const": "SetRenderRepresentation"}, "id": uuid, "render_representation": representations}, "required": ["type", "id", "render_representation"]},
         {"type": "object", "properties": {"type": {"const": "SetBoolean"}, "id": uuid, "parent": {"type": ["string", "null"]}, "operation": {"enum": ["Union", "Subtract", "Intersect"]}, "softness": {"type": "number"}}, "required": ["type", "id", "parent", "operation"]},
         {"type": "object", "properties": {"type": {"const": "DeleteObject"}, "id": uuid}, "required": ["type", "id"]},
         {"type": "object", "properties": {"type": {"const": "SetWorld"}, "world": object}, "required": ["type", "world"]},
@@ -1298,6 +1325,7 @@ mod tests {
                     transform: None,
                     position: None,
                     params: None,
+                    render_representation: None,
                 }],
             })
             .unwrap();
@@ -1312,6 +1340,7 @@ mod tests {
                     transform: None,
                     position: None,
                     params: None,
+                    render_representation: None,
                 }],
             })
             .is_err());
@@ -1380,5 +1409,189 @@ mod tests {
             model::objects_ref(&app.tree)[0].boolean_parent,
             Some(model::objects_ref(&app.tree)[0].uuid)
         );
+    }
+
+    #[test]
+    fn available_render_representations_are_authorable_by_agents() {
+        let declared: Vec<Value> = schema()["render_representations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["value"].clone())
+            .collect();
+        let advertised = &mcp_tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "apply")
+            .unwrap()["inputSchema"]["properties"]["actions"]["items"]["oneOf"];
+        let set_action = advertised
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["properties"]["type"]["const"] == "SetRenderRepresentation")
+            .unwrap();
+        let create_action = advertised
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["properties"]["type"]["const"] == "CreateObject")
+            .unwrap();
+        let set_values = set_action["properties"]["render_representation"]["enum"]
+            .as_array()
+            .unwrap();
+        let create_values = create_action["properties"]["render_representation"]["enum"]
+            .as_array()
+            .unwrap();
+        let available: Vec<Value> = GroupRenderRepresentation::ALL
+            .into_iter()
+            .map(|mode| serde_json::to_value(mode).unwrap())
+            .collect();
+        assert_eq!(set_values, &available);
+        assert_eq!(create_values, &available);
+        assert_eq!(declared.len(), GroupRenderRepresentation::ALL.len());
+
+        let mut app = App::new();
+        let root_id = model::objects_ref(&app.tree)[0].uuid;
+        let child = SdfObject::create_kind(PrimitiveKind::Box);
+        let child_id = child.uuid;
+        let mut scene = model::objects(&app.tree);
+        scene.push(child);
+        model::set_objects(&mut app.tree, scene);
+        app.agent_apply(ApplyArgs {
+            expected_revision: Some(app.scene_revision()),
+            actions: vec![Action::SetBoolean {
+                id: child_id,
+                parent: Some(root_id),
+                operation: BooleanOperation::Subtract,
+                softness: None,
+            }],
+        })
+        .unwrap();
+
+        for mode in GroupRenderRepresentation::ALL {
+            let value = serde_json::to_value(mode).unwrap();
+            let request: Request = serde_json::from_value(json!({
+                "op": "Apply", "args": {"actions": [{
+                    "type": "SetRenderRepresentation", "id": root_id,
+                    "render_representation": value
+                }]}
+            }))
+            .unwrap();
+            let Request::Apply(args) = request else {
+                unreachable!()
+            };
+            app.agent_apply(args).unwrap();
+            let root = model::objects_ref(&app.tree)
+                .iter()
+                .find(|object| object.uuid == root_id)
+                .unwrap();
+            assert_eq!(root.render_representation, mode);
+            let restored: SdfObject =
+                serde_json::from_value(serde_json::to_value(root).unwrap()).unwrap();
+            assert_eq!(restored.render_representation, mode);
+            let state = app.agent_state().unwrap();
+            let state_root: SdfObject = serde_json::from_value(
+                state["objects"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|object| object["uuid"] == json!(root_id))
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+            assert_eq!(state_root.render_representation, mode);
+
+            let create: Request = serde_json::from_value(json!({
+                "op": "Apply", "args": {"actions": [{
+                    "type": "CreateObject", "kind": "Box",
+                    "render_representation": value
+                }]}
+            }))
+            .unwrap();
+            let Request::Apply(args) = create else {
+                unreachable!()
+            };
+            let created = app.agent_apply(args).unwrap();
+            let created_id: uuid::Uuid =
+                serde_json::from_value(created["created_ids"][0].clone()).unwrap();
+            let object = model::objects_ref(&app.tree)
+                .iter()
+                .find(|object| object.uuid == created_id)
+                .unwrap();
+            assert_eq!(object.render_representation, mode);
+        }
+    }
+
+    #[test]
+    fn agent_can_compose_nested_union_groups_with_separate_render_choices() {
+        let mut app = App::new();
+        let outer_id = model::objects_ref(&app.tree)[0].uuid;
+        let create: Request = serde_json::from_value(json!({
+            "op": "Apply", "args": {"actions": [
+                {"type": "CreateObject", "kind": "Box", "name": "Group A"},
+                {"type": "CreateObject", "kind": "Sphere", "name": "A child"},
+                {"type": "CreateObject", "kind": "Box", "name": "Group B"},
+                {"type": "CreateObject", "kind": "Sphere", "name": "B child"}
+            ]}
+        }))
+        .unwrap();
+        let Request::Apply(args) = create else {
+            unreachable!()
+        };
+        let created = app.agent_apply(args).unwrap();
+        let ids: Vec<uuid::Uuid> = serde_json::from_value(created["created_ids"].clone()).unwrap();
+        let compose: Request = serde_json::from_value(json!({
+            "op": "Apply", "args": {"actions": [
+                {"type": "SetBoolean", "id": outer_id, "parent": null, "operation": "Union", "softness": 0.0},
+                {"type": "SetBoolean", "id": ids[1], "parent": ids[0], "operation": "Union"},
+                {"type": "SetBoolean", "id": ids[3], "parent": ids[2], "operation": "Union"},
+                {"type": "SetBoolean", "id": ids[0], "parent": outer_id, "operation": "Union", "softness": 0.0},
+                {"type": "SetBoolean", "id": ids[2], "parent": outer_id, "operation": "Union", "softness": 0.0},
+                {"type": "SetRenderRepresentation", "id": ids[0], "render_representation": "box_depth_atlas"},
+                {"type": "SetRenderRepresentation", "id": ids[2], "render_representation": "exact_sdf"}
+            ]}
+        }))
+        .unwrap();
+        let Request::Apply(args) = compose else {
+            unreachable!()
+        };
+        app.agent_apply(args).unwrap();
+        let scene = model::objects_ref(&app.tree);
+        assert_eq!(
+            scene
+                .iter()
+                .find(|object| object.uuid == ids[1])
+                .unwrap()
+                .boolean_parent,
+            Some(ids[0])
+        );
+        assert_eq!(
+            scene
+                .iter()
+                .find(|object| object.uuid == ids[3])
+                .unwrap()
+                .boolean_parent,
+            Some(ids[2])
+        );
+        assert_eq!(
+            scene
+                .iter()
+                .find(|object| object.uuid == ids[0])
+                .unwrap()
+                .render_representation,
+            GroupRenderRepresentation::BoxDepthAtlas
+        );
+        assert_eq!(
+            scene
+                .iter()
+                .find(|object| object.uuid == ids[2])
+                .unwrap()
+                .render_representation,
+            GroupRenderRepresentation::ExactSdf
+        );
+        let captured = capture_objects(scene, &[outer_id]).unwrap();
+        assert!(ids
+            .iter()
+            .all(|id| captured.iter().any(|object| object.uuid == *id)));
     }
 }

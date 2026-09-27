@@ -3,6 +3,35 @@ use glam::{Quat, Vec2, Vec3};
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 #[test]
+fn group_render_choices_round_trip_and_old_scenes_default_to_exact() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+    let saved = serde_json::to_value(&object).unwrap();
+    assert!(saved.get("render_representation").is_none());
+    let loaded: SdfObject = serde_json::from_value(saved).unwrap();
+    assert_eq!(
+        loaded.render_representation,
+        GroupRenderRepresentation::ExactSdf
+    );
+
+    for mode in GroupRenderRepresentation::ALL {
+        object.render_representation = mode;
+        let restored: SdfObject =
+            serde_json::from_str(&serde_json::to_string(&object).unwrap()).unwrap();
+        assert_eq!(restored.render_representation, mode);
+    }
+
+    for removed in ["gaussian_splats", "preview_hull"] {
+        let mut saved = serde_json::to_value(&object).unwrap();
+        saved["render_representation"] = serde_json::json!(removed);
+        let restored: SdfObject = serde_json::from_value(saved).unwrap();
+        assert_eq!(
+            restored.render_representation,
+            GroupRenderRepresentation::ExactSdf
+        );
+    }
+}
+
+#[test]
 fn rounded_box_keeps_half_extents_and_loads_old_boxes() {
     let mut object = SdfObject::create_kind(PrimitiveKind::Box);
     let SdfParams::BoxParams(params) = &mut object.params else {

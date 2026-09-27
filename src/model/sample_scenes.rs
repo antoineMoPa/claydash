@@ -2,8 +2,9 @@ use glam::{Quat, Vec2, Vec3, Vec4};
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 use super::{
-    boolean_distance, object_world_matrix, BooleanOperation, BoxParams, Material, MaterialKind,
-    PolygonPrismParams, PrimitiveKind, SdfObject, SdfParams, SphereParams, WoodSpecies,
+    boolean_distance, object_world_matrix, BooleanOperation, BoxParams, GroupRenderRepresentation,
+    Material, MaterialKind, PolygonPrismParams, PrimitiveKind, SdfObject, SdfParams, SphereParams,
+    WoodSpecies,
 };
 
 /// Deterministic visual QA scene: materials above, boolean operations below.
@@ -69,75 +70,89 @@ pub fn ui_preview_scene() -> Vec<SdfObject> {
 /// Evaluate each subtree before combining it with its parent. Parent links are
 /// independent of storage order, and root objects always union with one another.
 pub fn scene_sample(point: Vec3, scene: &[SdfObject]) -> Option<(f32, uuid::Uuid)> {
-    fn subtree(point: Vec3, scene: &[SdfObject], index: usize, depth: usize) -> (f32, uuid::Uuid) {
-        let object = &scene[index];
-        let has_children = scene
-            .iter()
-            .any(|child| child.boolean_parent == Some(object.uuid));
-        let point = if let Some(mirror) = object.mirror.filter(|_| object.boolean_parent.is_none())
-        {
-            mirror.fold_point(point, super::group_world_matrix(scene, object.uuid))
-        } else {
-            point
-        };
-        let point = if has_children && object.repetition.enabled {
-            let group = super::group_world_matrix(scene, object.uuid);
-            group.transform_point3(
-                object.repeated_local_point(group.inverse().transform_point3(point)),
-            )
-        } else {
-            point
-        };
-        let matrix = object_world_matrix(scene, object.uuid);
-        let profile = object
-            .path_extrusion
-            .and_then(|modifier| modifier.profile_curve)
-            .and_then(|id| super::profile_curve_vertices(scene, id));
-        let mut object_distance = object.distance_with_matrix_with_profile(
-            point,
-            matrix,
-            !(has_children && object.repetition.enabled),
-            profile.as_deref(),
-        );
-        if let Some(inlay) = object.surface_inlay {
-            if let Some(host_index) = scene
-                .iter()
-                .position(|candidate| candidate.uuid == inlay.host)
-            {
-                let host_distance = subtree(point, scene, host_index, depth + 1).0;
-                object_distance =
-                    object_distance.max((host_distance - inlay.offset).abs() - inlay.thickness);
-            } else {
-                object_distance = 100.0;
-            }
-        }
-        let mut result = (object_distance, object.uuid);
-        if depth >= scene.len() {
-            return result;
-        }
-        for (child_index, child) in scene.iter().enumerate() {
-            if child.boolean_parent != Some(object.uuid) {
-                continue;
-            }
-            let candidate = subtree(point, scene, child_index, depth + 1);
-            let distance =
-                boolean_distance(result.0, candidate.0, child.operation, object.softness);
-            match child.operation {
-                BooleanOperation::Union if candidate.0 < result.0 => result = candidate,
-                BooleanOperation::Subtract => result.0 = result.0.max(-candidate.0),
-                BooleanOperation::Intersect if candidate.0 > result.0 => result = candidate,
-                _ => {}
-            }
-            result.0 = distance;
-        }
-        result
-    }
     scene
         .iter()
         .enumerate()
         .filter(|(_, object)| object.boolean_parent.is_none())
-        .map(|(index, _)| subtree(point, scene, index, 0))
+        .map(|(index, _)| subtree_sample_at(point, scene, index, 0))
         .min_by(|a, b| a.0.total_cmp(&b.0))
+}
+
+/// Evaluate one Boolean subtree while retaining its ancestor transforms.
+pub fn scene_subtree_sample(
+    point: Vec3,
+    scene: &[SdfObject],
+    root: uuid::Uuid,
+) -> Option<(f32, uuid::Uuid)> {
+    scene
+        .iter()
+        .position(|object| object.uuid == root)
+        .map(|index| subtree_sample_at(point, scene, index, 0))
+}
+
+fn subtree_sample_at(
+    point: Vec3,
+    scene: &[SdfObject],
+    index: usize,
+    depth: usize,
+) -> (f32, uuid::Uuid) {
+    let object = &scene[index];
+    let has_children = scene
+        .iter()
+        .any(|child| child.boolean_parent == Some(object.uuid));
+    let point = if let Some(mirror) = object.mirror.filter(|_| object.boolean_parent.is_none()) {
+        mirror.fold_point(point, super::group_world_matrix(scene, object.uuid))
+    } else {
+        point
+    };
+    let point = if has_children && object.repetition.enabled {
+        let group = super::group_world_matrix(scene, object.uuid);
+        group.transform_point3(object.repeated_local_point(group.inverse().transform_point3(point)))
+    } else {
+        point
+    };
+    let matrix = object_world_matrix(scene, object.uuid);
+    let profile = object
+        .path_extrusion
+        .and_then(|modifier| modifier.profile_curve)
+        .and_then(|id| super::profile_curve_vertices(scene, id));
+    let mut object_distance = object.distance_with_matrix_with_profile(
+        point,
+        matrix,
+        !(has_children && object.repetition.enabled),
+        profile.as_deref(),
+    );
+    if let Some(inlay) = object.surface_inlay {
+        if let Some(host_index) = scene
+            .iter()
+            .position(|candidate| candidate.uuid == inlay.host)
+        {
+            let host_distance = subtree_sample_at(point, scene, host_index, depth + 1).0;
+            object_distance =
+                object_distance.max((host_distance - inlay.offset).abs() - inlay.thickness);
+        } else {
+            object_distance = 100.0;
+        }
+    }
+    let mut result = (object_distance, object.uuid);
+    if depth >= scene.len() {
+        return result;
+    }
+    for (child_index, child) in scene.iter().enumerate() {
+        if child.boolean_parent != Some(object.uuid) {
+            continue;
+        }
+        let candidate = subtree_sample_at(point, scene, child_index, depth + 1);
+        let distance = boolean_distance(result.0, candidate.0, child.operation, object.softness);
+        match child.operation {
+            BooleanOperation::Union if candidate.0 < result.0 => result = candidate,
+            BooleanOperation::Subtract => result.0 = result.0.max(-candidate.0),
+            BooleanOperation::Intersect if candidate.0 > result.0 => result = candidate,
+            _ => {}
+        }
+        result.0 = distance;
+    }
+    result
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -192,6 +207,34 @@ pub fn renderer_stress_scene() -> Vec<SdfObject> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     let mut cases = Vec::new();
+    // A nested group capture beside exact geometry exercises the baked GPU
+    // operand, its material color, and its composition in a larger union.
+    let mut outer = SdfObject::create_kind(PrimitiveKind::Sphere);
+    outer.params = SdfParams::SphereParams(SphereParams { radius: 0.35 });
+    outer.softness = 0.0;
+    let mut capture_root = SdfObject::create_kind(PrimitiveKind::Box);
+    capture_root.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::new(0.35, 0.55, 0.35),
+        corner_radius: 0.0,
+    });
+    capture_root.boolean_parent = Some(outer.uuid);
+    capture_root.group_transform.translation = Vec3::new(-0.7, 0.0, 0.0);
+    capture_root.softness = 0.0;
+    let mut capture_child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    capture_child.boolean_parent = Some(capture_root.uuid);
+    capture_child.params = SdfParams::SphereParams(SphereParams { radius: 0.55 });
+    capture_child.transform.translation = Vec3::new(0.45, 0.1, 0.0);
+    capture_child.color = glam::Vec4::new(0.25, 0.75, 0.95, 1.0);
+    let mut right = SdfObject::create_kind(PrimitiveKind::Sphere);
+    right.boolean_parent = Some(outer.uuid);
+    right.transform.translation = Vec3::new(0.8, 0.0, 0.0);
+    right.params = SdfParams::SphereParams(SphereParams { radius: 0.55 });
+    right.color = glam::Vec4::new(0.95, 0.4, 0.2, 1.0);
+    let mut captured = vec![outer, capture_root, capture_child, right];
+    let exact = captured.clone();
+    captured[1].render_representation = GroupRenderRepresentation::BoxDepthAtlas;
+    cases.push(("box-depth-exact".into(), exact));
+    cases.push(("box-depth-atlas".into(), captured));
     let mut shell = SdfObject::create_kind(PrimitiveKind::Cylinder);
     shell.params = SdfParams::CylinderParams {
         radius: 1.0,

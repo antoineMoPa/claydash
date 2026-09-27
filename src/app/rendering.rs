@@ -5,10 +5,23 @@ fn scene_render_versions(tree: &DataTree, capture_render: bool) -> [i32; 2] {
     // Material source and parameters both affect the cached viewport image.
     [
         tree.path_version("scene.sdf_objects")
-            .wrapping_add(tree.path_version("scene.materials")),
+            .wrapping_add(tree.path_version("scene.materials"))
+            .wrapping_add(tree.path_version("scene.selected_uuids")),
         tree.path_version("scene.world")
             .wrapping_add(export_version),
     ]
+}
+
+#[cfg(test)]
+#[test]
+fn selection_change_invalidates_rendered_proxy_highlight() {
+    let mut tree = DataTree::default();
+    let object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    let id = object.uuid;
+    crate::model::set_objects(&mut tree, vec![object]);
+    let before = scene_render_versions(&tree, false);
+    crate::model::set_selected_exact(&mut tree, vec![id]);
+    assert_ne!(scene_render_versions(&tree, false), before);
 }
 
 impl App {

@@ -15,22 +15,33 @@ struct Surface {
     sheen: f32, fiber: vec3<f32>, figure: f32,
 }
 fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object) -> Surface {
-    let header = material_headers[object.component.w];
+    var material_object = object;
+    var captured_color = object.color.rgb;
+    if object.state.y == 8 {
+        let capture = box_depth_surface_sample(point, object);
+        captured_color = capture.capture.yzw;
+        material_object.component.w = capture.material_index;
+    } else if object.state.y == 9 {
+        let capture = sphere_depth_surface_sample(point, object);
+        captured_color = capture.capture.yzw;
+        material_object.component.w = capture.material_index;
+    }
+    let header = material_headers[material_object.component.w];
     let common_values = material_params[header.offset];
     let optics = material_params[header.offset + 1u];
-    let base = Surface(object.color.rgb, normal, clamp(common_values.x, 0.03, 1.0), common_values.y,
+    let base = Surface(captured_color, normal, clamp(common_values.x, 0.03, 1.0), common_values.y,
         common_values.z, common_values.w, optics.x, 0.0, 0.0, vec3(0.0, 1.0, 0.0), 0.0);
     switch header.kind {
         case MATERIAL_WOOD: {
-            if HAS_WOOD_MATERIAL { return evaluate_wood(point, normal, object, base, header.offset); }
+            if HAS_WOOD_MATERIAL { return evaluate_wood(point, normal, material_object, base, header.offset); }
             return base;
         }
         case MATERIAL_DIAGNOSTIC: {
-            if HAS_DIAGNOSTIC_MATERIAL { return evaluate_diagnostic(point, object, base, header.offset); }
+            if HAS_DIAGNOSTIC_MATERIAL { return evaluate_diagnostic(point, material_object, base, header.offset); }
             return base;
         }
         case MATERIAL_BRICK: {
-            if HAS_BRICK_MATERIAL { return evaluate_brick(point, normal, view, object, base, header.offset); }
+            if HAS_BRICK_MATERIAL { return evaluate_brick(point, normal, view, material_object, base, header.offset); }
             return base;
         }
         case MATERIAL_CUSTOM: {
@@ -43,7 +54,13 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
     }
 }
 fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object, surface: Surface, use_ao: bool) -> vec3<f32> {
-    let header = material_headers[object.component.w];
+    var material_index = object.component.w;
+    if object.state.y == 8 {
+        material_index = box_depth_surface_sample(point, object).material_index;
+    } else if object.state.y == 9 {
+        material_index = sphere_depth_surface_sample(point, object).material_index;
+    }
+    let header = material_headers[material_index];
     let color = surface.color;
     let shade_normal = surface.normal;
     let roughness = surface.roughness;

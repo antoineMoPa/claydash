@@ -56,6 +56,111 @@ fn postorder_gpu_contract_matches_recursive_boolean_evaluation() {
 }
 
 #[test]
+fn nested_hard_unions_use_the_flat_gpu_path_without_changing_the_source_tree() {
+    let mut objects = vec![GpuObject::zeroed(); 5];
+    // Two operands union into an inner group, then that group and another
+    // operand union into the outer root.
+    objects[0].meta[3] = 2;
+    objects[1].meta[3] = 2;
+    objects[2].meta[3] = 4;
+    objects[3].meta[3] = 4;
+    objects[4].meta[3] = -1;
+    objects[0].component[2] = 0.05_f32.to_bits(); // Leaf softness is unused.
+    flatten_nested_hard_unions(&mut objects);
+    assert!(objects[..4].iter().all(|object| object.meta[3] == 4));
+    assert_eq!(objects[4].meta[3], -1);
+}
+
+#[test]
+fn nested_union_flattening_keeps_nonunion_and_modified_components_intact() {
+    for obstruction in ["subtract", "smooth", "repeat", "mirror"] {
+        let mut objects = vec![GpuObject::zeroed(); 3];
+        objects[0].meta[3] = 1;
+        objects[1].meta[3] = 2;
+        objects[2].meta[3] = -1;
+        match obstruction {
+            "subtract" => objects[1].meta[2] = 1,
+            "smooth" => objects[1].component[2] = 0.2_f32.to_bits(),
+            "repeat" => objects[1].repeat_count[3] = 1,
+            "mirror" => objects[1].mirror_axes[0] = 1,
+            _ => unreachable!(),
+        }
+        flatten_nested_hard_unions(&mut objects);
+        assert_eq!(objects[0].meta[3], 1, "{obstruction}");
+        assert_eq!(objects[1].meta[3], 2, "{obstruction}");
+    }
+}
+
+#[test]
+fn box_depth_capture_keeps_hit_owner_for_custom_materials() {
+    use crate::model::{BooleanOperation, GroupRenderRepresentation, MaterialKind, PrimitiveKind};
+    let mut root = SdfObject::create_kind(PrimitiveKind::Box);
+    root.render_representation = GroupRenderRepresentation::BoxDepthAtlas;
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    child.operation = BooleanOperation::Union;
+    child.transform.translation = Vec3::new(0.75, 0.0, 0.0);
+    child.material.kind = MaterialKind::Custom;
+    let child_id = child.uuid;
+    let source = [root, child];
+    let atlas = bake_box_depth_atlas(&source, source[0].uuid, 8).unwrap();
+    assert!(atlas.owners.contains(&Some(child_id)));
+    assert!(atlas.texels.iter().any(|sample| sample[0] >= 0.0));
+}
+
+#[test]
+fn sphere_depth_capture_keeps_hit_owner_and_empty_directions() {
+    use crate::model::{BooleanOperation, GroupRenderRepresentation, MaterialKind, PrimitiveKind};
+    let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+    root.render_representation = GroupRenderRepresentation::SphereDepthAtlas;
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    child.operation = BooleanOperation::Union;
+    child.transform.translation = Vec3::new(0.75, 0.0, 0.0);
+    child.material.kind = MaterialKind::Custom;
+    let child_id = child.uuid;
+    let source = [root, child];
+    let atlas = bake_sphere_depth_atlas(&source, source[0].uuid, 32, 16).unwrap();
+    assert!(atlas.owners.contains(&Some(child_id)));
+    assert!(atlas.texels.iter().any(|sample| sample[0] >= 0.0));
+    assert!(atlas.texels.iter().any(|sample| sample[0] < 0.0));
+    let prepared = scene_upload::prepare_group_scene(&source);
+    assert_eq!(prepared.objects.len(), 1);
+    assert!(prepared.sphere_depth_atlases.contains_key(&source[0].uuid));
+}
+
+#[test]
+fn default_duck_sphere_depth_capture_contains_surface_hits() {
+    let document: serde_json::Value = serde_json::from_str(crate::duck::DEFAULT_DUCK).unwrap();
+    let mut source: Vec<SdfObject> =
+        serde_json::from_value(document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone())
+            .unwrap();
+    let root = source[0].uuid;
+    source[0].render_representation = crate::model::GroupRenderRepresentation::SphereDepthAtlas;
+    let atlas =
+        bake_sphere_depth_atlas(&source, root, SPHERE_DEPTH_WIDTH, SPHERE_DEPTH_HEIGHT).unwrap();
+    assert!(atlas.texels.iter().any(|sample| sample[0] >= 0.0));
+    assert!(atlas.owners.iter().flatten().any(|owner| *owner != root));
+}
+
+#[test]
+fn default_duck_box_depth_capture_contains_surface_hits() {
+    let document: serde_json::Value = serde_json::from_str(crate::duck::DEFAULT_DUCK).unwrap();
+    let mut source: Vec<SdfObject> =
+        serde_json::from_value(document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone())
+            .unwrap();
+    let root = source[0].uuid;
+    source[0].render_representation = crate::model::GroupRenderRepresentation::BoxDepthAtlas;
+    let atlas = bake_box_depth_atlas(&source, root, BOX_DEPTH_RESOLUTION).unwrap();
+    let side = &atlas.texels[..(atlas.resolution * atlas.resolution) as usize];
+    assert!(side.iter().any(|sample| sample[0] >= 0.0));
+    assert!(side.iter().any(|sample| sample[0] < 0.0));
+    assert!(side
+        .iter()
+        .any(|sample| sample[0] < 0.0 && sample[0] > -0.1));
+}
+
+#[test]
 fn boolean_bounds_follow_volume_semantics_and_empty_subtrees() {
     let bound = |x: f32, index| ObjectBound {
         center: Vec3::new(x, 0.0, 0.0),

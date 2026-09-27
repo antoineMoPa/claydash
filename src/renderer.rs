@@ -183,6 +183,9 @@ struct GpuObject {
     stencil_meta: [f32; 4],
     distance_bound: [f32; 4],
     operand_tree: [u32; 4],
+    box_depth_meta: [u32; 4],
+    box_depth_min: [f32; 4],
+    box_depth_max: [f32; 4],
 }
 
 #[repr(C)]
@@ -225,6 +228,7 @@ pub struct Renderer {
     pipeline_layout: wgpu::PipelineLayout,
     use_bvh: bool,
     node_count: u32,
+    uploaded_object_count: u32,
     has_booleans: bool,
     scene_shader_features: SceneShaderFeatures,
     scene_pipelines_dirty: bool,
@@ -236,6 +240,7 @@ pub struct Renderer {
     material_headers_buffer: wgpu::Buffer,
     material_params_buffer: wgpu::Buffer,
     polygon_points_buffer: wgpu::Buffer,
+    box_depth_buffer: wgpu::Buffer,
     lattice_points_buffer: wgpu::Buffer,
     lattice_atlas: wgpu::Texture,
     lattice_atlas_rows: u32,
@@ -313,9 +318,11 @@ pub struct CapturedFrame {
     pub rgba: Vec<u8>,
 }
 
+mod box_depth_atlas;
 mod bvh;
 mod initialization;
 mod material_gpu;
+mod sphere_depth_atlas;
 pub(crate) use material_gpu::validate_custom_materials;
 mod material_previews;
 mod modifier_gpu;
@@ -324,8 +331,10 @@ mod scene_bounds;
 mod scene_upload;
 mod texture_cleanup;
 
+use box_depth_atlas::*;
 use bvh::*;
 use scene_bounds::*;
+use sphere_depth_atlas::*;
 
 #[cfg(test)]
 mod scene_tests;
