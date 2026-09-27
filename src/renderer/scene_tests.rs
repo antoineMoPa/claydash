@@ -72,6 +72,27 @@ fn nested_hard_unions_use_the_flat_gpu_path_without_changing_the_source_tree() {
 }
 
 #[test]
+fn large_direct_boolean_components_keep_fragment_scratch_small() {
+    let mut objects = vec![GpuObject::zeroed(); 600];
+    for child in &mut objects[..599] {
+        child.meta[3] = 599;
+    }
+    objects[599].meta[3] = -1;
+    assert_eq!(mark_component_evaluation(&mut objects, 0, 599), 2);
+    assert_eq!(objects[599].meta[3], FLAT_UNION_ROOT);
+
+    objects[0].meta[2] = 1;
+    objects[599].meta[3] = -1;
+    assert_eq!(mark_component_evaluation(&mut objects, 0, 599), 2);
+    assert_eq!(objects[599].meta[3], FLAT_COMPONENT_ROOT);
+
+    objects[0].meta[3] = 1;
+    objects[599].meta[3] = -1;
+    assert_eq!(mark_component_evaluation(&mut objects, 0, 599), 1024);
+    assert_eq!(objects[599].meta[3], -1);
+}
+
+#[test]
 fn nested_union_flattening_keeps_nonunion_and_modified_components_intact() {
     for obstruction in ["subtract", "smooth", "repeat", "mirror"] {
         let mut objects = vec![GpuObject::zeroed(); 3];
@@ -103,7 +124,8 @@ fn box_depth_capture_keeps_hit_owner_for_custom_materials() {
     child.material.kind = MaterialKind::Custom;
     let child_id = child.uuid;
     let source = [root, child];
-    let atlas = bake_box_depth_atlas(&source, source[0].uuid, 8).unwrap();
+    let atlas =
+        bake_box_depth_atlas(&source, source[0].uuid, 8, BoxCaptureStart::AtBounds).unwrap();
     assert!(atlas.owners.contains(&Some(child_id)));
     assert!(atlas.texels.iter().any(|sample| sample[0] >= 0.0));
 }
@@ -130,6 +152,110 @@ fn sphere_depth_capture_keeps_hit_owner_and_empty_directions() {
 }
 
 #[test]
+fn gaussian_splat_mode_replaces_group_and_preserves_capture_owners() {
+    use crate::model::{BooleanOperation, GroupRenderRepresentation, PrimitiveKind};
+    let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+    root.render_representation = GroupRenderRepresentation::GaussianSplats;
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    child.operation = BooleanOperation::Union;
+    child.transform.translation = Vec3::new(0.75, 0.0, 0.0);
+    let child_id = child.uuid;
+    let source = [root, child];
+    let prepared = scene_upload::prepare_group_scene(&source);
+    assert_eq!(prepared.objects.len(), 1);
+    assert!(prepared.gaussian_splats.contains(&source[0].uuid));
+    let atlas = &prepared.box_depth_atlases[&source[0].uuid];
+    assert!(atlas.owners.contains(&Some(child_id)));
+    let SdfParams::BoxParams(proxy) = &prepared.objects[0].params else {
+        panic!("Gaussian splat proxy should have box bounds");
+    };
+    assert!(proxy.box_q.x > atlas.local_max.x);
+}
+
+#[test]
+fn gaussian_capture_starts_outside_planar_bounds_without_moving_the_surface() {
+    let object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    let source = [object];
+    let ordinary =
+        bake_box_depth_atlas(&source, source[0].uuid, 32, BoxCaptureStart::AtBounds).unwrap();
+    let splats =
+        bake_box_depth_atlas(&source, source[0].uuid, 32, BoxCaptureStart::OutsideBounds).unwrap();
+    assert!((splats.local_max.x - ordinary.local_max.x - 0.5).abs() < 0.0001);
+    let center_pixel = 16 * 32 + 16;
+    let before = ordinary.texels[center_pixel][0];
+    let after = splats.texels[center_pixel][0];
+    assert!(after > before);
+    assert!(((ordinary.local_max.x - before) - (splats.local_max.x - after)).abs() < 0.02);
+}
+
+#[test]
+fn gaussian_box_capture_sees_exposed_faces_of_three_cube_union() {
+    use crate::model::{BooleanOperation, PrimitiveKind};
+    let root = SdfObject::create_kind(PrimitiveKind::Box);
+    let mut right = SdfObject::create_kind(PrimitiveKind::Box);
+    right.boolean_parent = Some(root.uuid);
+    right.operation = BooleanOperation::Union;
+    right.transform.translation = Vec3::new(0.8, 0.0, 0.0);
+    let mut back = SdfObject::create_kind(PrimitiveKind::Box);
+    back.boolean_parent = Some(root.uuid);
+    back.operation = BooleanOperation::Union;
+    back.transform.translation = Vec3::new(0.0, 0.0, 0.8);
+    let ids = [root.uuid, right.uuid, back.uuid];
+    let source = [root, right, back];
+    let atlas = bake_box_depth_atlas(&source, ids[0], 64, BoxCaptureStart::OutsideBounds).unwrap();
+    assert_eq!(atlas.layers, 8);
+    let face_size = 64 * 64;
+    for id in ids {
+        let visible_faces = atlas
+            .owners
+            .chunks(face_size)
+            .filter(|face| face.contains(&Some(id)))
+            .count();
+        assert!(
+            visible_faces >= 3,
+            "cube {id} appears in only {visible_faces} captures"
+        );
+    }
+    assert!(atlas
+        .normals
+        .iter()
+        .filter(|normal| normal.length_squared() > 0.0)
+        .all(|normal| (normal.length() - 1.0).abs() < 0.001));
+    let rear_positive_z = &atlas.owners[(2 * 6 + 4) * face_size..(2 * 6 + 5) * face_size];
+    assert!(rear_positive_z.contains(&Some(ids[0])));
+}
+
+#[test]
+fn splat_hierarchy_keeps_each_spatially_separate_capture_reachable() {
+    let mut texels = vec![[0.0; 4]; 10];
+    let mut bounds = [-2.0, 0.0, 2.0].map(|x| splat_bvh::SplatBound {
+        center: Vec3::new(x, 0.0, 0.0),
+        radius: 0.25,
+        texel_offset: ((x + 2.0) as u32) * 2,
+    });
+    let (start, end) = splat_bvh::append_splat_bvh(&mut texels, &mut bounds).unwrap();
+    assert_eq!(end - start, 10); // Three leaves and two internal nodes.
+    for (x, expected) in [(-2.0, 0.0), (0.0, 4.0), (2.0, 8.0)] {
+        let mut node = start;
+        let mut reached = Vec::new();
+        while node < end {
+            let minimum = texels[node as usize];
+            let maximum = texels[node as usize + 1];
+            if x < minimum[0] || x > maximum[0] || 0.0 < minimum[1] || 0.0 > maximum[1] {
+                node = maximum[3] as u32;
+            } else {
+                if minimum[3] >= 0.0 {
+                    reached.push(minimum[3]);
+                }
+                node += 2;
+            }
+        }
+        assert_eq!(reached, [expected]);
+    }
+}
+
+#[test]
 fn default_duck_sphere_depth_capture_contains_surface_hits() {
     let document: serde_json::Value = serde_json::from_str(crate::duck::DEFAULT_DUCK).unwrap();
     let mut source: Vec<SdfObject> =
@@ -151,7 +277,13 @@ fn default_duck_box_depth_capture_contains_surface_hits() {
             .unwrap();
     let root = source[0].uuid;
     source[0].render_representation = crate::model::GroupRenderRepresentation::BoxDepthAtlas;
-    let atlas = bake_box_depth_atlas(&source, root, BOX_DEPTH_RESOLUTION).unwrap();
+    let atlas = bake_box_depth_atlas(
+        &source,
+        root,
+        BOX_DEPTH_RESOLUTION,
+        BoxCaptureStart::AtBounds,
+    )
+    .unwrap();
     let side = &atlas.texels[..(atlas.resolution * atlas.resolution) as usize];
     assert!(side.iter().any(|sample| sample[0] >= 0.0));
     assert!(side.iter().any(|sample| sample[0] < 0.0));

@@ -90,8 +90,8 @@ box after a subsequent call supplies their generated IDs:
 `PutObject` replaces a complete object by UUID. It gives agents access to every serialized object
 field, including materials, repetition, mirrors, lattice, path extrusion, and surface inlays.
 `CreateObject` also accepts `render_representation`, and `SetRenderRepresentation` changes that
-choice on an existing object, including a Boolean group root or leaf. The choices are `exact_sdf`, `box_depth_atlas`, and `sphere_depth_atlas`. The atlases capture
-depth and the hit material from box faces or radial sphere rays, then render an approximate surface.
+choice on an existing object, including a Boolean group root or leaf. The choices are `exact_sdf`, `box_depth_atlas`, `sphere_depth_atlas`, and `gaussian_splats`. The capture modes record
+depth and the hit material from box faces or radial sphere rays; Gaussian splats project radial hits into soft opacity along each view ray.
 For example, after joining objects into a Boolean group, set the choice on its root:
 
 ```json

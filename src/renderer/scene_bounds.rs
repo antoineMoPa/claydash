@@ -135,6 +135,34 @@ pub(super) fn specialized_shader_source(source: &str, capacity: u32) -> String {
     )
 }
 
+pub(super) fn mark_component_evaluation(
+    objects: &mut [GpuObject],
+    start: usize,
+    root: usize,
+) -> u32 {
+    let size = root - start + 1;
+    if size == 1 {
+        return 1;
+    }
+    let direct_children = objects[start..root]
+        .iter()
+        .all(|object| object.meta[3] == root as i32);
+    if !direct_children {
+        return size.next_power_of_two() as u32;
+    }
+    let hard_union = objects[root].component[2] == 0
+        && objects[start..root]
+            .iter()
+            .all(|object| object.meta[2] == 0);
+    objects[root].meta[3] = if hard_union {
+        FLAT_UNION_ROOT
+    } else {
+        FLAT_COMPONENT_ROOT
+    };
+    // The streaming paths need Boolean evaluation, but no per-object scratch.
+    2
+}
+
 pub(super) fn create_scene_pipeline(
     device: &wgpu::Device,
     shader_source: &str,

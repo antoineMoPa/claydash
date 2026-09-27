@@ -54,6 +54,7 @@ impl Renderer {
                     object.render_representation,
                     crate::model::GroupRenderRepresentation::BoxDepthAtlas
                         | crate::model::GroupRenderRepresentation::SphereDepthAtlas
+                        | crate::model::GroupRenderRepresentation::GaussianSplats
                 )
             }))
         .then(|| prepare_group_scene(source_objects));
@@ -111,6 +112,8 @@ impl Renderer {
         let objects = &ordered;
         let mut box_depth_texels = Vec::new();
         let mut box_depth_metadata = std::collections::HashMap::new();
+        let mut splat_bounds = std::collections::HashMap::new();
+        let mut splat_bvh_metadata = std::collections::HashMap::new();
         let mut materials = material_gpu::PackedMaterials::default();
         let source_lookup: std::collections::HashMap<_, _> = source_objects
             .iter()
@@ -122,11 +125,16 @@ impl Renderer {
                     Some((
                         &atlas.texels,
                         &atlas.owners,
+                        atlas.normals.as_slice(),
                         atlas.resolution,
                         atlas.resolution,
                         atlas.local_min,
                         atlas.local_max,
-                        8,
+                        if prepared.gaussian_splats.contains(&object.uuid) {
+                            10
+                        } else {
+                            8
+                        },
                     ))
                 } else {
                     prepared
@@ -136,6 +144,7 @@ impl Renderer {
                             (
                                 &atlas.texels,
                                 &atlas.owners,
+                                &[] as &[Vec3],
                                 atlas.width,
                                 atlas.height,
                                 Vec3::splat(-atlas.radius),
@@ -144,9 +153,11 @@ impl Renderer {
                             )
                         })
                 };
-                if let Some((texels, owners, width, height, minimum, maximum, kind)) = capture {
+                if let Some((texels, owners, normals, width, height, minimum, maximum, kind)) =
+                    capture
+                {
                     let offset = box_depth_texels.len() as u32;
-                    for (texel, owner) in texels.iter().zip(owners) {
+                    for (sample_index, (texel, owner)) in texels.iter().zip(owners).enumerate() {
                         let material_index = owner
                             .and_then(|id| source_lookup.get(&id).copied())
                             .map_or(0, |source| {
@@ -164,12 +175,70 @@ impl Renderer {
                                 };
                                 materials.insert_custom(source.material, custom_index)
                             });
-                        box_depth_texels.push(*texel);
-                        box_depth_texels.push([material_index as f32, 0.0, 0.0, 0.0]);
+                        if kind == 10 {
+                            let face_size = (width * height) as usize;
+                            let face = (sample_index / face_size) % 6;
+                            let pixel = sample_index % face_size;
+                            let x = pixel as u32 % width;
+                            let y = pixel as u32 / width;
+                            let (axis, u_axis, v_axis, sign) = match face {
+                                0 => (0, 1, 2, 1.0),
+                                1 => (0, 1, 2, -1.0),
+                                2 => (1, 0, 2, 1.0),
+                                3 => (1, 0, 2, -1.0),
+                                4 => (2, 0, 1, 1.0),
+                                _ => (2, 0, 1, -1.0),
+                            };
+                            let mut center = Vec3::ZERO;
+                            center[axis] = if sign > 0.0 {
+                                maximum[axis]
+                            } else {
+                                minimum[axis]
+                            } - sign * texel[0];
+                            center[u_axis] = minimum[u_axis]
+                                + (x as f32 + 0.5) / width as f32
+                                    * (maximum[u_axis] - minimum[u_axis]);
+                            center[v_axis] = minimum[v_axis]
+                                + (y as f32 + 0.5) / height as f32
+                                    * (maximum[v_axis] - minimum[v_axis]);
+                            let support = 0.6
+                                * ((maximum[u_axis] - minimum[u_axis]) / width as f32)
+                                    .max((maximum[v_axis] - minimum[v_axis]) / height as f32);
+                            if owner.is_some() {
+                                splat_bounds
+                                    .entry(object.uuid)
+                                    .or_insert_with(Vec::new)
+                                    .push(splat_bvh::SplatBound {
+                                        center,
+                                        radius: 2.5 * support,
+                                        texel_offset: box_depth_texels.len() as u32,
+                                    });
+                            }
+                            box_depth_texels.push(if owner.is_some() {
+                                center.extend(support).to_array()
+                            } else {
+                                [0.0, 0.0, 0.0, -1.0]
+                            });
+                            box_depth_texels.push([
+                                material_index as f32,
+                                texel[1],
+                                texel[2],
+                                texel[3],
+                            ]);
+                            box_depth_texels.push(normals[sample_index].extend(0.0).to_array());
+                        } else {
+                            box_depth_texels.push(*texel);
+                            box_depth_texels.push([material_index as f32, 0.0, 0.0, 0.0]);
+                        }
                     }
                     box_depth_metadata
                         .insert(object.uuid, (offset, width, height, minimum, maximum, kind));
                 }
+            }
+        }
+        for (id, mut bounds) in splat_bounds {
+            if let Some(range) = splat_bvh::append_splat_bvh(&mut box_depth_texels, &mut bounds) {
+                splat_bvh_metadata.insert(id, range);
             }
         }
         if !box_depth_texels.is_empty() {
@@ -590,6 +659,7 @@ impl Renderer {
                 let uniform_scale = (abs_scale.max_element() - abs_scale.min_element())
                     <= abs_scale.max_element() * 0.00001;
                 let box_depth = box_depth_metadata.get(&object.uuid).copied();
+                let splat_bvh = splat_bvh_metadata.get(&object.uuid).copied();
                 let safe_distance_bound = box_depth.is_none()
                     && modifier_index == 0
                     && uniform_scale
@@ -625,10 +695,17 @@ impl Renderer {
                         .to_array(),
                     operand_tree: [0; 4],
                     box_depth_meta: box_depth.map_or([0; 4], |(offset, width, height, _, _, _)| {
-                        [offset, width, height, 0]
+                        [
+                            offset,
+                            width,
+                            height,
+                            splat_bvh.map_or(0, |(start, _)| start),
+                        ]
                     }),
                     box_depth_min: box_depth.map_or([0.0; 4], |(_, _, _, minimum, _, _)| {
-                        minimum.extend(0.0).to_array()
+                        minimum
+                            .extend(splat_bvh.map_or(0.0, |(_, end)| end as f32))
+                            .to_array()
                     }),
                     box_depth_max: box_depth.map_or([0.0; 4], |(_, _, _, _, maximum, _)| {
                         maximum.extend(0.0).to_array()
@@ -810,19 +887,11 @@ impl Renderer {
                     .iter()
                     .map(|object| f32::from_bits(object.modifier[1]))
                     .fold(1.0_f32, f32::min);
-                // A flat hard union needs only a running minimum. Nested or
-                // smooth components still use the general CSG evaluation.
-                if index > group_start
-                    && gpu_objects[index].component[2] == 0
-                    && gpu_objects[group_start..index]
-                        .iter()
-                        .all(|object| object.meta[2] == 0 && object.meta[3] == index as i32)
-                {
-                    gpu_objects[index].meta[3] = FLAT_UNION_ROOT;
-                }
+                let component_capacity =
+                    mark_component_evaluation(&mut gpu_objects, group_start, index);
                 gpu_objects[index].modifier[1] = march_factor.to_bits();
                 starts[index] = group_start as u32;
-                capacity = capacity.max((index - group_start + 1).next_power_of_two() as u32);
+                capacity = capacity.max(component_capacity);
                 group_start = index + 1;
             }
         }
@@ -846,7 +915,8 @@ impl Renderer {
         gpu_camera.count[1] = self.node_count;
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_camera));
-        // Specialize scratch storage to the largest component, not scene size.
+        // Size fragment scratch for the largest nested component. Direct
+        // components stream through one accumulator.
         let was_boolean = self.has_booleans;
         self.has_booleans = capacity > 1;
         let transmitted_instances: u64 = gpu_objects
@@ -1032,6 +1102,7 @@ pub(super) struct PreparedGroupScene {
     pub objects: Vec<SdfObject>,
     pub box_depth_atlases: HashMap<uuid::Uuid, BoxDepthAtlas>,
     pub sphere_depth_atlases: HashMap<uuid::Uuid, SphereDepthAtlas>,
+    pub gaussian_splats: HashSet<uuid::Uuid>,
 }
 
 pub(super) fn prepare_group_scene(source: &[SdfObject]) -> PreparedGroupScene {
@@ -1046,6 +1117,7 @@ pub(super) fn prepare_group_scene(source: &[SdfObject]) -> PreparedGroupScene {
     let mut proxies = HashMap::new();
     let mut box_depth_atlases = HashMap::new();
     let mut sphere_depth_atlases = HashMap::new();
+    let mut gaussian_splats = HashSet::new();
     let mut atlas_texels = 0;
     for root in source {
         if root.render_representation == GroupRenderRepresentation::ExactSdf {
@@ -1061,35 +1133,55 @@ pub(super) fn prepare_group_scene(source: &[SdfObject]) -> PreparedGroupScene {
         }
         let mut proxy = root.clone();
         match root.render_representation {
-            GroupRenderRepresentation::BoxDepthAtlas => {
-                let Some(atlas) = bake_box_depth_atlas(source, root.uuid, BOX_DEPTH_RESOLUTION)
-                else {
+            GroupRenderRepresentation::BoxDepthAtlas
+            | GroupRenderRepresentation::GaussianSplats => {
+                let gaussian =
+                    root.render_representation == GroupRenderRepresentation::GaussianSplats;
+                let resolution = if gaussian {
+                    GAUSSIAN_BOX_RESOLUTION
+                } else {
+                    BOX_DEPTH_RESOLUTION
+                };
+                let start = if gaussian {
+                    BoxCaptureStart::OutsideBounds
+                } else {
+                    BoxCaptureStart::AtBounds
+                };
+                let Some(atlas) = bake_box_depth_atlas(source, root.uuid, resolution, start) else {
                     continue;
                 };
-                if atlas_texels + atlas.texels.len() * 2 > MAX_BOX_DEPTH_TEXELS {
+                let required_texels = atlas.texels.len() * if gaussian { 7 } else { 2 };
+                if atlas_texels + required_texels > MAX_BOX_DEPTH_TEXELS {
                     continue;
                 }
-                atlas_texels += atlas.texels.len() * 2;
+                atlas_texels += required_texels;
+                let proxy_extent = if gaussian {
+                    let support =
+                        1.5 * (atlas.local_max - atlas.local_min).max_element() / resolution as f32;
+                    atlas.local_max + Vec3::splat(support)
+                } else {
+                    half_extent
+                };
                 box_depth_atlases.insert(root.uuid, atlas);
                 proxy.object_type = PrimitiveKind::Box.object_type();
                 proxy.params = SdfParams::BoxParams(BoxParams {
-                    box_q: half_extent,
+                    box_q: proxy_extent,
                     corner_radius: 0.0,
                 });
+                if gaussian {
+                    gaussian_splats.insert(root.uuid);
+                }
             }
             GroupRenderRepresentation::SphereDepthAtlas => {
-                let Some(atlas) = bake_sphere_depth_atlas(
-                    source,
-                    root.uuid,
-                    SPHERE_DEPTH_WIDTH,
-                    SPHERE_DEPTH_HEIGHT,
-                ) else {
+                let (width, height) = (SPHERE_DEPTH_WIDTH, SPHERE_DEPTH_HEIGHT);
+                let Some(atlas) = bake_sphere_depth_atlas(source, root.uuid, width, height) else {
                     continue;
                 };
-                if atlas_texels + atlas.texels.len() * 2 > MAX_BOX_DEPTH_TEXELS {
+                let required_texels = atlas.texels.len() * 2;
+                if atlas_texels + required_texels > MAX_BOX_DEPTH_TEXELS {
                     continue;
                 }
-                atlas_texels += atlas.texels.len() * 2;
+                atlas_texels += required_texels;
                 proxy.object_type = PrimitiveKind::Sphere.object_type();
                 proxy.params = SdfParams::SphereParams(SphereParams {
                     radius: atlas.radius,
@@ -1137,6 +1229,7 @@ pub(super) fn prepare_group_scene(source: &[SdfObject]) -> PreparedGroupScene {
         objects: rendered,
         box_depth_atlases,
         sphere_depth_atlases,
+        gaussian_splats,
     }
 }
 

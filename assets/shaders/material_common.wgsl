@@ -25,6 +25,10 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
         let capture = sphere_depth_surface_sample(point, object);
         captured_color = capture.capture.yzw;
         material_object.component.w = capture.material_index;
+    } else if object.state.y == 10 && object.box_depth_max.w >= 0.0 {
+        let capture = gaussian_splat_surface_sample(point, -view, object);
+        captured_color = capture.capture.yzw;
+        material_object.component.w = capture.material_index;
     }
     let header = material_headers[material_object.component.w];
     let common_values = material_params[header.offset];
@@ -59,6 +63,8 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
         material_index = box_depth_surface_sample(point, object).material_index;
     } else if object.state.y == 9 {
         material_index = sphere_depth_surface_sample(point, object).material_index;
+    } else if object.state.y == 10 && object.box_depth_max.w >= 0.0 {
+        material_index = gaussian_splat_surface_sample(point, -view, object).material_index;
     }
     let header = material_headers[material_index];
     let color = surface.color;

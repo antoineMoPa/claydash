@@ -59,6 +59,7 @@ fn stencil_color(point: vec3<f32>, normal: vec3<f32>, object: Object) -> vec4<f3
 }
 const CSG_SIZE: u32 = 256u;
 const FLAT_UNION_ROOT: i32 = -2;
+const FLAT_COMPONENT_ROOT: i32 = -3;
 
 struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) clip: vec2<f32> }
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
@@ -361,6 +362,11 @@ fn box_depth_texel_offset(object: Object, face: u32, pixel: vec2<i32>) -> u32 {
         + u32(clamped.y) * object.box_depth_meta.y + u32(clamped.x));
 }
 
+fn gaussian_splat_texel_offset(object: Object, face: u32, pixel: vec2<i32>) -> u32 {
+    return object.box_depth_meta.x + 3u * (face * object.box_depth_meta.y * object.box_depth_meta.y
+        + u32(pixel.y) * object.box_depth_meta.y + u32(pixel.x));
+}
+
 fn box_depth_face_sample(local: vec3<f32>, object: Object, face: u32) -> BoxDepthFaceSample {
     let uv = box_depth_face_uv(local, object, face);
     if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) {
@@ -521,6 +527,263 @@ fn sphere_depth_surface_sample(point: vec3<f32>, object: Object) -> BoxDepthFace
     return BoxDepthFaceSample(vec4(0.0, object.color.rgb), object.component.w);
 }
 
+// The finite support of nearby splats is an acceleration boundary, not the
+// visible shape; the ray compositor below computes projected Gaussian opacity.
+fn gaussian_splat_query(local: vec3<f32>, object: Object) -> vec2<f32> {
+    let dimensions = vec2<f32>(f32(object.box_depth_meta.y), f32(object.box_depth_meta.z));
+    let coordinate = sphere_depth_uv(local) * dimensions - vec2(0.5);
+    let nearest = vec2<i32>(round(coordinate));
+    var closest = 100.0;
+    var closest_offset = -1.0;
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            let pixel = nearest + vec2<i32>(x, y);
+            if pixel.y < 0 || pixel.y >= i32(object.box_depth_meta.z) { continue; }
+            let offset = sphere_depth_texel_offset(object, pixel);
+            let sample = box_depth_texels[offset];
+            if sample.w < 0.0 { continue; }
+            let distance = length(local - sample.xyz) - 2.5 * sample.w;
+            if distance < closest {
+                closest = distance;
+                closest_offset = f32(offset);
+            }
+        }
+    }
+    return vec2(closest, closest_offset);
+}
+
+// Intersect the finite support spheres through a stackless spatial hierarchy.
+// This finds splats anywhere in a hollow group without repeated SDF queries.
+fn gaussian_splat_ray_entry(origin: vec3<f32>, direction: vec3<f32>, object: Object,
+    start: f32, end: f32) -> vec2<f32> {
+    var node_index = object.box_depth_meta.w;
+    let node_end = u32(object.box_depth_min.w);
+    if node_index == 0u || node_index >= node_end { return vec2(100.0, -1.0); }
+    let p = vec4(origin, 1.0);
+    let local_origin = vec3(dot(object.inverse_rows[0], p),
+        dot(object.inverse_rows[1], p), dot(object.inverse_rows[2], p));
+    let local_direction = vec3(dot(object.inverse_rows[0].xyz, direction),
+        dot(object.inverse_rows[1].xyz, direction), dot(object.inverse_rows[2].xyz, direction));
+    let direction_squared = dot(local_direction, local_direction);
+    let inverse_direction = vec3(1.0) /
+        (select(vec3(-1.0), vec3(1.0), local_direction >= vec3(0.0))
+            * max(abs(local_direction), vec3(1e-20)));
+    var closest = end;
+    var found = false;
+    var closest_offset = -1.0;
+    while node_index < node_end {
+        let minimum = box_depth_texels[node_index];
+        let maximum = box_depth_texels[node_index + 1u];
+        let first = (minimum.xyz - local_origin) * inverse_direction;
+        let second = (maximum.xyz - local_origin) * inverse_direction;
+        let near = min(first, second);
+        let far = max(first, second);
+        let entry = max(start, max(near.x, max(near.y, near.z)));
+        let exit = min(closest, min(far.x, min(far.y, far.z)));
+        if entry > exit {
+            node_index = u32(maximum.w);
+            continue;
+        }
+        if minimum.w >= 0.0 {
+            let sample = box_depth_texels[u32(minimum.w)];
+            let relative = local_origin - sample.xyz;
+            let half_b = dot(relative, local_direction);
+            let radius = 2.5 * sample.w;
+            let discriminant = half_b * half_b
+                - direction_squared * (dot(relative, relative) - radius * radius);
+            if discriminant >= 0.0 {
+                let root = sqrt(discriminant);
+                let projected = gaussian_splat_projected_query(local_origin, local_direction, u32(minimum.w));
+                let candidate = max(start, projected.y);
+                if projected.x < 6.25 && candidate <= closest
+                    && (-half_b + root) / direction_squared >= start
+                    && (-half_b - root) / direction_squared <= end {
+                    closest = candidate;
+                    closest_offset = minimum.w;
+                    found = true;
+                }
+            }
+        }
+        node_index += 2u;
+    }
+    return select(vec2(100.0, -1.0), vec2(closest, closest_offset), found);
+}
+
+fn gaussian_splat_shape(local: vec3<f32>, object: Object) -> f32 {
+    let bound = length(local) - object.params.x;
+    if bound > 0.01 { return bound; }
+    let splat = gaussian_splat_query(local, object);
+    if splat.y < 0.0 { return max(bound, object.box_depth_max.x * 0.05); }
+    return max(bound, splat.x);
+}
+
+fn gaussian_splat_projected_query(local: vec3<f32>, direction: vec3<f32>, offset: u32) -> vec2<f32> {
+    let sample = box_depth_texels[offset];
+    if sample.w <= 0.0 { return vec2(100.0, 0.0); }
+    let normal = box_depth_texels[offset + 2u].xyz;
+    let delta = local - sample.xyz;
+    let normal_delta = dot(delta, normal);
+    let normal_ray = dot(direction, normal);
+    let tangent_delta = (delta - normal * normal_delta) / sample.w;
+    let tangent_ray = (direction - normal * normal_ray) / sample.w;
+    let depth_delta = normal_delta / (sample.w * 0.25);
+    let depth_ray = normal_ray / (sample.w * 0.25);
+    let a = dot(tangent_ray, tangent_ray) + depth_ray * depth_ray;
+    let b = dot(tangent_delta, tangent_ray) + depth_delta * depth_ray;
+    let c = dot(tangent_delta, tangent_delta) + depth_delta * depth_delta;
+    let squared_radius = max(c - b * b / max(a, 0.000001), 0.0);
+    return vec2(squared_radius, -b / max(a, 0.000001));
+}
+
+fn gaussian_splat_projected_weight(local: vec3<f32>, direction: vec3<f32>, offset: u32) -> f32 {
+    let squared_radius = gaussian_splat_projected_query(local, direction, offset).x;
+    return exp(-0.5 * squared_radius)
+        * (1.0 - smoothstep(4.0, 6.25, squared_radius));
+}
+
+fn gaussian_splat_surface_sample(point: vec3<f32>, direction: vec3<f32>, object: Object) -> BoxDepthFaceSample {
+    let homogeneous = vec4(point, 1.0);
+    let local = vec3(dot(object.inverse_rows[0], homogeneous),
+        dot(object.inverse_rows[1], homogeneous), dot(object.inverse_rows[2], homogeneous));
+    let local_direction = normalize(vec3(dot(object.inverse_rows[0].xyz, direction),
+        dot(object.inverse_rows[1].xyz, direction), dot(object.inverse_rows[2].xyz, direction)));
+    let resolution = i32(object.box_depth_meta.y);
+    let face_size = u32(resolution * resolution);
+    let sample_index = (u32(object.box_depth_max.w) - object.box_depth_meta.x) / 3u;
+    let face = sample_index / face_size;
+    let pixel_index = sample_index % face_size;
+    let nearest = vec2<i32>(i32(pixel_index % u32(resolution)), i32(pixel_index / u32(resolution)));
+    var weighted_color = vec3(0.0);
+    var total_weight = 0.0;
+    var strongest_weight = 0.0;
+    var material_index = object.component.w;
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            let pixel = nearest + vec2<i32>(x, y);
+            if any(pixel < vec2<i32>(0)) || any(pixel >= vec2<i32>(resolution)) { continue; }
+            let sample_offset = gaussian_splat_texel_offset(object, face, pixel);
+            let weight = gaussian_splat_projected_weight(local, local_direction, sample_offset);
+            if weight <= 0.0 { continue; }
+            let captured = box_depth_texels[sample_offset + 1u];
+            weighted_color += captured.yzw * weight;
+            total_weight += weight;
+            if weight > strongest_weight {
+                strongest_weight = weight;
+                material_index = u32(captured.x);
+            }
+        }
+    }
+    if total_weight <= 0.0 {
+        return BoxDepthFaceSample(vec4(0.0, object.color.rgb), object.component.w);
+    }
+    return BoxDepthFaceSample(vec4(0.0, weighted_color / total_weight), material_index);
+}
+
+// Project each nearby 3D Gaussian onto the ray. Optical depths add, so
+// overlapping splats become denser while their edges remain transparent.
+fn gaussian_splat_coverage(point: vec3<f32>, direction: vec3<f32>, object: Object) -> f32 {
+    let homogeneous = vec4(point, 1.0);
+    let local = vec3(dot(object.inverse_rows[0], homogeneous),
+        dot(object.inverse_rows[1], homogeneous), dot(object.inverse_rows[2], homogeneous));
+    let local_direction = normalize(vec3(dot(object.inverse_rows[0].xyz, direction),
+        dot(object.inverse_rows[1].xyz, direction), dot(object.inverse_rows[2].xyz, direction)));
+    let resolution = i32(object.box_depth_meta.y);
+    let face_size = u32(resolution * resolution);
+    let sample_index = (u32(object.box_depth_max.w) - object.box_depth_meta.x) / 3u;
+    let face = sample_index / face_size;
+    let pixel_index = sample_index % face_size;
+    let nearest = vec2<i32>(i32(pixel_index % u32(resolution)), i32(pixel_index / u32(resolution)));
+    var optical_depth = 0.0;
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            let pixel = nearest + vec2<i32>(x, y);
+            if any(pixel < vec2<i32>(0)) || any(pixel >= vec2<i32>(resolution)) { continue; }
+            let offset = gaussian_splat_texel_offset(object, face, pixel);
+            optical_depth += gaussian_splat_projected_weight(local, local_direction, offset);
+        }
+    }
+    return 1.0 - exp(-optical_depth);
+}
+
+struct GaussianRayComposite {
+    color: vec3<f32>,
+    normal: vec3<f32>,
+    alpha: f32,
+    material_index: u32,
+}
+
+// Accumulate all visible capture layers in one hierarchy walk. Eight bins
+// preserve front-to-back opacity while samples in one depth slice blend.
+fn gaussian_splat_ray_composite(point: vec3<f32>, direction: vec3<f32>, object: Object) -> GaussianRayComposite {
+    let p = vec4(point, 1.0);
+    let local_origin = vec3(dot(object.inverse_rows[0], p),
+        dot(object.inverse_rows[1], p), dot(object.inverse_rows[2], p));
+    let local_direction = vec3(dot(object.inverse_rows[0].xyz, direction),
+        dot(object.inverse_rows[1].xyz, direction), dot(object.inverse_rows[2].xyz, direction));
+    let inverse_direction = vec3(1.0) /
+        (select(vec3(-1.0), vec3(1.0), local_direction >= vec3(0.0))
+            * max(abs(local_direction), vec3(1e-20)));
+    let max_distance = length(object.box_depth_max.xyz - object.box_depth_min.xyz)
+        / max(length(local_direction), 0.000001) + 1.0;
+    var colors: array<vec4<f32>, 8>;
+    var normals: array<vec3<f32>, 8>;
+    var strongest: array<f32, 8>;
+    var materials: array<u32, 8>;
+    var node_index = object.box_depth_meta.w;
+    let node_end = u32(object.box_depth_min.w);
+    while node_index < node_end {
+        let minimum = box_depth_texels[node_index];
+        let maximum = box_depth_texels[node_index + 1u];
+        let first = (minimum.xyz - local_origin) * inverse_direction;
+        let second = (maximum.xyz - local_origin) * inverse_direction;
+        let near = min(first, second);
+        let far = max(first, second);
+        if max(near.x, max(near.y, near.z)) > min(max_distance, min(far.x, min(far.y, far.z)))
+            || min(far.x, min(far.y, far.z)) < -0.01 {
+            node_index = u32(maximum.w);
+            continue;
+        }
+        if minimum.w >= 0.0 {
+            let offset = u32(minimum.w);
+            let projected = gaussian_splat_projected_query(local_origin, local_direction, offset);
+            if projected.x < 6.25 && projected.y >= -0.01 && projected.y <= max_distance {
+                let weight = exp(-0.5 * projected.x)
+                    * (1.0 - smoothstep(4.0, 6.25, projected.x));
+                let bucket = min(u32(max(projected.y, 0.0) / max_distance * 8.0), 7u);
+                let captured = box_depth_texels[offset + 1u];
+                colors[bucket] += vec4(captured.yzw * weight, weight);
+                normals[bucket] += box_depth_texels[offset + 2u].xyz * weight;
+                if weight > strongest[bucket] {
+                    strongest[bucket] = weight;
+                    materials[bucket] = u32(captured.x);
+                }
+            }
+        }
+        node_index += 2u;
+    }
+    var color = vec3(0.0);
+    var normal = vec3(0.0);
+    var alpha = 0.0;
+    var material_index = object.component.w;
+    var material_found = false;
+    for (var bucket = 0u; bucket < 8u; bucket++) {
+        let weight = colors[bucket].w;
+        if weight <= 0.0 { continue; }
+        let contribution = (1.0 - alpha) * (1.0 - exp(-0.35 * weight));
+        color += colors[bucket].xyz / weight * contribution;
+        normal += normals[bucket] / weight * contribution;
+        alpha += contribution;
+        if !material_found {
+            material_index = materials[bucket];
+            material_found = true;
+        }
+    }
+    if alpha <= 0.0 {
+        return GaussianRayComposite(object.color.rgb, vec3(0.0, 1.0, 0.0), 0.0, object.component.w);
+    }
+    return GaussianRayComposite(color / alpha, normal / alpha, alpha, material_index);
+}
+
 fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
     var distance = 100.0;
     if object.state.y == 1 {
@@ -552,6 +815,8 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
         distance = box_depth_shape(local, object);
     } else if object.state.y == 9 {
         distance = sphere_depth_shape(local, object);
+    } else if object.state.y == 10 {
+        distance = gaussian_splat_shape(local, object);
     }
     return distance;
 }
@@ -612,6 +877,16 @@ fn inlay_host_distance(point: vec3<f32>, host_index: u32) -> f32 {
     let host = objects[host_index];
     let start = host.component.x;
     let root = host.component.y;
+    let parent = objects[root];
+    if parent.state.w == FLAT_UNION_ROOT || parent.state.w == FLAT_COMPONENT_ROOT {
+        var value = vec2(base_object_distance_at(point, parent), f32(root));
+        for (var i = start; i < root; i++) {
+            let child = objects[i];
+            let next = vec2(base_object_distance_at(point, child), f32(i));
+            value = combine_operand(value, next, child, parent);
+        }
+        return value.x;
+    }
     var values: array<vec2<f32>, CSG_SIZE>;
     for (var i = start; i <= root; i++) {
         values[i - start] = vec2(base_object_distance_at(point, objects[i]), f32(i));
@@ -637,14 +912,14 @@ fn object_distance(point: vec3<f32>, object: Object) -> f32 {
     return object_distance_at(modifier_point(point, object), object);
 }
 
-// Each leaf is a complete boolean component in contiguous postorder.
-// Local scratch is specialized to component size, independent of scene size.
+// Each leaf is a complete Boolean component in contiguous postorder.
+// Direct operands stream through one accumulator; nested components use scratch.
 fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     let mirrored_point = mirror_point(point, objects[root]);
     if !HAS_BOOLEANS || start == root {
         return vec2(object_distance(mirrored_point, objects[root]), f32(root));
     }
-    if CSG_SIZE == 2u {
+    if CSG_SIZE == 2u && root == start + 1u {
         let parent = objects[root];
         let operand = objects[start];
         let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
@@ -709,6 +984,24 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
         }
         return closest;
     }
+    if parent.state.w == FLAT_COMPONENT_ROOT {
+        let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+        let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
+        let parent_point = modifier_point(group_point, parent);
+        var parent_shape = parent;
+        if group_repeated { parent_shape.repeat_count.w = 0; }
+        var value = vec2(object_distance_at(parent_point, parent_shape), f32(root));
+        for (var i = start; i < root; i++) {
+            let child = objects[i];
+            var child_point = parent_point;
+            if child.modifier.x != parent.modifier.x {
+                child_point = modifier_point(group_point, child);
+            }
+            let next = vec2(object_distance_at(child_point, child), f32(i));
+            value = combine_operand(value, next, child, parent);
+        }
+        return value;
+    }
     var values: array<vec2<f32>, CSG_SIZE>;
     let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
     let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
@@ -732,11 +1025,17 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     return values[root - start];
 }
 
-fn scene_distance_limit(point: vec3<f32>, limit: f32, stop_on_inside: bool) -> vec2<f32> {
+fn scene_distance_limit(point: vec3<f32>, limit: f32, stop_on_inside: bool, skip_splats: bool) -> vec2<f32> {
     var closest = vec2(limit, 0.0);
     var node_index = 0u;
     while node_index < camera.count.y {
         let node = bvh[node_index];
+        if skip_splats && node.metadata.x != 0xffffffffu
+            && node.metadata.z == node.metadata.x
+            && objects[node.metadata.x].state.y == 10 {
+            node_index += 1u;
+            continue;
+        }
         let lower_bound = distance(point, node.center_radius.xyz) - node.center_radius.w;
         if !USE_BVH || lower_bound < closest.x {
             if node.metadata.x != 0xffffffffu {
@@ -757,7 +1056,7 @@ fn scene_distance_limit(point: vec3<f32>, limit: f32, stop_on_inside: bool) -> v
 }
 
 fn scene_distance(point: vec3<f32>) -> vec2<f32> {
-    return scene_distance_limit(point, 100.0, false);
+    return scene_distance_limit(point, 100.0, false, false);
 }
 
 fn convex_primitive_normal(point: vec3<f32>, object: Object) -> vec3<f32> {
@@ -978,9 +1277,17 @@ fn subtraction_exit(origin: vec3<f32>, direction: vec3<f32>, start: u32, root: u
 // Traverse bounds once per ray, then march only the intersected primitives.
 // The nearest boundary of a union is the nearest primitive boundary for rays
 // starting outside. Interior rays retain the union marcher to cross overlaps.
-fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<f32> {
+fn empty_splat_exclusions() -> array<u32, 12> {
+    var excluded: array<u32, 12>;
+    for (var i = 0u; i < 12u; i++) { excluded[i] = 0xffffffffu; }
+    return excluded;
+}
+
+fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
+    excluded_splats: array<u32, 12>) -> vec3<f32> {
     var closest = 100.0;
     var owner = -1.0;
+    var splat_offset = -1.0;
     let inverse_direction = vec3(1.0) / (select(vec3(-1.0), vec3(1.0), direction >= vec3(0.0)) * max(abs(direction), vec3(1e-20)));
     var node_index = 0u;
     while node_index < camera.count.y {
@@ -997,6 +1304,24 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
         }
         if node.metadata.x != 0xffffffffu {
             let object = objects[node.metadata.x];
+            if object.state.y == 10 {
+                var excluded = false;
+                for (var i = 0u; i < 12u; i++) {
+                    if excluded_splats[i] == node.metadata.x { excluded = true; break; }
+                }
+                if excluded { node_index += 1u; continue; }
+            }
+            if object.state.y == 10 && node.metadata.z == node.metadata.x
+                && object.box_depth_meta.w != 0u {
+                let splat_entry = gaussian_splat_ray_entry(origin, direction, object, start, end);
+                if splat_entry.x < closest {
+                    closest = splat_entry.x;
+                    owner = f32(node.metadata.x);
+                    splat_offset = splat_entry.y;
+                }
+                node_index += 1u;
+                continue;
+            }
             var travel = start;
             if HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x) {
                 let interval = subtraction_entry(origin, direction, node.metadata.z, node.metadata.x);
@@ -1008,6 +1333,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
                     if interval.x < closest {
                         closest = interval.x;
                         owner = interval.y;
+                        splat_offset = -1.0;
                     }
                     node_index += 1u;
                     continue;
@@ -1023,6 +1349,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
                 if interval.y >= candidate && candidate < closest {
                     closest = candidate;
                     owner = f32(node.metadata.x);
+                    splat_offset = -1.0;
                 }
                 node_index += 1u;
                 continue;
@@ -1040,6 +1367,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
                 if value < epsilon {
                     closest = travel;
                     owner = sample.y;
+                    splat_offset = -1.0;
                     break;
                 }
                 travel += value * bitcast<f32>(object.modifier.y);
@@ -1048,7 +1376,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32) -> vec2<
         }
         node_index += 1u;
     }
-    return vec2(closest, owner);
+    return vec3(closest, owner, splat_offset);
 }
 
 // A membership query only needs any containing component. Unlike a nearest
@@ -1078,9 +1406,9 @@ fn containing_component(point: vec3<f32>) -> vec2<f32> {
 
 // Reflections stay on the incident side; transmission crosses the surface.
 // The caller already knows which side contains the ray, avoiding a scene query.
-fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u32) -> vec2<f32> {
+fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u32) -> vec3<f32> {
     if USE_BVH {
-        if !inside { return trace_objects(origin, direction, 0.0015); }
+        if !inside { return trace_objects(origin, direction, 0.0015, empty_splat_exclusions()); }
         var owner = initial_owner;
         var travel = 0.0;
         for (var step = 0; step < 128; step++) {
@@ -1143,23 +1471,23 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             }
             if abs(sample.x) < 0.0015 {
                 let other = containing_component(origin + direction * travel);
-                if other.y < 0.0 { return vec2(travel, sample.y); }
+                if other.y < 0.0 { return vec3(travel, sample.y, -1.0); }
                 owner = u32(other.y);
                 sample = other;
             }
             travel += max(abs(sample.x) * 0.8, 0.0008);
             if travel > 100.0 { break; }
         }
-        return vec2(100.0, -1.0);
+        return vec3(100.0, -1.0, -1.0);
     }
     var travel = 0.0;
     for (var step = 0; step < 128; step++) {
         let sample = scene_distance(origin + direction * travel);
-        if abs(sample.x) < 0.0015 { return vec2(travel, sample.y); }
+        if abs(sample.x) < 0.0015 { return vec3(travel, sample.y, -1.0); }
         travel += max(abs(sample.x) * 0.8, 0.0008);
         if travel > 100.0 { break; }
     }
-    return vec2(100.0, -1.0);
+    return vec3(100.0, -1.0, -1.0);
 }
 
 // MODIFIER_MODULES
@@ -1175,10 +1503,14 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
     var point = ray_origin;
     var hit = false;
     var index = 0u;
+    var splat_offset = -1.0;
+    var excluded_splats = empty_splat_exclusions();
+    var excluded_splat_count = 0u;
     if USE_BVH {
-        let sample = trace_objects(ray_origin, ray, 0.003);
+        let sample = trace_objects(ray_origin, ray, 0.003, excluded_splats);
         hit = sample.y >= 0.0;
         index = u32(max(sample.y, 0.0));
+        splat_offset = sample.z;
         point += ray * sample.x;
     } else {
         var travel = 0.0;
@@ -1229,15 +1561,56 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             next_owner = transmission_owner;
         } else {
             if !hit {
-                radiance += throughput * background(direction);
-                throughput = vec3(0.0);
+                if !TRANSPARENT_BACKGROUND && camera.world_mode.x != 3u {
+                    radiance += throughput * background(direction);
+                    throughput = vec3(0.0);
+                }
                 break;
             }
             // A habitat may contain several translucent shells (clouds and
             // canopy) before the landscape. Each shell has two crossings.
             if bounce >= 12 { break; }
+            var object = objects[index];
+            if object.state.y == 10 {
+                object.box_depth_max.w = max(splat_offset, f32(object.box_depth_meta.x));
+            }
+            if object.state.y == 10 && object.component.x == object.component.y {
+                let composite = gaussian_splat_ray_composite(point, direction, object);
+                object.color = vec4(composite.color, object.color.a);
+                object.component.w = composite.material_index;
+                object.box_depth_max.w = -1.0;
+                let local_normal = normalize(composite.normal);
+                let normal = normalize(vec3(
+                    dot(local_normal, vec3(object.inverse_rows[0].x, object.inverse_rows[1].x, object.inverse_rows[2].x)),
+                    dot(local_normal, vec3(object.inverse_rows[0].y, object.inverse_rows[1].y, object.inverse_rows[2].y)),
+                    dot(local_normal, vec3(object.inverse_rows[0].z, object.inverse_rows[1].z, object.inverse_rows[2].z))));
+                let surface = material_surface(point, normal, -direction, object);
+                let alpha = composite.alpha
+                    * clamp(surface.opacity, 0.0, 1.0);
+                if FAST_PREVIEW {
+                    let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
+                        normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
+                    let shade = 0.22 + 0.78 * max(dot(normal, light), 0.0);
+                    radiance += throughput * surface.color * shade * alpha;
+                } else {
+                    radiance += throughput * surface_light(point, normal, -direction,
+                        object, surface, false) * alpha;
+                }
+                throughput *= 1.0 - alpha;
+                if max(throughput.x, max(throughput.y, throughput.z)) < 0.01 { break; }
+                if excluded_splat_count < 12u {
+                    excluded_splats[excluded_splat_count] = index;
+                    excluded_splat_count += 1u;
+                }
+                let next_origin = point + direction * 0.0005;
+                let next = trace_objects(next_origin, direction, 0.0015, excluded_splats);
+                hit = next.y >= 0.0;
+                point = next_origin + direction * next.x;
+                index = u32(max(next.y, 0.0));
+                splat_offset = next.z;
+                continue;
+            }
             bounce += 1;
-            let object = objects[index];
             let outward = scene_normal(point, index);
             let entering = dot(direction, outward) < 0.0;
             let normal = select(-outward, outward, entering);
@@ -1264,6 +1637,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 hit = next.y >= 0.0;
                 point = preview_origin + direction * next.x;
                 index = u32(max(next.y, 0.0));
+                splat_offset = next.z;
                 continue;
             }
             var surface = material_surface(point, normal, -direction, object);
@@ -1326,9 +1700,12 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
         point = next_origin + next_direction * next.x;
         direction = next_direction;
         index = u32(max(next.y, 0.0));
+        splat_offset = next.z;
     }
     // The final transmission miss contributes the environment even at the
     // bounce cap, just as it does after each earlier transmitted ray.
     if !reflecting && !hit && !opaque { radiance += throughput * background(direction); }
-    return vec4(radiance * camera.position.w, 1.0);
+    let transparent = TRANSPARENT_BACKGROUND || camera.world_mode.x == 3u;
+    let alpha = select(1.0, clamp(1.0 - dot(throughput, vec3(0.33333334)), 0.0, 1.0), transparent);
+    return vec4(radiance * camera.position.w, alpha);
 }

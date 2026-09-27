@@ -7,19 +7,26 @@ use serde::{Deserialize, Serialize};
 pub enum GroupRenderRepresentation {
     BoxDepthAtlas,
     SphereDepthAtlas,
+    GaussianSplats,
     #[default]
     #[serde(other)]
     ExactSdf,
 }
 
 impl GroupRenderRepresentation {
-    pub const ALL: [Self; 3] = [Self::ExactSdf, Self::BoxDepthAtlas, Self::SphereDepthAtlas];
+    pub const ALL: [Self; 4] = [
+        Self::ExactSdf,
+        Self::BoxDepthAtlas,
+        Self::SphereDepthAtlas,
+        Self::GaussianSplats,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::ExactSdf => "Exact SDF (current)",
             Self::BoxDepthAtlas => "Box depth + texture atlas",
             Self::SphereDepthAtlas => "Sphere depth + texture atlas",
+            Self::GaussianSplats => "Gaussian splats (SDF)",
         }
     }
 
@@ -30,6 +37,7 @@ impl GroupRenderRepresentation {
             Self::SphereDepthAtlas => {
                 "Capture depth and appearance with inward rays from a sphere."
             }
+            Self::GaussianSplats => "Fit Gaussian surface samples from radial SDF captures.",
         }
     }
 
@@ -41,6 +49,9 @@ impl GroupRenderRepresentation {
             }
             Self::SphereDepthAtlas => {
                 "A single radial layer misses hidden surfaces and close parallax."
+            }
+            Self::GaussianSplats => {
+                "Approximate surface; thin details and hidden layers may disappear."
             }
         }
     }

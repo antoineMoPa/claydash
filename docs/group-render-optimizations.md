@@ -10,7 +10,7 @@ an intent to use a representation, not proof that a valid bake exists.
 
 The Object properties panel shows these candidates after Modifiers for an
 object or selected Boolean group. The selection is saved on that object or
-group root and survives document round-trips. **Exact SDF**, **Box depth atlas**, and **Sphere depth atlas** have render paths today. The atlas replaces the selected subtree with a
+group root and survives document round-trips. **Exact SDF**, **Box depth atlas**, **Sphere depth atlas**, and **Gaussian splats (SDF)** have render paths today. The capture replaces the selected subtree with a
 depth capture for rendering; the editable source remains in the document. The
 renderer does not gate this choice on modifiers or Boolean operations. Older
 documents that saved a removed choice now load as Exact SDF. Documents without
@@ -30,9 +30,24 @@ Empty directions let rays pass through; nearby occupied depths are interpolated
 within a continuous surface. The radial capture favors rounded groups and has
 one layer per direction, so deep concavities can remain approximate.
 
+Gaussian splats use a denser radial bake, but each occupied sample becomes an
+isotropic Gaussian centered at its captured surface point. The shader marches
+to a finite support region, then projects nearby Gaussians onto the ray and
+composites their optical depth as soft opacity. Captured colors blend by the
+same projected weights, while the strongest sample supplies the material. The
+support boundary itself is invisible because contributions fade to zero there.
+The Gaussian capture starts 0.5 world units beyond the padded group bounds so
+planar faces at the boundary have positive captured depth. The render proxy
+contains that clearance and the splat support. A stackless spatial hierarchy
+finds support spheres along each view ray without marching every capture cell.
+This is a ray composited splat
+proxy, not a sorted screen space 3D Gaussian rasterizer. It can lose thin
+details or hidden layers, and cannot reproduce multiple transparent crossings
+faithfully.
+
 The local agent CLI and MCP server expose the working choices through
 `CreateObject.render_representation` and the `SetRenderRepresentation` action.
-`get_schema` lists the three available values. For a Boolean composition, set the
+`get_schema` lists the four available values. For a Boolean composition, set the
 choice on the group root; its source operands stay editable.
 Nested hard unions of ordinary SDF operands now use the flat-union GPU path
 when no nested repetition, mirror, or smooth blend changes their semantics.
@@ -49,7 +64,7 @@ capture succeeds.
 | Sphere depth atlas | Radial depth and material samples over a sphere | More uniform angular sampling for round groups | Concavities and multiple crossings need layers; sampling near the center is problematic |
 | Box grid, coarse | Local box depth atlases on a 3 by 3 grid | Smaller cells reduce parallax error | More textures and seam handling |
 | Box grid, fine | Local box depth atlases on a 9 by 9 grid | Better local detail | Bake cost, memory, and draw work rise sharply |
-| Gaussian splats | Positions, covariance, opacity, and color for fitted splats | Potentially fast view synthesis of baked opaque appearance | Requires fitting, visibility sorting/blending, and a different raster path; not an exact SDF |
+| Gaussian splats | Radial surface positions, isotropic support radius, color, and material | Soft alpha splats for a costly group | Missed hidden layers and approximate ordering with exact surfaces |
 | Dense SDF volume | Quantized signed distances plus material IDs or attributes in a 3D texture | Cheap spatially coherent samples of a costly group | Cubic memory growth; interpolation must remain conservative for safe ray steps |
 | Sparse SDF bricks | Distance and material samples only in occupied spatial bricks | Less memory for sparse geometry | Indirection and brick management; safe distance bounds still required |
 | Extracted mesh | Vertices, triangles, and per-surface material data | Hardware rasterization for opaque stable groups | Boolean edits require rebuilding; smooth/detail fidelity depends on extraction resolution |
@@ -131,8 +146,8 @@ extend the surface beyond primitive extents.
 3. Prototype a sparse or dense distance cache independently of appearance
    baking. Verify that its step distances do not overestimate the exact
    surface distance before using it for ray marching.
-4. Investigate splats only after there is an offscreen bake and a compositor
-   that handles depth and opacity alongside exact SDF objects.
+4. Compare the approximate Gaussian SDF splat proxy with a future raster
+   compositor that handles depth and opacity alongside exact SDF objects.
 
 ## What the saved examples imply
 

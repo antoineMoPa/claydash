@@ -12,9 +12,10 @@ fn ambient_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
         let reach = 0.12;
         let expected = reach * dot(direction, normal);
         // Distances beyond expected contribute zero occlusion. Once any
-        // component contains the probe, the contribution is already one.
+        // solid component contains the probe, the contribution is already one.
+        // Splats are composited with alpha, so they are not solid occluders.
         let distance_to_scene = scene_distance_limit(
-            point + normal * 0.008 + direction * reach, expected, true).x;
+            point + normal * 0.008 + direction * reach, expected, true, true).x;
         occlusion += clamp((expected - distance_to_scene) / expected, 0.0, 1.0);
     }
     return clamp(1.0 - occlusion * 0.52, 0.25, 1.0);

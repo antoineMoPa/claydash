@@ -22,6 +22,7 @@ const LATTICE_ATLAS_TILES_PER_ROW: u32 = 32;
 const LATTICE_ATLAS_WIDTH: u32 = LATTICE_ATLAS_TILE_PITCH * LATTICE_ATLAS_TILES_PER_ROW;
 const BVH_LEAF: u32 = u32::MAX;
 const FLAT_UNION_ROOT: i32 = -2;
+const FLAT_COMPONENT_ROOT: i32 = -3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct BuiltinMaterialFeatures {
@@ -329,6 +330,7 @@ mod modifier_gpu;
 mod rendering;
 mod scene_bounds;
 mod scene_upload;
+mod splat_bvh;
 mod texture_cleanup;
 
 use box_depth_atlas::*;

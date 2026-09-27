@@ -20,7 +20,7 @@ fn group_render_choices_round_trip_and_old_scenes_default_to_exact() {
         assert_eq!(restored.render_representation, mode);
     }
 
-    for removed in ["gaussian_splats", "preview_hull"] {
+    for removed in ["preview_hull"] {
         let mut saved = serde_json::to_value(&object).unwrap();
         saved["render_representation"] = serde_json::json!(removed);
         let restored: SdfObject = serde_json::from_value(saved).unwrap();

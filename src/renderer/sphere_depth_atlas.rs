@@ -31,10 +31,10 @@ pub(super) fn bake_sphere_depth_atlas(
     let (minimum, maximum) = lattice_bounds(scene, root)?;
     let center = (minimum + maximum) * 0.5;
     let radius = ((maximum - minimum) * 0.5).length();
+    let world = lattice_world_matrix(scene, root);
     if !center.is_finite() || !radius.is_finite() || radius <= 0.0 {
         return None;
     }
-    let world = lattice_world_matrix(scene, root);
     let mut texels = vec![[-0.003, 0.0, 0.0, 0.0]; (width * height) as usize];
     let mut owners = vec![None; texels.len()];
     let mut hits = 0;
