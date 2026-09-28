@@ -187,6 +187,7 @@ struct WebEncoding {
 #[cfg(not(target_arch = "wasm32"))]
 struct UiBenchmark {
     edit_objects: bool,
+    move_group: bool,
     selection_click: bool,
     preview_pixels: Vec<u32>,
     frames: usize,

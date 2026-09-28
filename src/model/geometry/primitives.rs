@@ -454,6 +454,7 @@ pub enum SdfParams {
     LoftParams(LoftParams),
     #[serde(alias = "BezierExtrusionParams")]
     BezierCurveParams(BezierCurveParams),
+    TextParams(super::TextParams),
 }
 
 pub fn polygon_distance(point: Vec2, vertices: &[Vec2]) -> f32 {

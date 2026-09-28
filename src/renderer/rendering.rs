@@ -13,6 +13,7 @@ impl Renderer {
         selected: &[uuid::Uuid],
         scene_versions: [i32; 2],
         world: World,
+        post_processing: &[crate::model::PostProcessPass],
         egui: &egui::Context,
         output: &mut egui::FullOutput,
         capture: bool,
@@ -108,20 +109,38 @@ impl Renderer {
             ],
             refine,
         };
+        let deferred = world.render_pipeline == crate::model::RenderPipelineMode::Deferred
+            && self.deferred_supported;
+        let viewport_refine = refine;
         let work = self
             .viewport
-            .prepare(&self.device, view_key.clone(), refine);
-        let scene_pipeline = match (refine, self.has_booleans) {
-            (true, true) => &self.boolean_pipeline.as_ref().expect("boolean pipeline").1,
-            (true, false) => &self.pipeline,
-            (false, true) => {
-                &self
-                    .fast_boolean_pipeline
+            .prepare(&self.device, view_key.clone(), viewport_refine, deferred);
+        if work != crate::viewport::Work::Cached {
+            self.upload_splat_camera(camera, world);
+        }
+        let scene_pipeline = if self.hybrid_enabled {
+            if refine {
+                self.hybrid_pipeline
                     .as_ref()
-                    .expect("fast boolean pipeline")
-                    .1
+                    .expect("hybrid scene pipeline")
+            } else {
+                self.hybrid_fast_pipeline
+                    .as_ref()
+                    .expect("hybrid preview pipeline")
             }
-            (false, false) => &self.fast_pipeline,
+        } else {
+            match (refine, self.has_booleans) {
+                (true, true) => &self.boolean_pipeline.as_ref().expect("boolean pipeline").1,
+                (true, false) => &self.pipeline,
+                (false, true) => {
+                    &self
+                        .fast_boolean_pipeline
+                        .as_ref()
+                        .expect("fast boolean pipeline")
+                        .1
+                }
+                (false, false) => &self.fast_pipeline,
+            }
         };
         let readback = self.viewport.encode(
             &self.device,
@@ -130,23 +149,57 @@ impl Renderer {
             work,
             scene_pipeline,
             &self.bind_group,
+            self.hybrid_enabled.then(|| crate::viewport::HybridPass {
+                depth_pipeline: self
+                    .hybrid_depth_pipeline
+                    .as_ref()
+                    .expect("hybrid depth pipeline"),
+                splat_pipeline: &self.splat_pipeline,
+                splat_bind_group: &self.splat_camera_bind_group,
+                splat_buffer: &self.splat_buffer,
+                splat_count: self.splat_instances.len() as u32,
+            }),
+            deferred.then(|| crate::viewport::DeferredPass {
+                geometry_pipeline: &self
+                    .deferred_geometry_pipeline
+                    .as_ref()
+                    .expect("deferred geometry pipeline")
+                    .2,
+            }),
         );
         // Export only after the adaptive viewport has rendered every native-
         // resolution tile for this exact camera and scene state. If the final
         // tile is part of this submission, the later texture copy observes it.
         let capture = capture
             && self.viewport.matches(&view_key)
-            && (!refine || self.viewport.is_refined())
+            && (!viewport_refine || self.viewport.is_refined())
             && !self.capture_pending;
         let workspace_background = match egui.theme() {
             egui::Theme::Dark => wgpu::Color::BLACK,
             egui::Theme::Light => wgpu::Color::WHITE,
         };
+        // Documents can be opened outside the atomic editor/MCP path. Keep a
+        // malformed source from reaching wgpu's pipeline creation.
+        let post_enabled = post_processing.iter().any(|pass| pass.enabled)
+            && self.post_processing.is_valid(post_processing);
+        if post_enabled {
+            egui.request_repaint();
+            self.post_processing.prepare(
+                &self.device,
+                post_processing,
+                [self.config.width, self.config.height],
+            );
+        }
+        let scene_view = if post_enabled {
+            self.post_processing.source_view()
+        } else {
+            &view
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -171,32 +224,50 @@ impl Renderer {
         }
         // Browser exports need a separate copyable texture for readback. Draw
         // the same scene to the surface too, so progress and Cancel repaint.
-        if let Some(display_view) = &display_view {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("display scene"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: display_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(workspace_background),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_viewport(
-                camera.viewport_origin.x,
-                camera.viewport_origin.y,
-                camera.viewport.x,
-                camera.viewport.y,
-                0.0,
-                1.0,
+        if !post_enabled {
+            if let Some(display_view) = &display_view {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("display scene"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: display_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(workspace_background),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_viewport(
+                    camera.viewport_origin.x,
+                    camera.viewport_origin.y,
+                    camera.viewport.x,
+                    camera.viewport.y,
+                    0.0,
+                    1.0,
+                );
+                self.viewport.composite(&mut pass);
+            }
+        }
+        if post_enabled {
+            self.post_processing.encode(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                post_processing,
+                [
+                    camera.viewport_origin.x,
+                    camera.viewport_origin.y,
+                    camera.viewport.x,
+                    camera.viewport.y,
+                ],
+                &view,
+                display_view.as_ref(),
             );
-            self.viewport.composite(&mut pass);
         }
         // Copy the scene before egui is composited so exports never contain
         // editor chrome, transform gizmos, camera wireframes, or labels.

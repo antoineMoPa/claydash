@@ -339,14 +339,18 @@ impl Renderer {
             false,
             true,
         );
+        let (splat_pipeline, splat_camera_buffer, splat_camera_bind_group, splat_buffer) =
+            hybrid_splats::create_splat_resources(&device, render_format);
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
             render_format,
             egui_wgpu::RendererOptions::default(),
         );
-        let viewport = crate::viewport::Viewport::new(&device, render_format, timestamps);
+        let viewport = crate::viewport::Viewport::new(&device, render_format, timestamps, &layout);
+        let post_processing = post_processing::PostProcessor::new(&device, render_format);
         let mut renderer = Self {
             viewport,
+            post_processing,
             initial_pixel_budget: 48 * 1024,
             surface,
             device,
@@ -355,6 +359,18 @@ impl Renderer {
             render_format,
             pipeline,
             fast_pipeline,
+            hybrid_pipeline: None,
+            hybrid_fast_pipeline: None,
+            hybrid_depth_pipeline: None,
+            deferred_geometry_pipeline: None,
+            deferred_supported: true,
+            splat_pipeline,
+            splat_camera_buffer,
+            splat_camera_bind_group,
+            splat_instances: Vec::new(),
+            splat_buffer,
+            splat_buffer_capacity: 1,
+            hybrid_enabled: false,
             boolean_pipeline: None,
             fast_boolean_pipeline: None,
             shader_source,
@@ -383,6 +399,7 @@ impl Renderer {
             image_sampler,
             modifier_params_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
+            group_capture_cache: std::collections::HashMap::new(),
             egui_renderer,
             material_preview_ids: None,
             material_preview_pipeline: None,

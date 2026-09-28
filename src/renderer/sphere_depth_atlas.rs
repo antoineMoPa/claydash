@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 
 use super::*;
-use crate::model::{lattice_bounds, lattice_world_matrix, scene_subtree_sample};
+use crate::model::{lattice_bounds, lattice_world_matrix, PreparedSubtreeSampler};
 
 pub(super) const SPHERE_DEPTH_WIDTH: u32 = 80;
 pub(super) const SPHERE_DEPTH_HEIGHT: u32 = 40;
@@ -28,10 +28,15 @@ pub(super) fn bake_sphere_depth_atlas(
     }
     let lookup: HashMap<_, _> = scene.iter().map(|object| (object.uuid, object)).collect();
     lookup.get(&root)?;
-    let (minimum, maximum) = lattice_bounds(scene, root)?;
+    let mut sampler = PreparedSubtreeSampler::new(scene, root)?;
+    let march_factor = sampler.march_factor(modifier_gpu::lattice_march_factor);
+    let (mut minimum, mut maximum) = lattice_bounds(scene, root)?;
+    let world = lattice_world_matrix(scene, root);
+    let deformation_extent = sampler.deformation_extent(world.inverse());
+    minimum -= deformation_extent;
+    maximum += deformation_extent;
     let center = (minimum + maximum) * 0.5;
     let radius = ((maximum - minimum) * 0.5).length();
-    let world = lattice_world_matrix(scene, root);
     if !center.is_finite() || !radius.is_finite() || radius <= 0.0 {
         return None;
     }
@@ -55,7 +60,7 @@ pub(super) fn bake_sphere_depth_atlas(
             let mut depth = 0.0;
             for _ in 0..96 {
                 let point = world.transform_point3(center + direction * (radius - depth));
-                let (distance, owner) = scene_subtree_sample(point, scene, root)?;
+                let (distance, owner) = sampler.sample(point);
                 if !distance.is_finite() {
                     return None;
                 }
@@ -67,7 +72,7 @@ pub(super) fn bake_sphere_depth_atlas(
                     hits += 1;
                     break;
                 }
-                depth += (distance / world_step * 0.8).max(0.0001);
+                depth += (distance / world_step * march_factor).max(0.0001);
                 if depth > radius {
                     break;
                 }

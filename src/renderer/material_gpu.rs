@@ -142,18 +142,27 @@ pub(super) fn shader_source_for_assets(assets: &[MaterialAsset]) -> String {
     }
     let common = include_str!("../../assets/shaders/material_common.wgsl")
         .replace("// CUSTOM_MATERIAL_CASES", &cases);
-    super::modifier_gpu::shader_source().replace(
-        "// MATERIAL_MODULES",
-        &[
-            &common,
-            include_str!("../../assets/shaders/material_wood.wgsl"),
-            include_str!("../../assets/shaders/material_brick.wgsl"),
-            include_str!("../../assets/shaders/material_diagnostic.wgsl"),
-            include_str!("../../assets/shaders/ambient_occlusion.wgsl"),
-            &functions,
-        ]
-        .join("\n"),
-    )
+    super::modifier_gpu::shader_source()
+        .replace(
+            "// DEFERRED_GEOMETRY_MODULE",
+            include_str!("../../assets/shaders/deferred_geometry.wgsl"),
+        )
+        .replace(
+            "// TEXT_MODULE",
+            include_str!("../../assets/shaders/text.wgsl"),
+        )
+        .replace(
+            "// MATERIAL_MODULES",
+            &[
+                &common,
+                include_str!("../../assets/shaders/material_wood.wgsl"),
+                include_str!("../../assets/shaders/material_brick.wgsl"),
+                include_str!("../../assets/shaders/material_diagnostic.wgsl"),
+                include_str!("../../assets/shaders/ambient_occlusion.wgsl"),
+                &functions,
+            ]
+            .join("\n"),
+        )
 }
 
 pub(crate) fn validate_custom_materials(assets: &[MaterialAsset]) -> Result<(), String> {

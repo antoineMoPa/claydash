@@ -196,7 +196,7 @@ pub(super) fn draw_web_save_dialog(
     let modal = egui::Modal::new("web-project-download".into()).show(ctx, |ui| {
         ui.set_width(340.0);
         ui.heading("Download project");
-        ui.label("Choose a name for the Claydash project.");
+        ui.label("File name");
         let response = ui.add(
             egui::TextEdit::singleline(name)
                 .desired_width(f32::INFINITY)

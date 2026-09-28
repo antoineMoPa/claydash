@@ -573,7 +573,6 @@ fn custom_shader_editor(
         }
     });
     ui.ctx().data_mut(|data| data.insert_temp(name_id, name));
-    ui.small("Write the body of a function returning Surface. Inputs: point, normal, view, base. Set surface.color, normal, roughness, metallic, reflectivity, opacity, ior, coat, sheen, fiber, or figure.");
     let draft_id = ui.id().with(("custom-wgsl-draft", asset.uuid));
     let error_id = ui.id().with(("custom-wgsl-error", asset.uuid));
     let current = asset.wgsl.as_deref().unwrap_or_default();

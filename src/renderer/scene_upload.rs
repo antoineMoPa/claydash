@@ -1,3 +1,4 @@
+pub(super) use super::group_capture::*;
 use super::*;
 
 impl Renderer {
@@ -57,7 +58,10 @@ impl Renderer {
                         | crate::model::GroupRenderRepresentation::GaussianSplats
                 )
             }))
-        .then(|| prepare_group_scene(source_objects));
+        .then(|| prepare_group_scene(source_objects, &mut self.group_capture_cache));
+        if scene_changed && prepared_scene.is_none() {
+            self.group_capture_cache.clear();
+        }
         let scene_objects = prepared_scene
             .as_ref()
             .map_or(source_objects, |prepared| prepared.objects.as_slice());
@@ -70,6 +74,7 @@ impl Renderer {
             inverse_view_projection: (camera.projection() * camera.view())
                 .inverse()
                 .to_cols_array_2d(),
+            view_projection: (camera.projection() * camera.view()).to_cols_array_2d(),
             position: camera.position.extend(exposure).to_array(),
             count: [
                 object_count,
@@ -77,7 +82,12 @@ impl Renderer {
                 camera.viewport.y.round().max(1.0) as u32,
                 u32::from(camera.projection_mode == ProjectionMode::Orthographic),
             ],
-            world_mode: [world.background.shader_id(), 0, 0, 0],
+            world_mode: [
+                world.background.shader_id(),
+                u32::from(world.screen_space_ambient_occlusion),
+                u32::from(world.screen_space_reflections),
+                0,
+            ],
             world_color: [
                 world.flat_color[0],
                 world.flat_color[1],
@@ -110,189 +120,13 @@ impl Renderer {
             .collect();
         let ordered = boolean_postorder(scene_objects);
         let objects = &ordered;
-        let mut box_depth_texels = Vec::new();
-        let mut box_depth_metadata = std::collections::HashMap::new();
-        let mut splat_bounds = std::collections::HashMap::new();
-        let mut splat_bvh_metadata = std::collections::HashMap::new();
-        let mut materials = material_gpu::PackedMaterials::default();
-        let source_lookup: std::collections::HashMap<_, _> = source_objects
-            .iter()
-            .map(|object| (object.uuid, object))
-            .collect();
-        if let Some(prepared) = &prepared_scene {
-            for object in objects {
-                let capture = if let Some(atlas) = prepared.box_depth_atlases.get(&object.uuid) {
-                    Some((
-                        &atlas.texels,
-                        &atlas.owners,
-                        atlas.normals.as_slice(),
-                        atlas.resolution,
-                        atlas.resolution,
-                        atlas.local_min,
-                        atlas.local_max,
-                        if prepared.gaussian_splats.contains(&object.uuid) {
-                            10
-                        } else {
-                            8
-                        },
-                    ))
-                } else {
-                    prepared
-                        .sphere_depth_atlases
-                        .get(&object.uuid)
-                        .map(|atlas| {
-                            (
-                                &atlas.texels,
-                                &atlas.owners,
-                                &[] as &[Vec3],
-                                atlas.width,
-                                atlas.height,
-                                Vec3::splat(-atlas.radius),
-                                Vec3::splat(atlas.radius),
-                                9,
-                            )
-                        })
-                };
-                if let Some((texels, owners, normals, width, height, minimum, maximum, kind)) =
-                    capture
-                {
-                    let offset = box_depth_texels.len() as u32;
-                    for (sample_index, (texel, owner)) in texels.iter().zip(owners).enumerate() {
-                        let material_index = owner
-                            .and_then(|id| source_lookup.get(&id).copied())
-                            .map_or(0, |source| {
-                                let custom_index = if source.material.kind == MaterialKind::Custom {
-                                    source
-                                        .material_id
-                                        .and_then(|id| {
-                                            self.custom_material_sources
-                                                .iter()
-                                                .position(|(asset_id, _)| *asset_id == id)
-                                        })
-                                        .map_or(0, |index| index as u32 + 1)
-                                } else {
-                                    0
-                                };
-                                materials.insert_custom(source.material, custom_index)
-                            });
-                        if kind == 10 {
-                            let face_size = (width * height) as usize;
-                            let face = (sample_index / face_size) % 6;
-                            let pixel = sample_index % face_size;
-                            let x = pixel as u32 % width;
-                            let y = pixel as u32 / width;
-                            let (axis, u_axis, v_axis, sign) = match face {
-                                0 => (0, 1, 2, 1.0),
-                                1 => (0, 1, 2, -1.0),
-                                2 => (1, 0, 2, 1.0),
-                                3 => (1, 0, 2, -1.0),
-                                4 => (2, 0, 1, 1.0),
-                                _ => (2, 0, 1, -1.0),
-                            };
-                            let mut center = Vec3::ZERO;
-                            center[axis] = if sign > 0.0 {
-                                maximum[axis]
-                            } else {
-                                minimum[axis]
-                            } - sign * texel[0];
-                            center[u_axis] = minimum[u_axis]
-                                + (x as f32 + 0.5) / width as f32
-                                    * (maximum[u_axis] - minimum[u_axis]);
-                            center[v_axis] = minimum[v_axis]
-                                + (y as f32 + 0.5) / height as f32
-                                    * (maximum[v_axis] - minimum[v_axis]);
-                            let support = 0.6
-                                * ((maximum[u_axis] - minimum[u_axis]) / width as f32)
-                                    .max((maximum[v_axis] - minimum[v_axis]) / height as f32);
-                            if owner.is_some() {
-                                splat_bounds
-                                    .entry(object.uuid)
-                                    .or_insert_with(Vec::new)
-                                    .push(splat_bvh::SplatBound {
-                                        center,
-                                        radius: 2.5 * support,
-                                        texel_offset: box_depth_texels.len() as u32,
-                                    });
-                            }
-                            box_depth_texels.push(if owner.is_some() {
-                                center.extend(support).to_array()
-                            } else {
-                                [0.0, 0.0, 0.0, -1.0]
-                            });
-                            box_depth_texels.push([
-                                material_index as f32,
-                                texel[1],
-                                texel[2],
-                                texel[3],
-                            ]);
-                            box_depth_texels.push(normals[sample_index].extend(0.0).to_array());
-                        } else {
-                            box_depth_texels.push(*texel);
-                            box_depth_texels.push([material_index as f32, 0.0, 0.0, 0.0]);
-                        }
-                    }
-                    box_depth_metadata
-                        .insert(object.uuid, (offset, width, height, minimum, maximum, kind));
-                }
-            }
-        }
-        for (id, mut bounds) in splat_bounds {
-            if let Some(range) = splat_bvh::append_splat_bvh(&mut box_depth_texels, &mut bounds) {
-                splat_bvh_metadata.insert(id, range);
-            }
-        }
-        if !box_depth_texels.is_empty() {
-            self.queue.write_buffer(
-                &self.box_depth_buffer,
-                0,
-                bytemuck::cast_slice(&box_depth_texels),
-            );
-        }
-        let mut stencil_layers = std::collections::HashMap::new();
-        for object in objects
-            .iter()
-            .filter(|object| object.image_stencil.is_some())
-            .take(32)
-        {
-            let stencil = object.image_stencil.as_ref().unwrap();
-            if stencil.image.len() > 16 * 1024 * 1024 {
-                continue;
-            }
-            let Ok(image) = image::load_from_memory(&stencil.image) else {
-                continue;
-            };
-            let layer = stencil_layers.len() as u32;
-            let rgba = image::imageops::resize(
-                &image.to_rgba8(),
-                512,
-                512,
-                image::imageops::FilterType::Triangle,
-            );
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.image_atlas,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: 0,
-                        y: 0,
-                        z: layer,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                rgba.as_raw(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(512 * 4),
-                    rows_per_image: Some(512),
-                },
-                wgpu::Extent3d {
-                    width: 512,
-                    height: 512,
-                    depth_or_array_layers: 1,
-                },
-            );
-            stencil_layers.insert(object.uuid, layer);
-        }
+        let super::atlas_upload::UploadedAtlases {
+            box_depth_metadata,
+            splat_bvh_metadata,
+            splat_samples,
+            mut materials,
+            stencil_layers,
+        } = self.upload_scene_atlases(objects, source_objects, prepared_scene.as_ref());
         let object_indices: std::collections::HashMap<_, _> = objects
             .iter()
             .enumerate()
@@ -301,6 +135,7 @@ impl Renderer {
 
         let mut bounds = Vec::with_capacity(objects.len().min(MAX_OBJECTS));
         let mut polygon_points = Vec::new();
+        let mut text_points_used = 0usize;
         let mut lattice_points: Vec<[f32; 4]> = Vec::new();
         let mut lattice_atlas_uploads = Vec::new();
         let mut modifiers = modifier_gpu::PackedModifiers::default();
@@ -406,166 +241,22 @@ impl Renderer {
                     matrix.z_axis.truncate().length(),
                 );
                 let distance_scale = abs_scale.min_element().max(0.000_001);
-                let path_profile = object
-                    .path_extrusion
-                    .and_then(|modifier| modifier.profile_curve)
-                    .and_then(|id| crate::model::profile_curve_vertices(scene_objects, id));
-                let path_profile_extent = path_profile.as_ref().map_or(1.0_f32, |vertices| {
-                    vertices
-                        .iter()
-                        .map(|point| point.length())
-                        .fold(1.0_f32, f32::max)
-                });
-                let path_radius = object
-                    .path_extrusion
-                    .map_or(0.0, |modifier| modifier.radius);
-                let path_profile_count = if object
-                    .path_extrusion
-                    .and_then(|modifier| modifier.profile_curve)
-                    .is_some()
-                {
-                    path_profile
-                        .as_ref()
-                        .map_or(2.0, |vertices| vertices.len().min(65) as f32)
-                } else if object
-                    .path_extrusion
-                    .is_some_and(|modifier| modifier.profile == crate::model::BezierProfile::Square)
-                {
-                    1.0
-                } else {
-                    0.0
-                };
-                let (params, radius) = match object.params {
-                    SdfParams::SphereParams(ref params) => (
-                        [params.radius, 0.0, 0.0, distance_scale],
-                        params.radius * abs_scale.max_element(),
-                    ),
-                    SdfParams::BoxParams(ref params) => (
-                        [
-                            params.box_q.x,
-                            params.box_q.y,
-                            params.box_q.z,
-                            distance_scale,
-                        ],
-                        (params.box_q * abs_scale).length(),
-                    ),
-                    SdfParams::CylinderParams {
-                        radius,
-                        half_height,
-                    } => (
-                        [radius, half_height, 0.0, distance_scale],
-                        Vec2::new(radius, half_height).length() * abs_scale.max_element(),
-                    ),
-                    SdfParams::TorusParams {
-                        major_radius,
-                        minor_radius,
-                    } => (
-                        [major_radius, minor_radius, 0.0, distance_scale],
-                        (major_radius + minor_radius) * abs_scale.max_element(),
-                    ),
-                    SdfParams::PolygonPrismParams(ref polygon) => {
-                        let offset = polygon_points.len() as u32;
-                        polygon_points.extend(
-                            polygon
-                                .vertices
-                                .iter()
-                                .take(crate::model::MAX_POLYGON_PRISM_VERTICES)
-                                .map(|point| GpuPolygonPoint {
-                                    position: point.to_array(),
-                                }),
-                        );
-                        let count = polygon_points.len() as u32 - offset;
-                        let planar_radius = polygon
-                            .vertices
-                            .iter()
-                            .map(|point| point.length())
-                            .fold(0.0_f32, f32::max);
-                        (
-                            [
-                                polygon.half_depth,
-                                f32::from_bits(offset),
-                                f32::from_bits(count),
-                                distance_scale,
-                            ],
-                            Vec2::new(planar_radius, polygon.half_depth).length()
-                                * abs_scale.max_element(),
-                        )
-                    }
-                    SdfParams::LoftParams(ref loft) => {
-                        let offset = polygon_points.len() as u32;
-                        let profile_count = loft.profile_count();
-                        for section in loft
-                            .sections
-                            .iter()
-                            .take(crate::model::LoftParams::MAX_SECTIONS)
-                        {
-                            polygon_points.push(GpuPolygonPoint {
-                                position: [section.x, section.center_y],
-                            });
-                            polygon_points.push(GpuPolygonPoint {
-                                position: [section.center_z, section.half_height],
-                            });
-                            polygon_points.push(GpuPolygonPoint {
-                                position: [section.half_width, 0.0],
-                            });
-                            for index in 0..profile_count {
-                                polygon_points.push(GpuPolygonPoint {
-                                    position: crate::model::LoftParams::profile_point(
-                                        section,
-                                        index,
-                                        profile_count,
-                                    )
-                                    .to_array(),
-                                });
-                            }
-                        }
-                        let count = loft
-                            .sections
-                            .len()
-                            .min(crate::model::LoftParams::MAX_SECTIONS)
-                            as u32;
-                        (
-                            [
-                                f32::from_bits(offset),
-                                f32::from_bits(count),
-                                f32::from_bits(profile_count as u32),
-                                distance_scale,
-                            ],
-                            loft.local_extent().length() * abs_scale.max_element(),
-                        )
-                    }
-                    SdfParams::BezierCurveParams(ref curve) => {
-                        let offset = polygon_points.len() as u32;
-                        for &point in curve.points.iter().take(25) {
-                            polygon_points.push(GpuPolygonPoint {
-                                position: [point.x, point.y],
-                            });
-                            polygon_points.push(GpuPolygonPoint {
-                                position: [point.z, 0.0],
-                            });
-                        }
-                        let profile_offset = polygon_points.len() as u32;
-                        if let Some(vertices) = &path_profile {
-                            polygon_points.extend(vertices.iter().take(65).map(|point| {
-                                GpuPolygonPoint {
-                                    position: point.to_array(),
-                                }
-                            }));
-                        }
-                        (
-                            [
-                                path_radius,
-                                f32::from_bits(offset),
-                                f32::from_bits(profile_offset),
-                                distance_scale,
-                            ],
-                            curve
-                                .local_extent(path_radius * path_profile_extent)
-                                .length()
-                                * abs_scale.max_element(),
-                        )
-                    }
-                };
+                let super::primitive_upload::PackedPrimitive {
+                    params,
+                    radius,
+                    path_profile_extent,
+                    path_radius,
+                    path_profile_count,
+                    text_geometry,
+                } = super::primitive_upload::pack_primitive(
+                    object,
+                    scene_objects,
+                    source_objects,
+                    abs_scale,
+                    distance_scale,
+                    &mut polygon_points,
+                    &mut text_points_used,
+                );
                 let inlay_host = object.surface_inlay.and_then(|inlay| {
                     object_indices
                         .get(&inlay.host)
@@ -633,6 +324,9 @@ impl Renderer {
                     SdfParams::BezierCurveParams(ref curve) => {
                         curve.local_extent(path_radius * path_profile_extent)
                     }
+                    SdfParams::TextParams(_) => text_geometry
+                        .as_ref()
+                        .map_or(Vec3::ZERO, |text| text.local_extent()),
                 };
                 let mut repeated_extent = local_extent;
                 if object.repetition.enabled && !repeats_group {
@@ -661,7 +355,6 @@ impl Renderer {
                 let box_depth = box_depth_metadata.get(&object.uuid).copied();
                 let splat_bvh = splat_bvh_metadata.get(&object.uuid).copied();
                 let safe_distance_bound = box_depth.is_none()
-                    && modifier_index == 0
                     && uniform_scale
                     && matches!(
                         &object.params,
@@ -688,7 +381,7 @@ impl Renderer {
                     distance_bound: bound
                         .center
                         .extend(if safe_distance_bound {
-                            bound.radius + 0.01
+                            repeated_radius + 0.01
                         } else {
                             -1.0
                         })
@@ -932,6 +625,71 @@ impl Renderer {
                     .fold(1u64, u64::saturating_mul)
             })
             .fold(0u64, u64::saturating_add);
+        // The mesh path has one depth value for the opaque SDF surface. Keep
+        // the ray compositor for glass, reflected splats, custom shaders and
+        // group modifiers whose copies cannot be represented by one instance.
+        let supported_materials = source_objects.iter().all(|object| {
+            object.material.kind == MaterialKind::Solid
+                && object.material.opacity >= 0.999
+                && object.image_stencil.is_none()
+                && object.surface_inlay.is_none()
+        });
+        let supported_roots = prepared_scene.as_ref().is_some_and(|prepared| {
+            prepared.gaussian_splats.iter().all(|id| {
+                source_objects
+                    .iter()
+                    .find(|object| object.uuid == *id)
+                    .is_some_and(|root| {
+                        root.boolean_parent.is_none()
+                            && root.operation == crate::model::BooleanOperation::Union
+                            && !root.repetition.enabled
+                            && root.mirror.is_none()
+                    })
+            })
+        });
+        let has_splat_samples = !splat_samples.is_empty();
+        self.hybrid_enabled = self.use_bvh
+            && self.shader_source.contains("fn fs_depth")
+            && supported_materials
+            && supported_roots
+            && has_splat_samples;
+        self.splat_instances.clear();
+        if self.hybrid_enabled {
+            let matrices: std::collections::HashMap<_, _> = splat_samples
+                .iter()
+                .map(|sample| sample.0)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .map(|id| (id, crate::model::object_world_matrix(scene_objects, id)))
+                .collect();
+            for (id, center, support, color, normal, material_index) in splat_samples {
+                let matrix = matrices[&id];
+                let scale = matrix
+                    .x_axis
+                    .truncate()
+                    .length()
+                    .max(matrix.y_axis.truncate().length())
+                    .max(matrix.z_axis.truncate().length());
+                let world_normal = matrix
+                    .inverse()
+                    .transpose()
+                    .transform_vector3(normal)
+                    .normalize_or_zero();
+                self.splat_instances.push(GpuSplat {
+                    center_radius: matrix
+                        .transform_point3(center)
+                        .extend(support * scale)
+                        .to_array(),
+                    color_opacity: [
+                        color[0],
+                        color[1],
+                        color[2],
+                        materials.materials[material_index as usize].opacity,
+                    ],
+                    normal: world_normal.extend(0.0).to_array(),
+                });
+            }
+        }
         self.initial_pixel_budget =
             if (capacity > 1 && gpu_objects.len() > 256) || transmitted_instances > 1024 {
                 1024
@@ -945,81 +703,11 @@ impl Renderer {
         self.viewport.set_initial_budget(self.initial_pixel_budget);
         self.resize_lattice_atlas_for(lattice_atlas_uploads.len());
         let shader_features = SceneShaderFeatures::for_scene(&materials.materials, &gpu_objects);
-        let shader_features_changed = shader_features != self.scene_shader_features;
-        if shader_features_changed || self.scene_pipelines_dirty {
-            self.boolean_pipeline = None;
-            self.fast_boolean_pipeline = None;
-        }
-        if !self.has_booleans
-            && (shader_features_changed || self.scene_pipelines_dirty || was_boolean)
-        {
-            self.pipeline = create_scene_pipeline_for_materials(
-                &self.device,
-                &self.shader_source,
-                &self.pipeline_layout,
-                self.render_format,
-                self.use_bvh,
-                1,
-                false,
-                false,
-                shader_features,
-            );
-            self.fast_pipeline = create_scene_pipeline_for_materials(
-                &self.device,
-                &self.shader_source,
-                &self.pipeline_layout,
-                self.render_format,
-                self.use_bvh,
-                1,
-                false,
-                true,
-                shader_features,
-            );
-        }
-        self.scene_shader_features = shader_features;
-        self.scene_pipelines_dirty = false;
-        if self.has_booleans
-            && self
-                .boolean_pipeline
-                .as_ref()
-                .is_none_or(|(size, _)| *size != capacity)
-        {
-            self.boolean_pipeline = Some((
-                capacity,
-                create_scene_pipeline_for_materials(
-                    &self.device,
-                    &self.shader_source,
-                    &self.pipeline_layout,
-                    self.render_format,
-                    self.use_bvh,
-                    capacity,
-                    false,
-                    false,
-                    shader_features,
-                ),
-            ));
-        }
-        if self.has_booleans
-            && self
-                .fast_boolean_pipeline
-                .as_ref()
-                .is_none_or(|(size, _)| *size != capacity)
-        {
-            self.fast_boolean_pipeline = Some((
-                capacity,
-                create_scene_pipeline_for_materials(
-                    &self.device,
-                    &self.shader_source,
-                    &self.pipeline_layout,
-                    self.render_format,
-                    self.use_bvh,
-                    capacity,
-                    false,
-                    true,
-                    shader_features,
-                ),
-            ));
-        }
+        self.deferred_supported = self.use_bvh
+            && self.shader_source.contains("fn fs_gbuffer")
+            && (!has_splat_samples || self.hybrid_enabled)
+            && crate::model::deferred_fallback_reason(source_objects).is_none();
+        self.prepare_scene_pipelines(world, capacity, was_boolean, shader_features);
         if !gpu_objects.is_empty() {
             self.queue.write_buffer(
                 &self.material_headers_buffer,
@@ -1092,172 +780,4 @@ impl Renderer {
         self.uploaded_scene_versions = scene_versions;
         self.uploaded_object_count = object_count;
     }
-}
-
-use std::collections::{HashMap, HashSet};
-
-use crate::model::{BoxParams, GroupRenderRepresentation, PrimitiveKind, SphereParams, Transform};
-
-pub(super) struct PreparedGroupScene {
-    pub objects: Vec<SdfObject>,
-    pub box_depth_atlases: HashMap<uuid::Uuid, BoxDepthAtlas>,
-    pub sphere_depth_atlases: HashMap<uuid::Uuid, SphereDepthAtlas>,
-    pub gaussian_splats: HashSet<uuid::Uuid>,
-}
-
-pub(super) fn prepare_group_scene(source: &[SdfObject]) -> PreparedGroupScene {
-    let parents: HashMap<_, _> = source
-        .iter()
-        .map(|object| (object.uuid, object.boolean_parent))
-        .collect();
-    let group_ids: HashSet<_> = source
-        .iter()
-        .filter_map(|object| object.boolean_parent)
-        .collect();
-    let mut proxies = HashMap::new();
-    let mut box_depth_atlases = HashMap::new();
-    let mut sphere_depth_atlases = HashMap::new();
-    let mut gaussian_splats = HashSet::new();
-    let mut atlas_texels = 0;
-    for root in source {
-        if root.render_representation == GroupRenderRepresentation::ExactSdf {
-            continue;
-        }
-        let Some((minimum, maximum)) = crate::model::lattice_bounds(source, root.uuid) else {
-            continue;
-        };
-        let center = (minimum + maximum) * 0.5;
-        let half_extent = (maximum - minimum) * 0.5;
-        if !center.is_finite() || !half_extent.is_finite() || half_extent.min_element() <= 0.0 {
-            continue;
-        }
-        let mut proxy = root.clone();
-        match root.render_representation {
-            GroupRenderRepresentation::BoxDepthAtlas
-            | GroupRenderRepresentation::GaussianSplats => {
-                let gaussian =
-                    root.render_representation == GroupRenderRepresentation::GaussianSplats;
-                let resolution = if gaussian {
-                    GAUSSIAN_BOX_RESOLUTION
-                } else {
-                    BOX_DEPTH_RESOLUTION
-                };
-                let start = if gaussian {
-                    BoxCaptureStart::OutsideBounds
-                } else {
-                    BoxCaptureStart::AtBounds
-                };
-                let Some(atlas) = bake_box_depth_atlas(source, root.uuid, resolution, start) else {
-                    continue;
-                };
-                let required_texels = atlas.texels.len() * if gaussian { 7 } else { 2 };
-                if atlas_texels + required_texels > MAX_BOX_DEPTH_TEXELS {
-                    continue;
-                }
-                atlas_texels += required_texels;
-                let proxy_extent = if gaussian {
-                    let support =
-                        1.5 * (atlas.local_max - atlas.local_min).max_element() / resolution as f32;
-                    atlas.local_max + Vec3::splat(support)
-                } else {
-                    half_extent
-                };
-                box_depth_atlases.insert(root.uuid, atlas);
-                proxy.object_type = PrimitiveKind::Box.object_type();
-                proxy.params = SdfParams::BoxParams(BoxParams {
-                    box_q: proxy_extent,
-                    corner_radius: 0.0,
-                });
-                if gaussian {
-                    gaussian_splats.insert(root.uuid);
-                }
-            }
-            GroupRenderRepresentation::SphereDepthAtlas => {
-                let (width, height) = (SPHERE_DEPTH_WIDTH, SPHERE_DEPTH_HEIGHT);
-                let Some(atlas) = bake_sphere_depth_atlas(source, root.uuid, width, height) else {
-                    continue;
-                };
-                let required_texels = atlas.texels.len() * 2;
-                if atlas_texels + required_texels > MAX_BOX_DEPTH_TEXELS {
-                    continue;
-                }
-                atlas_texels += required_texels;
-                proxy.object_type = PrimitiveKind::Sphere.object_type();
-                proxy.params = SdfParams::SphereParams(SphereParams {
-                    radius: atlas.radius,
-                });
-                sphere_depth_atlases.insert(root.uuid, atlas);
-            }
-            GroupRenderRepresentation::ExactSdf => continue,
-        }
-        if group_ids.contains(&root.uuid) {
-            proxy.transform = Transform {
-                translation: center,
-                ..Transform::default()
-            };
-        } else {
-            proxy.transform.translation +=
-                root.transform.rotation * (root.transform.scale * center);
-        }
-        proxy.image_stencil = None;
-        proxies.insert(root.uuid, proxy);
-    }
-
-    let mut rendered = Vec::with_capacity(source.len());
-    for object in source {
-        let mut parent = object.boolean_parent;
-        let mut hidden = false;
-        for _ in 0..source.len() {
-            let Some(id) = parent else { break };
-            if proxies.contains_key(&id) {
-                hidden = true;
-                break;
-            }
-            parent = parents.get(&id).copied().flatten();
-        }
-        if hidden {
-            continue;
-        }
-        rendered.push(
-            proxies
-                .get(&object.uuid)
-                .cloned()
-                .unwrap_or_else(|| object.clone()),
-        );
-    }
-    PreparedGroupScene {
-        objects: rendered,
-        box_depth_atlases,
-        sphere_depth_atlases,
-        gaussian_splats,
-    }
-}
-
-pub(super) fn visible_selection(
-    source: &[SdfObject],
-    rendered: &[SdfObject],
-    selected: &[uuid::Uuid],
-) -> HashSet<uuid::Uuid> {
-    let visible_ids: HashSet<_> = rendered.iter().map(|object| object.uuid).collect();
-    let parents: HashMap<_, _> = source
-        .iter()
-        .map(|object| (object.uuid, object.boolean_parent))
-        .collect();
-    let mut mapped = HashSet::new();
-    for id in selected {
-        if visible_ids.contains(id) {
-            mapped.insert(*id);
-            continue;
-        }
-        let mut parent = parents.get(id).copied().flatten();
-        for _ in 0..source.len() {
-            let Some(candidate) = parent else { break };
-            if visible_ids.contains(&candidate) {
-                mapped.insert(candidate);
-                break;
-            }
-            parent = parents.get(&candidate).copied().flatten();
-        }
-    }
-    mapped
 }

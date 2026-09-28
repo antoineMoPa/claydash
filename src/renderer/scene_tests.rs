@@ -146,7 +146,7 @@ fn sphere_depth_capture_keeps_hit_owner_and_empty_directions() {
     assert!(atlas.owners.contains(&Some(child_id)));
     assert!(atlas.texels.iter().any(|sample| sample[0] >= 0.0));
     assert!(atlas.texels.iter().any(|sample| sample[0] < 0.0));
-    let prepared = scene_upload::prepare_group_scene(&source);
+    let prepared = scene_upload::prepare_group_scene(&source, &mut Default::default());
     assert_eq!(prepared.objects.len(), 1);
     assert!(prepared.sphere_depth_atlases.contains_key(&source[0].uuid));
 }
@@ -162,7 +162,7 @@ fn gaussian_splat_mode_replaces_group_and_preserves_capture_owners() {
     child.transform.translation = Vec3::new(0.75, 0.0, 0.0);
     let child_id = child.uuid;
     let source = [root, child];
-    let prepared = scene_upload::prepare_group_scene(&source);
+    let prepared = scene_upload::prepare_group_scene(&source, &mut Default::default());
     assert_eq!(prepared.objects.len(), 1);
     assert!(prepared.gaussian_splats.contains(&source[0].uuid));
     let atlas = &prepared.box_depth_atlases[&source[0].uuid];
@@ -171,6 +171,71 @@ fn gaussian_splat_mode_replaces_group_and_preserves_capture_owners() {
         panic!("Gaussian splat proxy should have box bounds");
     };
     assert!(proxy.box_q.x > atlas.local_max.x);
+}
+
+#[test]
+fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
+    use crate::model::{BooleanOperation, GroupRenderRepresentation};
+    let document: serde_json::Value = serde_json::from_str(crate::duck::DEFAULT_DUCK).unwrap();
+    let source: Vec<SdfObject> =
+        serde_json::from_value(document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone())
+            .unwrap();
+    let duck_id = source[0].uuid;
+    let box_id = source[7].uuid;
+    let operands = [source[8].uuid, source[9].uuid];
+    let mut tree = crate::model::DataTree::default();
+    crate::model::set_objects(&mut tree, source);
+    assert!(crate::ui::scene_actions::attach(
+        &mut tree,
+        box_id,
+        &operands,
+        BooleanOperation::Union,
+    ));
+    let mut source = crate::model::objects(&tree);
+    source[0].render_representation = GroupRenderRepresentation::GaussianSplats;
+    assert!(source[8..10]
+        .iter()
+        .all(|object| object.boolean_parent == Some(box_id)));
+
+    for mode in [
+        GroupRenderRepresentation::ExactSdf,
+        GroupRenderRepresentation::GaussianSplats,
+        GroupRenderRepresentation::BoxDepthAtlas,
+        GroupRenderRepresentation::SphereDepthAtlas,
+    ] {
+        source[7].render_representation = mode;
+        let prepared = scene_upload::prepare_group_scene(&source, &mut Default::default());
+        assert!(prepared.gaussian_splats.contains(&duck_id));
+        assert!(prepared.box_depth_atlases.contains_key(&duck_id));
+        assert!(prepared.objects.iter().any(|object| object.uuid == duck_id));
+        assert!(prepared.objects.iter().any(|object| object.uuid == box_id));
+        if mode == GroupRenderRepresentation::ExactSdf {
+            assert_eq!(prepared.objects.len(), 4);
+            assert!(prepared
+                .objects
+                .iter()
+                .any(|object| object.uuid == source[8].uuid));
+            assert!(prepared
+                .objects
+                .iter()
+                .any(|object| object.uuid == source[9].uuid));
+        } else {
+            assert_eq!(prepared.objects.len(), 2);
+            match mode {
+                GroupRenderRepresentation::GaussianSplats => {
+                    assert!(prepared.gaussian_splats.contains(&box_id));
+                    assert!(prepared.box_depth_atlases.contains_key(&box_id));
+                }
+                GroupRenderRepresentation::BoxDepthAtlas => {
+                    assert!(prepared.box_depth_atlases.contains_key(&box_id));
+                }
+                GroupRenderRepresentation::SphereDepthAtlas => {
+                    assert!(prepared.sphere_depth_atlases.contains_key(&box_id));
+                }
+                GroupRenderRepresentation::ExactSdf => unreachable!(),
+            }
+        }
+    }
 }
 
 #[test]
@@ -381,4 +446,179 @@ fn postorder_keeps_orphan_components_and_sibling_order() {
         .map(|object| object.uuid)
         .collect();
     assert_eq!(ordered, [first.uuid, second.uuid, root.uuid]);
+}
+
+#[test]
+fn render_text_resolves_optimized_path_from_source_scene() {
+    use crate::model::{BezierCurveParams, BoxParams, PrimitiveKind, TextParams};
+    let mut path = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    path.params = SdfParams::BezierCurveParams(BezierCurveParams {
+        points: vec![Vec3::ZERO, Vec3::X, Vec3::X * 2.0, Vec3::X * 3.0],
+        closed: false,
+    });
+    let mut text = SdfObject::create_kind(PrimitiveKind::Text);
+    text.params = SdfParams::TextParams(TextParams {
+        text: "AB".into(),
+        path: Some(path.uuid),
+        ..TextParams::default()
+    });
+    let source = [path.clone(), text.clone()];
+    let mut proxy_path = path;
+    proxy_path.params = SdfParams::BoxParams(BoxParams {
+        box_q: Vec3::ONE,
+        corner_radius: 0.0,
+    });
+    assert!(crate::model::prepared_scene_text(&[proxy_path, text.clone()], &text).is_err());
+    let geometry = scene_upload::prepared_render_text(&source, &text).unwrap();
+    assert_eq!(geometry.glyphs.len(), 2);
+}
+
+#[test]
+fn group_capture_reuses_rigid_pose_and_invalidates_surface_changes() {
+    use crate::model::{GroupRenderRepresentation, PrimitiveKind};
+    let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+    root.render_representation = GroupRenderRepresentation::BoxDepthAtlas;
+    let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+    child.boolean_parent = Some(root.uuid);
+    child.transform.translation.x = 0.8;
+    let root_id = root.uuid;
+    let mut source = vec![root, child];
+    let mut cache = Default::default();
+    let initial = scene_upload::prepare_group_scene(&source, &mut cache);
+    let initial_atlas = initial.box_depth_atlases[&root_id].clone();
+    source[0].group_transform.translation = Vec3::new(3.0, -2.0, 1.0);
+    source[0].group_transform.rotation = glam::Quat::from_rotation_y(0.7);
+    let moved = scene_upload::prepare_group_scene(&source, &mut cache);
+    assert!(Arc::ptr_eq(
+        &initial_atlas,
+        &moved.box_depth_atlases[&root_id]
+    ));
+    assert_eq!(
+        moved.objects[0].group_transform.translation,
+        source[0].group_transform.translation
+    );
+
+    source[1].transform.translation.x += 0.3;
+    let changed = scene_upload::prepare_group_scene(&source, &mut cache);
+    assert!(!Arc::ptr_eq(
+        &initial_atlas,
+        &changed.box_depth_atlases[&root_id]
+    ));
+    let previous = changed.box_depth_atlases[&root_id].clone();
+    source[1].material.color.x = 0.9;
+    let changed = scene_upload::prepare_group_scene(&source, &mut cache);
+    assert!(!Arc::ptr_eq(
+        &previous,
+        &changed.box_depth_atlases[&root_id]
+    ));
+    let previous = changed.box_depth_atlases[&root_id].clone();
+    let mut lattice = crate::model::Lattice::new(-Vec3::ONE, Vec3::ONE, 2);
+    lattice.offsets.fill(Vec3::new(0.2, 0.0, 0.0));
+    source[0].lattice = Some(lattice);
+    let changed = scene_upload::prepare_group_scene(&source, &mut cache);
+    assert!(!Arc::ptr_eq(
+        &previous,
+        &changed.box_depth_atlases[&root_id]
+    ));
+    assert!(
+        changed.objects[0].lattice.is_none(),
+        "baked cage must not apply twice"
+    );
+
+    // A referenced world-space path can move relative to the capture. Even
+    // an unrelated reference conservatively disables pose-only reuse.
+    let mut text = SdfObject::create_kind(PrimitiveKind::Text);
+    text.params = SdfParams::TextParams(crate::model::TextParams {
+        path: Some(uuid::Uuid::new_v4()),
+        ..Default::default()
+    });
+    source.push(text);
+    let with_reference = scene_upload::prepare_group_scene(&source, &mut cache);
+    source[0].group_transform.translation.x += 1.0;
+    let moved_reference = scene_upload::prepare_group_scene(&source, &mut cache);
+    assert!(!Arc::ptr_eq(
+        &with_reference.box_depth_atlases[&root_id],
+        &moved_reference.box_depth_atlases[&root_id],
+    ));
+}
+
+#[test]
+fn prepared_capture_sampler_matches_tree_and_cage_contracts() {
+    use crate::model::{
+        scene_subtree_sample, BooleanOperation, PreparedSubtreeSampler, PrimitiveKind,
+    };
+    let mut root = SdfObject::create_kind(PrimitiveKind::Box);
+    root.transform.scale = Vec3::new(0.6, 1.4, 0.9);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    child.transform.translation = Vec3::new(0.4, 0.2, -0.1);
+    let root_id = root.uuid;
+    for operation in [
+        BooleanOperation::Union,
+        BooleanOperation::Subtract,
+        BooleanOperation::Intersect,
+    ] {
+        child.operation = operation;
+        let source = [root.clone(), child.clone()];
+        let mut sampler = PreparedSubtreeSampler::new(&source, root_id).unwrap();
+        for x in -8..=8 {
+            for y in -5..=5 {
+                let point = Vec3::new(x as f32 * 0.19, y as f32 * 0.17, 0.23);
+                let expected = scene_subtree_sample(point, &source, root_id).unwrap();
+                let actual = sampler.sample(point);
+                assert!((actual.0 - expected.0).abs() < 0.00001);
+                assert_eq!(actual.1, expected.1);
+            }
+        }
+    }
+    // A constant cage displacement has an exact inverse and moves both root
+    // and inherited child surfaces once, with no numerical solver ambiguity.
+    child.operation = BooleanOperation::Union;
+    let rest = [root.clone(), child.clone()];
+    let mut cage = crate::model::Lattice::new(-Vec3::splat(2.0), Vec3::splat(2.0), 7);
+    let shift = Vec3::new(0.45, -0.2, 0.15);
+    cage.offsets.fill(shift);
+    root.lattice = Some(cage);
+    let deformed = [root, child];
+    let mut sampler = PreparedSubtreeSampler::new(&deformed, root_id).unwrap();
+    for x in -8..=8 {
+        let point = Vec3::new(x as f32 * 0.23, 0.12, 0.24);
+        let expected = scene_subtree_sample(point - shift, &rest, root_id).unwrap();
+        let actual = sampler.sample(point);
+        assert!((actual.0 - expected.0).abs() < 0.00001);
+        assert_eq!(actual.1, expected.1);
+    }
+}
+
+#[test]
+fn capture_cache_retains_only_admitted_atlases() {
+    use crate::model::{GroupRenderRepresentation, PrimitiveKind};
+    let mut source: Vec<_> = (0..4)
+        .map(|index| {
+            let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+            root.transform.translation.x = index as f32 * 2.0;
+            root.render_representation = GroupRenderRepresentation::GaussianSplats;
+            root
+        })
+        .collect();
+    let mut cache = Default::default();
+    let prepared = scene_upload::prepare_group_scene(&source, &mut cache);
+    assert!(
+        prepared.box_depth_atlases.len() < source.len(),
+        "fixture must exceed atlas budget"
+    );
+    assert_eq!(cache.len(), prepared.box_depth_atlases.len());
+    assert!(cache
+        .keys()
+        .all(|id| prepared.box_depth_atlases.contains_key(id)));
+
+    for root in &mut source {
+        root.render_representation = GroupRenderRepresentation::ExactSdf;
+    }
+    let restored = scene_upload::prepare_group_scene(&source, &mut cache);
+    assert!(restored.box_depth_atlases.is_empty());
+    assert!(
+        cache.is_empty(),
+        "dormant Exact captures must release CPU memory"
+    );
 }

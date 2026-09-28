@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 
 use super::*;
-use crate::model::{lattice_bounds, lattice_world_matrix, scene_subtree_sample};
+use crate::model::{lattice_bounds, lattice_world_matrix, PreparedSubtreeSampler};
 
 pub(super) const BOX_DEPTH_RESOLUTION: u32 = 40;
 pub(super) const GAUSSIAN_BOX_RESOLUTION: u32 = 64;
@@ -72,8 +72,13 @@ pub(super) fn bake_box_depth_atlas(
     }
     let lookup: HashMap<_, _> = scene.iter().map(|object| (object.uuid, object)).collect();
     lookup.get(&root)?;
-    let (minimum, maximum) = lattice_bounds(scene, root)?;
+    let mut sampler = PreparedSubtreeSampler::new(scene, root)?;
+    let march_factor = sampler.march_factor(modifier_gpu::lattice_march_factor);
+    let (mut minimum, mut maximum) = lattice_bounds(scene, root)?;
     let world = lattice_world_matrix(scene, root);
+    let deformation_extent = sampler.deformation_extent(world.inverse());
+    minimum -= deformation_extent;
+    maximum += deformation_extent;
     let center = (minimum + maximum) * 0.5;
     let half_extent = (maximum - minimum) * 0.5;
     if !center.is_finite() || !half_extent.is_finite() || half_extent.min_element() <= 0.0 {
@@ -131,7 +136,7 @@ pub(super) fn bake_box_depth_atlas(
                 let mut layer = 0;
                 for _ in 0..192 {
                     let point = world.transform_point3(origin + inward * depth);
-                    let (distance, owner) = scene_subtree_sample(point, scene, root)?;
+                    let (distance, owner) = sampler.sample(point);
                     if !distance.is_finite() {
                         return None;
                     }
@@ -152,18 +157,12 @@ pub(super) fn bake_box_depth_atlas(
                             for direction in 0..3 {
                                 let mut delta = Vec3::ZERO;
                                 delta[direction] = step;
-                                let positive = scene_subtree_sample(
-                                    world.transform_point3(origin + inward * depth + delta),
-                                    scene,
-                                    root,
-                                )?
-                                .0;
-                                let negative = scene_subtree_sample(
-                                    world.transform_point3(origin + inward * depth - delta),
-                                    scene,
-                                    root,
-                                )?
-                                .0;
+                                let positive = sampler
+                                    .sample(world.transform_point3(origin + inward * depth + delta))
+                                    .0;
+                                let negative = sampler
+                                    .sample(world.transform_point3(origin + inward * depth - delta))
+                                    .0;
                                 gradient[direction] = positive - negative;
                             }
                             normals[offset] = if gradient.length_squared() > 0.00000001 {
@@ -179,7 +178,7 @@ pub(super) fn bake_box_depth_atlas(
                         depth += 0.004;
                         continue;
                     }
-                    depth += (distance.abs() / world_step * 0.8).max(0.0001);
+                    depth += (distance.abs() / world_step * march_factor).max(0.0001);
                     if depth > span {
                         break;
                     }

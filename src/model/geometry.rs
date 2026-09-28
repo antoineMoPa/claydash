@@ -1,7 +1,7 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use sdf_consts::{
     TYPE_BEZIER_CURVE, TYPE_BOX, TYPE_CYLINDER, TYPE_LOFT, TYPE_POLYGON_PRISM, TYPE_SPHERE,
-    TYPE_TORUS,
+    TYPE_TEXT, TYPE_TORUS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -9,12 +9,14 @@ mod materials;
 mod optimization;
 mod primitives;
 mod spatial;
+mod text;
 
 pub use materials::*;
 pub use optimization::*;
 use primitives::curve_profile_frame;
 pub use primitives::*;
 pub use spatial::*;
+pub use text::*;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EditorState {
@@ -78,10 +80,11 @@ pub enum PrimitiveKind {
     PolygonPrism,
     BezierCurve,
     Loft,
+    Text,
 }
 
 impl PrimitiveKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Sphere,
         Self::Box,
         Self::Cylinder,
@@ -89,14 +92,16 @@ impl PrimitiveKind {
         Self::PolygonPrism,
         Self::BezierCurve,
         Self::Loft,
+        Self::Text,
     ];
-    pub const SPAWNABLE: [Self; 6] = [
+    pub const SPAWNABLE: [Self; 7] = [
         Self::Sphere,
         Self::Box,
         Self::Cylinder,
         Self::Torus,
         Self::BezierCurve,
         Self::Loft,
+        Self::Text,
     ];
 
     pub fn label(self) -> &'static str {
@@ -108,6 +113,7 @@ impl PrimitiveKind {
             Self::PolygonPrism => "Face shape",
             Self::BezierCurve => "Bézier curve",
             Self::Loft => "Loft",
+            Self::Text => "Text",
         }
     }
 
@@ -120,6 +126,7 @@ impl PrimitiveKind {
             Self::PolygonPrism => TYPE_POLYGON_PRISM,
             Self::BezierCurve => TYPE_BEZIER_CURVE,
             Self::Loft => TYPE_LOFT,
+            Self::Text => TYPE_TEXT,
         }
     }
 
@@ -131,6 +138,7 @@ impl PrimitiveKind {
             TYPE_POLYGON_PRISM => Self::PolygonPrism,
             TYPE_BEZIER_CURVE => Self::BezierCurve,
             TYPE_LOFT => Self::Loft,
+            TYPE_TEXT => Self::Text,
             _ => Self::Sphere,
         }
     }
@@ -323,6 +331,7 @@ impl SdfObject {
                         },
                     ],
                 }),
+                PrimitiveKind::Text => SdfParams::TextParams(TextParams::default()),
             },
             name: kind.label().to_string(),
             operation: BooleanOperation::Union,
@@ -361,17 +370,18 @@ impl SdfObject {
     }
 
     pub fn distance_with_matrix(&self, point: Vec3, matrix: Mat4) -> f32 {
-        self.distance_with_matrix_at(point, matrix, true, None)
+        self.distance_with_matrix_at(point, matrix, true, None, None)
     }
 
-    pub(crate) fn distance_with_matrix_with_profile(
+    pub(crate) fn distance_with_matrix_with_geometry(
         &self,
         point: Vec3,
         matrix: Mat4,
         repeat: bool,
         profile: Option<&[Vec2]>,
+        text: Option<&PreparedText>,
     ) -> f32 {
-        self.distance_with_matrix_at(point, matrix, repeat, profile)
+        self.distance_with_matrix_at(point, matrix, repeat, profile, text)
     }
 
     fn distance_with_matrix_at(
@@ -380,8 +390,34 @@ impl SdfObject {
         matrix: Mat4,
         repeat: bool,
         profile: Option<&[Vec2]>,
+        text: Option<&PreparedText>,
     ) -> f32 {
-        let local = (matrix.inverse() * point.extend(1.0)).truncate();
+        let scale = Vec3::new(
+            matrix.x_axis.truncate().length(),
+            matrix.y_axis.truncate().length(),
+            matrix.z_axis.truncate().length(),
+        )
+        .min_element();
+        self.distance_with_precomputed_inverse(
+            point,
+            matrix.inverse(),
+            scale,
+            repeat,
+            profile,
+            text,
+        )
+    }
+
+    pub(crate) fn distance_with_precomputed_inverse(
+        &self,
+        point: Vec3,
+        inverse: Mat4,
+        distance_scale: f32,
+        repeat: bool,
+        profile: Option<&[Vec2]>,
+        text: Option<&PreparedText>,
+    ) -> f32 {
+        let local = (inverse * point.extend(1.0)).truncate();
         let local = if repeat {
             self.repeated_local_point(local)
         } else {
@@ -419,6 +455,10 @@ impl SdfObject {
                 outside + polygon.max(depth).min(0.0)
             }
             SdfParams::LoftParams(ref params) => params.distance(local),
+            SdfParams::TextParams(ref params) => text.map_or_else(
+                || params.prepared(None).distance(local),
+                |prepared| prepared.distance(local),
+            ),
             SdfParams::BezierCurveParams(ref params) => {
                 let Some(modifier) = self.path_extrusion else {
                     return 100.0;
@@ -456,12 +496,7 @@ impl SdfObject {
                 }
             }
         };
-        let scale = Vec3::new(
-            matrix.x_axis.truncate().length(),
-            matrix.y_axis.truncate().length(),
-            matrix.z_axis.truncate().length(),
-        );
-        distance * scale.min_element()
+        distance * distance_scale
     }
 
     pub(crate) fn repeated_local_point(&self, mut local: Vec3) -> Vec3 {

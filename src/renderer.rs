@@ -11,11 +11,12 @@ use crate::{
 
 #[cfg(not(target_arch = "wasm32"))]
 mod benchmark;
+pub(crate) mod post_processing;
 
 const MAX_OBJECTS: usize = 1024;
 // Scene components and eligible operand trees share the same storage buffer.
 const MAX_BVH_NODES: usize = MAX_OBJECTS * 4;
-const MAX_POLYGON_POINTS: usize = MAX_OBJECTS * (16 * (3 + 32));
+const MAX_POLYGON_POINTS: usize = 2_097_152;
 const MAX_LATTICE_POINTS: usize = MAX_OBJECTS * 9 * 9 * 9;
 const LATTICE_ATLAS_TILE_PITCH: u32 = 19;
 const LATTICE_ATLAS_TILES_PER_ROW: u32 = 32;
@@ -61,6 +62,7 @@ struct PrimitiveFeatures {
     polygon_prisms: bool,
     bezier_curves: bool,
     lofts: bool,
+    text: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,6 +99,7 @@ impl PrimitiveFeatures {
         polygon_prisms: true,
         bezier_curves: true,
         lofts: true,
+        text: true,
     };
 
     fn for_objects(objects: &[GpuObject]) -> Self {
@@ -104,12 +107,14 @@ impl PrimitiveFeatures {
             polygon_prisms: false,
             bezier_curves: false,
             lofts: false,
+            text: false,
         };
         for object in objects {
             match object.meta[1] {
                 sdf_consts::TYPE_POLYGON_PRISM => features.polygon_prisms = true,
                 sdf_consts::TYPE_BEZIER_CURVE => features.bezier_curves = true,
                 sdf_consts::TYPE_LOFT => features.lofts = true,
+                sdf_consts::TYPE_TEXT => features.text = true,
                 _ => {}
             }
         }
@@ -164,6 +169,24 @@ struct GpuCamera {
     world_color: [f32; 4],
     sun_direction: [f32; 4],
     sky_params: [f32; 4],
+    view_projection: [[f32; 4]; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuSplat {
+    center_radius: [f32; 4],
+    color_opacity: [f32; 4],
+    normal: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SplatCamera {
+    view_projection: [[f32; 4]; 4],
+    right: [f32; 4],
+    up: [f32; 4],
+    light: [f32; 4],
 }
 
 #[repr(C)]
@@ -222,6 +245,18 @@ pub struct Renderer {
     render_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     fast_pipeline: wgpu::RenderPipeline,
+    hybrid_pipeline: Option<wgpu::RenderPipeline>,
+    hybrid_fast_pipeline: Option<wgpu::RenderPipeline>,
+    hybrid_depth_pipeline: Option<wgpu::RenderPipeline>,
+    deferred_geometry_pipeline: Option<(u32, bool, wgpu::RenderPipeline)>,
+    deferred_supported: bool,
+    splat_pipeline: wgpu::RenderPipeline,
+    splat_camera_buffer: wgpu::Buffer,
+    splat_camera_bind_group: wgpu::BindGroup,
+    splat_instances: Vec<GpuSplat>,
+    splat_buffer: wgpu::Buffer,
+    splat_buffer_capacity: usize,
+    hybrid_enabled: bool,
     boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,
     fast_boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,
     shader_source: String,
@@ -250,8 +285,10 @@ pub struct Renderer {
     image_sampler: wgpu::Sampler,
     modifier_params_buffer: wgpu::Buffer,
     uploaded_scene_versions: [i32; 2],
+    group_capture_cache: std::collections::HashMap<uuid::Uuid, group_capture::CachedGroupCapture>,
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,
+    post_processing: post_processing::PostProcessor,
     initial_pixel_budget: u32,
     material_preview_ids: Option<MaterialPreviewIds>,
     material_preview_pipeline: Option<wgpu::RenderPipeline>,
@@ -325,10 +362,15 @@ mod initialization;
 mod material_gpu;
 mod sphere_depth_atlas;
 pub(crate) use material_gpu::validate_custom_materials;
+mod atlas_upload;
+mod group_capture;
+mod hybrid_splats;
 mod material_previews;
 mod modifier_gpu;
+mod primitive_upload;
 mod rendering;
 mod scene_bounds;
+mod scene_pipelines;
 mod scene_upload;
 mod splat_bvh;
 mod texture_cleanup;

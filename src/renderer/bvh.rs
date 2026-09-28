@@ -20,7 +20,6 @@ pub(super) fn append_operand_bvhs(
     for root in 0..objects.len() {
         let parent = objects[root];
         if parent.meta[3] != FLAT_UNION_ROOT
-            || parent.modifier[0] != 0
             || parent.repeat_count[3] != 0
             || parent.mirror_axes[..3].iter().any(|&axis| axis != 0)
         {
@@ -30,16 +29,17 @@ pub(super) fn append_operand_bvhs(
         let children = &objects[start..root];
         // A handful of operands is cheaper to scan directly than to traverse
         // another tree at every distance sample.
-        if children.len() < 8
-            || children
-                .iter()
-                .any(|child| !child.distance_bound[3].is_finite() || child.distance_bound[3] <= 0.0)
-        {
-            continue;
-        }
         let mut bounds: Vec<_> = children
             .iter()
             .enumerate()
+            // Bounds and queries share the parent's undeformed world space.
+            // Other cages and primitives without a distance bound are scanned
+            // separately; one such operand must not disable the entire tree.
+            .filter(|(_, child)| {
+                child.modifier[0] == parent.modifier[0]
+                    && child.distance_bound[3].is_finite()
+                    && child.distance_bound[3] > 0.0
+            })
             .map(|(offset, child)| {
                 let radius = child.distance_bound[3];
                 ObjectBound {
@@ -54,6 +54,15 @@ pub(super) fn append_operand_bvhs(
                 }
             })
             .collect();
+        if bounds.len() < 8 {
+            continue;
+        }
+        // For cheap undeformed primitives the extra exception scan costs more
+        // than it saves. Keep their existing linear path when the tree cannot
+        // cover every operand; shared cage evaluations justify a partial tree.
+        if parent.modifier[0] == 0 && bounds.len() != children.len() {
+            continue;
+        }
         let offset = nodes.len() as u32;
         let mut tree = build_bvh(&mut bounds);
         for node in &mut tree {

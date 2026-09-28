@@ -421,7 +421,6 @@ fn group_transform_panel(
         return;
     };
     ui.label(RichText::new("Group transform").strong());
-    ui.label("Transforms the complete Boolean group.");
     let mut changed = false;
     let mut keyframes = Vec::new();
     ui.horizontal(|ui| {
@@ -774,6 +773,75 @@ pub(super) fn params_editor(
             ));
             ui.weak("G moves a point · Backspace removes an anchor · E extends · Enter closes the loop.");
             false
+        }
+        SdfParams::TextParams(value) => {
+            let mut changed = ui
+                .add(egui::TextEdit::multiline(&mut value.text).desired_rows(3))
+                .changed();
+            ui.horizontal(|ui| {
+                ui.label("Size");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut value.size)
+                            .speed(0.01)
+                            .range(0.001..=100.0),
+                    )
+                    .changed();
+                ui.label("Half-depth");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut value.half_depth)
+                            .speed(0.005)
+                            .range(0.001..=100.0),
+                    )
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Tracking");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut value.tracking).speed(0.005))
+                    .changed();
+                ui.label("Line spacing");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut value.line_spacing)
+                            .speed(0.01)
+                            .range(0.01..=10.0),
+                    )
+                    .changed();
+            });
+            let mut scene = objects(tree);
+            let path_name = value
+                .path
+                .and_then(|id| scene.iter().find(|candidate| candidate.uuid == id))
+                .map_or("Straight".to_string(), |path| path.display_name());
+            egui::ComboBox::from_label("Placement")
+                .selected_text(path_name)
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(&mut value.path, None, "Straight")
+                        .changed();
+                    for candidate in &scene {
+                        if candidate.uuid != object
+                            && matches!(candidate.params, SdfParams::BezierCurveParams(_))
+                        {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut value.path,
+                                    Some(candidate.uuid),
+                                    candidate.display_name(),
+                                )
+                                .changed();
+                        }
+                    }
+                });
+            if let Some(preview) = scene.iter_mut().find(|candidate| candidate.uuid == object) {
+                preview.params = SdfParams::TextParams(value.clone());
+            }
+            if let Err(error) = crate::model::validate_scene_text_budget(&scene) {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+            changed
         }
     }
 }

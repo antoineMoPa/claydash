@@ -183,35 +183,15 @@ pub(super) fn create_scene_pipeline(
         transparent_background,
         fast_preview,
         SceneShaderFeatures::ALL,
+        false,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn create_scene_pipeline_for_materials(
-    device: &wgpu::Device,
+fn scene_feature_constants(
     shader_source: &str,
-    pipeline_layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
-    use_bvh: bool,
-    capacity: u32,
-    transparent_background: bool,
-    fast_preview: bool,
     features: SceneShaderFeatures,
-) -> wgpu::RenderPipeline {
-    let source = specialized_shader_source(shader_source, capacity);
+) -> Vec<(&'static str, f64)> {
     let mut constants = Vec::new();
-    if shader_source.contains("override USE_BVH") {
-        constants.push(("USE_BVH", f64::from(use_bvh)));
-    }
-    if shader_source.contains("override HAS_BOOLEANS") {
-        constants.push(("HAS_BOOLEANS", f64::from(capacity > 1)));
-    }
-    if shader_source.contains("override TRANSPARENT_BACKGROUND") {
-        constants.push(("TRANSPARENT_BACKGROUND", f64::from(transparent_background)));
-    }
-    if shader_source.contains("override FAST_PREVIEW") {
-        constants.push(("FAST_PREVIEW", f64::from(fast_preview)));
-    }
     if shader_source.contains("override HAS_WOOD_MATERIAL") {
         constants.extend_from_slice(&[
             ("HAS_WOOD_MATERIAL", f64::from(features.materials.wood)),
@@ -233,6 +213,7 @@ pub(super) fn create_scene_pipeline_for_materials(
                 f64::from(features.primitives.bezier_curves),
             ),
             ("HAS_LOFTS", f64::from(features.primitives.lofts)),
+            ("HAS_TEXT", f64::from(features.primitives.text)),
         ]);
     }
     if shader_source.contains("override HAS_LATTICE_MODIFIERS") {
@@ -244,6 +225,40 @@ pub(super) fn create_scene_pipeline_for_materials(
     }
     if shader_source.contains("override HAS_FLAT_UNIONS") {
         constants.push(("HAS_FLAT_UNIONS", f64::from(features.flat_unions)));
+    }
+    constants
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn create_scene_pipeline_for_materials(
+    device: &wgpu::Device,
+    shader_source: &str,
+    pipeline_layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+    use_bvh: bool,
+    capacity: u32,
+    transparent_background: bool,
+    fast_preview: bool,
+    features: SceneShaderFeatures,
+    hybrid_splats: bool,
+) -> wgpu::RenderPipeline {
+    let source = specialized_shader_source(shader_source, capacity);
+    let mut constants = Vec::new();
+    if shader_source.contains("override USE_BVH") {
+        constants.push(("USE_BVH", f64::from(use_bvh)));
+    }
+    if shader_source.contains("override HAS_BOOLEANS") {
+        constants.push(("HAS_BOOLEANS", f64::from(capacity > 1)));
+    }
+    if shader_source.contains("override TRANSPARENT_BACKGROUND") {
+        constants.push(("TRANSPARENT_BACKGROUND", f64::from(transparent_background)));
+    }
+    if shader_source.contains("override FAST_PREVIEW") {
+        constants.push(("FAST_PREVIEW", f64::from(fast_preview)));
+    }
+    constants.extend(scene_feature_constants(shader_source, features));
+    if shader_source.contains("override HYBRID_SPLATS") {
+        constants.push(("HYBRID_SPLATS", f64::from(hybrid_splats)));
     }
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("specialized SDF shader"),
@@ -273,6 +288,112 @@ pub(super) fn create_scene_pipeline_for_materials(
         }),
         primitive: Default::default(),
         depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+pub(super) fn create_hybrid_depth_pipeline(
+    device: &wgpu::Device,
+    shader_source: &str,
+    pipeline_layout: &wgpu::PipelineLayout,
+    capacity: u32,
+) -> wgpu::RenderPipeline {
+    let source = specialized_shader_source(shader_source, capacity);
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("hybrid SDF depth shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("opaque SDF depth"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_depth"),
+            targets: &[],
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &[
+                    ("USE_BVH", 1.0),
+                    ("HAS_BOOLEANS", f64::from(capacity > 1)),
+                    ("HYBRID_SPLATS", 1.0),
+                ],
+                ..Default::default()
+            },
+        }),
+        primitive: Default::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+pub(super) fn create_deferred_geometry_pipeline(
+    device: &wgpu::Device,
+    shader_source: &str,
+    pipeline_layout: &wgpu::PipelineLayout,
+    capacity: u32,
+    hybrid_splats: bool,
+    features: SceneShaderFeatures,
+) -> wgpu::RenderPipeline {
+    let source = specialized_shader_source(shader_source, capacity);
+    let mut constants = scene_feature_constants(shader_source, features);
+    constants.extend_from_slice(&[
+        ("USE_BVH", 1.0),
+        ("HAS_BOOLEANS", f64::from(capacity > 1)),
+        ("HYBRID_SPLATS", f64::from(hybrid_splats)),
+    ]);
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("deferred SDF geometry shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let colors = vec![
+        Some(wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba16Float,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        });
+        4
+    ];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("deferred SDF geometry"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_gbuffer"),
+            targets: &colors,
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            },
+        }),
+        primitive: Default::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
         multisample: Default::default(),
         multiview_mask: None,
         cache: None,

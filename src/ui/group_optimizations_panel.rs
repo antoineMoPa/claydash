@@ -29,11 +29,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                     .on_hover_text(mode.description());
             }
         });
-    ui.weak(selected_mode.description());
     ui.weak(selected_mode.limitation());
-    if selected_mode.is_exact() {
-        ui.weak("Exact SDF is active.");
-    }
     if selected_mode != scene[index].render_representation {
         scene[index].render_representation = selected_mode;
         set_objects(tree, scene);

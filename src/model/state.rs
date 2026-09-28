@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AnimationData, BooleanOperation, BoxFaceSelection, CurvePointSelection, EditorState, Material,
-    MaterialAsset, ModelingFaceSelection, SdfObject, Transform,
+    MaterialAsset, ModelingFaceSelection, PostProcessPass, SdfObject, Transform,
 };
 use crate::camera::SceneCamera;
 
@@ -13,6 +13,7 @@ pub enum ClaydashValue {
     Animation(AnimationData),
     Material(Material),
     VecMaterialAsset(Vec<MaterialAsset>),
+    VecPostProcessPass(Vec<PostProcessPass>),
     VecCamera(Vec<SceneCamera>),
     BooleanPick(BooleanPick),
     BoxFaceSelection(BoxFaceSelection),

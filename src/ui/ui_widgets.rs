@@ -60,6 +60,7 @@ pub(super) fn primitive_icon_source(kind: PrimitiveKind) -> egui::ImageSource<'s
         }
         PrimitiveKind::BezierCurve => egui::include_image!("../../assets/icons/lucide/tangent.svg"),
         PrimitiveKind::Loft => egui::include_image!("../../assets/icons/lucide/scan.svg"),
+        PrimitiveKind::Text => egui::include_image!("../../assets/icons/lucide/type.svg"),
     }
 }
 

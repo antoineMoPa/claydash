@@ -238,8 +238,12 @@ impl Lattice {
     }
 
     pub fn displacement(&self, position: Vec3) -> Vec3 {
+        self.displacement_with_offsets(position, &self.effective_offsets())
+    }
+
+    pub(crate) fn displacement_with_offsets(&self, position: Vec3, offsets: &[Vec3]) -> Vec3 {
         let n = self.resolution as usize;
-        if self.offsets.len() != n * n * n {
+        if n < 2 || offsets.len() != n * n * n {
             return Vec3::ZERO;
         }
         let coordinates = ((position - self.min) / (self.max - self.min).max(Vec3::splat(0.0001)))
@@ -248,7 +252,6 @@ impl Lattice {
         let lower = coordinates.floor().as_uvec3();
         let upper = (lower + glam::UVec3::ONE).min(glam::UVec3::splat((n - 1) as u32));
         let t = coordinates - lower.as_vec3();
-        let offsets = self.effective_offsets();
         let sample =
             |x: u32, y: u32, z: u32| offsets[self.index(x as usize, y as usize, z as usize)];
         let a = sample(lower.x, lower.y, lower.z).lerp(sample(upper.x, lower.y, lower.z), t.x);
@@ -406,6 +409,9 @@ pub fn lattice_bounds(scene: &[SdfObject], root: uuid::Uuid) -> Option<(Vec3, Ve
                     .path_extrusion
                     .map_or(0.0, |modifier| modifier.radius),
             ),
+            SdfParams::TextParams(_) => {
+                super::prepared_scene_text(scene, object).map_or(Vec3::ZERO, |p| p.local_extent())
+            }
         };
         let mut extent = extent;
         if object.repetition.enabled {

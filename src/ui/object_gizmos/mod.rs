@@ -389,7 +389,8 @@ impl UiState {
                     }
                     SdfParams::PolygonPrismParams(_)
                     | SdfParams::BezierCurveParams(_)
-                    | SdfParams::LoftParams(_) => {}
+                    | SdfParams::LoftParams(_)
+                    | SdfParams::TextParams(_) => {}
                 }
                 changed = true;
             }

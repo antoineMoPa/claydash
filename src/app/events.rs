@@ -1,5 +1,157 @@
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn benchmark_group_workflow(renderer: &mut Renderer, camera: &Camera, source: &DataTree) {
+    use crate::model::{self, BooleanOperation, GroupRenderRepresentation};
+    let mut tree = source.clone();
+    let Some(root) = objects_ref(&tree)
+        .iter()
+        .find(|o| o.boolean_parent.is_none())
+        .map(|o| o.uuid)
+    else {
+        return;
+    };
+    let world = model::world(&tree);
+    let mut revision = 0;
+    let mut render = |renderer: &mut Renderer, tree: &DataTree, label: &str| {
+        revision += 1;
+        renderer.benchmark_scene(
+            camera,
+            objects_ref(tree),
+            &model::selected(tree),
+            [revision, 0],
+            world,
+            label,
+        );
+    };
+    let representation = |tree: &mut DataTree, mode| {
+        let mut objects = model::objects(tree);
+        objects
+            .iter_mut()
+            .find(|o| o.uuid == root)
+            .unwrap()
+            .render_representation = mode;
+        model::set_objects(tree, objects);
+    };
+    render(renderer, &tree, "saved");
+    representation(&mut tree, GroupRenderRepresentation::ExactSdf);
+    render(renderer, &tree, "exact");
+    let mut ids = vec![root];
+    ids.extend(
+        objects_ref(&tree)
+            .iter()
+            .filter(|o| o.uuid != root)
+            .map(|o| o.uuid),
+    );
+    model::set_selected(&mut tree, ids);
+    let started = std::time::Instant::now();
+    crate::ui::scene_actions::begin_boolean_pick(&mut tree, BooleanOperation::Union);
+    eprintln!(
+        "Union edit: {:.3} ms",
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    render(renderer, &tree, "union");
+    representation(&mut tree, GroupRenderRepresentation::GaussianSplats);
+    render(renderer, &tree, "splats");
+    let mut objects = model::objects(&tree);
+    let object = objects.iter_mut().find(|o| o.uuid == root).unwrap();
+    if model::has_boolean_children(objects_ref(&tree), root) {
+        object.group_transform.translation += glam::Vec3::new(0.25, 0.0, 0.0);
+        object.group_transform.rotation =
+            glam::Quat::from_rotation_y(0.15) * object.group_transform.rotation;
+    } else {
+        object.transform.translation += glam::Vec3::new(0.25, 0.0, 0.0);
+        object.transform.rotation = glam::Quat::from_rotation_y(0.15) * object.transform.rotation;
+    }
+    model::set_objects(&mut tree, objects);
+    render(renderer, &tree, "moved-splats");
+    model::set_selected(&mut tree, Vec::new());
+    render(renderer, &tree, "deselected-splats");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn benchmark_default_group_transitions(renderer: &mut Renderer, camera: &Camera) {
+    use crate::model::{
+        self, BooleanOperation, GroupRenderRepresentation, RenderPipelineMode, World,
+    };
+
+    let scene = serde_json::from_str(duck::DEFAULT_DUCK).expect("default scene fixture");
+    let mut tree = data_tree_with_scene(scene);
+    let objects = objects_ref(&tree);
+    let duck_id = objects[0].uuid;
+    let boxes: Vec<_> = objects
+        .iter()
+        .filter(|object| object.name.starts_with("Cube "))
+        .map(|object| object.uuid)
+        .collect();
+    assert_eq!(boxes.len(), 3);
+    let set_representation = |tree: &mut DataTree, id, mode| {
+        let mut objects = model::objects(tree);
+        objects
+            .iter_mut()
+            .find(|object| object.uuid == id)
+            .unwrap()
+            .render_representation = mode;
+        model::set_objects(tree, objects);
+    };
+    let mut revision = 0;
+    let mut render = |renderer: &mut Renderer, tree: &DataTree, world: World, label: &str| {
+        revision += 1;
+        eprintln!("Default group transition: {label}");
+        renderer.benchmark_scene(camera, objects_ref(tree), &[], [revision, 0], world, label);
+    };
+    render(renderer, &tree, World::default(), "default-exact");
+    set_representation(
+        &mut tree,
+        duck_id,
+        GroupRenderRepresentation::GaussianSplats,
+    );
+    render(renderer, &tree, World::default(), "duck-splats");
+    // Exercise the same selection and Union command used by the editor,
+    // retaining the renderer and all compiled pipelines across each edit.
+    model::set_selected(&mut tree, boxes.clone());
+    crate::ui::scene_actions::begin_boolean_pick(&mut tree, BooleanOperation::Union);
+    render(renderer, &tree, World::default(), "grouped-boxes-sdf");
+    for (mode, label) in [
+        (
+            GroupRenderRepresentation::GaussianSplats,
+            "grouped-boxes-splats",
+        ),
+        (
+            GroupRenderRepresentation::ExactSdf,
+            "grouped-boxes-sdf-restored",
+        ),
+        (
+            GroupRenderRepresentation::BoxDepthAtlas,
+            "grouped-boxes-box-atlas",
+        ),
+        (
+            GroupRenderRepresentation::SphereDepthAtlas,
+            "grouped-boxes-sphere-atlas",
+        ),
+    ] {
+        set_representation(&mut tree, boxes[0], mode);
+        render(renderer, &tree, World::default(), label);
+    }
+    let deferred = World {
+        render_pipeline: RenderPipelineMode::Deferred,
+        ..World::default()
+    };
+    for (mode, label) in [
+        (
+            GroupRenderRepresentation::ExactSdf,
+            "deferred-grouped-boxes-sdf",
+        ),
+        (
+            GroupRenderRepresentation::GaussianSplats,
+            "deferred-grouped-boxes-splats",
+        ),
+    ] {
+        set_representation(&mut tree, boxes[0], mode);
+        render(renderer, &tree, deferred, label);
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 fn web_canvas_size(window: &Window) -> Option<winit::dpi::PhysicalSize<u32>> {
     let Some(browser) = web_sys::window() else {
@@ -104,7 +256,13 @@ impl ApplicationHandler<AppEvent> for App {
                     self.tree.path_version("scene.sdf_objects"),
                     self.tree.path_version("scene.selected_uuids"),
                 ];
-                if std::env::args().any(|argument| argument == "--stress-benchmark-suite") {
+                if std::env::args().any(|argument| argument == "--benchmark-group-workflow") {
+                    benchmark_group_workflow(&mut renderer, &self.camera, &self.tree);
+                } else if std::env::args()
+                    .any(|argument| argument == "--benchmark-default-group-transitions")
+                {
+                    benchmark_default_group_transitions(&mut renderer, &self.camera);
+                } else if std::env::args().any(|argument| argument == "--stress-benchmark-suite") {
                     for (case, scene) in crate::model::renderer_benchmark_scenes() {
                         if let Some(filter) = std::env::args().find_map(|arg| {
                             arg.strip_prefix("--benchmark-case=").map(str::to_owned)
@@ -271,8 +429,16 @@ impl ApplicationHandler<AppEvent> for App {
                         let angle = (benchmark.frames as f32 * 0.08).sin() * 0.3;
                         if benchmark.edit_objects {
                             let mut scene = objects_ref(&self.tree).to_vec();
+                            let grouped = scene.first().is_some_and(|object| {
+                                crate::model::has_boolean_children(&scene, object.uuid)
+                            });
                             if let Some(object) = scene.first_mut() {
-                                object.transform.rotation = glam::Quat::from_rotation_y(angle);
+                                if benchmark.move_group && grouped {
+                                    object.group_transform.rotation =
+                                        glam::Quat::from_rotation_y(angle);
+                                } else {
+                                    object.transform.rotation = glam::Quat::from_rotation_y(angle);
+                                }
                             }
                             crate::model::set_objects(&mut self.tree, scene);
                         } else {

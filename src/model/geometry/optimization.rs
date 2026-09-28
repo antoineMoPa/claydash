@@ -26,7 +26,7 @@ impl GroupRenderRepresentation {
             Self::ExactSdf => "Exact SDF (current)",
             Self::BoxDepthAtlas => "Box depth + texture atlas",
             Self::SphereDepthAtlas => "Sphere depth + texture atlas",
-            Self::GaussianSplats => "Gaussian splats (SDF)",
+            Self::GaussianSplats => "Gaussian splats",
         }
     }
 
@@ -37,7 +37,7 @@ impl GroupRenderRepresentation {
             Self::SphereDepthAtlas => {
                 "Capture depth and appearance with inward rays from a sphere."
             }
-            Self::GaussianSplats => "Fit Gaussian surface samples from radial SDF captures.",
+            Self::GaussianSplats => "Approximate the group with soft Gaussian surface samples.",
         }
     }
 
@@ -51,7 +51,7 @@ impl GroupRenderRepresentation {
                 "A single radial layer misses hidden surfaces and close parallax."
             }
             Self::GaussianSplats => {
-                "Approximate surface; thin details and hidden layers may disappear."
+                "Fast splats for opaque solid scenes; other materials use ray composition. Thin details may be lost."
             }
         }
     }

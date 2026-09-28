@@ -300,6 +300,7 @@ impl App {
                 &effective_selection,
                 scene_versions,
                 crate::model::world(&self.tree),
+                crate::model::post_processing_ref(&self.tree),
                 &self.egui,
                 &mut output,
                 capture_render,

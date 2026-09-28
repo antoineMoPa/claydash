@@ -14,8 +14,19 @@ impl Renderer {
     ) {
         use std::time::{Duration, Instant};
 
+        let upload_started = Instant::now();
         self.uploaded_scene_versions = [i32::MIN; 2];
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
+        self.upload_splat_camera(camera, world);
+        eprintln!(
+            "Scene preparation ({case}): {:.3} ms",
+            upload_started.elapsed().as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "Hybrid splats: {} instances, enabled {}",
+            self.splat_instances.len(),
+            self.hybrid_enabled
+        );
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("SDF stress benchmark target"),
             size: wgpu::Extent3d {
@@ -31,11 +42,62 @@ impl Renderer {
             view_formats: &[],
         });
         let view = target.create_view(&Default::default());
+        if world.render_pipeline == crate::model::RenderPipelineMode::Deferred
+            && self.deferred_supported
+        {
+            self.benchmark_deferred(
+                camera,
+                objects,
+                selected,
+                scene_versions,
+                world,
+                case,
+                &target,
+            );
+            return;
+        }
+        let depth_target = self.hybrid_enabled.then(|| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("benchmark opaque SDF depth"),
+                size: target.size(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+        });
+        let depth_view = depth_target
+            .as_ref()
+            .map(|target| target.create_view(&Default::default()));
         let draw_batch = |pass_count: usize| {
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             for _ in 0..pass_count {
+                if let Some(depth_view) = &depth_view {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("benchmark SDF depth"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(
+                        self.hybrid_depth_pipeline
+                            .as_ref()
+                            .expect("hybrid depth pipeline"),
+                    );
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.draw(0..3, 0..1);
+                }
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("SDF stress benchmark draw"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -49,13 +111,45 @@ impl Renderer {
                     })],
                     ..Default::default()
                 });
-                pass.set_pipeline(if self.has_booleans {
+                pass.set_pipeline(if self.hybrid_enabled {
+                    self.hybrid_pipeline
+                        .as_ref()
+                        .expect("hybrid scene pipeline")
+                } else if self.has_booleans {
                     &self.boolean_pipeline.as_ref().expect("boolean pipeline").1
                 } else {
                     &self.pipeline
                 });
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 pass.draw(0..3, 0..1);
+                drop(pass);
+                if let Some(depth_view) = &depth_view {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("benchmark Gaussian quads"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Discard,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&self.splat_pipeline);
+                    pass.set_bind_group(0, &self.splat_camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, self.splat_buffer.slice(..));
+                    pass.draw(0..6, 0..self.splat_instances.len() as u32);
+                }
             }
             let start = Instant::now();
             let submission = self.queue.submit([encoder.finish()]);
@@ -68,7 +162,11 @@ impl Renderer {
             start.elapsed()
         };
 
-        draw_batch(1);
+        let first_frame = draw_batch(1);
+        eprintln!(
+            "First GPU frame ({case}): {:.3} ms",
+            first_frame.as_secs_f64() * 1000.0
+        );
         let passes = 3;
         let mut samples = [0.0_f64; 5];
         for sample in &mut samples {
@@ -103,6 +201,123 @@ impl Renderer {
                 "refined viewport differs from full-resolution reference: max error {max_error}"
             );
             eprintln!("Refined image matches full-resolution reference (max channel error {max_error}/255)");
+            save_benchmark_image(&format!("{case}-refined"), &refined_image);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn benchmark_deferred(
+        &mut self,
+        camera: &Camera,
+        objects: &[SdfObject],
+        selected: &[uuid::Uuid],
+        scene_versions: [i32; 2],
+        world: World,
+        case: &str,
+        target: &wgpu::Texture,
+    ) {
+        use std::time::{Duration, Instant};
+        let view = target.create_view(&Default::default());
+        let mut samples = [0.0_f64; 5];
+        for iteration in 0..6 {
+            self.viewport.invalidate();
+            let key = crate::viewport::ViewKey {
+                matrix: (camera.projection() * camera.view()).to_cols_array_2d(),
+                position: camera.position.to_array(),
+                projection: u32::from(camera.projection_mode == ProjectionMode::Orthographic),
+                versions: [scene_versions[0].wrapping_add(iteration), scene_versions[1]],
+                size: [self.config.width, self.config.height],
+                refine: false,
+            };
+            let work = self.viewport.prepare(&self.device, key, false, true);
+            assert_eq!(work, crate::viewport::Work::Preview);
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            let pipeline = if self.hybrid_enabled {
+                self.hybrid_pipeline.as_ref().expect("hybrid pipeline")
+            } else if self.has_booleans {
+                &self.boolean_pipeline.as_ref().expect("boolean pipeline").1
+            } else {
+                &self.pipeline
+            };
+            let readback = self.viewport.encode(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                work,
+                pipeline,
+                &self.bind_group,
+                self.hybrid_enabled.then(|| crate::viewport::HybridPass {
+                    depth_pipeline: self
+                        .hybrid_depth_pipeline
+                        .as_ref()
+                        .expect("hybrid depth pipeline"),
+                    splat_pipeline: &self.splat_pipeline,
+                    splat_bind_group: &self.splat_camera_bind_group,
+                    splat_buffer: &self.splat_buffer,
+                    splat_count: self.splat_instances.len() as u32,
+                }),
+                Some(crate::viewport::DeferredPass {
+                    geometry_pipeline: &self
+                        .deferred_geometry_pipeline
+                        .as_ref()
+                        .expect("deferred geometry")
+                        .2,
+                }),
+            );
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("deferred benchmark composite"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                self.viewport.composite(&mut pass);
+            }
+            let start = Instant::now();
+            let submission = self.queue.submit([encoder.finish()]);
+            self.viewport.submitted(&self.queue, work, readback);
+            self.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission),
+                    timeout: Some(Duration::from_secs(15)),
+                })
+                .expect("deferred benchmark GPU timeout");
+            if iteration > 0 {
+                samples[(iteration - 1) as usize] = start.elapsed().as_secs_f64() * 1000.0;
+            }
+        }
+        samples.sort_by(f64::total_cmp);
+        let milliseconds = samples[2];
+        eprintln!("Deferred benchmark: {milliseconds:.3} ms/frame ({:.1} FPS), {} objects, {}x{}, SSAO {}, SSR {}, hybrid {}",
+            1000.0 / milliseconds, objects.len().min(MAX_OBJECTS), self.config.width, self.config.height,
+            world.screen_space_ambient_occlusion, world.screen_space_reflections, self.hybrid_enabled);
+        let full_image = self.benchmark_pixels(target);
+        assert!(
+            full_image.iter().skip(32).any(|&value| value > 0),
+            "GPU returned a blank deferred image"
+        );
+        save_benchmark_image(case, &full_image);
+        if std::env::args().any(|arg| arg == "--benchmark-progressive") {
+            self.benchmark_viewport(camera, objects, selected, scene_versions, world, target);
+            let refined_image = self.benchmark_pixels(target);
+            let max_error = full_image
+                .iter()
+                .zip(&refined_image)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            assert!(
+                max_error <= 1,
+                "deferred refinement differs from direct reference: {max_error}"
+            );
+            eprintln!("Deferred refined image matches direct reference (max channel error {max_error}/255)");
             save_benchmark_image(&format!("{case}-refined"), &refined_image);
         }
     }
@@ -183,6 +398,7 @@ impl Renderer {
             self.device
                 .features()
                 .contains(wgpu::Features::TIMESTAMP_QUERY),
+            &self.bind_group_layout,
         );
         self.viewport.set_initial_budget(self.initial_pixel_budget);
         let view = target.create_view(&Default::default());
@@ -244,6 +460,9 @@ impl Renderer {
                 frame_versions,
                 world,
             );
+            self.upload_splat_camera(&current, world);
+            let deferred = world.render_pipeline == crate::model::RenderPipelineMode::Deferred
+                && self.deferred_supported;
             let work = self.viewport.prepare(
                 &self.device,
                 crate::viewport::ViewKey {
@@ -255,9 +474,12 @@ impl Renderer {
                     refine: true,
                 },
                 true,
+                deferred,
             );
             let mut encoder = self.device.create_command_encoder(&Default::default());
-            let pipeline = if self.has_booleans {
+            let pipeline = if self.hybrid_enabled {
+                self.hybrid_pipeline.as_ref().expect("hybrid pipeline")
+            } else if self.has_booleans {
                 &self.boolean_pipeline.as_ref().unwrap().1
             } else {
                 &self.pipeline
@@ -269,6 +491,23 @@ impl Renderer {
                 work,
                 pipeline,
                 &self.bind_group,
+                self.hybrid_enabled.then(|| crate::viewport::HybridPass {
+                    depth_pipeline: self
+                        .hybrid_depth_pipeline
+                        .as_ref()
+                        .expect("hybrid depth pipeline"),
+                    splat_pipeline: &self.splat_pipeline,
+                    splat_bind_group: &self.splat_camera_bind_group,
+                    splat_buffer: &self.splat_buffer,
+                    splat_count: self.splat_instances.len() as u32,
+                }),
+                deferred.then(|| crate::viewport::DeferredPass {
+                    geometry_pipeline: &self
+                        .deferred_geometry_pipeline
+                        .as_ref()
+                        .expect("deferred geometry pipeline")
+                        .2,
+                }),
             );
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

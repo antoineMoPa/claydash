@@ -1,11 +1,12 @@
 use super::*;
 
-const TOOLBAR_PRIMITIVES: [PrimitiveKind; 5] = [
+const TOOLBAR_PRIMITIVES: [PrimitiveKind; 6] = [
     PrimitiveKind::Sphere,
     PrimitiveKind::Box,
     PrimitiveKind::Cylinder,
     PrimitiveKind::Torus,
     PrimitiveKind::BezierCurve,
+    PrimitiveKind::Text,
 ];
 
 impl UiState {

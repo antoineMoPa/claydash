@@ -66,7 +66,12 @@ pub(super) fn draw(ui: &egui::Ui, tree: &DataTree, camera: &Camera) -> Ghosts {
             Color32::from_rgba_unmultiplied(159, 219, 255, if active { 195 } else { 85 })
         };
         let stroke = Stroke::new(if active { 1.5 } else { 1.0 }, color);
-        let segments = primitive_segments(&object.params);
+        let prepared_text = if matches!(object.params, SdfParams::TextParams(_)) {
+            crate::model::prepared_scene_text(scene, object).ok()
+        } else {
+            None
+        };
+        let segments = primitive_segments(&object.params, prepared_text.as_deref());
         let transform = crate::model::object_world_matrix(scene, object.uuid);
         let world_to_clip = projection * transform;
         let local_eye = transform.inverse().transform_point3(camera.position);
@@ -160,7 +165,10 @@ fn editing_operands(
     operands
 }
 
-fn primitive_segments(params: &SdfParams) -> Vec<[Vec3; 2]> {
+fn primitive_segments(
+    params: &SdfParams,
+    prepared_text: Option<&crate::model::PreparedText>,
+) -> Vec<[Vec3; 2]> {
     let mut result = Vec::new();
     let mut ring = |center: Vec3, a: Vec3, b: Vec3| {
         for i in 0..CURVE_STEPS {
@@ -287,6 +295,19 @@ fn primitive_segments(params: &SdfParams) -> Vec<[Vec3; 2]> {
                         )
                     };
                     result.push([point(&pair[0]), point(&pair[1])]);
+                }
+            }
+        }
+        SdfParams::TextParams(text) => {
+            let prepared = prepared_text
+                .cloned()
+                .unwrap_or_else(|| text.prepared(None));
+            for glyph in prepared.glyphs {
+                for [a, b] in glyph.edges {
+                    result.push([
+                        glyph.origin + glyph.x * a.x + glyph.y * a.y,
+                        glyph.origin + glyph.x * b.x + glyph.y * b.y,
+                    ]);
                 }
             }
         }
@@ -436,7 +457,10 @@ mod tests {
             object.transform.translation = Vec3::new(1.0, 2.0, -1.0);
             object.transform.scale = Vec3::new(0.6, 1.8, 1.2);
             object.transform.rotation = glam::Quat::from_rotation_z(0.7);
-            for point in primitive_segments(&object.params).into_iter().flatten() {
+            for point in primitive_segments(&object.params, None)
+                .into_iter()
+                .flatten()
+            {
                 let world = object.transform.matrix().transform_point3(point);
                 assert!(object.distance(world).abs() < 0.0001, "{kind:?}: {world:?}");
             }

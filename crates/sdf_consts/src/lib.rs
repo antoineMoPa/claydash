@@ -9,3 +9,4 @@ pub const TYPE_TORUS: i32 = 4;
 pub const TYPE_POLYGON_PRISM: i32 = 5;
 pub const TYPE_BEZIER_CURVE: i32 = 6;
 pub const TYPE_LOFT: i32 = 7;
+pub const TYPE_TEXT: i32 = 11;

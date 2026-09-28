@@ -62,6 +62,99 @@ compositor reads only completed native-resolution tiles; other pixels come from 
 preview. UI-only frames reuse the cached scene. Benchmark-only waits have a 15-second
 per-submission timeout.
 
+## Hybrid Gaussian splats
+
+Eligible Gaussian groups use their baked surface samples as instanced camera-facing
+quads. The SDF pass shades other scene objects and writes the nearest opaque SDF hit
+to a depth texture. The quads test that depth without writing it, then composite in
+back-to-front order with premultiplied alpha. Preview and native refinement tiles use
+the same passes, so scene-only captures contain the final composition.
+
+The mesh path currently accepts independent Gaussian roots with opaque Solid source
+materials. It uses the existing ray compositor for transparent or custom materials,
+image stencils, inlays, repeated or mirrored Gaussian roots, and
+scenes without BVH tracing. Secondary SDF reflection rays still trace splats through
+the existing BVH. Quad shading uses the captured base color and normal with diffuse
+Studio or Sky lighting; it omits the full material shader's specular and contact
+shading. Independent captures bake the nearest inherited or object cage into the
+surface samples, expand their capture bounds, and clear the proxy cage to avoid a
+second deformation. Nested captures retain the existing inherited-cage path.
+
+Capture setup resolves child links, transforms, path profiles, and text once. Flat
+hard unions also prune primitive evaluations with conservative distance bounds.
+Completed atlases are cached across independent root group translation and rotation;
+geometry, scale, material, modifier, path, and representation changes invalidate
+them. Camera and selection changes reuse the atlas. The cache currently compares
+the whole source scene conservatively, so unrelated geometry edits can also cause a
+rebake. World-space text/path/inlay references retain the group pose in the key.
+Only captures admitted by the shared atlas budget are retained, with compact source
+fingerprints. Returning a group to Exact releases its cached atlas, so converting
+it again requires a new bake.
+Cold capture and geometry edits of large Gaussian groups can still pause while
+the CPU samples their surfaces; the capture cache and scene pipeline cache remove
+that work from ordinary rigid moves.
+
+On an Apple M1 Metal run with a 320×240 duck fixture, the active hybrid path drew
+10,663 instances in 2.99 ms per direct frame. The progressive image matched the
+direct image exactly. The same fixture showed an edit frame around 343 ms when
+capture data was regenerated. These measurements describe that fixture only.
+
+Capture budgeting counts the uploaded sample records and occupied-sample BVH
+nodes. The default duck and a union of its three boxes can both use Gaussian
+splats within the shared buffer (17,045 instances in this fixture).
+To exercise the actual Union command and representation changes on one renderer:
+
+```sh
+cargo run --offline -- --stress-benchmark --benchmark-default-group-transitions \
+  --benchmark-size=320x240 --benchmark-progressive \
+  --benchmark-images=/tmp/claydash-default-transitions
+```
+
+This covers exact boxes, Gaussian boxes, restoring exact boxes, both atlas
+representations, and deferred composition while the duck remains Gaussian.
+
+### Astra car workflow (Apple M1 / Metal, 2026-09-27)
+
+The user-supplied car contains 156 objects and 11 active lattice cages. Its saved
+scene is already a union with Gaussian representation. The workflow benchmark
+clones that scene, renders the saved state, switches to Exact, executes the actual
+Union action, converts to Gaussian, moves the whole group, then clears selection.
+It does not modify the input file. Reapplying Union to an existing union measures
+the action and renderer invalidation, rather than reconstructing an unsaved scene.
+
+```sh
+cargo run --offline -- --stress-benchmark --benchmark-group-workflow \
+  --benchmark-scene=examples/astra_car.claydash --benchmark-size=192x144 \
+  --benchmark-images=/tmp/astra-workflow
+cargo run --offline -- --stress-ui-benchmark --benchmark-move-group \
+  --benchmark-scene=examples/astra_car.claydash --benchmark-size=800x600
+```
+
+One local run measured 3,955 ms for saved-scene preparation, 4.4 ms for the Union
+edit, 2,296 ms for conversion preparation, 13.1 ms for a rigid group move, and
+11.6 ms for selection invalidation. Preparation includes GPU upload and any shader
+pipeline compilation. The car produced 11,221 raster splat instances, with direct
+frames around 1.2 ms at 192×144. A separate full-car camera view measured 1.96 ms
+at 640×360. These raster timings exclude capture preparation.
+
+The native UI benchmark with a full-car camera and an 800×600 window measured
+14.4 ms median and 15.8 ms p95 over 119 sampled frames, with a median adaptive
+preview of 101,728 pixels. `--benchmark-move-group` changes the group pose;
+`--benchmark-edit` changes an operand and can legitimately require a new bake.
+Cold captures remain synchronous and take seconds on this fixture; moving the
+cached group no longer repeats that work. Gaussian captures remain approximate
+and soften small details.
+
+Exact grouped rendering in the original close camera view improved from 433.1 to
+348.7 ms per 192×144 frame, with byte-identical output. Shared-cage unions can
+accelerate eligible operands while evaluating other cages and unsupported distance
+bounds separately. Undeformed groups keep the linear path when a partial tree
+would add overhead: the no-lattice control measured 163.4 ms before and 162.7 ms
+after, also with identical pixels. Exact rendering of this dense, deformed union
+remains expensive. Its first pipeline preparation in the workflow took 11 seconds;
+subsequent Union preparation took 11.7 ms. Capture caching does not eliminate first
+use shader compilation.
+
 ## Reproduce
 
 ```sh
@@ -325,3 +418,82 @@ responsiveness. The dense scene remains GPU-limited and retains its low-resoluti
 preview. These are short local measurements, not a guarantee of unchanged frame time on
 other devices. The target GPU batch budget remains 6 ms; a sudden cost increase can still
 produce an over-budget batch before timing feedback reduces subsequent work.
+
+## Experimental deferred viewport (2026-09-27)
+
+The World panel switches between Exact ray shading and Deferred (experimental).
+The pipeline choice and SSAO/SSR switches live in the scene's World value, so
+ordinary scene undo/redo and the agent SetWorld action apply. Older scenes
+default to Exact. Deferred also applies to render exports.
+
+Deferred traces the nearest primary-ray surface once into four RGBA16F
+geometry attachments (world position/reflectivity, normal/roughness,
+albedo/metallic, and opacity/index of refraction) and a depth attachment. A full-screen pass computes direct
+lighting and samples nearby geometry for ambient occlusion. Experimental
+reflections march projected rays through the position buffer, test depth
+crossings, fade near screen edges and on long rays, and use the environment
+when no visible on-screen hit is found. Orthographic cameras use a parallel
+view direction. Hybrid Gaussian splat quads are composited afterward against
+SDF depth; their colors do not enter the screen-space effects.
+
+Geometry buffers are allocated only while Deferred is active. Edits first
+render a complete adaptive preview, including its screen-space effects. Idle
+frames build native geometry in bounded tile batches, while the complete
+preview remains visible. Once every native tile is ready, one full lighting
+and splat pass publishes the native image. Effects never read incomplete
+neighbor tiles, and exports wait for that completed native frame. Native
+geometry buffers are allocated when refinement starts. World lighting and
+SSAO/SSR changes reuse existing geometry; cached frames skip scene work.
+The final native lighting pass still has a cost proportional to output size.
+The World panel
+shows an Exact fallback when custom shaders, image
+planes with alpha, or unsupported Gaussian group configurations need the
+existing ray compositor. Transparent world backgrounds retain zero alpha.
+Glass remains in Deferred and shares the same geometry pass as opaque objects.
+There is no separate glass pipeline, opaque-background capture, boundary walk,
+or thickness/exit ray. One screen-space lighting resolve applies SSAO, SSR,
+and thin-surface refraction from the shared front-surface buffers. Occluded
+geometry is unavailable: reflection/refraction misses use the world environment.
+Use Exact when hidden geometry must be visible through glass or reflected.
+The modules live in `deferred_geometry.wgsl`, `deferred.wgsl`,
+`deferred_transmission.wgsl`, `ssao.wgsl`, and `ssr.wgsl`.
+
+Deferred lighting approximates the Exact renderer's wood coat, ray-traced
+ambient occlusion, multiple transmission bounces, and sky atmosphere. SSR
+depends on visible on-screen surfaces and camera position.
+
+The native stress benchmark reads the saved World choice. For example,
+use --stress-benchmark --benchmark-scene=scene.claydash and
+--benchmark-images=/tmp/deferred-images. On an Apple M1 Metal adapter, a
+three-object opaque 320x240 fixture showed 2,401 pixels changed by SSAO and
+1,243 by SSR against Deferred base lighting; the combined result changed
+3,609 pixels. A separate, isolated 256-solid-object run at 320x240 measured
+9.621 ms/frame for Exact and 7.531 ms/frame for Deferred with both effects.
+These numbers are medians after warm-up, but the benchmark paths differ:
+Deferred includes the viewport composite. A native application screenshot
+capture also produced a complete Deferred frame. The small three-object
+fixture showed no reliable speedup. Measure the intended scene and device
+before choosing for performance.
+
+### Deferred glass regression
+
+After `cargo build --offline`, run `python3 scripts/check-deferred-reflections.py`
+in a native desktop session. The fixture places text behind the camera and a
+reflective glass sphere in front. Deferred output must be byte-identical with
+and without the text; the Exact control must differ. Both Deferred cases also
+check progressive refinement against the direct render. On Apple M1 Metal,
+these checks pass, and `examples/ssao_duck.claydash` at 320×240 also matches its
+direct reference exactly after refinement.
+
+### Single geometry pass performance
+
+On Apple M1 Metal, `examples/ssao_duck.claydash` with both SSAO and SSR enabled
+measured 8.504 ms/frame at 640×480, compared with 46.490 ms/frame for the earlier
+separate opaque/glass geometry passes. At 1280×720 the single-pass version
+measured 19.295 ms/frame. These are native benchmark submission/wait medians,
+not application-wide frame-rate guarantees. The 720p result remains above the
+16.7 ms budget for 60 FPS. Geometry attachments decreased from seven to four;
+there is still one screen-space lighting resolve after geometry. Refraction
+now uses only visible surfaces and the environment, without hidden geometry
+or measured thickness. The off-screen-text regression and exact progressive
+image comparison still pass.

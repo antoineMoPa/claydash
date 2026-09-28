@@ -315,6 +315,7 @@ dependencies = [
  "sdf_consts",
  "serde",
  "serde_json",
+ "ttf-parser",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",

@@ -1,4 +1,4 @@
-use glam::{Quat, Vec2, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
 
 use super::{
@@ -116,11 +116,17 @@ fn subtree_sample_at(
         .path_extrusion
         .and_then(|modifier| modifier.profile_curve)
         .and_then(|id| super::profile_curve_vertices(scene, id));
-    let mut object_distance = object.distance_with_matrix_with_profile(
+    let prepared_text = if matches!(object.params, SdfParams::TextParams(_)) {
+        super::prepared_scene_text(scene, object).ok()
+    } else {
+        None
+    };
+    let mut object_distance = object.distance_with_matrix_with_geometry(
         point,
         matrix,
         !(has_children && object.repetition.enabled),
         profile.as_deref(),
+        prepared_text.as_deref(),
     );
     if let Some(inlay) = object.surface_inlay {
         if let Some(host_index) = scene
@@ -153,6 +159,341 @@ fn subtree_sample_at(
         result.0 = distance;
     }
     result
+}
+
+/// Geometry and tree relationships used repeatedly while baking one capture.
+/// A bake evaluates millions of points, so resolving these once matters more
+/// than the small setup cost when the scene changes.
+pub(crate) struct PreparedSubtreeSampler<'a> {
+    scene: &'a [SdfObject],
+    root: usize,
+    nodes: Vec<PreparedSampleNode>,
+    flat_union: bool,
+    lattices: Vec<PreparedSampleLattice<'a>>,
+    cage_points: Vec<Vec3>,
+}
+
+struct PreparedSampleLattice<'a> {
+    lattice: &'a super::Lattice,
+    offsets: Vec<Vec3>,
+    forward: Mat4,
+    inverse: Mat4,
+}
+
+impl PreparedSampleLattice<'_> {
+    fn rest_point(&self, point: Vec3) -> Vec3 {
+        let cage_point = self.inverse.transform_point3(point);
+        let mut rest = cage_point;
+        for _ in 0..4 {
+            let next = cage_point - self.lattice.displacement_with_offsets(rest, &self.offsets);
+            let change = next - rest;
+            rest = next;
+            if change.length_squared() < 0.00000001 {
+                break;
+            }
+        }
+        self.forward.transform_point3(rest)
+    }
+}
+
+struct PreparedSampleNode {
+    children: Vec<usize>,
+    inlay_host: Option<usize>,
+    inverse: Mat4,
+    distance_scale: f32,
+    group: Mat4,
+    group_inverse: Mat4,
+    profile: Option<Vec<Vec2>>,
+    text: Option<std::sync::Arc<super::PreparedText>>,
+    sphere_bound: Option<(Vec3, f32, f32)>,
+    cage: Option<usize>,
+}
+
+impl<'a> PreparedSubtreeSampler<'a> {
+    pub(crate) fn new(scene: &'a [SdfObject], root: uuid::Uuid) -> Option<Self> {
+        let root = scene.iter().position(|object| object.uuid == root)?;
+        let indices: std::collections::HashMap<_, _> = scene
+            .iter()
+            .enumerate()
+            .map(|(index, object)| (object.uuid, index))
+            .collect();
+        let mut children = vec![Vec::new(); scene.len()];
+        for (index, object) in scene.iter().enumerate() {
+            if let Some(parent) = object.boolean_parent.and_then(|id| indices.get(&id)) {
+                children[*parent].push(index);
+            }
+        }
+        let mut lattices = Vec::new();
+        let mut lattice_indices = std::collections::HashMap::new();
+        if scene[root].boolean_parent.is_none() {
+            for object in scene {
+                let mut ancestor = Some(object.uuid);
+                let mut belongs = false;
+                for _ in 0..scene.len() {
+                    let Some(id) = ancestor else { break };
+                    if id == scene[root].uuid {
+                        belongs = true;
+                        break;
+                    }
+                    ancestor = indices
+                        .get(&id)
+                        .and_then(|&index| scene[index].boolean_parent);
+                }
+                if !belongs {
+                    continue;
+                }
+                if let Some(lattice) = object.lattice.as_ref().filter(|lattice| {
+                    let n = lattice.resolution as usize;
+                    (2..=9).contains(&n)
+                        && lattice.offsets.len() == n * n * n
+                        && lattice.offsets.iter().any(|offset| *offset != Vec3::ZERO)
+                }) {
+                    let forward = super::lattice_world_matrix(scene, object.uuid);
+                    lattice_indices.insert(object.uuid, lattices.len());
+                    lattices.push(PreparedSampleLattice {
+                        lattice,
+                        offsets: lattice.effective_offsets(),
+                        forward,
+                        inverse: forward.inverse(),
+                    });
+                }
+            }
+        }
+        let nodes = scene
+            .iter()
+            .enumerate()
+            .map(|(index, object)| {
+                let mut ancestor = Some(object.uuid);
+                let mut cage = None;
+                for _ in 0..scene.len() {
+                    let Some(id) = ancestor else { break };
+                    if let Some(&slot) = lattice_indices.get(&id) {
+                        cage = Some(slot);
+                        break;
+                    }
+                    // A valid zero cage also overrides a parent's cage.
+                    let Some(&candidate_index) = indices.get(&id) else {
+                        break;
+                    };
+                    let candidate = &scene[candidate_index];
+                    if candidate.lattice.as_ref().is_some_and(|lattice| {
+                        let n = lattice.resolution as usize;
+                        (2..=9).contains(&n) && lattice.offsets.len() == n * n * n
+                    }) {
+                        break;
+                    }
+                    ancestor = candidate.boolean_parent;
+                }
+                let matrix = object_world_matrix(scene, object.uuid);
+                let distance_scale = Vec3::new(
+                    matrix.x_axis.truncate().length(),
+                    matrix.y_axis.truncate().length(),
+                    matrix.z_axis.truncate().length(),
+                )
+                .min_element();
+                let max_scale = Vec3::new(
+                    matrix.x_axis.truncate().length(),
+                    matrix.y_axis.truncate().length(),
+                    matrix.z_axis.truncate().length(),
+                )
+                .length(); // Frobenius norm also bounds sheared ancestor transforms.
+                let local_radius = if object.repetition.enabled
+                    || object.surface_inlay.is_some()
+                    || object.path_extrusion.is_some()
+                    || object.mirror.is_some()
+                    || !children[index].is_empty()
+                {
+                    None
+                } else {
+                    match &object.params {
+                        SdfParams::SphereParams(p) => Some(p.radius),
+                        SdfParams::BoxParams(p) => Some(p.box_q.length()),
+                        SdfParams::CylinderParams {
+                            radius,
+                            half_height,
+                        } => Some(radius.hypot(*half_height)),
+                        SdfParams::TorusParams {
+                            major_radius,
+                            minor_radius,
+                        } => Some(major_radius + 2.0 * minor_radius),
+                        _ => None,
+                    }
+                };
+                let group = super::group_world_matrix(scene, object.uuid);
+                let profile = object
+                    .path_extrusion
+                    .and_then(|modifier| modifier.profile_curve)
+                    .and_then(|id| super::profile_curve_vertices(scene, id));
+                let text = if matches!(object.params, SdfParams::TextParams(_)) {
+                    super::prepared_scene_text(scene, object).ok()
+                } else {
+                    None
+                };
+                PreparedSampleNode {
+                    children: children[index].clone(),
+                    inlay_host: object
+                        .surface_inlay
+                        .and_then(|inlay| indices.get(&inlay.host).copied()),
+                    inverse: matrix.inverse(),
+                    distance_scale,
+                    group,
+                    group_inverse: group.inverse(),
+                    profile,
+                    text,
+                    sphere_bound: local_radius
+                        .map(|radius| (matrix.transform_point3(Vec3::ZERO), radius, max_scale)),
+                    cage,
+                }
+            })
+            .collect();
+        let flat_union = scene[root].softness <= 0.0
+            && !scene[root].repetition.enabled
+            && scene[root].mirror.is_none()
+            && children[root].iter().all(|&index| {
+                scene[index].operation == BooleanOperation::Union && children[index].is_empty()
+            });
+        let cage_points = vec![Vec3::ZERO; lattices.len()];
+        Some(Self {
+            scene,
+            root,
+            nodes,
+            flat_union,
+            lattices,
+            cage_points,
+        })
+    }
+
+    pub(crate) fn sample(&mut self, point: Vec3) -> (f32, uuid::Uuid) {
+        if self.flat_union {
+            for (target, lattice) in self.cage_points.iter_mut().zip(&self.lattices) {
+                *target = lattice.rest_point(point);
+            }
+        }
+        self.sample_at(point, self.root, 0)
+    }
+
+    pub(crate) fn deformation_extent(&self, capture_inverse: Mat4) -> Vec3 {
+        self.lattices.iter().fold(Vec3::ZERO, |maximum, cage| {
+            let offset = cage
+                .offsets
+                .iter()
+                .fold(Vec3::ZERO, |extent, offset| extent.max(offset.abs()));
+            let matrix = capture_inverse * cage.forward;
+            maximum.max(
+                matrix.x_axis.truncate().abs() * offset.x
+                    + matrix.y_axis.truncate().abs() * offset.y
+                    + matrix.z_axis.truncate().abs() * offset.z,
+            )
+        })
+    }
+
+    pub(crate) fn march_factor(
+        &self,
+        lattice_factor: impl Fn(&super::Lattice, &[Vec3], Mat4) -> f32,
+    ) -> f32 {
+        let mut factor = self.lattices.iter().fold(0.8_f32, |factor, cage| {
+            factor.min(lattice_factor(cage.lattice, &cage.offsets, cage.forward))
+        });
+        for object in self.scene {
+            let mut ancestor = Some(object.uuid);
+            let mut belongs = false;
+            for _ in 0..self.scene.len() {
+                let Some(id) = ancestor else { break };
+                if id == self.scene[self.root].uuid {
+                    belongs = true;
+                    break;
+                }
+                ancestor = self
+                    .scene
+                    .iter()
+                    .find(|candidate| candidate.uuid == id)
+                    .and_then(|candidate| candidate.boolean_parent);
+            }
+            if belongs {
+                match &object.params {
+                    SdfParams::LoftParams(loft) => factor = factor.min(loft.march_factor()),
+                    SdfParams::BezierCurveParams(_) => factor = factor.min(0.5),
+                    SdfParams::TextParams(_) if object.path_extrusion.is_some() => {
+                        factor = factor.min(0.35);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        factor
+    }
+
+    fn object_point(&self, point: Vec3, index: usize) -> Vec3 {
+        self.nodes[index].cage.map_or(point, |cage| {
+            if self.flat_union {
+                self.cage_points[cage]
+            } else {
+                self.lattices[cage].rest_point(point)
+            }
+        })
+    }
+
+    fn sample_at(&self, point: Vec3, index: usize, depth: usize) -> (f32, uuid::Uuid) {
+        let object = &self.scene[index];
+        let node = &self.nodes[index];
+        let point = if let Some(mirror) = object.mirror.filter(|_| object.boolean_parent.is_none())
+        {
+            mirror.fold_point(point, node.group)
+        } else {
+            point
+        };
+        let group_repeat = !node.children.is_empty() && object.repetition.enabled;
+        let point = if group_repeat {
+            node.group.transform_point3(
+                object.repeated_local_point(node.group_inverse.transform_point3(point)),
+            )
+        } else {
+            point
+        };
+        let mut distance = object.distance_with_precomputed_inverse(
+            self.object_point(point, index),
+            node.inverse,
+            node.distance_scale,
+            !group_repeat,
+            node.profile.as_deref(),
+            node.text.as_deref(),
+        );
+        if let Some(inlay) = object.surface_inlay {
+            distance = if let Some(host) = node.inlay_host {
+                let host_distance = self.sample_at(point, host, depth + 1).0;
+                distance.max((host_distance - inlay.offset).abs() - inlay.thickness)
+            } else {
+                100.0
+            };
+        }
+        let mut result = (distance, object.uuid);
+        if depth >= self.scene.len() {
+            return result;
+        }
+        for &child in &node.children {
+            if self.flat_union && index == self.root {
+                if let Some((center, radius, max_scale)) = self.nodes[child].sphere_bound {
+                    let lower = ((self.object_point(point, child) - center).length() / max_scale
+                        - radius)
+                        * self.nodes[child].distance_scale;
+                    if lower >= result.0 {
+                        continue;
+                    }
+                }
+            }
+            let candidate = self.sample_at(point, child, depth + 1);
+            let operation = self.scene[child].operation;
+            let distance = boolean_distance(result.0, candidate.0, operation, object.softness);
+            match operation {
+                BooleanOperation::Union if candidate.0 < result.0 => result = candidate,
+                BooleanOperation::Subtract => result.0 = result.0.max(-candidate.0),
+                BooleanOperation::Intersect if candidate.0 > result.0 => result = candidate,
+                _ => {}
+            }
+            result.0 = distance;
+        }
+        result
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

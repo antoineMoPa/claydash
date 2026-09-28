@@ -3,6 +3,7 @@
 struct Camera {
     inverse_view_projection: mat4x4<f32>, position: vec4<f32>, count: vec4<u32>,
     world_mode: vec4<u32>, world_color: vec4<f32>, sun_direction: vec4<f32>, sky_params: vec4<f32>,
+    view_projection: mat4x4<f32>,
 }
 struct Object {
     state: vec4<i32>,
@@ -39,10 +40,12 @@ override FAST_PREVIEW: bool = false;
 override HAS_POLYGON_PRISMS: bool = true;
 override HAS_BEZIER_CURVES: bool = true;
 override HAS_LOFTS: bool = true;
+override HAS_TEXT: bool = true;
 override HAS_LATTICE_MODIFIERS: bool = true;
 override HAS_MIRRORS: bool = true;
 override HAS_REPETITION: bool = true;
 override HAS_FLAT_UNIONS: bool = true;
+override HYBRID_SPLATS: bool = false;
 
 fn stencil_color(point: vec3<f32>, normal: vec3<f32>, object: Object) -> vec4<f32> {
     if object.stencil_meta.x < 0.5 { return vec4(0.0); }
@@ -158,6 +161,8 @@ fn polygon_distance(point: vec2<f32>, offset: u32, count: u32) -> f32 {
     }
     return sqrt(distance_squared) * select(1.0, -1.0, inside);
 }
+
+// TEXT_MODULE
 
 fn bezier_control(offset: u32, index: u32) -> vec3<f32> {
     let xy = polygon_points[offset + index * 2u];
@@ -811,6 +816,8 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
         distance = bezier_extrusion_distance(local, object);
     } else if HAS_LOFTS && object.state.y == 7 {
         distance = loft_distance(local, object);
+    } else if HAS_TEXT && object.state.y == 11 {
+        distance = text_distance(local, object);
     } else if object.state.y == 8 {
         distance = box_depth_shape(local, object);
     } else if object.state.y == 9 {
@@ -945,10 +952,22 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
         if group_repeated { parent_shape.repeat_count.w = 0; }
         var closest = vec2(object_distance_at(parent_point, parent_shape), f32(root));
         if parent.operand_tree.y > parent.operand_tree.x {
+            // Exceptional operands (different cage, nonuniform scale, loft,
+            // etc.) retain their full evaluator alongside the accelerated set.
+            for (var i = start; i < root; i++) {
+                let child = objects[i];
+                if child.modifier.x == parent.modifier.x && child.distance_bound.w > 0.0 { continue; }
+                var child_point = parent_point;
+                if child.modifier.x != parent.modifier.x {
+                    child_point = modifier_point(group_point, child);
+                }
+                let child_distance = object_distance_at(child_point, child);
+                if child_distance < closest.x { closest = vec2(child_distance, f32(i)); }
+            }
             var node_index = parent.operand_tree.x;
             while node_index < parent.operand_tree.y {
                 let node = bvh[node_index];
-                let lower_bound = distance(group_point, node.center_radius.xyz) - node.center_radius.w;
+                let lower_bound = distance(parent_point, node.center_radius.xyz) - node.center_radius.w;
                 if lower_bound > closest.x {
                     node_index = node.metadata.y;
                     continue;
@@ -970,9 +989,9 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
         }
         for (var i = start; i < root; i++) {
             let child = objects[i];
-            if parent.modifier.x == 0u && child.distance_bound.w > 0.0 {
+            if child.modifier.x == parent.modifier.x && child.distance_bound.w > 0.0 {
                 let reach = child.distance_bound.w + closest.x;
-                let offset = group_point - child.distance_bound.xyz;
+                let offset = parent_point - child.distance_bound.xyz;
                 if reach <= 0.0 || dot(offset, offset) > reach * reach { continue; }
             }
             var child_point = parent_point;
@@ -1284,7 +1303,7 @@ fn empty_splat_exclusions() -> array<u32, 12> {
 }
 
 fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
-    excluded_splats: array<u32, 12>) -> vec3<f32> {
+    excluded_splats: array<u32, 12>, skip_splats: bool) -> vec3<f32> {
     var closest = 100.0;
     var owner = -1.0;
     var splat_offset = -1.0;
@@ -1304,6 +1323,11 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
         }
         if node.metadata.x != 0xffffffffu {
             let object = objects[node.metadata.x];
+            if skip_splats && object.state.y == 10
+                && node.metadata.z == node.metadata.x {
+                node_index += 1u;
+                continue;
+            }
             if object.state.y == 10 {
                 var excluded = false;
                 for (var i = 0u; i < 12u; i++) {
@@ -1408,7 +1432,7 @@ fn containing_component(point: vec3<f32>) -> vec2<f32> {
 // The caller already knows which side contains the ray, avoiding a scene query.
 fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u32) -> vec3<f32> {
     if USE_BVH {
-        if !inside { return trace_objects(origin, direction, 0.0015, empty_splat_exclusions()); }
+        if !inside { return trace_objects(origin, direction, 0.0015, empty_splat_exclusions(), false); }
         var owner = initial_owner;
         var travel = 0.0;
         for (var step = 0; step < 128; step++) {
@@ -1493,6 +1517,22 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
 // MODIFIER_MODULES
 // MATERIAL_MODULES
 
+@fragment fn fs_depth(input: VertexOutput) -> @builtin(frag_depth) f32 {
+    let far = camera.inverse_view_projection * vec4(input.clip, 1.0, 1.0);
+    let near = camera.inverse_view_projection * vec4(input.clip, 0.0, 1.0);
+    let far_point = far.xyz / far.w;
+    let near_point = near.xyz / near.w;
+    let ray = select(normalize(far_point - camera.position.xyz),
+        normalize(far_point - near_point), camera.count.w != 0u);
+    let origin = select(camera.position.xyz, near_point, camera.count.w != 0u);
+    let hit = trace_objects(origin, ray, 0.003, empty_splat_exclusions(), true);
+    if hit.y < 0.0 { return 1.0; }
+    let clip = camera.view_projection * vec4(origin + ray * hit.x, 1.0);
+    return clamp(clip.z / clip.w, 0.0, 1.0);
+}
+
+// DEFERRED_GEOMETRY_MODULE
+
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let far = camera.inverse_view_projection * vec4(input.clip, 1.0, 1.0);
     let near = camera.inverse_view_projection * vec4(input.clip, 0.0, 1.0);
@@ -1507,7 +1547,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
     var excluded_splats = empty_splat_exclusions();
     var excluded_splat_count = 0u;
     if USE_BVH {
-        let sample = trace_objects(ray_origin, ray, 0.003, excluded_splats);
+        let sample = trace_objects(ray_origin, ray, 0.003, excluded_splats, HYBRID_SPLATS);
         hit = sample.y >= 0.0;
         index = u32(max(sample.y, 0.0));
         splat_offset = sample.z;
@@ -1603,7 +1643,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                     excluded_splat_count += 1u;
                 }
                 let next_origin = point + direction * 0.0005;
-                let next = trace_objects(next_origin, direction, 0.0015, excluded_splats);
+                let next = trace_objects(next_origin, direction, 0.0015, excluded_splats, false);
                 hit = next.y >= 0.0;
                 point = next_origin + direction * next.x;
                 index = u32(max(next.y, 0.0));

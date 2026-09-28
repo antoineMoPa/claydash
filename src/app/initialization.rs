@@ -385,7 +385,9 @@ impl App {
             ui_benchmark: std::env::args()
                 .any(|arg| arg == "--stress-ui-benchmark")
                 .then(|| UiBenchmark {
-                    edit_objects: std::env::args().any(|arg| arg == "--benchmark-edit"),
+                    edit_objects: std::env::args()
+                        .any(|arg| arg == "--benchmark-edit" || arg == "--benchmark-move-group"),
+                    move_group: std::env::args().any(|arg| arg == "--benchmark-move-group"),
                     selection_click: std::env::args()
                         .any(|arg| arg == "--benchmark-selection-click"),
                     preview_pixels: Vec::new(),
