@@ -117,6 +117,20 @@ pub(super) fn draw_file_menu(
                     }
                 }
             });
+            ui.menu_button("Help", |ui| {
+                ui.menu_button("Examples", |ui| {
+                    for example in crate::examples::EXAMPLES {
+                        if ui.button(example.title).clicked() {
+                            action = Some(FileMenuAction::OpenExample(*example));
+                            ui.close();
+                        }
+                    }
+                });
+                if ui.button("Guide").clicked() {
+                    action = Some(FileMenuAction::Guide);
+                    ui.close();
+                }
+            });
             if let Some(path) = document.current_path() {
                 ui.separator();
                 ui.weak(

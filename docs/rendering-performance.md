@@ -497,3 +497,113 @@ there is still one screen-space lighting resolve after geometry. Refraction
 now uses only visible surfaces and the environment, without hidden geometry
 or measured thickness. The off-screen-text regression and exact progressive
 image comparison still pass.
+
+## Neural SDF
+
+The optional `neural_sdf` representation fits a configurable ReLU network
+from a 32³ signed-distance grid (default: one hidden layer, width eight). See [the representation contract](group-render-optimizations.md#neural-sdf).
+Native benchmarks wait for training before measuring frames, so results do not
+silently measure the temporary Exact SDF fallback.
+
+Historical Apple M1 / Metal measurements at 384×216, optimized development build,
+from the initial fixed-architecture version (before configurable settings and
+full shuffled epochs):
+
+| Fixture | Bake | Steady-state frame |
+| --- | ---: | ---: |
+| Two-sphere union, two child colors, neural | 36 ms | 5.34 ms |
+| Same two-sphere union, Exact SDF | — | 5.66 ms |
+| Neural union, transparent materials | 51 ms | 12.70 ms |
+| Neural box/sphere union | 56 ms | 5.42 ms |
+| Neural sphere subtraction | 38 ms | 4.31 ms |
+| Neural union with rotation/nonuniform scale | 55 ms | 7.42 ms |
+| Neural union, inside camera | 56 ms | 5.61 ms |
+| Neural union, deferred pipeline | 37 ms | 4.73 ms |
+| Neural union, farther camera | 55 ms | 1.56 ms |
+
+Before the distance-estimate tracing change, a two-layer, width-eight model trained for 32 epochs
+at learning rate 0.001, seed 42, and hit distance 0.75 cells took 265 ms to bake.
+It achieved RMS 0.04699, max error 0.23369, and used 524,880 GPU bytes. Its frame
+time was 62.94 ms at 384×216. Vector-aligned rows reduced that from 120.83 ms,
+but deeper models remain substantially slower and should be treated as a
+quality/performance experiment rather than an automatic improvement.
+
+The saved union fixture has full-grid field RMS error 0.07262 and maximum error
+0.37074 world units. These are distance-fit errors, not image errors or guaranteed
+surface bounds. One ReLU layer produces visibly faceted geometry; the two source
+colors remain visible. The half-cell hit tolerance expands the approximate
+silhouette. Transparent refraction follows the faceted surface and can differ
+substantially from Exact SDF. Sparse/disjoint geometry can fail the zero-crossing
+check and remain on Exact SDF.
+
+The initial version uploaded 524,464 bytes per group. The configurable version
+uses 524,496 bytes at default settings, mostly material/color ownership, plus
+additional weight records for larger networks. Native
+bake timing excludes the 200 ms edit debounce, GPU upload, and pipeline creation.
+Initial scene preparation reached 2.96 seconds with cold pipeline compilation;
+a warm run including debounce was around 296 ms. The activation-mask step bound
+reduced the union's measured time from 13.75 to 5.34 ms/frame; this one small
+fixture does not establish a general speed advantage. Ray-step counts are not
+currently exported by the benchmark.
+
+Validation includes deterministic fitting and finite-difference gradient tests,
+cache invalidation, cancellation/stale results, completion notifications,
+material-owner preservation, and assembled WGSL validation. An explicit GPU
+compute test compares the renderer's inference function against CPU evaluation
+at all 32³ grid positions (absolute error < 1e-5), covering one layer × eight,
+two layers × five/eight, and four layers × 32, for both ReLU and Softplus, plus
+gradient agreement checks. The browser target compiles;
+interactive browser responsiveness has not been measured. Its 4 ms scheduling
+budget is soft, particularly during sampler construction on large scenes.
+
+```sh
+cargo test --workspace
+cargo check --target wasm32-unknown-unknown
+cargo test neural_gpu_inference_matches_cpu -- --ignored --nocapture
+cargo run -- --stress-benchmark \
+  --benchmark-scene=tests/fixtures/neural-sdf.claydash \
+  --benchmark-size=384x216 --benchmark-images=/tmp/claydash-neural
+```
+
+For an exact control, copy the fixture to a temporary path and change the root's
+`render_representation` to `exact_sdf`. Keep the checked-in fixture unchanged.
+
+
+### Default-duck model presets
+
+The preset calibration test trains the unchanged default duck using all four
+presets. It asserts decreasing full-grid RMS error and visible hits through
+the cube. Run it explicitly because it trains several models:
+
+```sh
+cargo test neural_duck_presets_fit_increasing_quality -- --ignored --nocapture
+```
+
+Preview / Balanced / Detailed / High detail fit errors are respectively
+0.03580 / 0.01598 / 0.00793 / 0.00580 world units. Initial isolated CPU bake
+measurements were approximately 0.32 / 2.1 / 7.5 / 21.5 seconds. Concurrent work
+can increase those times substantially. All use Softplus with beta 10 and the
+same deterministic seed. The presets are intended to expose quality/cost
+tradeoffs, not to imply that the largest model is interactive on every GPU.
+
+All four presets also produced visible duck images in the native GPU benchmark
+on Apple M1 at 192×108, with the default 0.5-cell hit distance:
+
+| Preset | Bake time | GPU frame time | Full-grid RMS |
+| --- | ---: | ---: | ---: |
+| Preview | 0.31 s | 2.31 ms | 0.03580 |
+| Balanced | 2.07 s | 8.57 ms | 0.01598 |
+| Detailed | 7.43 s | 18.86 ms | 0.00793 |
+| High detail | 21.44 s | 49.66 ms | 0.00580 |
+
+These are low-resolution diagnostic measurements, not full-viewport frame rates.
+
+An attempted fix that expanded tracing to 4,096 conservative steps passed CPU
+visibility checks but produced blank repeated GPU renders for larger presets.
+The renderer now marches the predicted distance with sign-crossing refinement
+and the bounded existing iteration counts. This avoids the extremely small
+steps caused by deep networks' loose global slope bounds.
+
+The preset bake timings above predate on-demand source sampling. Training now
+queries source distances for each batch and validation chunk rather than caching
+the complete distance grid; bake times must be remeasured for this path.

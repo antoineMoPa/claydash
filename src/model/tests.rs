@@ -748,3 +748,68 @@ fn group_rotation_and_scale_affect_every_primitive_in_the_subtree() {
     assert_eq!(root.transform.translation, Vec3::X);
     assert_eq!(child.transform.translation, Vec3::X * 2.0);
 }
+
+#[test]
+fn neural_settings_round_trip_defaults_and_reject_invalid_values() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
+    let saved = serde_json::to_value(&object).unwrap();
+    assert!(saved.get("neural_sdf").is_none());
+    assert_eq!(
+        serde_json::from_value::<SdfObject>(saved)
+            .unwrap()
+            .neural_sdf,
+        NeuralSdfSettings::default()
+    );
+    object.neural_sdf.training.activation = NeuralActivation::Softplus;
+    object.neural_sdf.training.layers = 3;
+    object.neural_sdf.training.width = 16;
+    object.neural_sdf.training.epochs = 64;
+    object.neural_sdf.training.seed = 0;
+    object.neural_sdf.training.samples_per_side = 17;
+    object.neural_sdf.hit_distance_cells = 1.25;
+    let saved = serde_json::to_value(&object).unwrap();
+    assert_eq!(
+        serde_json::from_value::<SdfObject>(saved.clone())
+            .unwrap()
+            .neural_sdf,
+        object.neural_sdf
+    );
+    for (key, value) in [
+        ("layers", serde_json::json!(0)),
+        ("samples_per_side", serde_json::json!(7)),
+        ("samples_per_side", serde_json::json!(1025)),
+        ("width", serde_json::json!(33)),
+        ("epochs", serde_json::json!(0)),
+        ("learning_rate", serde_json::json!(-1)),
+    ] {
+        let mut bad = saved.clone();
+        bad["neural_sdf"]["training"][key] = value;
+        assert!(serde_json::from_value::<SdfObject>(bad).is_err(), "{key}");
+    }
+    let mut bad = saved;
+    bad["neural_sdf"]["hit_distance_cells"] = serde_json::json!(-1);
+    assert!(serde_json::from_value::<SdfObject>(bad).is_err());
+}
+
+#[test]
+fn neural_presets_are_valid_and_manual_edits_become_custom() {
+    for preset in NeuralModelPreset::ALL {
+        let settings = preset.settings();
+        assert!(settings.is_valid());
+        assert_eq!(settings.activation, NeuralActivation::Softplus);
+        assert_eq!(NeuralModelPreset::matching(settings), Some(preset));
+        let mut custom = settings;
+        custom.epochs += 1;
+        assert_eq!(NeuralModelPreset::matching(custom), None);
+    }
+    for value in [-100.0, -1.0, 0.0, 1.0, 100.0] {
+        let output = NeuralActivation::Softplus.evaluate(value);
+        let slope = NeuralActivation::Softplus.slope_from_output(output);
+        assert!(output.is_finite() && output >= 0.0);
+        assert!(slope.is_finite() && (0.0..=1.0).contains(&slope));
+    }
+    assert_eq!(
+        NeuralActivation::Softplus.slope_from_output(NeuralActivation::Softplus.evaluate(0.0)),
+        0.5
+    );
+}

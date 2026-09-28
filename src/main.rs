@@ -4,6 +4,7 @@ mod camera;
 mod commands;
 mod document;
 mod duck;
+mod examples;
 mod guides;
 mod interactions;
 mod model;

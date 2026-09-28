@@ -41,6 +41,7 @@ override HAS_POLYGON_PRISMS: bool = true;
 override HAS_BEZIER_CURVES: bool = true;
 override HAS_LOFTS: bool = true;
 override HAS_TEXT: bool = true;
+override HAS_NEURAL_SDF: bool = true;
 override HAS_LATTICE_MODIFIERS: bool = true;
 override HAS_MIRRORS: bool = true;
 override HAS_REPETITION: bool = true;
@@ -346,6 +347,149 @@ fn loft_distance(point: vec3<f32>, object: Object) -> f32 {
 struct BoxDepthFaceSample {
     capture: vec4<f32>,
     material_index: u32,
+}
+
+// Neural payload: architecture/owner offset, step bound/hit distance, packed weights, 32³ owners.
+fn neural_activation(value: f32, offset: u32) -> f32 {
+    if box_depth_texels[offset + 1u].z < 0.5 { return max(value, 0.0); }
+    return max(value, 0.0) + log(1.0 + exp(-10.0 * abs(value))) / 10.0;
+}
+fn neural_activation_slope(value: f32, offset: u32) -> f32 {
+    if box_depth_texels[offset + 1u].z < 0.5 { return select(0.0, 1.0, value > 0.0); }
+    let e = exp(-10.0 * abs(value));
+    return select(e / (1.0 + e), 1.0 / (1.0 + e), value >= 0.0);
+}
+fn neural_weight(offset: u32, index: u32) -> f32 {
+    return box_depth_texels[offset + 2u + index / 4u][index % 4u];
+}
+fn neural_value(local: vec3<f32>, object: Object) -> f32 {
+    let offset = object.box_depth_meta.x;
+    let header = box_depth_texels[offset];
+    let layers = u32(header.x);
+    let width = u32(header.y);
+    let p = local / object.box_depth_max.x;
+    if layers == 1u {
+        var result = neural_weight(offset, u32(header.z) + width);
+        for (var i = 0u; i < width; i++) {
+            result += neural_activation(dot(box_depth_texels[offset + 2u + i], vec4(p, 1.0)), offset)
+                * neural_weight(offset, u32(header.z) + i);
+        }
+        return result * object.box_depth_max.x;
+    }
+    var values: array<vec4<f32>, 8>;
+    var next: array<vec4<f32>, 8>;
+    for (var row = 0u; row < width; row++) {
+        values[row / 4u][row % 4u] = neural_activation(dot(box_depth_texels[offset + 2u + row], vec4(p, 1.0)), offset);
+    }
+    var layer_offset = width; // vec4 records from the start of weights
+    let row_records = (width + 4u) / 4u;
+    let blocks = (width + 3u) / 4u;
+    for (var layer = 1u; layer < layers; layer++) {
+        for (var row = 0u; row < width; row++) {
+            let row_offset = layer_offset + row * row_records;
+            var value = neural_weight(offset, row_offset * 4u + width);
+            for (var block = 0u; block < blocks; block++) {
+                value += dot(box_depth_texels[offset + 2u + row_offset + block], values[block]);
+            }
+            next[row / 4u][row % 4u] = neural_activation(value, offset);
+        }
+        values = next;
+        layer_offset += width * row_records;
+    }
+    let output_offset = u32(header.z);
+    var result = neural_weight(offset, output_offset + width);
+    for (var block = 0u; block < blocks; block++) {
+        result += dot(box_depth_texels[offset + 2u + output_offset / 4u + block], values[block]);
+    }
+    return result * object.box_depth_max.x;
+}
+fn neural_gradient(local: vec3<f32>, object: Object) -> vec3<f32> {
+    let offset = object.box_depth_meta.x;
+    let header = box_depth_texels[offset];
+    let layers = u32(header.x);
+    let width = u32(header.y);
+    let p = local / object.box_depth_max.x;
+    if layers == 1u {
+        var result = vec3(0.0);
+        for (var i = 0u; i < width; i++) {
+            let row = box_depth_texels[offset + 2u + i];
+            result += row.xyz * neural_weight(offset, u32(header.z) + i) * neural_activation_slope(dot(row, vec4(p, 1.0)), offset);
+        }
+        return result;
+    }
+    // xyz carries the spatial derivative; w carries the activation.
+    var values: array<vec4<f32>, 32>;
+    var next: array<vec4<f32>, 32>;
+    var layer_offset = 0u;
+    for (var layer = 0u; layer < layers; layer++) {
+        let inputs = select(width, 3u, layer == 0u);
+        for (var row = 0u; row < width; row++) {
+            let row_stride = ((inputs + 4u) / 4u) * 4u;
+            let row_offset = layer_offset + row * row_stride;
+            var value = vec4(0.0, 0.0, 0.0, neural_weight(offset, row_offset + inputs));
+            for (var col = 0u; col < inputs; col++) {
+                var input = values[col];
+                if layer == 0u {
+                    input = vec4(0.0, 0.0, 0.0, p[col]);
+                    input[col] = 1.0;
+                }
+                value += neural_weight(offset, row_offset + col) * input;
+            }
+            next[row] = vec4(value.xyz * neural_activation_slope(value.w, offset), neural_activation(value.w, offset));
+        }
+        values = next;
+        layer_offset += width * ((inputs + 4u) / 4u) * 4u;
+    }
+    var result = vec3(0.0);
+    for (var i = 0u; i < width; i++) { result += neural_weight(offset, u32(header.z) + i) * values[i].xyz; }
+    return result;
+}
+fn neural_shape(local: vec3<f32>, object: Object) -> f32 {
+    let q = abs(local) - object.box_depth_max.xyz;
+    let cube = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+    return max(cube, neural_value(local, object));
+}
+fn neural_surface_sample(point: vec3<f32>, object: Object) -> BoxDepthFaceSample {
+    let p = vec4(point, 1.0);
+    let local = vec3(dot(object.inverse_rows[0], p), dot(object.inverse_rows[1], p), dot(object.inverse_rows[2], p));
+    let grid = 32u; // Material ownership is independent of training resolution.
+    let last = f32(grid - 1u);
+    let cell = vec3<u32>(clamp(round((local / object.box_depth_max.x + vec3(1.0)) * (last * 0.5)), vec3(0.0), vec3(last)));
+    let index = cell.x + grid * (cell.y + grid * cell.z);
+    let sample = box_depth_texels[object.box_depth_meta.x + u32(box_depth_texels[object.box_depth_meta.x].w) + index];
+    return BoxDepthFaceSample(vec4(0.0, sample.yzw), u32(sample.x));
+}
+fn surface_hit_tolerance(owner: f32, classic: f32) -> f32 {
+    if !HAS_NEURAL_SDF || owner < 0.0 { return classic; }
+    let object = objects[u32(owner)];
+    if object.state.y != 12 { return classic; }
+    // User-selected grid intervals in world-distance units, including endpoints.
+    return max(classic, 2.0 * object.box_depth_max.x * object.params.w * box_depth_texels[object.box_depth_meta.x + 1u].y / (box_depth_texels[object.box_depth_meta.x + 1u].w - 1.0));
+}
+fn component_has_neural(owner: f32) -> bool {
+    if !HAS_NEURAL_SDF || owner < 0.0 { return false; }
+    let component = objects[u32(owner)].component;
+    for (var i = component.x; i <= component.y; i++) {
+        if objects[i].state.y == 12 { return true; }
+    }
+    return false;
+}
+// A learned distance can overstep a zero crossing. Recover a bracketed hit
+// without dividing every step by a very loose global network slope bound.
+fn refine_neural_crossing(origin: vec3<f32>, direction: vec3<f32>, low: f32, high: f32, owner: f32) -> vec3<f32> {
+    let component = objects[u32(owner)].component;
+    var a = low;
+    var b = high;
+    let negative_at_a = component_distance(origin + direction * a, component.x, component.y).x < 0.0;
+    var sample = vec2(0.0, owner);
+    var t = (a + b) * 0.5;
+    for (var iteration = 0u; iteration < 12u; iteration++) {
+        t = (a + b) * 0.5;
+        sample = component_distance(origin + direction * t, component.x, component.y);
+        if abs(sample.x) <= surface_hit_tolerance(sample.y, 0.0015) { break; }
+        if (sample.x < 0.0) == negative_at_a { a = t; } else { b = t; }
+    }
+    return vec3(t, sample.y, -1.0);
 }
 
 fn box_depth_face_uv(local: vec3<f32>, object: Object, face: u32) -> vec2<f32> {
@@ -818,6 +962,8 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
         distance = loft_distance(local, object);
     } else if HAS_TEXT && object.state.y == 11 {
         distance = text_distance(local, object);
+    } else if HAS_NEURAL_SDF && object.state.y == 12 {
+        distance = neural_shape(local, object);
     } else if object.state.y == 8 {
         distance = box_depth_shape(local, object);
     } else if object.state.y == 9 {
@@ -1118,6 +1264,21 @@ fn convex_primitive_normal(point: vec3<f32>, object: Object) -> vec3<f32> {
 
 fn scene_normal(point: vec3<f32>, index: u32) -> vec3<f32> {
     let component = objects[index].component;
+    let neural_object = objects[index];
+    if HAS_NEURAL_SDF && neural_object.state.y == 12 && component.x == component.y
+        && neural_object.modifier.x == 0u && all(neural_object.mirror_axes == vec4<u32>(0u)) {
+        let p = vec4(point, 1.0);
+        let local = vec3(dot(neural_object.inverse_rows[0], p), dot(neural_object.inverse_rows[1], p), dot(neural_object.inverse_rows[2], p));
+        let gradient = neural_gradient(local, neural_object);
+        let world = vec3(
+            dot(gradient, vec3(neural_object.inverse_rows[0].x, neural_object.inverse_rows[1].x, neural_object.inverse_rows[2].x)),
+            dot(gradient, vec3(neural_object.inverse_rows[0].y, neural_object.inverse_rows[1].y, neural_object.inverse_rows[2].y)),
+            dot(gradient, vec3(neural_object.inverse_rows[0].z, neural_object.inverse_rows[1].z, neural_object.inverse_rows[2].z)));
+        // Cube clipping needs the ordinary finite-difference normal at its boundary.
+        if all(abs(local) < neural_object.box_depth_max.xyz - vec3(0.003)) && dot(world, world) > 1e-12 {
+            return world / length(world);
+        }
+    }
     if HAS_BOOLEANS && analytic_subtraction(component.x, component.y) {
         let parent = objects[component.y];
         let child = objects[component.x];
@@ -1379,7 +1540,10 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                 continue;
             }
             let smooth_pair = HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x);
-            for (var step = 0; step < 128; step++) {
+            let neural_component = component_has_neural(f32(node.metadata.x));
+            var previous_travel = travel;
+            var previous_value = 0.0;
+            for (var step = 0u; step < 128u; step++) {
                 let point = origin + direction * travel;
                 var sample: vec2<f32>;
                 if smooth_pair {
@@ -1388,13 +1552,24 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                     sample = component_distance(point, node.metadata.z, node.metadata.x);
                 }
                 let value = sample.x;
-                if value < epsilon {
+                if neural_component && step > 0u && (value < 0.0) != (previous_value < 0.0) {
+                    let refined = refine_neural_crossing(origin, direction, previous_travel, travel, sample.y);
+                    closest = refined.x;
+                    owner = refined.y;
+                    splat_offset = -1.0;
+                    break;
+                }
+                let tolerance = surface_hit_tolerance(sample.y, epsilon);
+                let neural = HAS_NEURAL_SDF && sample.y >= 0.0 && objects[u32(max(sample.y, 0.0))].state.y == 12;
+                if select(value < epsilon, abs(value) <= tolerance, neural) {
                     closest = travel;
                     owner = sample.y;
                     splat_offset = -1.0;
                     break;
                 }
-                travel += value * bitcast<f32>(object.modifier.y);
+                previous_travel = travel;
+                previous_value = value;
+                travel += select(value, abs(value), neural_component) * bitcast<f32>(object.modifier.y);
                 if travel > end { break; }
             }
         }
@@ -1421,7 +1596,7 @@ fn containing_component(point: vec3<f32>) -> vec2<f32> {
             } else {
                 sample = component_distance(point, node.metadata.z, node.metadata.x);
             }
-            if sample.x < -0.0015 { return sample; }
+            if sample.x < -surface_hit_tolerance(sample.y, 0.0015) { return sample; }
         }
         node_index += 1u;
     }
@@ -1435,7 +1610,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
         if !inside { return trace_objects(origin, direction, 0.0015, empty_splat_exclusions(), false); }
         var owner = initial_owner;
         var travel = 0.0;
-        for (var step = 0; step < 128; step++) {
+        var previous_travel = 0.0;
+        var previous_value = 0.0;
+        for (var step = 0u; step < 128u; step++) {
             let component = objects[owner].component;
             var sample = vec2(0.0, f32(owner));
             if HAS_BOOLEANS && hard_subtraction(component.x, component.y) {
@@ -1493,21 +1670,36 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                     }
                 }
             }
-            if abs(sample.x) < 0.0015 {
+            if step > 0u && component_has_neural(sample.y) && (sample.x < 0.0) != (previous_value < 0.0) {
+                let refined = refine_neural_crossing(origin, direction, previous_travel, travel, sample.y);
+                travel = refined.x;
+                sample = vec2(0.0, refined.y);
+            }
+            if abs(sample.x) <= surface_hit_tolerance(sample.y, 0.0015) {
                 let other = containing_component(origin + direction * travel);
                 if other.y < 0.0 { return vec3(travel, sample.y, -1.0); }
                 owner = u32(other.y);
                 sample = other;
             }
+            previous_travel = travel;
+            previous_value = sample.x;
             travel += max(abs(sample.x) * 0.8, 0.0008);
             if travel > 100.0 { break; }
         }
         return vec3(100.0, -1.0, -1.0);
     }
     var travel = 0.0;
-    for (var step = 0; step < 128; step++) {
+    var previous_travel = 0.0;
+    var previous_sample = vec2(0.0, -1.0);
+    for (var step = 0u; step < 128u; step++) {
         let sample = scene_distance(origin + direction * travel);
-        if abs(sample.x) < 0.0015 { return vec3(travel, sample.y, -1.0); }
+        let crossing_owner = select(sample.y, previous_sample.y, previous_sample.x < 0.0);
+        if step > 0u && component_has_neural(crossing_owner) && (sample.x < 0.0) != (previous_sample.x < 0.0) {
+            return refine_neural_crossing(origin, direction, previous_travel, travel, crossing_owner);
+        }
+        if abs(sample.x) <= surface_hit_tolerance(sample.y, 0.0015) { return vec3(travel, sample.y, -1.0); }
+        previous_travel = travel;
+        previous_sample = sample;
         travel += max(abs(sample.x) * 0.8, 0.0008);
         if travel > 100.0 { break; }
     }
@@ -1554,10 +1746,22 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
         point += ray * sample.x;
     } else {
         var travel = 0.0;
-        for (var step = 0; step < 96; step++) {
+        var previous_travel = 0.0;
+        var previous_sample = vec2(0.0, -1.0);
+        for (var step = 0u; step < 96u; step++) {
             let scene = scene_distance(point);
-            if scene.x < 0.003 { hit = true; index = u32(scene.y); break; }
-            travel += scene.x * 0.8;
+            let crossing_owner = select(scene.y, previous_sample.y, previous_sample.x < 0.0);
+            if step > 0u && component_has_neural(crossing_owner) && (scene.x < 0.0) != (previous_sample.x < 0.0) {
+                let refined = refine_neural_crossing(ray_origin, ray, previous_travel, travel, crossing_owner);
+                hit = true; index = u32(refined.y); point = ray_origin + ray * refined.x; break;
+            }
+            let neural = HAS_NEURAL_SDF && scene.y >= 0.0 && objects[u32(max(scene.y, 0.0))].state.y == 12;
+            if select(scene.x < 0.003, abs(scene.x) <= surface_hit_tolerance(scene.y, 0.003), neural) {
+                hit = true; index = u32(scene.y); break;
+            }
+            previous_travel = travel;
+            previous_sample = scene;
+            travel += select(scene.x, abs(scene.x), neural) * 0.8;
             if travel > 100.0 { break; }
             point = ray_origin + ray * travel;
         }
@@ -1672,7 +1876,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 if opacity >= 0.999 || max(throughput.x, max(throughput.y, throughput.z)) < 0.01 {
                     break;
                 }
-                let preview_origin = point + direction * 0.007;
+                let preview_origin = point + direction * max(0.007, 2.0 * surface_hit_tolerance(f32(index), 0.0));
                 let next = trace(preview_origin, direction, entering, index);
                 hit = next.y >= 0.0;
                 point = preview_origin + direction * next.x;
@@ -1701,7 +1905,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
             let metallic = clamp(surface.metallic, 0.0, 1.0);
             let eta = select(ior, 1.0 / ior, entering);
             let transmitted = refract(direction, normal, eta);
-            next_origin = point + normal * 0.007;
+            next_origin = point + normal * max(0.007, 2.0 * surface_hit_tolerance(f32(index), 0.0));
             next_direction = reflection;
             next_inside = !entering;
             if !(opacity < 0.999 && metallic < 0.999 && dot(transmitted, transmitted) < 0.001) {
@@ -1716,7 +1920,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 radiance += throughput * (vec3(0.22, 0.27, 0.35) * roughness * roughness * tint * weight
                     + lit_surface * opacity * (1.0 - weight));
                 transmission_direction = transmitted;
-                transmission_origin = point - normal * 0.007;
+                transmission_origin = point - normal * max(0.007, 2.0 * surface_hit_tolerance(f32(index), 0.0));
                 transmission_inside = entering;
                 transmission_owner = index;
                 throughput *= (1.0 - weight) * (1.0 - opacity) * mix(vec3(1.0), object.color.rgb, 0.12);

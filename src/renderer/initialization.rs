@@ -399,6 +399,7 @@ impl Renderer {
             image_sampler,
             modifier_params_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
+            neural_jobs: Default::default(),
             group_capture_cache: std::collections::HashMap::new(),
             egui_renderer,
             material_preview_ids: None,

@@ -32,6 +32,40 @@ impl Renderer {
             .collect();
         if let Some(prepared) = &prepared_scene {
             for object in objects {
+                if let Some(field) = prepared.neural_fields.get(&object.uuid) {
+                    let offset = box_depth_texels.len() as u32;
+                    box_depth_texels.extend_from_slice(
+                        &field
+                            .network
+                            .gpu_records(object.neural_sdf.hit_distance_cells),
+                    );
+                    let fallback = source_lookup.get(&object.uuid).copied().unwrap_or(object);
+                    for owner in &field.owners {
+                        let source = source_lookup.get(owner).copied().unwrap_or(fallback);
+                        let custom_index = if source.material.kind == MaterialKind::Custom {
+                            source
+                                .material_id
+                                .and_then(|id| {
+                                    self.custom_material_sources
+                                        .iter()
+                                        .position(|(asset_id, _)| *asset_id == id)
+                                })
+                                .map_or(0, |i| i as u32 + 1)
+                        } else {
+                            0
+                        };
+                        let material = materials.insert_custom(source.material, custom_index);
+                        box_depth_texels.push([
+                            material as f32,
+                            source.color.x,
+                            source.color.y,
+                            source.color.z,
+                        ]);
+                    }
+                    let extent = Vec3::splat(field.half_extent);
+                    box_depth_metadata.insert(object.uuid, (offset, 32, 32, -extent, extent, 12));
+                    continue;
+                }
                 let capture = if let Some(atlas) = prepared.box_depth_atlases.get(&object.uuid) {
                     Some((
                         &atlas.texels,

@@ -128,6 +128,7 @@ struct SceneShaderFeatures {
     primitives: PrimitiveFeatures,
     spatial: SpatialFeatures,
     flat_unions: bool,
+    neural_sdf: bool,
 }
 
 impl SceneShaderFeatures {
@@ -136,6 +137,7 @@ impl SceneShaderFeatures {
         primitives: PrimitiveFeatures::ALL,
         spatial: SpatialFeatures::ALL,
         flat_unions: true,
+        neural_sdf: true,
     };
 
     fn for_scene(materials: &[Material], objects: &[GpuObject]) -> Self {
@@ -143,6 +145,7 @@ impl SceneShaderFeatures {
             materials: BuiltinMaterialFeatures::for_materials(materials),
             primitives: PrimitiveFeatures::for_objects(objects),
             spatial: SpatialFeatures::for_objects(objects),
+            neural_sdf: objects.iter().any(|object| object.meta[1] == 12),
             flat_unions: objects
                 .iter()
                 .any(|object| object.meta[3] == FLAT_UNION_ROOT),
@@ -285,6 +288,7 @@ pub struct Renderer {
     image_sampler: wgpu::Sampler,
     modifier_params_buffer: wgpu::Buffer,
     uploaded_scene_versions: [i32; 2],
+    neural_jobs: neural_jobs::NeuralJobs,
     group_capture_cache: std::collections::HashMap<uuid::Uuid, group_capture::CachedGroupCapture>,
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,
@@ -364,6 +368,9 @@ mod sphere_depth_atlas;
 pub(crate) use material_gpu::validate_custom_materials;
 mod atlas_upload;
 mod group_capture;
+mod neural_jobs;
+mod neural_sdf;
+pub(crate) use neural_jobs::NeuralStatus;
 mod hybrid_splats;
 mod material_previews;
 mod modifier_gpu;

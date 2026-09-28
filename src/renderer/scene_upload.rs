@@ -47,8 +47,16 @@ impl Renderer {
         exposure: f32,
         world: World,
     ) {
-        let scene_changed = self.uploaded_scene_versions != scene_versions;
         let source_objects = &objects[..objects.len().min(MAX_OBJECTS)];
+        let document_changed = self.uploaded_scene_versions != scene_versions;
+        if document_changed {
+            self.neural_jobs.reconcile(source_objects);
+        }
+        let neural_changed = self.neural_jobs.poll();
+        if neural_changed {
+            self.viewport.invalidate();
+        }
+        let scene_changed = document_changed || neural_changed;
         let prepared_scene = (scene_changed
             && source_objects.iter().any(|object| {
                 matches!(
@@ -56,9 +64,25 @@ impl Renderer {
                     crate::model::GroupRenderRepresentation::BoxDepthAtlas
                         | crate::model::GroupRenderRepresentation::SphereDepthAtlas
                         | crate::model::GroupRenderRepresentation::GaussianSplats
+                        | crate::model::GroupRenderRepresentation::NeuralSdf
                 )
             }))
-        .then(|| prepare_group_scene(source_objects, &mut self.group_capture_cache));
+        .then(|| {
+            prepare_group_scene_with_neural(
+                source_objects,
+                &mut self.group_capture_cache,
+                &self.neural_jobs.ready(),
+            )
+        });
+        if let Some(prepared) = &prepared_scene {
+            for id in self.neural_jobs.ready().keys() {
+                if prepared.objects.iter().any(|o| o.uuid == *id)
+                    && !prepared.neural_fields.contains_key(id)
+                {
+                    self.neural_jobs.reject_payload(*id);
+                }
+            }
+        }
         if scene_changed && prepared_scene.is_none() {
             self.group_capture_cache.clear();
         }

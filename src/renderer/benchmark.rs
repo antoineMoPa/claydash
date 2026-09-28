@@ -17,6 +17,24 @@ impl Renderer {
         let upload_started = Instant::now();
         self.uploaded_scene_versions = [i32::MIN; 2];
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
+        // Benchmarks must measure ready neural proxies, not the temporary exact fallback.
+        while self.neural_jobs.is_busy() {
+            assert!(
+                upload_started.elapsed() < Duration::from_secs(120),
+                "Neural benchmark bake timed out"
+            );
+            std::thread::sleep(Duration::from_millis(4));
+            self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
+        }
+        for (id, field) in self.neural_jobs.ready() {
+            eprintln!(
+                "Neural {id}: {:.1} ms bake, RMS {:.5}, max {:.5}, {} GPU bytes",
+                field.bake_ms,
+                field.rms_error,
+                field.max_error,
+                field.network.payload_records() * 16
+            );
+        }
         self.upload_splat_camera(camera, world);
         eprintln!(
             "Scene preparation ({case}): {:.3} ms",

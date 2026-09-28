@@ -403,6 +403,8 @@ impl App {
             document_tx,
             #[cfg(target_arch = "wasm32")]
             document_rx,
+            #[cfg(target_arch = "wasm32")]
+            document_request: 0,
         }
     }
 }

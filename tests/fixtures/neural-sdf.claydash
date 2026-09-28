@@ -1,0 +1,286 @@
+{
+  "subtree": {
+    "cameras": {
+      "subtree": {},
+      "value": {
+        "VecCamera": [
+          {
+            "uuid": "f1000000-0000-4000-8000-000000000004",
+            "name": "Reflection check",
+            "transform": {
+              "translation": [
+                0,
+                0,
+                4
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "focal_distance": 4,
+            "projection_mode": "Perspective"
+          }
+        ]
+      }
+    },
+    "sdf_objects": {
+      "subtree": {},
+      "value": {
+        "VecSDFObject": [
+          {
+            "uuid": "f1000000-0000-4000-8000-000000000001",
+            "transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "color": [
+              0.15,
+              0.5,
+              0.95,
+              1
+            ],
+            "object_type": 1,
+            "params": {
+              "SphereParams": {
+                "radius": 1
+              }
+            },
+            "name": "Neural sphere",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                1,
+                0.03,
+                0.02,
+                1
+              ],
+              "roughness": 0.05,
+              "metallic": 0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "axes": [
+                true,
+                false,
+                false
+              ],
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "modifiers": {
+              "mirror_axes": [
+                false,
+                false,
+                false
+              ],
+              "mirror_offset": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "render_representation": "neural_sdf"
+          },
+          {
+            "uuid": "f1000000-0000-4000-8000-000000000003",
+            "transform": {
+              "translation": [
+                0.8,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "color": [
+              0.95,
+              0.15,
+              0.08,
+              1
+            ],
+            "object_type": 1,
+            "params": {
+              "SphereParams": {
+                "radius": 1
+              }
+            },
+            "name": "Red union sphere",
+            "operation": "Union",
+            "boolean_parent": "f1000000-0000-4000-8000-000000000001",
+            "softness": 0,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                1,
+                0.03,
+                0.02,
+                1
+              ],
+              "roughness": 0.05,
+              "metallic": 0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "axes": [
+                true,
+                false,
+                false
+              ],
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "modifiers": {
+              "mirror_axes": [
+                false,
+                false,
+                false
+              ],
+              "mirror_offset": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "render_representation": "exact_sdf"
+          }
+        ]
+      }
+    },
+    "selected_uuids": {
+      "subtree": {},
+      "value": {
+        "VecUuid": []
+      }
+    },
+    "selection_scope": {
+      "subtree": {},
+      "value": {
+        "SelectionScope": "Group"
+      }
+    },
+    "active_camera": {
+      "subtree": {},
+      "value": {
+        "Uuid": "f1000000-0000-4000-8000-000000000004"
+      }
+    },
+    "world": {
+      "subtree": {},
+      "value": {
+        "World": {
+          "render_pipeline": "exact",
+          "screen_space_ambient_occlusion": false,
+          "screen_space_reflections": false,
+          "background": "Flat",
+          "flat_color": [
+            0.04,
+            0.05,
+            0.06
+          ],
+          "latitude": 45.0,
+          "day_of_year": 172,
+          "solar_time": 12.0,
+          "azimuth": 0.0,
+          "turbidity": 2.5,
+          "sun_temperature": 5778.0,
+          "sun_intensity": 1.0
+        }
+      }
+    }
+  },
+  "value": "None"
+}

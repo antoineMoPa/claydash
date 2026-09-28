@@ -232,7 +232,9 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
                 GroupRenderRepresentation::SphereDepthAtlas => {
                     assert!(prepared.sphere_depth_atlases.contains_key(&box_id));
                 }
-                GroupRenderRepresentation::ExactSdf => unreachable!(),
+                GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::NeuralSdf => {
+                    unreachable!()
+                }
             }
         }
     }

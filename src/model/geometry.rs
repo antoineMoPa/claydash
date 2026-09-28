@@ -206,6 +206,8 @@ pub struct SdfObject {
     pub image_stencil: Option<ImageStencil>,
     #[serde(default, skip_serializing_if = "GroupRenderRepresentation::is_exact")]
     pub render_representation: GroupRenderRepresentation,
+    #[serde(default, skip_serializing_if = "NeuralSdfSettings::is_default")]
+    pub neural_sdf: NeuralSdfSettings,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -262,6 +264,7 @@ impl SdfObject {
             transform: Transform::default(),
             group_transform: Transform::default(),
             render_representation: GroupRenderRepresentation::default(),
+            neural_sdf: NeuralSdfSettings::default(),
             color: material.color,
             object_type: kind.object_type(),
             params: match kind {

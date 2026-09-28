@@ -192,6 +192,9 @@ fn scene_feature_constants(
     features: SceneShaderFeatures,
 ) -> Vec<(&'static str, f64)> {
     let mut constants = Vec::new();
+    if shader_source.contains("override HAS_NEURAL_SDF") {
+        constants.push(("HAS_NEURAL_SDF", f64::from(features.neural_sdf)));
+    }
     if shader_source.contains("override HAS_WOOD_MATERIAL") {
         constants.extend_from_slice(&[
             ("HAS_WOOD_MATERIAL", f64::from(features.materials.wood)),

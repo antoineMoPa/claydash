@@ -10,7 +10,7 @@ an intent to use a representation, not proof that a valid bake exists.
 
 The Object properties panel shows these candidates after Modifiers for an
 object or selected Boolean group. The selection is saved on that object or
-group root and survives document round-trips. **Exact SDF**, **Box depth atlas**, **Sphere depth atlas**, and **Gaussian splats** have render paths today. The capture replaces the selected subtree with a
+group root and survives document round-trips. **Exact SDF**, **Box depth atlas**, **Sphere depth atlas**, **Gaussian splats**, and **Neural SDF** have render paths today. The capture replaces the selected subtree with a
 depth capture for rendering; the editable source remains in the document. The
 renderer does not gate this choice on modifiers or Boolean operations. Older
 documents that saved a removed choice now load as Exact SDF. Documents without
@@ -49,13 +49,113 @@ eligibility, shading limits, and measured rendering and editing costs.
 
 The local agent CLI and MCP server expose the working choices through
 `CreateObject.render_representation` and the `SetRenderRepresentation` action.
-`get_schema` lists the four available values. For a Boolean composition, set the
+`get_schema` lists the five available values. For a Boolean composition, set the
 choice on the group root; its source operands stay editable.
 Nested hard unions of ordinary SDF operands now use the flat-union GPU path
 when no nested repetition, mirror, or smooth blend changes their semantics.
 That path can use an operand BVH for larger groups. This accelerates exact
 union composition. Box and sphere depth atlas groups use a captured representation when
 capture succeeds.
+
+## Neural SDF
+
+Choose **Neural SDF** on an object or Boolean group root. Its editable source
+is sampled at the endpoints of a configurable grid (8–1024 samples per side, default 32) inside a padded cube. The default network has one width-eight ReLU hidden layer (`3 → 8 → 1`,
+41 parameters). The panel exposes these saved per-group controls:
+
+| Control | Range | Default |
+| --- | --- | --- |
+| Hidden layers | 1–4 | 1 |
+| Width of each hidden layer | 4–32 | 8 |
+| Epochs | 1–512 | 32 |
+| Learning rate | 0.00001–0.1 | 0.001 |
+| Seed | Any unsigned 32-bit integer | 11256099 |
+| Hit distance, grid cells | 0.001–4 | 0.5 |
+
+The **Model size** dropdown offers calibrated presets. All use smooth Softplus
+activation (`log(1 + exp(10x)) / 10`), learning rate 0.001, the default seed, and
+hit distance 0.5 cells. Selecting a preset stages its training settings until
+**Recompute**; editing its fields switches the displayed choice to **Custom**.
+
+| Preset | Hidden layers | Width | Epochs | Default-duck field RMS |
+| --- | ---: | ---: | ---: | ---: |
+| Preview | 1 | 8 | 32 | 0.03580 |
+| Balanced | 2 | 12 | 64 | 0.01598 |
+| Detailed | 3 | 16 | 96 | 0.00793 |
+| High detail | 4 | 24 | 128 | 0.00580 |
+
+These are measured field-fit improvements on the default duck, not a guarantee
+for every model. Larger presets increase training and rendering cost. The
+**Activation** control also retains ReLU for comparison and old documents.
+ReLU produces planar patches; Softplus gives continuous hidden-layer derivatives.
+The final layer remains linear so distances can be negative inside the object.
+
+One epoch is a full, deterministically shuffled pass through all grid samples;
+batch size is at most 256, with a smaller final batch when needed. Source
+distances are evaluated on demand for each batch, with no cached distance array
+or full-grid sampling pass before training. Validation also samples in bounded
+chunks after each epoch. A separate fixed 32³ material-ownership grid is sampled
+in chunks after training. The default 32 epochs perform 4,096 Adam updates. The lowest
+full-grid loss checkpoint is retained, checked after each epoch. The seed
+controls both initialization and shuffle order. Settings are saved with the
+object and participate in undo/redo; documents without them use the defaults.
+Numeric text edits commit on Enter or focus loss, so an empty or partial value
+can be typed without changing the setting. Dragging still updates the value.
+Invalid saved settings are rejected rather than silently rewritten.
+
+**Recompute** restarts the selected group's bake without changing its saved
+settings or adding an undo entry. It also retries a failed fit. Network/training
+edits wait for this button; the current model and any running bake keep their
+previous settings. Geometry edits still trigger automatic rebakes using the last
+applied training settings. The initial bake on selecting Neural SDF or reopening
+a document uses its saved settings. Hit distance updates only the GPU
+payload and reuses the fitted model. Superseded results are rejected even when
+a recompute uses exactly the same settings. No model weights or sampled ownership
+are saved in `.claydash` files.
+
+After 200 ms without source changes, desktop training runs on one background
+worker. Browser sampling/training advances in batches with a 4 ms soft budget
+per frame; preparing the sampler and individual work units can exceed that
+budget on large sources. Exact SDF is displayed while work is pending, after
+an edit, or if a fit fails. Obsolete results are discarded, and completion
+invalidates the viewport even without another edit. Camera movement reuses the
+model. Capture keys conservatively include source geometry, references,
+modifiers, and materials; unrelated source edits can also cause a rebake.
+
+The shader evaluates the fitted field inside the cube and advances by the
+predicted distance with the existing 0.8 step factor. If a step changes the
+field's sign, it refines that bracket before shading the hit. Primary and
+secondary neural rays use this distance-estimate path; exact geometry retains
+its existing tracing. The global weight-derived slope bound is not used to
+shrink ray steps: deeper networks made that bound so loose that tracing either
+missed surfaces at its iteration limit or overloaded the GPU with longer loops.
+As with the learned field itself, these steps are approximate: sign refinement
+cannot recover a thin feature crossed twice within one step.
+The hit tolerance is `max(classic tolerance, hit cells × cube side × world
+distance scale / 31)`, half a grid interval at the default setting. Exact-SDF hit
+tolerance is unchanged. Standalone proxies use analytic
+network gradients for normals; composed or deformed proxies use the existing
+field-gradient path. Reflection and transmission origins account for the
+larger tolerance. Source repetition, mirror, path, and inlay effects are baked
+once rather than reapplied to the proxy.
+
+Nearest-grid ownership supplies the original child material and base color.
+Material boundaries are approximate; material programs are evaluated at the
+proxy hit, with the proxy coordinate frame. This does not retain every child’s
+original procedural texture frame. The default GPU payload uses 524,496 bytes:
+two metadata records, eleven
+vec4 weight records, and 32³ material/color records independent of training resolution. Larger architectures add
+packed weight records. Payloads share the existing
+32 MiB proxy buffer budget. Invalid bounds, nonfinite samples/weights, missing
+sampled zero crossings, and exhausted resources fall back to Exact SDF. Failure
+is retained until source inputs change. The panel reports status, full-grid RMS
+and maximum field errors, and bake elapsed time.
+
+The default eight ReLU neurons deliberately limit quality: surfaces are faceted, small holes
+and disjoint parts can disappear, and half-cell hit tolerance expands silhouettes.
+A valid zero crossing is not a fidelity guarantee. Use Exact SDF for faithful
+geometry. See [neural measurements](rendering-performance.md#neural-sdf) for
+validation and timings; this mode is not automatically selected as an optimization.
 
 ## Candidate modes
 
@@ -67,6 +167,7 @@ capture succeeds.
 | Box grid, coarse | Local box depth atlases on a 3 by 3 grid | Smaller cells reduce parallax error | More textures and seam handling |
 | Box grid, fine | Local box depth atlases on a 9 by 9 grid | Better local detail | Bake cost, memory, and draw work rise sharply |
 | Gaussian splats | Layered box-face surface positions, isotropic support radius, color, normal, and material | Instanced alpha splats for a costly group | Missed hidden layers and approximate shading; some scenes use ray composition |
+| Neural SDF | Width-eight network and 32³ material/color ownership | Fixed-cost learned distance query | Faceted approximations, lost thin features, training and material-grid cost |
 | Dense SDF volume | Quantized signed distances plus material IDs or attributes in a 3D texture | Cheap spatially coherent samples of a costly group | Cubic memory growth; interpolation must remain conservative for safe ray steps |
 | Sparse SDF bricks | Distance and material samples only in occupied spatial bricks | Less memory for sparse geometry | Indirection and brick management; safe distance bounds still required |
 | Extracted mesh | Vertices, triangles, and per-surface material data | Hardware rasterization for opaque stable groups | Boolean edits require rebuilding; smooth/detail fidelity depends on extraction resolution |
@@ -171,3 +272,10 @@ an example file to make a bake appear faster.
 - Schaufler and Stuerzlinger, [multi-layered impostors](https://graphics.cs.yale.edu/publications/multi-layered-impostors-accelerated-rendering): depth layers address visibility lost in a single image proxy.
 - Kerbl et al., [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/): fitted anisotropic splats and visibility-aware rasterization.
 - Adobe Research, [Sphere Carving: Bounding Volumes for Signed Distance Fields](https://research.adobe.com/publication/sphere-carving-bounding-volumes-for-signed-distance-fields/): conservative bounds for SDF acceleration.
+
+Samples per side is staged until Recompute, like other training settings.
+Recompute is disabled while a bake is queued or training. Model presets restore
+the calibrated 32-samples-per-side resolution. Each epoch visits the entire training grid, so its work grows cubically. Large
+grids use a seeded bijective index mapping instead of allocating a sample-order
+array. Material storage stays at 32³, so increasing training resolution does not
+increase the GPU payload or trigger the cache budget.

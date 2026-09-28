@@ -14,6 +14,8 @@ pub enum FileMenuAction {
     New,
     Open,
     OpenRecent(PathBuf),
+    OpenExample(crate::examples::Example),
+    Guide,
     Save,
     SaveAs,
     #[cfg(target_arch = "wasm32")]

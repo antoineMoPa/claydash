@@ -18,6 +18,7 @@ pub(super) struct PreparedGroupScene {
     pub objects: Vec<SdfObject>,
     pub box_depth_atlases: HashMap<uuid::Uuid, std::sync::Arc<BoxDepthAtlas>>,
     pub sphere_depth_atlases: HashMap<uuid::Uuid, std::sync::Arc<SphereDepthAtlas>>,
+    pub neural_fields: HashMap<uuid::Uuid, std::sync::Arc<super::neural_sdf::NeuralField>>,
     pub gaussian_splats: HashSet<uuid::Uuid>,
 }
 
@@ -53,7 +54,7 @@ struct CaptureObjectKey<'a> {
     image_stencil: &'a Option<crate::model::ImageStencil>,
 }
 
-fn capture_key(source: &[SdfObject], root: &SdfObject) -> u64 {
+pub(super) fn capture_key(source: &[SdfObject], root: &SdfObject) -> u64 {
     // External world-space references can change relative geometry when a
     // group moves. Conservatively include its pose if any are present.
     let independent_pose = root.boolean_parent.is_none()
@@ -96,10 +97,20 @@ fn capture_key(source: &[SdfObject], root: &SdfObject) -> u64 {
     std::hash::Hasher::finish(&hasher)
 }
 
+#[cfg(test)]
 pub(super) fn prepare_group_scene(
     source: &[SdfObject],
     cache: &mut HashMap<uuid::Uuid, CachedGroupCapture>,
 ) -> PreparedGroupScene {
+    prepare_group_scene_with_neural(source, cache, &HashMap::new())
+}
+
+pub(super) fn prepare_group_scene_with_neural(
+    source: &[SdfObject],
+    cache: &mut HashMap<uuid::Uuid, CachedGroupCapture>,
+    ready_neural: &HashMap<uuid::Uuid, std::sync::Arc<super::neural_sdf::NeuralField>>,
+) -> PreparedGroupScene {
+    let mut neural_fields = HashMap::new();
     cache.retain(|id, _| source.iter().any(|object| object.uuid == *id));
     let parents: HashMap<_, _> = source
         .iter()
@@ -224,6 +235,25 @@ pub(super) fn prepare_group_scene(
                 });
                 sphere_depth_atlases.insert(root.uuid, atlas);
             }
+            GroupRenderRepresentation::NeuralSdf => {
+                let Some(field) = ready_neural.get(&root.uuid) else {
+                    continue;
+                };
+                if atlas_texels + field.network.payload_records() > MAX_BOX_DEPTH_TEXELS {
+                    continue;
+                }
+                atlas_texels += field.network.payload_records();
+                proxy.object_type = PrimitiveKind::Box.object_type();
+                proxy.params = SdfParams::BoxParams(BoxParams {
+                    box_q: Vec3::splat(field.half_extent),
+                    corner_radius: 0.0,
+                });
+                proxy.repetition = Default::default();
+                proxy.mirror = None;
+                proxy.path_extrusion = None;
+                proxy.surface_inlay = None;
+                neural_fields.insert(root.uuid, field.clone());
+            }
             GroupRenderRepresentation::ExactSdf => continue,
         }
         if group_ids.contains(&root.uuid) {
@@ -275,6 +305,7 @@ pub(super) fn prepare_group_scene(
         box_depth_atlases,
         sphere_depth_atlases,
         gaussian_splats,
+        neural_fields,
     }
 }
 

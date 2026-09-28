@@ -57,8 +57,13 @@ use crate::document;
 #[cfg(target_arch = "wasm32")]
 enum WebDocumentMessage {
     Opened {
+        request: u64,
         name: std::path::PathBuf,
         bytes: Vec<u8>,
+    },
+    ExampleError {
+        request: u64,
+        message: String,
     },
     RenderError {
         id: u64,
@@ -125,6 +130,8 @@ pub struct App {
     document_tx: Sender<WebDocumentMessage>,
     #[cfg(target_arch = "wasm32")]
     document_rx: Receiver<WebDocumentMessage>,
+    #[cfg(target_arch = "wasm32")]
+    document_request: u64,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), unix))]
@@ -248,6 +255,23 @@ impl App {
                     self.open_path(path);
                 }
             }
+            FileMenuAction::OpenExample(example) => {
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("examples")
+                    .join(example.file);
+                match document::read_scene(&path) {
+                    Ok(scene) => {
+                        self.replace_scene(scene);
+                        self.document.start_new();
+                    }
+                    Err(error) => self.document.set_error("open the example", error),
+                }
+            }
+            FileMenuAction::Guide => {
+                if let Err(error) = crate::examples::open_guide() {
+                    self.document.set_error("open the guide", error);
+                }
+            }
             FileMenuAction::OpenRecent(path) => self.open_path(path),
             FileMenuAction::Save => {
                 if let Some(path) = self.document.current_path().map(std::path::Path::to_owned) {
@@ -306,7 +330,34 @@ impl App {
 
     #[cfg(target_arch = "wasm32")]
     fn handle_file_action(&mut self, action: FileMenuAction) {
+        if matches!(
+            action,
+            FileMenuAction::New | FileMenuAction::Open | FileMenuAction::OpenExample(_)
+        ) {
+            self.document_request = self.document_request.wrapping_add(1);
+        }
+        let request = self.document_request;
         match action {
+            FileMenuAction::Guide => crate::examples::open_guide(),
+            FileMenuAction::OpenExample(example) => {
+                let tx = self.document_tx.clone();
+                let ctx = self.egui.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let message = match crate::examples::fetch_example(example.file).await {
+                        Ok(bytes) => WebDocumentMessage::Opened {
+                            request,
+                            name: example.file.into(),
+                            bytes: bytes.to_vec(),
+                        },
+                        Err(error) => WebDocumentMessage::ExampleError {
+                            request,
+                            message: format!("{}: {error:?}", example.title),
+                        },
+                    };
+                    let _ = tx.send(message);
+                    ctx.request_repaint();
+                });
+            }
             FileMenuAction::New => self.new_document(),
             FileMenuAction::Open => {
                 let tx = self.document_tx.clone();
@@ -318,7 +369,11 @@ impl App {
                     if let Some(file) = file {
                         let name = std::path::PathBuf::from(file.file_name());
                         let bytes = file.read().await;
-                        let _ = tx.send(WebDocumentMessage::Opened { name, bytes });
+                        let _ = tx.send(WebDocumentMessage::Opened {
+                            request,
+                            name,
+                            bytes,
+                        });
                     }
                 });
             }
@@ -413,13 +468,25 @@ impl App {
     fn process_web_document_messages(&mut self) {
         while let Ok(message) = self.document_rx.try_recv() {
             match message {
-                WebDocumentMessage::Opened { name, bytes } => {
+                WebDocumentMessage::Opened {
+                    request,
+                    name,
+                    bytes,
+                } => {
+                    if request != self.document_request {
+                        continue;
+                    }
                     match crate::document::deserialize_scene(&bytes) {
                         Ok(scene) => {
                             self.replace_scene(scene);
                             self.document.mark_opened(name);
                         }
                         Err(error) => self.document.set_error("open the project", error),
+                    }
+                }
+                WebDocumentMessage::ExampleError { request, message } => {
+                    if request == self.document_request {
+                        self.document.set_error("open the example", message);
                     }
                 }
                 WebDocumentMessage::RenderFinished(id) => {

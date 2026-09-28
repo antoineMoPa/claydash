@@ -21,7 +21,23 @@ impl Renderer {
         offscreen_capture: bool,
         refine: bool,
     ) {
+        let requests = egui
+            .data_mut(|data| {
+                data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(
+                    "neural-sdf-recompute",
+                ))
+            })
+            .unwrap_or_default();
+        if !requests.is_empty() {
+            self.neural_jobs
+                .reconcile(&objects[..objects.len().min(MAX_OBJECTS)]);
+            for id in requests {
+                self.neural_jobs.recompute(id);
+            }
+            self.invalidate_scene();
+        }
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
+        self.neural_jobs.publish(egui);
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],
