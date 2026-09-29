@@ -79,6 +79,7 @@ pub fn scene_sample(point: Vec3, scene: &[SdfObject]) -> Option<(f32, uuid::Uuid
 }
 
 /// Evaluate one Boolean subtree while retaining its ancestor transforms.
+#[cfg(test)]
 pub fn scene_subtree_sample(
     point: Vec3,
     scene: &[SdfObject],

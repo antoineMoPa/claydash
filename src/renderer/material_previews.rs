@@ -110,7 +110,7 @@ impl Renderer {
             }
         }
         self.material_preview_textures.clear();
-        let pipeline = create_scene_pipeline(
+        let pipeline = create_scene_pipeline_for_materials(
             &self.device,
             &self.shader_source,
             &self.pipeline_layout,
@@ -118,6 +118,8 @@ impl Renderer {
             self.use_bvh,
             1,
             true,
+            false,
+            SceneShaderFeatures::for_material_previews(),
             false,
         );
         let presets = [

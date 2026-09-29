@@ -2,8 +2,9 @@
 
 These are optional representations of one object or Boolean group. The source
 SDF remains editable and authoritative. A representation should be generated
-from the current source, cached separately from the `.claydash` document, and
-invalidated when any source input on which it depends changes. A saved mode is
+from the current source and invalidated when any source input on which it
+depends changes. Neural fields, box and sphere depth atlases, and Gaussian
+captures persist validated caches in `.claydash` files. A saved mode is
 an intent to use a representation, not proof that a valid bake exists.
 
 ## Current implementation
@@ -57,24 +58,42 @@ That path can use an operand BVH for larger groups. This accelerates exact
 union composition. Box and sphere depth atlas groups use a captured representation when
 capture succeeds.
 
+## Saved atlas captures
+
+Project saves persist completed box and sphere depth atlases, including sampled
+depth and RGB, dimensions, bounds, and material ownership. Box captures also
+persist surface normals; Gaussian splats reuse their saved eight-layer box
+capture. GPU material records and acceleration buffers are assembled from the
+restored samples without ray marching the source again. Desktop saves, agent
+saves, and browser project downloads all include these caches.
+
+On open, the renderer checks the capture version, source fingerprint, atlas
+shape, finite sample values, and ownership references before reuse. Source edits
+invalidate the cache; files without valid saved captures bake as before. The
+source geometry and material definitions remain editable, and the existing
+shared proxy buffer budget still applies. Saves include caches already computed
+by the renderer; saving before the first bake requires another save afterward
+to include it. Captured textures and depth samples increase project file size.
+
 ## Neural SDF
 
 Choose **Neural SDF** on an object or Boolean group root. Its editable source
-is sampled at the endpoints of a configurable grid (8–1024 samples per side, default 32) inside a padded cube. The default network has one width-eight ReLU hidden layer (`3 → 8 → 1`,
+is sampled at a fixed number of uniformly random positions (512–1,073,741,824 samples, default 32,768) inside a padded bounding cube. Positions are continuous and do not snap to the former grid. The default network has one width-eight ReLU hidden layer (`3 → 8 → 1`,
 41 parameters). The panel exposes these saved per-group controls:
 
 | Control | Range | Default |
 | --- | --- | --- |
-| Hidden layers | 1–4 | 1 |
-| Width of each hidden layer | 4–32 | 8 |
+| Hidden layers | 1–8 | 1 |
+| Width of each hidden layer | 4–1024 | 8 |
+| Samples (total) | 512–1,073,741,824 | 32,768 |
 | Epochs | 1–512 | 32 |
 | Learning rate | 0.00001–0.1 | 0.001 |
 | Seed | Any unsigned 32-bit integer | 11256099 |
-| Hit distance, grid cells | 0.001–4 | 0.5 |
+| Hit distance, equivalent sample spacing | 0.001–4 | 0.02 |
 
 The **Model size** dropdown offers calibrated presets. All use smooth Softplus
 activation (`log(1 + exp(10x)) / 10`), learning rate 0.001, the default seed, and
-hit distance 0.5 cells. Selecting a preset stages its training settings until
+hit distance 0.02 cells. Selecting a preset stages its training settings until
 **Recompute**; editing its fields switches the displayed choice to **Custom**.
 
 | Preset | Hidden layers | Width | Epochs | Default-duck field RMS |
@@ -90,14 +109,20 @@ for every model. Larger presets increase training and rendering cost. The
 ReLU produces planar patches; Softplus gives continuous hidden-layer derivatives.
 The final layer remains linear so distances can be negative inside the object.
 
-One epoch is a full, deterministically shuffled pass through all grid samples;
+One epoch is a full, deterministically shuffled pass through all random samples;
 batch size is at most 256, with a smaller final batch when needed. Source
-distances are evaluated on demand for each batch, with no cached distance array
-or full-grid sampling pass before training. Validation also samples in bounded
-chunks after each epoch. A separate fixed 32³ material-ownership grid is sampled
+distances and mapped sample positions are evaluated by a GPU compute pass on
+demand for each batch, with no cached distance array
+or complete sampling pass before training. Validation also samples in bounded
+chunks after each epoch. During training, a seeded random mask discards half
+of candidate points whose source SDF distance exceeds 0.4 scene units. All points
+at or below 0.4 are retained. Discarded points skip forward/backpropagation and
+gradient accumulation; each batch averages over retained points only. Validation
+keeps the full candidate set, and ownership capture is unchanged. A separate
+fixed 32³ material-ownership grid is sampled
 in chunks after training. The default 32 epochs perform 4,096 Adam updates. The lowest
-full-grid loss checkpoint is retained, checked after each epoch. The seed
-controls both initialization and shuffle order. Settings are saved with the
+sample-set loss checkpoint is retained, checked after each epoch. The seed
+controls initialization, continuous sample positions, and shuffle order. Settings are saved with the
 object and participate in undo/redo; documents without them use the defaults.
 Numeric text edits commit on Enter or focus loss, so an empty or partial value
 can be typed without changing the setting. Dragging still updates the value.
@@ -107,17 +132,48 @@ Invalid saved settings are rejected rather than silently rewritten.
 settings or adding an undo entry. It also retries a failed fit. Network/training
 edits wait for this button; the current model and any running bake keep their
 previous settings. Geometry edits still trigger automatic rebakes using the last
-applied training settings. The initial bake on selecting Neural SDF or reopening
-a document uses its saved settings. Hit distance updates only the GPU
-payload and reuses the fitted model. Superseded results are rejected even when
-a recompute uses exactly the same settings. No model weights or sampled ownership
-are saved in `.claydash` files.
+applied training settings. The initial bake on selecting Neural SDF uses its
+saved settings. Hit distance updates only the GPU payload and reuses the fitted
+model. Superseded results are rejected even when a recompute uses exactly the
+same settings.
 
-After 200 ms without source changes, desktop training runs on one background
-worker. Browser sampling/training advances in batches with a 4 ms soft budget
-per frame; preparing the sampler and individual work units can exceed that
-budget on large sources. Exact SDF is displayed while work is pending, after
-an edit, or if a fit fails. Obsolete results are discarded, and completion
+Saving a project includes completed neural fields: model weights, the fixed 32³
+material-ownership grid, bounds, fit statistics, and applied training settings.
+Desktop Save/Save As, agent saves, and browser downloads share this behavior.
+A versioned, stable source fingerprint validates each field on reopening; valid
+fields become Ready immediately without training. Pending training edits remain
+separate from the applied settings, so reopening keeps the saved fit until
+Recompute. Older files without a cache train normally. Stale, unsupported, or
+invalid caches also fall back to training. A save while a bake is pending does
+not include an unfinished field; save again after it becomes Ready to persist
+the result. Stored ownership increases project file size.
+
+Training weights, Adam moments, per-sample activations and backpropagated deltas
+stay in GPU storage buffers throughout the fit. Forward passes and backward
+passes run per neuron, and the optimizer reduces per-sample gradients before
+updating each parameter. Validation and best-checkpoint selection also run on
+the GPU. Only the completed weights, statistics, and material ownership grid
+are read back for rendering and saving; no per-batch target or gradient readback
+is required. Buffers are sized for the selected width and reused across batches
+and validation. GPU inference and gradients use scratch arrays
+sized for the widest fitted model in the rendered scene, including restored
+fields. Widths need not be divisible by four. The existing shared 32 MiB proxy
+budget still applies to wider networks.
+
+After 200 ms without source changes, desktop training runs GPU submissions from
+one background worker. Browser training submits bounded batches and waits for
+asynchronous GPU completion with a 4 ms soft scheduling budget per frame. Small
+networks group up to eight batches into one submission to reduce driver overhead;
+wider models use smaller submission groups. GPU work can outlast the scheduling
+budget, and source preparation and pipeline compilation remain on the CPU.
+The sampler uses the renderer’s native primitive packing and Boolean evaluator
+with mirrors, repetition, paths, text, and lattice data. Derived proxies and the
+viewport BVH are excluded from source sampling to respect WebGPU’s portable
+eight-storage-buffer limit. Brick relief sampling includes the geometry
+independently of camera distance. Neural training uses wgpu on every platform.
+Tests check GPU sampling and optimizer math against independent reference
+calculations. Exact SDF is displayed while work is pending, after an edit, or if
+a fit fails. Obsolete results are discarded, and completion
 invalidates the viewport even without another edit. Camera movement reuses the
 model. Capture keys conservatively include source geometry, references,
 modifiers, and materials; unrelated source edits can also cause a rebake.
@@ -132,7 +188,7 @@ missed surfaces at its iteration limit or overloaded the GPU with longer loops.
 As with the learned field itself, these steps are approximate: sign refinement
 cannot recover a thin feature crossed twice within one step.
 The hit tolerance is `max(classic tolerance, hit cells × cube side × world
-distance scale / 31)`, half a grid interval at the default setting. Exact-SDF hit
+distance scale / 31)`, with 0.02 equivalent sample-spacing units at the default setting. Exact-SDF hit
 tolerance is unchanged. Standalone proxies use analytic
 network gradients for normals; composed or deformed proxies use the existing
 field-gradient path. Reflection and transmission origins account for the
@@ -148,11 +204,14 @@ vec4 weight records, and 32³ material/color records independent of training res
 packed weight records. Payloads share the existing
 32 MiB proxy buffer budget. Invalid bounds, nonfinite samples/weights, missing
 sampled zero crossings, and exhausted resources fall back to Exact SDF. Failure
-is retained until source inputs change. The panel reports status, full-grid RMS
-and maximum field errors, and bake elapsed time.
+is retained until source inputs change. Below Recompute, the panel shows only
+the integer percentage (for example, `30%`), from `0%` while queued to `100%`
+when ready. Progress accounts for training, validation, and ownership sampling
+on desktop and browser. Sample-set RMS and maximum field errors and bake elapsed
+time are retained in saved field metadata.
 
 The default eight ReLU neurons deliberately limit quality: surfaces are faceted, small holes
-and disjoint parts can disappear, and half-cell hit tolerance expands silhouettes.
+and disjoint parts can disappear, and larger hit tolerances expand silhouettes.
 A valid zero crossing is not a fidelity guarantee. Use Exact SDF for faithful
 geometry. See [neural measurements](rendering-performance.md#neural-sdf) for
 validation and timings; this mode is not automatically selected as an optimization.
@@ -218,7 +277,8 @@ the renderer uses the source SDF.
   bake stale. Camera movement also invalidates camera-facing impostors.
 - Cache keys should include the source subtree version, transform, mode and
   resolution, relevant material version, and any view or lighting dependency.
-  The cache should not be serialized into the scene document by default.
+  Persist completed captures with a versioned source fingerprint and validate
+  their dimensions, data, and ownership references on open.
 - If capture fails or exceeds the atlas buffer, rendering uses Exact SDF.
 - Test a candidate against direct output across opaque, translucent, Boolean,
   material, modifier, repetition, near-camera, and partially offscreen scenes.
@@ -273,9 +333,12 @@ an example file to make a bake appear faster.
 - Kerbl et al., [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/): fitted anisotropic splats and visibility-aware rasterization.
 - Adobe Research, [Sphere Carving: Bounding Volumes for Signed Distance Fields](https://research.adobe.com/publication/sphere-carving-bounding-volumes-for-signed-distance-fields/): conservative bounds for SDF acceleration.
 
-Samples per side is staged until Recompute, like other training settings.
+The total sample count is staged until Recompute, like other training settings.
 Recompute is disabled while a bake is queued or training. Model presets restore
-the calibrated 32-samples-per-side resolution. Each epoch visits the entire training grid, so its work grows cubically. Large
-grids use a seeded bijective index mapping instead of allocating a sample-order
-array. Material storage stays at 32³, so increasing training resolution does not
-increase the GPU payload or trigger the cache budget.
+32,768 samples. Each epoch visits the same seeded, uniformly random sample set,
+so work grows linearly with the count. Training and validation evaluate distances
+at those continuous positions, including between the former grid points. Large
+sets use a seeded bijective index mapping instead of allocating a sample-order
+array. Material storage stays at 32³, so increasing the sample count does not
+increase the GPU payload or trigger the cache budget. Old `samples_per_side`
+settings map to their cubed total count when loaded; new saves store `samples`.

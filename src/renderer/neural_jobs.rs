@@ -1,11 +1,14 @@
-use super::neural_sdf::{payload_records, NeuralField, TrainingJob};
+use super::neural_sdf::{payload_records, GpuTrainingJob, NeuralField};
 use super::*;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 #[derive(Clone, PartialEq)]
 pub(crate) enum NeuralStatus {
+    Idle,
     Pending,
-    Training,
+    Training {
+        percent: u32,
+    },
     Ready {
         rms: f32,
         max: f32,
@@ -14,7 +17,7 @@ pub(crate) enum NeuralStatus {
     Failed(String),
 }
 struct Entry {
-    // Settings committed by the initial bake or the Recompute button.
+    // Settings committed by the Recompute button or restored from a saved bake.
     training: crate::model::NeuralTrainingSettings,
     key: u64,
     generation: u64,
@@ -29,8 +32,10 @@ struct Active {
     receiver: std::sync::mpsc::Receiver<Result<NeuralField, &'static str>>,
     #[cfg(not(target_arch = "wasm32"))]
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(not(target_arch = "wasm32"))]
+    progress: Arc<std::sync::atomic::AtomicU32>,
     #[cfg(target_arch = "wasm32")]
-    job: Option<TrainingJob>,
+    job: Option<GpuTrainingJob>,
 }
 impl Drop for Active {
     fn drop(&mut self) {
@@ -48,6 +53,35 @@ pub(super) struct NeuralJobs {
     generation: u64,
 }
 impl NeuralJobs {
+    pub fn objects_for_save(&self, source: &[SdfObject]) -> Vec<SdfObject> {
+        let mut objects = source.to_vec();
+        let source = &source[..source.len().min(MAX_OBJECTS)];
+        for object in &mut objects {
+            if object.render_representation != crate::model::GroupRenderRepresentation::NeuralSdf {
+                object.saved_neural_field = None;
+                continue;
+            }
+            let key = super::group_capture::capture_key(source, object);
+            if let Some(entry) = self
+                .entries
+                .get(&object.uuid)
+                .filter(|entry| entry.key == key)
+            {
+                object.saved_neural_field = entry
+                    .field
+                    .as_ref()
+                    .map(|field| Arc::new(field.saved(key, entry.training)));
+            } else if !object
+                .saved_neural_field
+                .as_deref()
+                .is_some_and(|saved| NeuralField::from_saved(saved, key, source).is_some())
+            {
+                object.saved_neural_field = None;
+            }
+        }
+        objects
+    }
+
     pub fn reconcile(&mut self, source: &[SdfObject]) {
         let mut changed = false;
         self.entries.retain(|id, _| {
@@ -61,21 +95,42 @@ impl NeuralJobs {
             o.render_representation == crate::model::GroupRenderRepresentation::NeuralSdf
         }) {
             let key = super::group_capture::capture_key(source, root);
-            let training = self
+            if let Some(entry) = self
                 .entries
                 .get(&root.uuid)
-                .map_or(root.neural_sdf.training, |entry| entry.training);
-            let payload = payload_records(training);
-            admitted += payload.unwrap_or(0);
-            if self.entries.get(&root.uuid).is_some_and(|e| e.key == key) {
+                .filter(|entry| entry.key == key)
+            {
+                admitted += payload_records(entry.training).unwrap_or(0);
                 continue;
             }
-            let status = if payload.is_none() {
+            let restored = root.saved_neural_field.as_deref().and_then(|saved| {
+                NeuralField::from_saved(saved, key, source).map(|field| (saved.training, field))
+            });
+            let training = restored
+                .as_ref()
+                .map(|(training, _)| *training)
+                .or_else(|| self.entries.get(&root.uuid).map(|entry| entry.training))
+                .unwrap_or(root.neural_sdf.training);
+            let payload = payload_records(training);
+            admitted += payload.unwrap_or(0);
+            let mut status = if payload.is_none() {
                 NeuralStatus::Failed("Invalid neural training settings".into())
             } else if admitted > super::box_depth_atlas::MAX_BOX_DEPTH_TEXELS {
                 NeuralStatus::Failed("Neural cache budget exceeded".into())
             } else {
-                NeuralStatus::Pending
+                NeuralStatus::Idle
+            };
+            let field = if matches!(status, NeuralStatus::Idle) {
+                restored.map(|(_, field)| {
+                    status = NeuralStatus::Ready {
+                        rms: field.rms_error,
+                        max: field.max_error,
+                        milliseconds: field.bake_ms,
+                    };
+                    Arc::new(field)
+                })
+            } else {
+                None
             };
             self.generation = self.generation.wrapping_add(1);
             self.entries.insert(
@@ -85,7 +140,7 @@ impl NeuralJobs {
                     key,
                     generation: self.generation,
                     status,
-                    field: None,
+                    field,
                 },
             );
             changed = true;
@@ -159,7 +214,10 @@ impl NeuralJobs {
         true
     }
     /// Returns true only when a newly completed model requires a GPU upload.
-    pub fn poll(&mut self) -> bool {
+    pub fn poll(
+        &mut self,
+        mut factory: impl FnMut(Arc<Vec<SdfObject>>, uuid::Uuid) -> Result<GpuTrainingJob, &'static str>,
+    ) -> bool {
         let mut changed = false;
         if let Some(active) = &mut self.active {
             #[cfg(not(target_arch = "wasm32"))]
@@ -181,6 +239,22 @@ impl NeuralJobs {
                 Ok(true) => Some(active.job.take().unwrap().finish()),
                 Err(error) => Some(Err(error)),
             };
+            #[cfg(not(target_arch = "wasm32"))]
+            let percent = active.progress.load(std::sync::atomic::Ordering::Relaxed);
+            #[cfg(target_arch = "wasm32")]
+            let percent = active
+                .job
+                .as_ref()
+                .map_or(100, GpuTrainingJob::progress_percent);
+            if let Some(entry) = self
+                .entries
+                .get_mut(&active.root)
+                .filter(|entry| entry.key == active.key && entry.generation == active.generation)
+            {
+                entry.status = NeuralStatus::Training {
+                    percent: percent.min(99),
+                };
+            }
             if let Some(result) = result {
                 if let Some(entry) = self
                     .entries
@@ -216,24 +290,36 @@ impl NeuralJobs {
                     .map(|e| (o.uuid, e.key, e.generation))
             });
             if let Some((root, key, generation)) = next {
-                self.entries.get_mut(&root).unwrap().status = NeuralStatus::Training;
+                self.entries.get_mut(&root).unwrap().status = NeuralStatus::Training { percent: 0 };
                 let source = self.training_source(root);
+                let job = match factory(source, root) {
+                    Ok(job) => job,
+                    Err(error) => {
+                        self.entries.get_mut(&root).unwrap().status =
+                            NeuralStatus::Failed(error.into());
+                        return changed;
+                    }
+                };
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let (sender, receiver) = std::sync::mpsc::channel();
                     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let cancelled = cancel.clone();
+                    let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
+                    let worker_progress = progress.clone();
                     std::thread::spawn(move || {
-                        let result = (|| {
-                            let mut job =
-                                TrainingJob::new(source, root).ok_or("Invalid source bounds")?;
-                            loop {
-                                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                                    return Err("Cancelled");
-                                }
-                                if job.advance(Duration::from_millis(4))? {
-                                    return job.finish();
-                                }
+                        let mut job = job;
+                        let result = (|| loop {
+                            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                                return Err("Cancelled");
+                            }
+                            let complete = job.advance(Duration::from_millis(4))?;
+                            worker_progress.store(
+                                job.progress_percent(),
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
+                            if complete {
+                                return job.finish();
                             }
                         })();
                         let _ = sender.send(result);
@@ -244,21 +330,17 @@ impl NeuralJobs {
                         generation,
                         receiver,
                         cancel,
+                        progress,
                     });
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    if let Some(job) = TrainingJob::new(source, root) {
-                        self.active = Some(Active {
-                            root,
-                            key,
-                            generation,
-                            job: Some(job),
-                        });
-                    } else {
-                        self.entries.get_mut(&root).unwrap().status =
-                            NeuralStatus::Failed("Invalid source bounds".into());
-                    }
+                    self.active = Some(Active {
+                        root,
+                        key,
+                        generation,
+                        job: Some(job),
+                    });
                 }
             }
         }
@@ -325,15 +407,165 @@ mod tests {
         object.render_representation = GroupRenderRepresentation::NeuralSdf;
         vec![object]
     }
+    // Lifecycle and persistence checks consume a completed field without training.
+    fn field_fixture(source: &[SdfObject]) -> NeuralField {
+        let root = &source[0];
+        let training = root.neural_sdf.training;
+        let key = super::super::group_capture::capture_key(source, root);
+        let saved = crate::model::SavedNeuralField {
+            version: 1,
+            source_key: key,
+            training,
+            weights: vec![0.125; training.parameter_count().unwrap()],
+            half_extent: 0.5,
+            owners: vec![root.uuid; 32 * 32 * 32],
+            rms_error: 0.01,
+            max_error: 0.03,
+            bake_ms: 5.0,
+        };
+        NeuralField::from_saved(&saved, key, source).unwrap()
+    }
     #[test]
-    fn neural_large_training_grids_are_admitted_and_recomputed() {
-        for resolution in [128, 1024] {
+    fn neural_training_starts_only_after_recompute() {
+        let mut jobs = NeuralJobs::default();
+        let mut source = source();
+        let id = source[0].uuid;
+        jobs.reconcile(&source);
+        jobs.changed_at = Some(web_time::Instant::now() - Duration::from_secs(1));
+        assert!(!jobs.is_busy());
+        jobs.poll(|_, _| panic!("selection must not start training"));
+        assert!(jobs.recompute(id));
+        assert!(jobs.is_busy());
+        let mut started = false;
+        jobs.poll(|_, _| {
+            started = true;
+            Err("test GPU job creation failure")
+        });
+        assert!(started);
+        source[0].transform.scale *= 2.0;
+        jobs.reconcile(&source);
+        jobs.changed_at = Some(web_time::Instant::now() - Duration::from_secs(1));
+        assert!(!jobs.is_busy());
+        jobs.poll(|_, _| panic!("geometry edits must not start training"));
+    }
+
+    #[test]
+    fn saved_neural_fields_reopen_ready_and_preserve_pending_settings() {
+        let mut source = source();
+        let id = source[0].uuid;
+        source[0].neural_sdf.training.samples = 512;
+        source[0].neural_sdf.training.width = 65;
+        let applied = source[0].neural_sdf.training;
+        let field = field_fixture(&source);
+        let mut jobs = NeuralJobs::default();
+        jobs.reconcile(&source);
+        jobs.entries.get_mut(&id).unwrap().field = Some(Arc::new(field.clone()));
+        // Edits are staged until Recompute, and must survive reopening separately.
+        source[0].neural_sdf.training.width = 128;
+        source[0].neural_sdf.hit_distance_cells = 1.25;
+        let mut tree = crate::model::DataTree::default();
+        crate::model::set_objects(&mut tree, jobs.objects_for_save(&source));
+        let bytes = crate::document::serialize_scene(&tree).unwrap();
+        let scene = crate::document::deserialize_scene(&bytes).unwrap();
+        let mut reopened = crate::model::DataTree::default();
+        reopened.set_tree("scene", scene);
+        let objects = crate::model::objects_ref(&reopened);
+        let mut restored = NeuralJobs::default();
+        restored.reconcile(objects);
+        assert!(matches!(
+            restored.entries[&id].status,
+            NeuralStatus::Ready { .. }
+        ));
+        assert!(!restored.is_busy());
+        assert!(!restored.poll(|_, _| panic!("restored fields must not retrain")));
+        let restored_field = restored.ready()[&id].clone();
+        assert_eq!(restored_field.network.weights, field.network.weights);
+        assert_eq!(
+            restored_field.network.gpu_records(1.25),
+            field.network.gpu_records(1.25)
+        );
+        assert_eq!(restored_field.owners, field.owners);
+        assert_eq!(restored_field.half_extent, field.half_extent);
+        assert_eq!(restored.entries[&id].training, applied);
+        assert_eq!(objects[0].neural_sdf.training.width, 128);
+        assert_eq!(objects[0].neural_sdf.hit_distance_cells, 1.25);
+        assert!(restored.recompute(id));
+        assert_eq!(restored.entries[&id].training.width, 128);
+        assert!(restored.objects_for_save(objects)[0]
+            .saved_neural_field
+            .is_none());
+
+        let mut edited = objects.to_vec();
+        edited[0].transform.scale *= 2.0;
+        let mut fresh = NeuralJobs::default();
+        fresh.reconcile(&edited);
+        assert!(matches!(fresh.entries[&id].status, NeuralStatus::Idle));
+        assert!(fresh.ready().is_empty());
+        assert!(fresh.objects_for_save(&edited)[0]
+            .saved_neural_field
+            .is_none());
+        edited[0].saved_neural_field = None;
+        let mut legacy = NeuralJobs::default();
+        legacy.reconcile(&edited);
+        assert!(matches!(legacy.entries[&id].status, NeuralStatus::Idle));
+    }
+
+    #[test]
+    fn invalid_saved_neural_fields_wait_for_recompute() {
+        let mut source = source();
+        let id = source[0].uuid;
+        let training = source[0].neural_sdf.training;
+        let valid = crate::model::SavedNeuralField {
+            version: 1,
+            source_key: super::super::group_capture::capture_key(&source, &source[0]),
+            training,
+            weights: vec![0.0; training.parameter_count().unwrap()],
+            half_extent: 0.5,
+            owners: vec![id; 32 * 32 * 32],
+            rms_error: 0.01,
+            max_error: 0.03,
+            bake_ms: 5.0,
+        };
+        for case in 0..8 {
+            let mut saved = valid.clone();
+            match case {
+                0 => saved.version = 99,
+                1 => saved.source_key ^= 1,
+                2 => {
+                    saved.weights.pop();
+                }
+                3 => saved.weights[0] = f32::NAN,
+                4 => saved.half_extent = 0.0,
+                5 => {
+                    saved.owners.pop();
+                }
+                6 => saved.owners[0] = uuid::Uuid::new_v4(),
+                7 => saved.training.width = crate::model::NeuralTrainingSettings::MAX_WIDTH + 1,
+                _ => unreachable!(),
+            }
+            source[0].saved_neural_field = Some(Arc::new(saved));
+            let mut jobs = NeuralJobs::default();
+            jobs.reconcile(&source);
+            assert!(
+                matches!(jobs.entries[&id].status, NeuralStatus::Idle),
+                "case {case}"
+            );
+            assert!(jobs.ready().is_empty());
+        }
+    }
+
+    #[test]
+    fn neural_large_sample_counts_are_admitted_and_recomputed() {
+        for count in [
+            128_u32.pow(3),
+            crate::model::NeuralTrainingSettings::MAX_SAMPLES,
+        ] {
             let mut jobs = NeuralJobs::default();
             let mut source = source();
-            source[0].neural_sdf.training.samples_per_side = resolution;
+            source[0].neural_sdf.training.samples = count;
             let id = source[0].uuid;
             jobs.reconcile(&source);
-            assert!(matches!(jobs.entries[&id].status, NeuralStatus::Pending));
+            assert!(matches!(jobs.entries[&id].status, NeuralStatus::Idle));
             assert!(jobs.recompute(id));
             assert!(matches!(jobs.entries[&id].status, NeuralStatus::Pending));
         }
@@ -344,7 +576,7 @@ mod tests {
         let mut source = source();
         let id = source[0].uuid;
         jobs.reconcile(&source);
-        assert!(!jobs.poll());
+        assert!(!jobs.poll(|_, _| panic!("unexpected training request")));
         assert!(jobs.active.is_none());
         let key = jobs.entries[&id].key;
         jobs.entries.get_mut(&id).unwrap().status = NeuralStatus::Failed("test failure".into());
@@ -353,7 +585,7 @@ mod tests {
         source[0].transform.scale *= 2.0;
         jobs.reconcile(&source);
         assert_ne!(key, jobs.entries[&id].key);
-        assert!(matches!(jobs.entries[&id].status, NeuralStatus::Pending));
+        assert!(matches!(jobs.entries[&id].status, NeuralStatus::Idle));
         source[0].render_representation = GroupRenderRepresentation::ExactSdf;
         jobs.reconcile(&source);
         assert!(jobs.entries.is_empty());
@@ -375,13 +607,14 @@ mod tests {
             generation: jobs.entries[&id].generation,
             receiver,
             cancel: cancel.clone(),
+            progress: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         });
         source[0].transform.scale *= 2.0;
         jobs.reconcile(&source);
         assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
         sender.send(Err("obsolete failure")).unwrap();
-        assert!(!jobs.poll());
-        assert!(matches!(jobs.entries[&id].status, NeuralStatus::Pending));
+        assert!(!jobs.poll(|_, _| panic!("unexpected training request")));
+        assert!(matches!(jobs.entries[&id].status, NeuralStatus::Idle));
         assert!(jobs.ready().is_empty());
     }
     #[test]
@@ -403,7 +636,7 @@ mod tests {
         source[0].neural_sdf.training.epochs = 64;
         source[0].neural_sdf.training.learning_rate = 0.002;
         source[0].neural_sdf.training.seed = 42;
-        source[0].neural_sdf.training.samples_per_side = 17;
+        source[0].neural_sdf.training.samples = 4913;
         jobs.reconcile(&source);
         assert_eq!(key, jobs.entries[&id].key);
         assert_eq!(generation, jobs.entries[&id].generation);
@@ -442,6 +675,7 @@ mod tests {
             generation,
             receiver,
             cancel: cancel.clone(),
+            progress: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         });
         let mut edited = source.clone();
         edited[0].neural_sdf.training.width = 16;
@@ -454,7 +688,7 @@ mod tests {
         assert_ne!(generation, jobs.entries[&id].generation);
         sender.send(Err("obsolete failure")).unwrap();
         jobs.changed_at = Some(web_time::Instant::now());
-        assert!(!jobs.poll());
+        assert!(!jobs.poll(|_, _| panic!("unexpected training request")));
         assert!(matches!(jobs.entries[&id].status, NeuralStatus::Pending));
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -465,8 +699,7 @@ mod tests {
         let id = source[0].uuid;
         jobs.reconcile(&source);
         let key = jobs.entries[&id].key;
-        let mut job = TrainingJob::new(Arc::new(source.clone()), id).unwrap();
-        while !job.advance(Duration::from_millis(4)).unwrap() {}
+        let field = field_fixture(&source);
         let (sender, receiver) = std::sync::mpsc::channel();
         jobs.active = Some(Active {
             root: id,
@@ -474,10 +707,11 @@ mod tests {
             generation: jobs.entries[&id].generation,
             receiver,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            progress: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         });
-        sender.send(Ok(job.finish().unwrap())).unwrap();
-        assert!(jobs.poll());
-        assert!(!jobs.poll());
+        sender.send(Ok(field)).unwrap();
+        assert!(jobs.poll(|_, _| panic!("unexpected training request")));
+        assert!(!jobs.poll(|_, _| panic!("unexpected training request")));
         assert!(jobs.ready().contains_key(&id));
         let first = jobs.ready()[&id].clone();
         source[0].neural_sdf.training.layers = 2;
@@ -490,5 +724,23 @@ mod tests {
         assert!(matches!(jobs.entries[&id].status, NeuralStatus::Failed(_)));
         jobs.reconcile(&source);
         assert!(matches!(jobs.entries[&id].status, NeuralStatus::Failed(_)));
+    }
+}
+
+impl Renderer {
+    pub(crate) fn optimized_objects_for_save(&self, source: &[SdfObject]) -> Vec<SdfObject> {
+        let mut objects = self.neural_jobs.objects_for_save(source);
+        super::group_capture::objects_with_saved_captures(
+            source,
+            &mut objects,
+            &self.group_capture_cache,
+        );
+        objects
+    }
+
+    pub(crate) fn reset_optimized_fields(&mut self) {
+        self.neural_jobs = NeuralJobs::default();
+        self.group_capture_cache.clear();
+        self.group_compute_requests.clear();
     }
 }

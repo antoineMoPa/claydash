@@ -149,6 +149,7 @@ impl Renderer {
                 &self.shader_source,
                 &self.pipeline_layout,
                 capacity,
+                shader_features,
             ));
         } else if !self.hybrid_enabled {
             self.hybrid_pipeline = None;

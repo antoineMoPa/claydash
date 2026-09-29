@@ -448,7 +448,7 @@ impl App {
             Request::Save { path } => {
                 let path = path.or_else(|| self.document.current_path().map(ToOwned::to_owned));
                 match path {
-                    Some(path) => document::write_scene(&path, &self.tree).map(|_| {
+                    Some(path) => document::write_scene(&path, &self.project_tree_for_save()).map(|_| {
                         self.document.mark_saved(path.clone());
                         json!({"path": path})
                     }),

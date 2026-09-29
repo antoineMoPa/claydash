@@ -1,8 +1,11 @@
 //! Tiny, deterministic neural distance bake. Positions and distances are explicitly
-//! mapped to a cube; no trained data is serialized into the document.
+//! mapped to a cube; completed fields can be persisted in the document.
 use super::*;
 use crate::model::{lattice_bounds, lattice_world_matrix, PreparedSubtreeSampler};
 use std::sync::Arc;
+
+mod gpu;
+pub(super) use gpu::GpuTrainingJob;
 
 #[cfg(test)]
 pub(super) const GRID: usize = 32;
@@ -11,7 +14,6 @@ pub(super) const SAMPLES: usize = GRID * GRID * GRID;
 const MATERIAL_GRID: usize = 32;
 const MATERIAL_SAMPLES: usize = MATERIAL_GRID * MATERIAL_GRID * MATERIAL_GRID;
 const BATCH: usize = 256;
-const MAX_WIDTH: usize = 32;
 use crate::model::NeuralTrainingSettings;
 
 pub(super) fn payload_records(settings: NeuralTrainingSettings) -> Option<usize> {
@@ -30,8 +32,25 @@ pub(super) struct Network {
     activation: crate::model::NeuralActivation,
     layers: usize,
     width: usize,
-    grid: usize,
+    sample_resolution: f32,
 }
+#[cfg(test)]
+struct NetworkScratch {
+    activations: Vec<f32>,
+    delta: Vec<f32>,
+    previous: Vec<f32>,
+}
+#[cfg(test)]
+impl NetworkScratch {
+    fn new(network: &Network) -> Self {
+        Self {
+            activations: vec![0.0; network.layers * network.width],
+            delta: vec![0.0; network.width],
+            previous: vec![0.0; network.width],
+        }
+    }
+}
+
 fn random_u32(state: &mut u32) -> u32 {
     // An LCG supports every seed, including zero.
     *state = state.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -48,7 +67,7 @@ impl Network {
                     .parameter_count()
                     .expect("validated network settings")
             ],
-            grid: settings.samples_per_side as usize,
+            sample_resolution: (settings.samples as f32).cbrt(),
             activation: settings.activation,
             layers,
             width,
@@ -91,7 +110,8 @@ impl Network {
     fn output_offset(&self) -> usize {
         self.width * 4 + (self.layers - 1) * self.width * (self.width + 1)
     }
-    fn forward(&self, p: Vec3, activations: &mut [[f32; MAX_WIDTH]; 4]) -> f32 {
+    #[cfg(test)]
+    fn forward(&self, p: Vec3, activations: &mut [f32]) -> f32 {
         for layer in 0..self.layers {
             let inputs = if layer == 0 { 3 } else { self.width };
             for row in 0..self.width {
@@ -101,53 +121,68 @@ impl Network {
                     let value = if layer == 0 {
                         p[col]
                     } else {
-                        activations[layer - 1][col]
+                        activations[(layer - 1) * self.width + col]
                     };
                     sum += self.weights[offset + col] * value;
                 }
-                activations[layer][row] = self.activation.evaluate(sum);
+                activations[layer * self.width + row] = self.activation.evaluate(sum);
             }
         }
         let offset = self.output_offset();
         let mut sum = self.weights[offset + self.width];
         for i in 0..self.width {
-            sum += self.weights[offset + i] * activations[self.layers - 1][i];
+            sum += self.weights[offset + i] * activations[(self.layers - 1) * self.width + i];
         }
         sum
     }
+    #[cfg(test)]
     pub fn evaluate(&self, p: Vec3) -> f32 {
-        self.forward(p, &mut [[0.0; MAX_WIDTH]; 4])
+        self.forward(p, &mut vec![0.0; self.layers * self.width])
     }
+    #[cfg(test)]
     fn gradient(&self, p: Vec3, target: f32, gradient: &mut [f32]) {
-        let mut activations = [[0.0; MAX_WIDTH]; 4];
-        let error = 2.0 * (self.forward(p, &mut activations) - target);
+        self.gradient_with_scratch(p, target, gradient, &mut NetworkScratch::new(self));
+    }
+    #[cfg(test)]
+    fn gradient_with_scratch(
+        &self,
+        p: Vec3,
+        target: f32,
+        gradient: &mut [f32],
+        scratch: &mut NetworkScratch,
+    ) {
+        let error = 2.0 * (self.forward(p, &mut scratch.activations) - target);
         let out = self.output_offset();
         gradient[out + self.width] += error;
-        let mut delta = [0.0; MAX_WIDTH];
         for i in 0..self.width {
-            gradient[out + i] += error * activations[self.layers - 1][i];
-            delta[i] = error * self.weights[out + i];
+            gradient[out + i] += error * scratch.activations[(self.layers - 1) * self.width + i];
+            scratch.delta[i] = error * self.weights[out + i];
         }
         for layer in (0..self.layers).rev() {
             let inputs = if layer == 0 { 3 } else { self.width };
-            let mut previous = [0.0; MAX_WIDTH];
+            scratch.previous.fill(0.0);
             for row in 0..self.width {
-                let local_delta =
-                    delta[row] * self.activation.slope_from_output(activations[layer][row]);
+                let local_delta = scratch.delta[row]
+                    * self
+                        .activation
+                        .slope_from_output(scratch.activations[layer * self.width + row]);
                 let offset = self.layer_offset(layer) + row * (inputs + 1);
                 gradient[offset + inputs] += local_delta;
                 for col in 0..inputs {
                     let value = if layer == 0 {
                         p[col]
                     } else {
-                        activations[layer - 1][col]
+                        scratch.activations[(layer - 1) * self.width + col]
                     };
                     gradient[offset + col] += local_delta * value;
-                    previous[col] += self.weights[offset + col] * local_delta;
+                    scratch.previous[col] += self.weights[offset + col] * local_delta;
                 }
             }
-            delta = previous;
+            std::mem::swap(&mut scratch.delta, &mut scratch.previous);
         }
+    }
+    pub fn width(&self) -> u32 {
+        self.width as u32
     }
     pub fn gpu_records(&self, hit_distance_cells: f32) -> Vec<[f32; 4]> {
         let mut records = vec![
@@ -156,7 +191,7 @@ impl Network {
                 self.lipschitz(),
                 hit_distance_cells,
                 self.activation.shader_id() as f32,
-                self.grid as f32,
+                self.sample_resolution,
             ],
         ];
         // Pad each affine row to vec4 alignment so hidden layers can use dot products.
@@ -212,10 +247,11 @@ impl Network {
         }
         // Propagate component-wise absolute derivative bounds. ReLU slopes
         // are at most one, so this remains safe for deeper/wider networks.
-        let mut bounds = [Vec3::ZERO; MAX_WIDTH];
+        let mut bounds = vec![Vec3::ZERO; self.width];
+        let mut next = vec![Vec3::ZERO; self.width];
         for layer in 0..self.layers {
             let inputs = if layer == 0 { 3 } else { self.width };
-            let mut next = [Vec3::ZERO; MAX_WIDTH];
+            next.fill(Vec3::ZERO);
             for row in 0..self.width {
                 let offset = self.layer_offset(layer) + row * (inputs + 1);
                 if layer == 0 {
@@ -226,7 +262,7 @@ impl Network {
                     }
                 }
             }
-            bounds = next;
+            std::mem::swap(&mut bounds, &mut next);
         }
         let mut gradient = Vec3::ZERO;
         for i in 0..self.width {
@@ -241,6 +277,7 @@ pub(super) fn grid_position(index: usize) -> Vec3 {
     sample_position(index, GRID)
 }
 
+#[cfg(test)]
 fn sample_position(index: usize, grid: usize) -> Vec3 {
     Vec3::new(
         (index % grid) as f32,
@@ -248,6 +285,27 @@ fn sample_position(index: usize, grid: usize) -> Vec3 {
         (index / (grid * grid)) as f32,
     ) * (2.0 / (grid - 1) as f32)
         - Vec3::ONE
+}
+
+#[cfg(test)]
+fn sample_hash(mut value: u32) -> u32 {
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x7feb352d);
+    value ^= value >> 15;
+    value = value.wrapping_mul(0x846ca68b);
+    value ^ (value >> 16)
+}
+#[cfg(test)]
+fn drop_training_sample(index: usize, seed: u32, distance: f32) -> bool {
+    distance > 0.4 && sample_hash(index as u32 ^ seed ^ 0xa511e9b3) & 1 != 0
+}
+
+#[cfg(test)]
+fn random_sample_position(index: usize, seed: u32) -> Vec3 {
+    let base = (index as u32).wrapping_mul(3) ^ seed;
+    let coordinate =
+        |axis: u32| (sample_hash(base.wrapping_add(axis)) >> 8) as f32 * (2.0 / 16_777_216.0) - 1.0;
+    Vec3::new(coordinate(0), coordinate(1), coordinate(2))
 }
 
 #[derive(Clone, Debug)]
@@ -260,8 +318,68 @@ pub(super) struct NeuralField {
     pub bake_ms: f64,
 }
 
-// Preserve calibrated shuffles for small grids; large grids use a bijective
-// affine index mapping instead of allocating billions of sample indices.
+impl NeuralField {
+    pub fn saved(
+        &self,
+        source_key: u64,
+        training: NeuralTrainingSettings,
+    ) -> crate::model::SavedNeuralField {
+        crate::model::SavedNeuralField {
+            version: 1,
+            source_key,
+            training,
+            weights: self.network.weights.clone(),
+            half_extent: self.half_extent,
+            owners: self.owners.clone(),
+            rms_error: self.rms_error,
+            max_error: self.max_error,
+            bake_ms: self.bake_ms,
+        }
+    }
+
+    pub fn from_saved(
+        saved: &crate::model::SavedNeuralField,
+        key: u64,
+        source: &[SdfObject],
+    ) -> Option<Self> {
+        let settings = saved.training;
+        let ids: std::collections::HashSet<_> = source.iter().map(|object| object.uuid).collect();
+        if saved.version != 1
+            || saved.source_key != key
+            || settings.parameter_count()? != saved.weights.len()
+            || saved.weights.iter().any(|weight| !weight.is_finite())
+            || !saved.half_extent.is_finite()
+            || saved.half_extent <= 0.0
+            || saved.owners.len() != MATERIAL_SAMPLES
+            || saved.owners.iter().any(|id| !ids.contains(id))
+            || !saved.rms_error.is_finite()
+            || saved.rms_error < 0.0
+            || !saved.max_error.is_finite()
+            || saved.max_error < 0.0
+            || !saved.bake_ms.is_finite()
+            || saved.bake_ms < 0.0
+        {
+            return None;
+        }
+        Some(Self {
+            network: Network {
+                weights: saved.weights.clone(),
+                activation: settings.activation,
+                layers: settings.layers as usize,
+                width: settings.width as usize,
+                sample_resolution: (settings.samples as f32).cbrt(),
+            },
+            half_extent: saved.half_extent,
+            owners: saved.owners.clone(),
+            rms_error: saved.rms_error,
+            max_error: saved.max_error,
+            bake_ms: saved.bake_ms,
+        })
+    }
+}
+
+// Shuffle small sample sets; large sets use a bijective affine index mapping
+// instead of allocating billions of sample indices.
 enum SampleOrder {
     Shuffled(Vec<usize>),
     Mapped {
@@ -322,38 +440,26 @@ impl SampleOrder {
     }
 }
 
-pub(super) struct TrainingJob {
-    source: Arc<Vec<SdfObject>>,
-    root: uuid::Uuid,
+// Host state for GPU initialization, sample scheduling, and readback assembly.
+struct TrainingState {
     world: glam::Mat4,
     center: Vec3,
     half_extent: f32,
     distance_unit: f32,
     owners: Vec<uuid::Uuid>,
     network: Network,
-    first: Vec<f32>,
-    second: Vec<f32>,
-    gradient: Vec<f32>,
     settings: NeuralTrainingSettings,
     sample_order: SampleOrder,
     update: usize,
-    batch_fill: usize,
     rng: u32,
     best: Network,
     best_loss: f32,
-    validation_cursor: usize,
-    validation_loss: f32,
-    validation_max_error: f32,
     best_max_error: f32,
-    validating: bool,
-    training_complete: bool,
-    validation_min: f32,
-    validation_max: f32,
     best_min: f32,
     best_max: f32,
     started: web_time::Instant,
 }
-impl TrainingJob {
+impl TrainingState {
     pub fn new(source: Arc<Vec<SdfObject>>, root: uuid::Uuid) -> Option<Self> {
         let settings = source
             .iter()
@@ -365,9 +471,8 @@ impl TrainingJob {
         {
             return None;
         }
-        let samples = (settings.samples_per_side as usize).pow(3);
+        let samples = settings.samples as usize;
         let network = Network::new(settings);
-        let parameters = network.weights.len();
         let sampler = PreparedSubtreeSampler::new(&source, root)?;
         let (minimum, maximum) = lattice_bounds(&source, root)?;
         let world = lattice_world_matrix(&source, root);
@@ -390,151 +495,26 @@ impl TrainingJob {
         }
         drop(sampler);
         Some(Self {
-            source,
-            root,
             world,
             center: (minimum + maximum) * 0.5,
             half_extent,
             distance_unit,
             owners: Vec::with_capacity(MATERIAL_SAMPLES),
             network: network.clone(),
-            first: vec![0.0; parameters],
-            second: vec![0.0; parameters],
-            gradient: vec![0.0; parameters],
             settings,
             sample_order: SampleOrder::new(samples),
             update: 0,
-            batch_fill: 0,
             rng: settings.seed,
             best: network,
             best_loss: f32::INFINITY,
-            validation_cursor: 0,
-            validation_loss: 0.0,
-            validation_max_error: 0.0,
             best_max_error: 0.0,
-            validating: false,
-            training_complete: false,
-            validation_min: f32::INFINITY,
-            validation_max: f32::NEG_INFINITY,
             best_min: f32::INFINITY,
             best_max: f32::NEG_INFINITY,
             started: web_time::Instant::now(),
         })
     }
-    /// A small bounded work unit. Sampling preparation is shared by a slice.
-    pub fn advance(&mut self, budget: std::time::Duration) -> Result<bool, &'static str> {
-        let samples = (self.settings.samples_per_side as usize).pow(3);
-        let grid = self.settings.samples_per_side as usize;
-        let batches = samples.div_ceil(BATCH);
-        let start = web_time::Instant::now();
-        let mut sampler =
-            PreparedSubtreeSampler::new(&self.source, self.root).ok_or("Invalid source")?;
-        loop {
-            if self.training_complete {
-                let end = (self.owners.len() + 16).min(MATERIAL_SAMPLES);
-                for i in self.owners.len()..end {
-                    let p = sample_position(i, MATERIAL_GRID);
-                    let (_, owner) = sampler.sample(
-                        self.world
-                            .transform_point3(self.center + p * self.half_extent),
-                    );
-                    self.owners.push(owner);
-                }
-                if self.owners.len() == MATERIAL_SAMPLES {
-                    return Ok(true);
-                }
-            } else if self.validating {
-                let end = (self.validation_cursor + 16).min(samples);
-                for i in self.validation_cursor..end {
-                    let p = sample_position(i, grid);
-                    let (distance, _) = sampler.sample(
-                        self.world
-                            .transform_point3(self.center + p * self.half_extent),
-                    );
-                    if !distance.is_finite() {
-                        return Err("Nonfinite source distance");
-                    }
-                    let value = self.network.evaluate(p);
-                    self.validation_min = self.validation_min.min(value);
-                    self.validation_max = self.validation_max.max(value);
-                    let error = value - distance / self.distance_unit;
-                    self.validation_loss += error * error;
-                    self.validation_max_error = self.validation_max_error.max(error.abs());
-                }
-                self.validation_cursor = end;
-                if end == samples {
-                    if self.validation_loss < self.best_loss {
-                        self.best_loss = self.validation_loss;
-                        self.best_max_error = self.validation_max_error;
-                        self.best_min = self.validation_min;
-                        self.best_max = self.validation_max;
-                        self.best = self.network.clone();
-                    }
-                    self.validating = false;
-                    self.validation_cursor = 0;
-                    self.validation_loss = 0.0;
-                    self.validation_max_error = 0.0;
-                    self.validation_min = f32::INFINITY;
-                    self.validation_max = f32::NEG_INFINITY;
-                    self.training_complete = self.update == self.settings.epochs as usize * batches;
-                }
-            } else {
-                if self.batch_fill == 0 {
-                    self.gradient.fill(0.0);
-                }
-                let batch_start = (self.update % batches) * BATCH;
-                if batch_start == 0 && self.batch_fill == 0 {
-                    self.sample_order.shuffle(&mut self.rng);
-                }
-                let batch_size = BATCH.min(samples - batch_start);
-                let chunk_start = batch_start + self.batch_fill;
-                let chunk_size = 16.min(batch_size - self.batch_fill);
-                for position in chunk_start..chunk_start + chunk_size {
-                    let index = self.sample_order.index(position);
-                    let p = sample_position(index, grid);
-                    let distance = sampler
-                        .sample(
-                            self.world
-                                .transform_point3(self.center + p * self.half_extent),
-                        )
-                        .0;
-                    if !distance.is_finite() {
-                        return Err("Nonfinite source distance");
-                    }
-                    self.network
-                        .gradient(p, distance / self.distance_unit, &mut self.gradient);
-                }
-                self.batch_fill += chunk_size;
-                if self.batch_fill < batch_size {
-                    if start.elapsed() >= budget {
-                        return Ok(false);
-                    }
-                    continue;
-                }
-                self.batch_fill = 0;
-                self.update += 1;
-                let correction1 = 1.0 - 0.9_f32.powi(self.update as i32);
-                let correction2 = 1.0 - 0.999_f32.powi(self.update as i32);
-                for (i, gradient) in self.gradient.iter().enumerate() {
-                    let g = gradient / batch_size as f32;
-                    self.first[i] = 0.9 * self.first[i] + 0.1 * g;
-                    self.second[i] = 0.999 * self.second[i] + 0.001 * g * g;
-                    self.network.weights[i] -= self.settings.learning_rate
-                        * (self.first[i] / correction1)
-                        / ((self.second[i] / correction2).sqrt() + 1e-8);
-                }
-                if !self.network.weights.iter().all(|v| v.is_finite()) {
-                    return Err("Nonfinite trained weights");
-                }
-                self.validating = self.update % batches == 0;
-            }
-            if start.elapsed() >= budget {
-                return Ok(false);
-            }
-        }
-    }
     pub fn finish(self) -> Result<NeuralField, &'static str> {
-        let samples = (self.settings.samples_per_side as usize).pow(3);
+        let samples = self.settings.samples as usize;
         if self.best_min >= 0.0 || self.best_max <= 0.0 || !self.best_loss.is_finite() {
             return Err("Fit contains no surface crossing");
         }
@@ -553,14 +533,97 @@ impl TrainingJob {
 mod tests {
     use super::*;
     use crate::model::{BooleanOperation, GroupRenderRepresentation, PrimitiveKind};
-    use std::time::Duration;
 
-    fn train(source: Vec<SdfObject>) -> NeuralField {
-        let id = source[0].uuid;
-        let mut job = TrainingJob::new(Arc::new(source), id).unwrap();
-        while !job.advance(Duration::from_millis(4)).unwrap() {}
-        job.finish().unwrap()
+    #[test]
+    fn wide_neural_networks_have_correct_gradients_and_payloads() {
+        for (layers, width) in [(2, 33), (3, 65), (4, 128), (8, 33), (2, 1024)] {
+            let settings = NeuralTrainingSettings {
+                layers,
+                width,
+                activation: crate::model::NeuralActivation::Softplus,
+                ..Default::default()
+            };
+            let network = Network::new(settings);
+            let p = Vec3::new(0.37, -0.21, 0.63);
+            let target = 0.25;
+            let mut gradient = vec![0.0; network.weights.len()];
+            network.gradient(p, target, &mut gradient);
+            for index in [
+                0,
+                3,
+                width as usize * 4,
+                network.output_offset(),
+                network.weights.len() - 1,
+            ] {
+                let mut high = network.clone();
+                let mut low = network.clone();
+                high.weights[index] += 0.001;
+                low.weights[index] -= 0.001;
+                let numerical = ((high.evaluate(p) - target).powi(2)
+                    - (low.evaluate(p) - target).powi(2))
+                    / 0.002;
+                assert!(
+                    (gradient[index] - numerical).abs() < 0.005,
+                    "layers {layers}, width {width}, index {index}"
+                );
+            }
+            assert!(network.lipschitz().is_finite());
+            assert_eq!(
+                network.gpu_records(0.5).len() + MATERIAL_SAMPLES,
+                network.payload_records()
+            );
+            assert_eq!(payload_records(settings), Some(network.payload_records()));
+        }
     }
+
+    #[test]
+    fn neural_far_sample_dropout_keeps_near_surface_and_half_far_points() {
+        let mut dropped = 0;
+        for index in 0..32_768 {
+            for distance in [-1.0, 0.0, 0.399, 0.4] {
+                assert!(!drop_training_sample(index, 42, distance));
+            }
+            let drop = drop_training_sample(index, 42, 0.401);
+            assert_eq!(drop, drop_training_sample(index, 42, 10.0));
+            dropped += usize::from(drop);
+        }
+        assert!((15_800..17_000).contains(&dropped));
+    }
+
+    #[test]
+    fn neural_random_samples_are_uniform_continuous_and_reproducible() {
+        let count = 32_768;
+        let mut sum = Vec3::ZERO;
+        let mut squares = Vec3::ZERO;
+        let mut octants = [0usize; 8];
+        let mut off_grid = 0;
+        for index in 0..count {
+            let p = random_sample_position(index, 42);
+            assert_eq!(p, random_sample_position(index, 42));
+            assert!(p.cmpge(-Vec3::ONE).all() && p.cmplt(Vec3::ONE).all());
+            sum += p;
+            squares += p * p;
+            let octant = usize::from(p.x >= 0.0)
+                | (usize::from(p.y >= 0.0) << 1)
+                | (usize::from(p.z >= 0.0) << 2);
+            octants[octant] += 1;
+            let old_cell = (p + Vec3::ONE) * 15.5;
+            if (old_cell - old_cell.round()).abs().min_element() > 0.0001 {
+                off_grid += 1;
+            }
+        }
+        assert!((sum / count as f32).abs().max_element() < 0.02);
+        assert!(
+            (squares / count as f32 - Vec3::splat(1.0 / 3.0))
+                .abs()
+                .max_element()
+                < 0.02
+        );
+        assert!(octants.iter().all(|&count| (3800..4400).contains(&count)));
+        assert!(off_grid > 32_000);
+        assert_ne!(random_sample_position(0, 42), random_sample_position(0, 43));
+    }
+
     #[test]
     fn neural_gradients_match_finite_differences() {
         for (layers, width, activation) in [
@@ -596,42 +659,7 @@ mod tests {
             }
         }
     }
-    #[test]
-    fn neural_training_reduces_loss_and_is_deterministic() {
-        let object = SdfObject::create_kind(PrimitiveKind::Sphere);
-        let source = vec![object];
-        let initial = TrainingJob::new(Arc::new(source.clone()), source[0].uuid).unwrap();
-        let mut sampler = PreparedSubtreeSampler::new(&source, source[0].uuid).unwrap();
-        let initial_loss: f32 = (0..SAMPLES)
-            .map(|i| {
-                let p = grid_position(i);
-                let target = sampler
-                    .sample(
-                        initial
-                            .world
-                            .transform_point3(initial.center + p * initial.half_extent),
-                    )
-                    .0
-                    / initial.distance_unit;
-                (initial.network.evaluate(p) - target).powi(2)
-            })
-            .sum::<f32>()
-            / SAMPLES as f32;
-        let first = train(source.clone());
-        let second = train(source);
-        assert_eq!(first.network.weights, second.network.weights);
-        assert!(first.rms_error / initial.distance_unit < initial_loss.sqrt() * 0.7);
-        assert!(first.network.evaluate(Vec3::ZERO) < 0.0);
-        assert!(first.network.evaluate(Vec3::ONE) > 0.0);
-        eprintln!(
-            "Neural sphere: {:.1} ms, RMS {:.5}, max {:.5}, GPU payload {} bytes, L {:.3}",
-            first.bake_ms,
-            first.rms_error,
-            first.max_error,
-            first.network.payload_records() * 16,
-            first.network.lipschitz()
-        );
-    }
+
     #[test]
     fn neural_proxy_preserves_owners_and_removes_baked_repetition() {
         let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
@@ -648,7 +676,14 @@ mod tests {
         let pending =
             super::super::group_capture::prepare_group_scene(&source, &mut Default::default());
         assert_eq!(pending.objects.len(), 2);
-        let field = train(source.clone());
+        let mut state = TrainingState::new(Arc::new(source.clone()), source[0].uuid).unwrap();
+        state.best_loss = 0.01;
+        state.best_min = -0.1;
+        state.best_max = 0.1;
+        state.owners = (0..MATERIAL_SAMPLES)
+            .map(|i| source[i % source.len()].uuid)
+            .collect();
+        let field = state.finish().unwrap();
         assert!(field.owners.contains(&source[0].uuid));
         assert!(field.owners.contains(&child_id));
         let ready = [(source[0].uuid, Arc::new(field))].into_iter().collect();
@@ -656,28 +691,28 @@ mod tests {
             &source,
             &mut Default::default(),
             &ready,
+            &Default::default(),
         );
         assert_eq!(prepared.objects.len(), 1);
         assert!(!prepared.objects[0].repetition.enabled);
         assert!(prepared.neural_fields.contains_key(&source[0].uuid));
     }
     #[test]
-    fn neural_epochs_cover_grid_and_seed_changes_initialization() {
+    fn neural_sample_order_covers_grid_and_seed_changes_initialization() {
         let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
         object.neural_sdf.training.epochs = 1;
         object.neural_sdf.training.layers = 2;
         object.neural_sdf.training.width = 5;
-        let mut job = TrainingJob::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
+        let mut job = TrainingState::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
         let first = job.network.weights.clone();
-        while !job.advance(Duration::from_millis(4)).unwrap() {}
-        assert_eq!(job.update, SAMPLES / BATCH);
-        let mut indices: Vec<_> = (0..(job.settings.samples_per_side as usize).pow(3))
+        job.sample_order.shuffle(&mut job.rng);
+        let mut indices: Vec<_> = (0..job.settings.samples as usize)
             .map(|i| job.sample_order.index(i))
             .collect();
         indices.sort_unstable();
         assert_eq!(indices, (0..SAMPLES).collect::<Vec<_>>());
         object.neural_sdf.training.seed = 0;
-        let other = TrainingJob::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
+        let other = TrainingState::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
         assert_ne!(first, other.network.weights);
         assert_eq!(other.network.layers, 2);
         assert_eq!(other.network.width, 5);
@@ -695,169 +730,19 @@ mod tests {
         }
     }
     #[test]
-    fn neural_large_grid_starts_without_grid_allocation() {
+    fn neural_large_sample_count_starts_without_sample_allocation() {
         let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
-        object.neural_sdf.training.samples_per_side = 1024;
+        object.neural_sdf.training.samples = 1073741824;
         assert!(object.neural_sdf.training.is_valid());
-        let mut job = TrainingJob::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
+        let job = TrainingState::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
         assert!(matches!(job.sample_order, SampleOrder::Mapped { .. }));
-        assert!(!job.advance(Duration::ZERO).unwrap());
-        assert_eq!(job.batch_fill, 16);
         assert!(job.owners.is_empty());
     }
+
     #[test]
-    fn neural_odd_resolution_covers_partial_batches_and_payload() {
-        let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
-        object.neural_sdf.training.samples_per_side = 9;
-        object.neural_sdf.training.epochs = 2;
-        let settings = object.neural_sdf.training;
-        let mut job = TrainingJob::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
-        while !job.advance(Duration::from_millis(1)).unwrap() {}
-        assert_eq!(job.update, 2 * 729_usize.div_ceil(BATCH));
-        assert_eq!(job.owners.len(), MATERIAL_SAMPLES);
-        let mut indices: Vec<_> = (0..(job.settings.samples_per_side as usize).pow(3))
-            .map(|i| job.sample_order.index(i))
-            .collect();
-        indices.sort_unstable();
-        assert_eq!(indices, (0..729).collect::<Vec<_>>());
-        assert_eq!(sample_position(0, 9), -Vec3::ONE);
-        assert_eq!(sample_position(728, 9), Vec3::ONE);
-        let field = job.finish().unwrap();
-        assert_eq!(field.owners.len(), MATERIAL_SAMPLES);
-        let records = field.network.gpu_records(0.5);
-        assert_eq!(records[1][3], 9.0);
-        assert_eq!(
-            Some(records.len() + MATERIAL_SAMPLES),
-            payload_records(settings)
-        );
-        assert_eq!(
-            records.len() + MATERIAL_SAMPLES,
-            field.network.payload_records()
-        );
-    }
-    #[test]
-    #[ignore = "trains all four presets; run explicitly for preset changes"]
-    fn neural_duck_presets_fit_increasing_quality() {
-        let document: serde_json::Value = serde_json::from_str(crate::duck::DEFAULT_DUCK).unwrap();
-        let source: Vec<SdfObject> = serde_json::from_value(
-            document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone(),
-        )
-        .unwrap();
-        let mut previous = f32::INFINITY;
-        for preset in crate::model::NeuralModelPreset::ALL {
-            let mut scene = source.clone();
-            scene[0].neural_sdf.training = preset.settings();
-            let field = train(scene);
-            eprintln!(
-                "{}: RMS {}, max {}, L {}, bake {}ms",
-                preset.label(),
-                field.rms_error,
-                field.max_error,
-                field.network.lipschitz(),
-                field.bake_ms
-            );
-            assert!(
-                field.rms_error < previous,
-                "{} must improve the duck fit",
-                preset.label()
-            );
-            previous = field.rms_error;
-            let mut hits = 0;
-            for y in 0..8 {
-                for x in 0..8 {
-                    let origin = Vec3::new(
-                        (x as f32 + 0.5) / 4.0 - 1.0,
-                        (y as f32 + 0.5) / 4.0 - 1.0,
-                        1.0,
-                    );
-                    let mut t = 0.0;
-                    for _ in 0..128 {
-                        let p = origin - Vec3::Z * t;
-                        let q = p.abs() - Vec3::ONE;
-                        let cube = q.max(Vec3::ZERO).length() + q.max_element().min(0.0);
-                        let distance = field.network.evaluate(p).max(cube);
-                        if distance.abs() <= 1.0 / 31.0 {
-                            hits += 1;
-                            break;
-                        }
-                        t += distance.abs() * 0.8;
-                        if t > 2.0 {
-                            break;
-                        }
-                    }
-                }
-            }
-            eprintln!(
-                "{}: {hits} visible grid rays / 64 with {} steps",
-                preset.label(),
-                128
-            );
-            assert!(
-                hits >= 8,
-                "{} must render a visible surface",
-                preset.label()
-            );
-        }
-    }
-    #[test]
-    fn neural_duck_two_layer_distance_steps_preserve_visible_hits() {
-        let document: serde_json::Value = serde_json::from_str(crate::duck::DEFAULT_DUCK).unwrap();
-        let source: Vec<SdfObject> = serde_json::from_value(
-            document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone(),
-        )
-        .unwrap();
-        for width in [8, 16, 32] {
-            let mut scene = source.clone();
-            scene[0].neural_sdf.training.layers = 2;
-            scene[0].neural_sdf.training.width = width;
-            let field = train(scene);
-            let bound = field.network.lipschitz();
-            let mut hits = [0; 2];
-            for (budget_index, budget) in [128, 4096].into_iter().enumerate() {
-                for y in 0..16 {
-                    for x in 0..16 {
-                        let origin = Vec3::new(
-                            (x as f32 + 0.5) / 8.0 - 1.0,
-                            (y as f32 + 0.5) / 8.0 - 1.0,
-                            1.0,
-                        );
-                        let mut t = 0.0;
-                        for _ in 0..budget {
-                            let p = origin - Vec3::Z * t;
-                            let q = p.abs() - Vec3::ONE;
-                            let cube = q.max(Vec3::ZERO).length() + q.max_element().min(0.0);
-                            let distance = field.network.evaluate(p).max(cube);
-                            if distance.abs() <= 1.0 / 31.0 {
-                                hits[budget_index] += 1;
-                                break;
-                            }
-                            t += distance.abs() * 0.8;
-                            if t > 2.0 {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            eprintln!(
-                "Duck width {width}: bound {bound}, budget hits {}, reference hits {}",
-                hits[0], hits[1]
-            );
-            assert!(hits[1] > 0);
-            assert_eq!(
-                hits[0], hits[1],
-                "width {width}: step budget must retain reference hits"
-            );
-        }
-    }
-    #[test]
-    fn neural_sampling_yields_and_invalid_fit_falls_back() {
+    fn neural_invalid_fit_falls_back() {
         let object = SdfObject::create_kind(PrimitiveKind::Sphere);
-        let mut job = TrainingJob::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
-        assert!(!job.advance(Duration::ZERO).unwrap());
-        assert_eq!(job.batch_fill, 16);
-        assert!(job.owners.is_empty()); // Training starts before any full-grid pass.
-        while !job.advance(Duration::from_millis(4)).unwrap() {}
+        let mut job = TrainingState::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
         job.best_min = 0.0;
         job.best_max = 0.0;
         assert!(job.finish().is_err());
@@ -902,10 +787,16 @@ mod gpu_tests {
                 (2, 5, crate::model::NeuralActivation::Relu),
                 (2, 8, crate::model::NeuralActivation::Relu),
                 (4, 32, crate::model::NeuralActivation::Relu),
+                (8, 33, crate::model::NeuralActivation::Softplus),
                 (1, 8, crate::model::NeuralActivation::Softplus),
                 (2, 5, crate::model::NeuralActivation::Softplus),
                 (2, 8, crate::model::NeuralActivation::Softplus),
                 (4, 32, crate::model::NeuralActivation::Softplus),
+                (2, 65, crate::model::NeuralActivation::Relu),
+                (3, 128, crate::model::NeuralActivation::Softplus),
+                (4, 256, crate::model::NeuralActivation::Softplus),
+                (1, 1024, crate::model::NeuralActivation::Relu),
+                (2, 1024, crate::model::NeuralActivation::Relu),
             ] {
                 let network = Network::new(NeuralTrainingSettings {
                     layers,
@@ -913,6 +804,13 @@ mod gpu_tests {
                     activation,
                     ..Default::default()
                 });
+                let sample_count = if width > 256 {
+                    64
+                } else if width > 32 {
+                    256
+                } else {
+                    SAMPLES
+                };
                 let records = network.gpu_records(0.5);
                 assert_eq!(records.len() + SAMPLES, network.payload_records());
                 assert_eq!(
@@ -930,7 +828,7 @@ mod gpu_tests {
                 });
                 let output = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("neural values"),
-                    size: (SAMPLES * 16) as u64,
+                    size: (sample_count * 16) as u64,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 });
@@ -946,6 +844,7 @@ mod gpu_tests {
                 let end = renderer[start..].find("fn neural_shape(").unwrap() + start;
                 let source = format!(
                     r#"
+                const NEURAL_WIDTH: u32 = {width}u;
                 struct Object {{ box_depth_max: vec4<f32>, box_depth_meta: vec4<u32> }}
                 @group(0) @binding(0) var<storage, read> box_depth_texels: array<vec4<f32>>;
                 @group(0) @binding(1) var<storage, read_write> result: array<vec4<f32>>;
@@ -990,7 +889,7 @@ mod gpu_tests {
                     let mut pass = encoder.begin_compute_pass(&Default::default());
                     pass.set_pipeline(&pipeline);
                     pass.set_bind_group(0, &bind, &[]);
-                    pass.dispatch_workgroups(SAMPLES as u32 / 64, 1, 1);
+                    pass.dispatch_workgroups(sample_count as u32 / 64, 1, 1);
                 }
                 encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, output.size());
                 queue.submit([encoder.finish()]);

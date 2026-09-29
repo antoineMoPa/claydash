@@ -349,6 +349,8 @@ struct BoxDepthFaceSample {
     material_index: u32,
 }
 
+const NEURAL_WIDTH: u32 = 1024u;
+
 // Neural payload: architecture/owner offset, step bound/hit distance, packed weights, 32³ owners.
 fn neural_activation(value: f32, offset: u32) -> f32 {
     if box_depth_texels[offset + 1u].z < 0.5 { return max(value, 0.0); }
@@ -376,8 +378,8 @@ fn neural_value(local: vec3<f32>, object: Object) -> f32 {
         }
         return result * object.box_depth_max.x;
     }
-    var values: array<vec4<f32>, 8>;
-    var next: array<vec4<f32>, 8>;
+    var values: array<vec4<f32>, (NEURAL_WIDTH + 3u) / 4u>;
+    var next: array<vec4<f32>, (NEURAL_WIDTH + 3u) / 4u>;
     for (var row = 0u; row < width; row++) {
         values[row / 4u][row % 4u] = neural_activation(dot(box_depth_texels[offset + 2u + row], vec4(p, 1.0)), offset);
     }
@@ -418,8 +420,8 @@ fn neural_gradient(local: vec3<f32>, object: Object) -> vec3<f32> {
         return result;
     }
     // xyz carries the spatial derivative; w carries the activation.
-    var values: array<vec4<f32>, 32>;
-    var next: array<vec4<f32>, 32>;
+    var values: array<vec4<f32>, NEURAL_WIDTH>;
+    var next: array<vec4<f32>, NEURAL_WIDTH>;
     var layer_offset = 0u;
     for (var layer = 0u; layer < layers; layer++) {
         let inputs = select(width, 3u, layer == 0u);
@@ -463,7 +465,7 @@ fn surface_hit_tolerance(owner: f32, classic: f32) -> f32 {
     if !HAS_NEURAL_SDF || owner < 0.0 { return classic; }
     let object = objects[u32(owner)];
     if object.state.y != 12 { return classic; }
-    // User-selected grid intervals in world-distance units, including endpoints.
+    // Equivalent sample spacing in world-distance units, preserving legacy hit tolerance.
     return max(classic, 2.0 * object.box_depth_max.x * object.params.w * box_depth_texels[object.box_depth_meta.x + 1u].y / (box_depth_texels[object.box_depth_meta.x + 1u].w - 1.0));
 }
 fn component_has_neural(owner: f32) -> bool {

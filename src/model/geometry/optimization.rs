@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// A saved render choice for an object or Boolean group. Derived bake data
-/// does not belong in the scene document.
+/// A saved render choice for an object or Boolean group. Neural fields can
+/// carry a versioned cache alongside the editable source geometry.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupRenderRepresentation {
@@ -40,7 +40,9 @@ impl GroupRenderRepresentation {
             Self::SphereDepthAtlas => {
                 "Capture depth and appearance with inward rays from a sphere."
             }
-            Self::NeuralSdf => "Fit a configurable neural field to a sampled distance grid.",
+            Self::NeuralSdf => {
+                "Fit a configurable neural field to uniformly random distance samples."
+            }
             Self::GaussianSplats => "Approximate the group with soft Gaussian surface samples.",
         }
     }
@@ -77,8 +79,8 @@ impl NeuralActivation {
     pub const ALL: [Self; 2] = [Self::Relu, Self::Softplus];
     pub fn label(self) -> &'static str {
         match self {
-            Self::Relu => "ReLU (faceted)",
-            Self::Softplus => "Softplus (smooth)",
+            Self::Relu => "ReLU",
+            Self::Softplus => "Softplus",
         }
     }
     pub fn shader_id(self) -> u32 {
@@ -87,12 +89,14 @@ impl NeuralActivation {
             Self::Softplus => 1,
         }
     }
+    #[cfg(test)]
     pub fn evaluate(self, value: f32) -> f32 {
         match self {
             Self::Relu => value.max(0.0),
             Self::Softplus => value.max(0.0) + (-10.0 * value.abs()).exp().ln_1p() / 10.0,
         }
     }
+    #[cfg(test)]
     pub fn slope_from_output(self, output: f32) -> f32 {
         match self {
             Self::Relu => {
@@ -109,10 +113,10 @@ impl NeuralActivation {
 
 /// Saved choices, never the fitted model itself.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(try_from = "StoredNeuralTrainingSettings")]
 pub struct NeuralTrainingSettings {
     pub activation: NeuralActivation,
-    pub samples_per_side: u32,
+    pub samples: u32,
     pub layers: u32,
     pub width: u32,
     pub epochs: u32,
@@ -123,13 +127,65 @@ impl Default for NeuralTrainingSettings {
     fn default() -> Self {
         Self {
             activation: NeuralActivation::default(),
-            samples_per_side: 32,
+            samples: 32_768,
             layers: 1,
             width: 8,
             epochs: 32,
             learning_rate: 0.001,
             seed: 0xabc123,
         }
+    }
+}
+// Explicitly map legacy grid settings to the same total number of samples.
+#[derive(Deserialize)]
+#[serde(default)]
+struct StoredNeuralTrainingSettings {
+    activation: NeuralActivation,
+    samples: Option<u32>,
+    samples_per_side: Option<u32>,
+    layers: u32,
+    width: u32,
+    epochs: u32,
+    learning_rate: f32,
+    seed: u32,
+}
+impl Default for StoredNeuralTrainingSettings {
+    fn default() -> Self {
+        let settings = NeuralTrainingSettings::default();
+        Self {
+            activation: settings.activation,
+            samples: None,
+            samples_per_side: None,
+            layers: settings.layers,
+            width: settings.width,
+            epochs: settings.epochs,
+            learning_rate: settings.learning_rate,
+            seed: settings.seed,
+        }
+    }
+}
+impl TryFrom<StoredNeuralTrainingSettings> for NeuralTrainingSettings {
+    type Error = &'static str;
+    fn try_from(stored: StoredNeuralTrainingSettings) -> Result<Self, Self::Error> {
+        let samples = match (stored.samples, stored.samples_per_side) {
+            (Some(samples), _) => samples,
+            (None, Some(side)) if (8..=1024).contains(&side) => side.pow(3),
+            (None, Some(_)) => return Err("Invalid legacy neural sample resolution"),
+            (None, None) => Self::default().samples,
+        };
+        let settings = Self {
+            activation: stored.activation,
+            samples,
+            layers: stored.layers,
+            width: stored.width,
+            epochs: stored.epochs,
+            learning_rate: stored.learning_rate,
+            seed: stored.seed,
+        };
+        settings
+            .is_valid()
+            .then_some(settings)
+            .ok_or("Invalid neural training settings")
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,10 +228,14 @@ impl NeuralModelPreset {
 }
 
 impl NeuralTrainingSettings {
+    pub const MAX_LAYERS: u32 = 8;
+    pub const MAX_WIDTH: u32 = 1024;
+    pub const MAX_SAMPLES: u32 = 1 << 30;
+
     pub fn is_valid(&self) -> bool {
-        (8..=1024).contains(&self.samples_per_side)
-            && (1..=4).contains(&self.layers)
-            && (4..=32).contains(&self.width)
+        (512..=Self::MAX_SAMPLES).contains(&self.samples)
+            && (1..=Self::MAX_LAYERS).contains(&self.layers)
+            && (4..=Self::MAX_WIDTH).contains(&self.width)
             && (1..=512).contains(&self.epochs)
             && self.learning_rate.is_finite()
             && (0.00001..=0.1).contains(&self.learning_rate)
@@ -191,14 +251,14 @@ impl NeuralTrainingSettings {
 #[serde(try_from = "StoredNeuralSdfSettings")]
 pub struct NeuralSdfSettings {
     pub training: NeuralTrainingSettings,
-    /// Half a grid interval by default; independent of the fitted field.
+    /// Hit tolerance in equivalent sample-spacing units; independent of the fitted field.
     pub hit_distance_cells: f32,
 }
 impl Default for NeuralSdfSettings {
     fn default() -> Self {
         Self {
             training: Default::default(),
-            hit_distance_cells: 0.5,
+            hit_distance_cells: 0.02,
         }
     }
 }
@@ -238,4 +298,53 @@ impl TryFrom<StoredNeuralSdfSettings> for NeuralSdfSettings {
         }
         Ok(settings)
     }
+}
+
+/// Versioned derived data. Invalid or stale fields are ignored by the renderer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedNeuralField {
+    pub version: u32,
+    pub source_key: u64,
+    /// Settings used for this fit, which may differ from pending UI edits.
+    pub training: NeuralTrainingSettings,
+    pub weights: Vec<f32>,
+    pub half_extent: f32,
+    pub owners: Vec<uuid::Uuid>,
+    pub rms_error: f32,
+    pub max_error: f32,
+    pub bake_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedBoxDepthAtlas {
+    pub local_min: glam::Vec3,
+    pub local_max: glam::Vec3,
+    pub resolution: u32,
+    pub layers: usize,
+    /// Depth and RGB, with negative depth for a missed ray.
+    pub texels: Vec<[f32; 4]>,
+    pub owners: Vec<Option<uuid::Uuid>>,
+    pub normals: Vec<glam::Vec3>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedSphereDepthAtlas {
+    pub radius: f32,
+    pub width: u32,
+    pub height: u32,
+    pub texels: Vec<[f32; 4]>,
+    pub owners: Vec<Option<uuid::Uuid>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum SavedDepthAtlas {
+    Box(std::sync::Arc<SavedBoxDepthAtlas>),
+    Sphere(std::sync::Arc<SavedSphereDepthAtlas>),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedGroupCapture {
+    pub version: u32,
+    pub source_key: u64,
+    pub capture: SavedDepthAtlas,
 }

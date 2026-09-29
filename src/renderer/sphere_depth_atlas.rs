@@ -8,14 +8,7 @@ use crate::model::{lattice_bounds, lattice_world_matrix, PreparedSubtreeSampler}
 pub(super) const SPHERE_DEPTH_WIDTH: u32 = 80;
 pub(super) const SPHERE_DEPTH_HEIGHT: u32 = 40;
 
-#[derive(Clone, Debug)]
-pub(super) struct SphereDepthAtlas {
-    pub radius: f32,
-    pub width: u32,
-    pub height: u32,
-    pub texels: Vec<[f32; 4]>,
-    pub owners: Vec<Option<uuid::Uuid>>,
-}
+pub(super) use crate::model::SavedSphereDepthAtlas as SphereDepthAtlas;
 
 pub(super) fn bake_sphere_depth_atlas(
     scene: &[SdfObject],

@@ -73,12 +73,6 @@ struct SpatialFeatures {
 }
 
 impl SpatialFeatures {
-    const ALL: Self = Self {
-        lattice: true,
-        mirror: true,
-        repetition: true,
-    };
-
     fn for_objects(objects: &[GpuObject]) -> Self {
         let mut features = Self {
             lattice: false,
@@ -95,13 +89,6 @@ impl SpatialFeatures {
 }
 
 impl PrimitiveFeatures {
-    const ALL: Self = Self {
-        polygon_prisms: true,
-        bezier_curves: true,
-        lofts: true,
-        text: true,
-    };
-
     fn for_objects(objects: &[GpuObject]) -> Self {
         let mut features = Self {
             polygon_prisms: false,
@@ -129,16 +116,18 @@ struct SceneShaderFeatures {
     spatial: SpatialFeatures,
     flat_unions: bool,
     neural_sdf: bool,
+    neural_width: u32,
 }
 
 impl SceneShaderFeatures {
-    const ALL: Self = Self {
-        materials: BuiltinMaterialFeatures::ALL,
-        primitives: PrimitiveFeatures::ALL,
-        spatial: SpatialFeatures::ALL,
-        flat_unions: true,
-        neural_sdf: true,
-    };
+    // Material thumbnails only draw an unmodified sphere. Enabling unrelated
+    // geometry here can stall Chrome's GPU process compiling unused code.
+    fn for_material_previews() -> Self {
+        Self {
+            materials: BuiltinMaterialFeatures::ALL,
+            ..Self::for_scene(&[], &[])
+        }
+    }
 
     fn for_scene(materials: &[Material], objects: &[GpuObject]) -> Self {
         Self {
@@ -146,6 +135,7 @@ impl SceneShaderFeatures {
             primitives: PrimitiveFeatures::for_objects(objects),
             spatial: SpatialFeatures::for_objects(objects),
             neural_sdf: objects.iter().any(|object| object.meta[1] == 12),
+            neural_width: 4,
             flat_unions: objects
                 .iter()
                 .any(|object| object.meta[3] == FLAT_UNION_ROOT),
@@ -289,6 +279,7 @@ pub struct Renderer {
     modifier_params_buffer: wgpu::Buffer,
     uploaded_scene_versions: [i32; 2],
     neural_jobs: neural_jobs::NeuralJobs,
+    group_compute_requests: std::collections::HashSet<uuid::Uuid>,
     group_capture_cache: std::collections::HashMap<uuid::Uuid, group_capture::CachedGroupCapture>,
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,

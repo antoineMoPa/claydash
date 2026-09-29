@@ -7,7 +7,28 @@ pub(super) fn schema() -> Value {
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| json!({"kind": kind, "example": SdfObject::create_kind(*kind)})).collect::<Vec<_>>(),
         "render_representations": GroupRenderRepresentation::ALL.iter().map(|mode| json!({"value": mode, "label": mode.label(), "description": mode.description(), "limitation": mode.limitation()})).collect::<Vec<_>>(),
-        "notes": "GetState returns complete typed objects and the raw .claydash scene document. CreateCustomMaterial takes name and wgsl, returning its UUID in created_material_ids. The WGSL is a function body returning Surface, with point, normal, view, and base inputs. UpdateCustomMaterial edits name and/or wgsl; AssignMaterial links it to object_ids. Post-processing WGSL is the body of effect(uv: vec2<f32>, color: vec4<f32>, resolution: vec2<f32>, time: f32) -> vec4<f32>. UV and resolution are local to the scene viewport; sample_scene(uv) samples the previous pass and clamps to that viewport. Passes run in array order before editor UI and exports, with source validation before atomic Apply. CreatePostProcessPass returns its UUID in created_post_process_pass_ids. CreateObject accepts an optional position [x,y,z], full transform, shape params, and render_representation. SetRenderRepresentation accepts an object or Boolean group root id. ExactSdf uses the source; BoxDepthAtlas captures from six box faces; SphereDepthAtlas captures with radial rays; GaussianSplats uses layered box-face captures rasterized as hybrid splats. Captures retain depth, base color, and the hit material. Older documents with removed choices load as ExactSdf. BoxParams includes corner_radius; LoftParams contains ordered sections, each with an optional closed profile of 3–32 [Y,Z] points in unit ellipse coordinates. Custom profiles in one loft must have matching point counts. A PutObject can set surface_inlay to a host object id, offset, and thickness. CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. Apply actions run as one undoable edit. Send expected_revision from GetState to reject stale edits. ReplaceScene accepts the raw document value and must be the sole action."
+        "notes": concat!(
+            "GetState returns complete typed objects and the raw .claydash scene document. ",
+            "CreateCustomMaterial takes name and wgsl, returning its UUID in created_material_ids. ",
+            "The WGSL is a function body returning Surface, with point, normal, view, and base inputs. ",
+            "UpdateCustomMaterial edits name and/or wgsl; AssignMaterial links it to object_ids. ",
+            "Post-processing WGSL is the body of effect(uv: vec2<f32>, color: vec4<f32>, resolution: vec2<f32>, time: f32) -> vec4<f32>. ",
+            "UV and resolution are local to the scene viewport; sample_scene(uv) samples the previous pass and clamps to that viewport. ",
+            "Passes run in array order before editor UI and exports, with source validation before atomic Apply. ",
+            "CreatePostProcessPass returns its UUID in created_post_process_pass_ids. ",
+            "CreateObject accepts an optional position [x,y,z], full transform, shape params, and render_representation. ",
+            "SetRenderRepresentation accepts an object or Boolean group root id. ",
+            "ExactSdf uses the source; BoxDepthAtlas captures from six box faces; SphereDepthAtlas captures with radial rays; GaussianSplats uses layered box-face captures rasterized as hybrid splats. ",
+            "Captures retain depth, base color, and the hit material. ",
+            "Older documents with removed choices load as ExactSdf. ",
+            "BoxParams includes corner_radius; LoftParams contains ordered sections, each with an optional closed profile of 3–32 [Y,Z] points in unit ellipse coordinates. ",
+            "Custom profiles in one loft must have matching point counts. ",
+            "A PutObject can set surface_inlay to a host object id, offset, and thickness. ",
+            "CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. ",
+            "Apply actions run as one undoable edit. ",
+            "Send expected_revision from GetState to reject stale edits. ",
+            "ReplaceScene accepts the raw document value and must be the sole action.",
+        )
     })
 }
 

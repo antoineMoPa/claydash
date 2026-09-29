@@ -1,7 +1,83 @@
 pub(super) use super::group_capture::*;
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScenePipelinePreparation {
+    Viewport,
+    MaterialPreview,
+    NeuralTraining,
+}
+
+pub(super) struct PackedTrainingScene {
+    pub objects: Vec<GpuObject>,
+    pub bvh: Vec<GpuBvhNode>,
+    pub polygon_points: Vec<GpuPolygonPoint>,
+    pub material_headers: Vec<material_gpu::GpuMaterialHeader>,
+    pub material_params: Vec<[f32; 4]>,
+    pub lattice_points: Vec<[f32; 4]>,
+    pub modifier_params: Vec<[f32; 4]>,
+    pub lattice_tiles: Vec<(u32, u32, Vec<Vec3>)>,
+    pub ids: Vec<uuid::Uuid>,
+    pub start: u32,
+    pub root: u32,
+    pub capacity: u32,
+}
+
 impl Renderer {
+    pub(super) fn pack_neural_training_scene(
+        &mut self,
+        camera: &Camera,
+        source: &[SdfObject],
+        root: uuid::Uuid,
+    ) -> Result<PackedTrainingScene, &'static str> {
+        let mut exact = source.to_vec();
+        for object in &mut exact {
+            object.render_representation = crate::model::GroupRenderRepresentation::ExactSdf;
+        }
+        let mut packed = self
+            .upload_scene_with_world_exposure(
+                camera,
+                &exact,
+                &[],
+                [i32::MIN; 2],
+                1.0,
+                World::default(),
+                ScenePipelinePreparation::NeuralTraining,
+            )
+            .ok_or("Could not prepare GPU training scene")?;
+        let root_index = packed
+            .ids
+            .iter()
+            .position(|id| *id == root)
+            .ok_or("Missing training root")?;
+        let descendants: std::collections::HashSet<_> = source
+            .iter()
+            .filter(|object| {
+                let mut id = Some(object.uuid);
+                for _ in 0..source.len() {
+                    if id == Some(root) {
+                        return true;
+                    }
+                    id = id
+                        .and_then(|id| source.iter().find(|object| object.uuid == id))
+                        .and_then(|object| object.boolean_parent);
+                }
+                false
+            })
+            .map(|object| object.uuid)
+            .collect();
+        let start = packed
+            .ids
+            .iter()
+            .position(|id| descendants.contains(id))
+            .ok_or("Missing training subtree")?;
+        let capacity = mark_component_evaluation(&mut packed.objects, start, root_index);
+        packed.start = start as u32;
+        packed.root = root_index as u32;
+        packed.capacity = packed.capacity.max(capacity);
+        Ok(packed)
+    }
+
     pub(super) fn upload_scene_with_world(
         &mut self,
         camera: &Camera,
@@ -17,6 +93,7 @@ impl Renderer {
             scene_versions,
             1.0,
             world,
+            ScenePipelinePreparation::Viewport,
         );
     }
 
@@ -35,6 +112,7 @@ impl Renderer {
             scene_versions,
             exposure,
             World::default(),
+            ScenePipelinePreparation::MaterialPreview,
         );
     }
 
@@ -46,13 +124,31 @@ impl Renderer {
         scene_versions: [i32; 2],
         exposure: f32,
         world: World,
-    ) {
+        pipeline_preparation: ScenePipelinePreparation,
+    ) -> Option<PackedTrainingScene> {
         let source_objects = &objects[..objects.len().min(MAX_OBJECTS)];
-        let document_changed = self.uploaded_scene_versions != scene_versions;
-        if document_changed {
+        let training_only = pipeline_preparation == ScenePipelinePreparation::NeuralTraining;
+        let document_changed = training_only || self.uploaded_scene_versions != scene_versions;
+        if document_changed && !training_only {
             self.neural_jobs.reconcile(source_objects);
         }
-        let neural_changed = self.neural_jobs.poll();
+        let neural_changed = if training_only {
+            false
+        } else {
+            let mut jobs = std::mem::take(&mut self.neural_jobs);
+            let changed = jobs.poll(|source, root| {
+                let packed = self.pack_neural_training_scene(camera, &source, root)?;
+                super::neural_sdf::GpuTrainingJob::new(
+                    self.device.clone(),
+                    self.queue.clone(),
+                    source,
+                    root,
+                    packed,
+                )
+            });
+            self.neural_jobs = jobs;
+            changed
+        };
         if neural_changed {
             self.viewport.invalidate();
         }
@@ -72,8 +168,12 @@ impl Renderer {
                 source_objects,
                 &mut self.group_capture_cache,
                 &self.neural_jobs.ready(),
+                &self.group_compute_requests,
             )
         });
+        if !training_only {
+            self.group_compute_requests.clear();
+        }
         if let Some(prepared) = &prepared_scene {
             for id in self.neural_jobs.ready().keys() {
                 if prepared.objects.iter().any(|o| o.uuid == *id)
@@ -83,7 +183,7 @@ impl Renderer {
                 }
             }
         }
-        if scene_changed && prepared_scene.is_none() {
+        if scene_changed && prepared_scene.is_none() && !training_only {
             self.group_capture_cache.clear();
         }
         let scene_objects = prepared_scene
@@ -129,10 +229,12 @@ impl Renderer {
             },
             sky_params: [world.turbidity, world.sun_temperature, 0.0, 0.0],
         };
-        self.queue
-            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_camera));
+        if !training_only {
+            self.queue
+                .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_camera));
+        }
         if !scene_changed {
-            return;
+            return None;
         }
 
         // Children precede parents, so the fragment shader can evaluate the
@@ -590,7 +692,9 @@ impl Renderer {
                 mirror,
             );
         }
-        flatten_nested_hard_unions(&mut gpu_objects);
+        if !training_only {
+            flatten_nested_hard_unions(&mut gpu_objects);
+        }
         let mut group_bounds = Vec::new();
         let mut group_start = 0;
         let mut capacity = 1;
@@ -626,8 +730,25 @@ impl Renderer {
                 node.metadata[2] = starts[node.metadata[0] as usize];
             }
         }
-        self.node_count = bvh.len() as u32;
+        let scene_node_count = bvh.len() as u32;
         append_operand_bvhs(&mut bvh, &mut gpu_objects, &starts);
+        if training_only {
+            return Some(PackedTrainingScene {
+                objects: gpu_objects,
+                bvh,
+                polygon_points,
+                material_headers: materials.headers,
+                material_params: materials.params,
+                lattice_points,
+                modifier_params: modifiers.params,
+                lattice_tiles: lattice_atlas_uploads,
+                ids: objects.iter().map(|object| object.uuid).collect(),
+                start: 0,
+                root: 0,
+                capacity,
+            });
+        }
+        self.node_count = scene_node_count;
         debug_assert!(bvh.len() <= MAX_BVH_NODES);
         gpu_camera.count[1] = self.node_count;
         self.queue
@@ -726,12 +847,25 @@ impl Renderer {
             };
         self.viewport.set_initial_budget(self.initial_pixel_budget);
         self.resize_lattice_atlas_for(lattice_atlas_uploads.len());
-        let shader_features = SceneShaderFeatures::for_scene(&materials.materials, &gpu_objects);
+        let mut shader_features =
+            SceneShaderFeatures::for_scene(&materials.materials, &gpu_objects);
+        shader_features.neural_width = prepared_scene.as_ref().map_or(4, |prepared| {
+            prepared
+                .neural_fields
+                .values()
+                .map(|field| field.network.width())
+                .max()
+                .unwrap_or(4)
+        });
         self.deferred_supported = self.use_bvh
             && self.shader_source.contains("fn fs_gbuffer")
             && (!has_splat_samples || self.hybrid_enabled)
             && crate::model::deferred_fallback_reason(source_objects).is_none();
-        self.prepare_scene_pipelines(world, capacity, was_boolean, shader_features);
+        // Thumbnail draws use their dedicated sphere pipeline. Uploading their
+        // temporary objects must not compile viewport variants for every preset.
+        if pipeline_preparation == ScenePipelinePreparation::Viewport {
+            self.prepare_scene_pipelines(world, capacity, was_boolean, shader_features);
+        }
         if !gpu_objects.is_empty() {
             self.queue.write_buffer(
                 &self.material_headers_buffer,
@@ -803,5 +937,6 @@ impl Renderer {
         }
         self.uploaded_scene_versions = scene_versions;
         self.uploaded_object_count = object_count;
+        None
     }
 }

@@ -9,9 +9,9 @@ use bezier::draw_bezier_gizmo;
 pub(super) use bezier::draw_bezier_paths;
 pub(in crate::ui) use bezier::BezierDrag;
 pub(in crate::ui) use lattice::LatticeDrag;
-pub(super) use polygon::{
-    apply_polygon_cap_drag, polygon_overlay_triangles, selected_polygon_face_vertices,
-};
+pub(super) use polygon::polygon_overlay_triangles;
+#[cfg(test)]
+pub(super) use polygon::{apply_polygon_cap_drag, selected_polygon_face_vertices};
 use polygon::{draw_selected_cylinder_cap_overlay, draw_selected_polygon_face_overlay};
 pub(super) use resize::gizmo_label_rect;
 #[cfg(test)]

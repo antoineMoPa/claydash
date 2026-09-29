@@ -62,6 +62,9 @@ fn material_and_boolean_shader_validates() {
         .into_iter()
         .map(|capacity| specialized_shader_source(&source, capacity))
         .collect();
+    sources.extend(
+        [4, 33, 65, 128, 256, 1024].map(|width| specialized_neural_shader_source(&source, width)),
+    );
     sources.push(include_str!("../../assets/shaders/viewport.wgsl").into());
     for source in sources {
         let module = wgpu::naga::front::wgsl::parse_str(&source)

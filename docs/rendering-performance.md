@@ -43,7 +43,10 @@ camera, and viewport-size changes invalidate the cache.
   have not changed.
 - Compile scene pipelines for the wood, brick, and diagnostic material families
   and for polygon prism, Bézier curve, and loft primitives actually present in
-  that scene. Material previews retain every family and primitive. A custom
+  that scene. Material previews enable every material family but only their
+  unmodified sphere geometry. Thumbnail uploads reuse that dedicated pipeline
+  without compiling viewport variants for each preset. Startup viewport pipelines
+  disable optional features until the first scene upload. A custom
   shader edit defers scene-pipeline compilation until the next scene upload, when
   the active Boolean or non-Boolean variant is known.
 
@@ -501,9 +504,12 @@ image comparison still pass.
 ## Neural SDF
 
 The optional `neural_sdf` representation fits a configurable ReLU network
-from a 32³ signed-distance grid (default: one hidden layer, width eight). See [the representation contract](group-render-optimizations.md#neural-sdf).
+from 32,768 uniformly random distance samples by default (one hidden layer, width eight). Historic measurements below used grid samples. See [the representation contract](group-render-optimizations.md#neural-sdf).
 Native benchmarks wait for training before measuring frames, so results do not
-silently measure the temporary Exact SDF fallback.
+silently measure the temporary Exact SDF fallback. Training now uses GPU compute
+for source-distance sampling, forward/backward passes, Adam updates, validation,
+and material ownership. The historical measurements below predate this backend;
+they are not GPU training benchmarks.
 
 Historical Apple M1 / Metal measurements at 384×216, optimized development build,
 from the initial fixed-architecture version (before configurable settings and
@@ -571,12 +577,13 @@ For an exact control, copy the fixture to a temporary path and change the root's
 
 ### Default-duck model presets
 
-The preset calibration test trains the unchanged default duck using all four
-presets. It asserts decreasing full-grid RMS error and visible hits through
-the cube. Run it explicitly because it trains several models:
+The original CPU preset calibration trained the unchanged default duck using
+all four presets and checked decreasing full-grid RMS error and visible hits
+through the cube. These measurements are historical; CPU training has been
+removed. Validate the wgpu trainer explicitly with a GPU adapter:
 
 ```sh
-cargo test neural_duck_presets_fit_increasing_quality -- --ignored --nocapture
+cargo test gpu_sampling_backprop_adam_and_training_match_reference -- --ignored --nocapture
 ```
 
 Preview / Balanced / Detailed / High detail fit errors are respectively

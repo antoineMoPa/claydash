@@ -208,6 +208,10 @@ pub struct SdfObject {
     pub render_representation: GroupRenderRepresentation,
     #[serde(default, skip_serializing_if = "NeuralSdfSettings::is_default")]
     pub neural_sdf: NeuralSdfSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_neural_field: Option<std::sync::Arc<SavedNeuralField>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_group_capture: Option<std::sync::Arc<SavedGroupCapture>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -265,6 +269,8 @@ impl SdfObject {
             group_transform: Transform::default(),
             render_representation: GroupRenderRepresentation::default(),
             neural_sdf: NeuralSdfSettings::default(),
+            saved_neural_field: None,
+            saved_group_capture: None,
             color: material.color,
             object_type: kind.object_type(),
             params: match kind {
@@ -372,6 +378,7 @@ impl SdfObject {
         self.distance_with_matrix(point, self.transform.matrix())
     }
 
+    #[cfg(test)]
     pub fn distance_with_matrix(&self, point: Vec3, matrix: Mat4) -> f32 {
         self.distance_with_matrix_at(point, matrix, true, None, None)
     }

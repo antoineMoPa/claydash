@@ -12,7 +12,7 @@ command_central = { path = "crates/command_central" }
 lazy_static = "1.5.0"
 observable_key_value_tree = { path = "crates/observable_key_value_tree" }
 sdf_consts = { path = "crates/sdf_consts" }
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 uuid = { version = "1.26.1", features = ["serde", "v4", "js"] }
 glam = { version = "0.32.1", features = ["serde"] }

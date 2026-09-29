@@ -209,6 +209,15 @@ impl App {
             || (egui_consumed && self.ui.overlay_captures_pointer(&self.egui))
     }
 
+    fn project_tree_for_save(&self) -> DataTree {
+        let mut tree = self.tree.clone();
+        if let Some(renderer) = &self.renderer {
+            let objects = renderer.optimized_objects_for_save(objects_ref(&self.tree));
+            crate::model::set_objects(&mut tree, objects);
+        }
+        tree
+    }
+
     fn replace_scene(&mut self, scene: DataTree) {
         self.cancel_render();
         self.tree = data_tree_with_scene(scene);
@@ -216,6 +225,7 @@ impl App {
         self.ui.reset_document_gestures();
         self.ui.reset_animation(&self.tree);
         if let Some(renderer) = &mut self.renderer {
+            renderer.reset_optimized_fields();
             renderer.invalidate_scene();
         }
     }
@@ -240,7 +250,7 @@ impl App {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn save_path(&mut self, path: std::path::PathBuf) {
-        match document::write_scene(&path, &self.tree) {
+        match document::write_scene(&path, &self.project_tree_for_save()) {
             Ok(()) => self.document.mark_saved(path),
             Err(error) => self.document.set_error("save the project", error),
         }
@@ -449,7 +459,7 @@ impl App {
 
     #[cfg(target_arch = "wasm32")]
     fn download_web_project(&mut self, file_name: String) {
-        let bytes = match crate::document::serialize_scene(&self.tree) {
+        let bytes = match crate::document::serialize_scene(&self.project_tree_for_save()) {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.document.set_error("save the project", error);

@@ -30,7 +30,6 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                     .on_hover_text(mode.description());
             }
         });
-    ui.weak(selected_mode.limitation());
     if selected_mode == crate::model::GroupRenderRepresentation::NeuralSdf {
         let settings = &mut scene[index].neural_sdf;
         let preset = crate::model::NeuralModelPreset::matching(settings.training);
@@ -41,7 +40,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                 for choice in crate::model::NeuralModelPreset::ALL {
                     if ui.selectable_label(preset == Some(choice), choice.label()).clicked() {
                         settings.training = choice.settings();
-                        settings.hit_distance_cells = 0.5;
+                        settings.hit_distance_cells = crate::model::NeuralSdfSettings::default().hit_distance_cells;
                     }
                 }
             }).response.on_hover_text("Model size presets tested on the default duck. Larger models trade training and rendering speed for fit quality. Click Recompute to apply; edit parameters below for Custom settings.");
@@ -53,27 +52,30 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                 }
             }); ui.end_row();
             ui.label("Hidden layers");
-            ui.add(egui::DragValue::new(&mut settings.training.layers).update_while_editing(false).range(1..=4)); ui.end_row();
+            ui.add(egui::DragValue::new(&mut settings.training.layers).update_while_editing(false).range(1..=crate::model::NeuralTrainingSettings::MAX_LAYERS)); ui.end_row();
             ui.label("Width");
-            ui.add(egui::DragValue::new(&mut settings.training.width).update_while_editing(false).range(4..=32)); ui.end_row();
-            ui.label("Samples per side").on_hover_text("Training distance grid resolution. Total samples grow cubically; applies on Recompute.");
-            ui.add(egui::DragValue::new(&mut settings.training.samples_per_side).update_while_editing(false).range(8..=1024)); ui.end_row();
-            ui.label("Epochs").on_hover_text("One full pass through all grid samples per epoch.");
+            ui.add(egui::DragValue::new(&mut settings.training.width).update_while_editing(false).range(4..=crate::model::NeuralTrainingSettings::MAX_WIDTH)); ui.end_row();
+            ui.label("Samples").on_hover_text("Total candidate points distributed uniformly at random in the bounding box. Training discards half the points farther than 0.4 scene units from the surface; applies on Recompute.");
+            ui.add(egui::DragValue::new(&mut settings.training.samples).update_while_editing(false).range(512..=crate::model::NeuralTrainingSettings::MAX_SAMPLES)); ui.end_row();
+            ui.label("Epochs").on_hover_text("One full pass through all random samples per epoch.");
             ui.add(egui::DragValue::new(&mut settings.training.epochs).update_while_editing(false).range(1..=512)); ui.end_row();
             ui.label("Learning rate");
-            ui.add(egui::DragValue::new(&mut settings.training.learning_rate).update_while_editing(false).range(0.00001..=0.1).speed(0.0001).max_decimals(5)); ui.end_row();
-            ui.label("Seed").on_hover_text("Controls initialization and sample order. The same seed and settings reproduce the same fit.");
+            learning_rate_input(ui, &mut settings.training.learning_rate); ui.end_row();
+            ui.label("Seed").on_hover_text("Controls initialization, random sample positions, and sample order. The same seed and settings reproduce the same fit.");
             ui.add(egui::DragValue::new(&mut settings.training.seed).update_while_editing(false)); ui.end_row();
-            ui.label("Hit distance (cells)").on_hover_text("Distance from zero accepted as a hit, in grid-cell units. Larger values stop sooner and expand the silhouette. Applies immediately without retraining.");
+            ui.label("Hit distance").on_hover_text("Distance from zero accepted as a hit, in equivalent sample-spacing units. Larger values stop sooner and expand the silhouette. Applies immediately without retraining.");
             ui.add(egui::DragValue::new(&mut settings.hit_distance_cells).update_while_editing(false).range(0.001..=4.0).speed(0.001).max_decimals(3)); ui.end_row();
         });
         let status = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, crate::renderer::NeuralStatus>>(egui::Id::new("neural-sdf-status")))
             .and_then(|statuses| statuses.get(&target).cloned());
         use crate::renderer::NeuralStatus;
-        let computing = matches!(status, None | Some(NeuralStatus::Pending | NeuralStatus::Training));
+        let computing = matches!(
+            status,
+            Some(NeuralStatus::Pending | NeuralStatus::Training { .. })
+        );
         if ui.add_enabled(!computing, egui::Button::new("Recompute")).on_hover_text("Restart this group's bake using the current settings. Exact SDF is shown until the result is ready.").clicked() {
             ui.ctx().data_mut(|data| {
-                let id = egui::Id::new("neural-sdf-recompute");
+                let id = egui::Id::new("group-optimization-recompute");
                 let mut requests = data.get_temp::<std::collections::HashSet<uuid::Uuid>>(id).unwrap_or_default();
                 requests.insert(target);
                 data.insert_temp(id, requests);
@@ -81,25 +83,31 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             ui.ctx().request_repaint();
         }
         match status {
-            Some(NeuralStatus::Ready {
-                rms,
-                max,
-                milliseconds,
-            }) => {
-                ui.weak(format!(
-                    "Ready · RMS {rms:.4}, max {max:.4} · {milliseconds:.0} ms"
-                ));
+            Some(NeuralStatus::Ready { .. }) => {
+                ui.weak("100%");
             }
             Some(NeuralStatus::Failed(reason)) => {
                 ui.weak(format!("Exact SDF fallback: {reason}"));
             }
-            Some(NeuralStatus::Training) => {
-                ui.weak("Training neural field…");
+            Some(NeuralStatus::Training { percent }) => {
+                ui.weak(format!("{percent}%"));
             }
             _ => {
-                ui.weak("Neural bake pending…");
+                ui.weak("0%");
             }
         }
+    }
+    if selected_mode != crate::model::GroupRenderRepresentation::ExactSdf
+        && selected_mode != crate::model::GroupRenderRepresentation::NeuralSdf
+        && ui.button("Recompute").on_hover_text("Bake this group using the selected method.").clicked()
+    {
+        ui.ctx().data_mut(|data| {
+            let id = egui::Id::new("group-optimization-recompute");
+            let mut requests = data.get_temp::<std::collections::HashSet<uuid::Uuid>>(id).unwrap_or_default();
+            requests.insert(target);
+            data.insert_temp(id, requests);
+        });
+        ui.ctx().request_repaint();
     }
     if selected_mode != scene[index].render_representation
         || saved_settings != scene[index].neural_sdf
@@ -107,5 +115,121 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
         scene[index].render_representation = selected_mode;
         set_objects(tree, scene);
         tree.make_undo_redo_snapshot();
+    }
+}
+
+fn learning_rate_input(ui: &mut egui::Ui, value: &mut f32) -> egui::Response {
+    ui.add(
+        egui::DragValue::new(value)
+            .update_while_editing(false)
+            // Match the stored f32 endpoints so roundoff cannot discard the edit buffer.
+            .range(0.00001_f32..=0.1_f32)
+            .clamp_existing_to_range(false)
+            .speed(0.0001)
+            .max_decimals(5),
+    )
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    #[test]
+    fn learning_rate_keeps_partial_text_until_committed() {
+        for initial in [0.00001_f32, 0.001, 0.1] {
+            let context = egui::Context::default();
+            let mut value = initial;
+            let mut widget = egui::Id::NULL;
+            let input = |events| egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let mut output = context.run_ui(input(vec![]), |ui| {
+                widget = learning_rate_input(ui, &mut value).id;
+            });
+            output.textures_delta.clear();
+            context.memory_mut(|memory| memory.request_focus(widget));
+            let mut output = context.run_ui(input(vec![]), |ui| { learning_rate_input(ui, &mut value); });
+            output.textures_delta.clear();
+            let mut output = context.run_ui(input(vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }]), |ui| { learning_rate_input(ui, &mut value); });
+            output.textures_delta.clear();
+            for text in ["0", ".", "0", "0", "2"] {
+                let mut output = context.run_ui(input(vec![egui::Event::Text(text.into())]), |ui| {
+                    learning_rate_input(ui, &mut value);
+                });
+                output.textures_delta.clear();
+                assert_eq!(value, initial, "partial text must not change the saved rate");
+                if text == "2" {
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == "0.002")),
+                        "typed text was reset for rate {initial}: {:?}", output.shapes.iter().filter_map(|shape| match &shape.shape { egui::Shape::Text(text) => Some(text.galley.text()), _ => None }).collect::<Vec<_>>());
+                }
+            }
+            let mut output = context.run_ui(input(vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]), |ui| { learning_rate_input(ui, &mut value); });
+            output.textures_delta.clear();
+            assert_eq!(value, 0.002);
+        }
+    }
+
+    #[test]
+    fn percentage_is_shown_below_recompute_without_status_text() {
+        let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        object.render_representation = crate::model::GroupRenderRepresentation::NeuralSdf;
+        let id = object.uuid;
+        let mut tree = DataTree::default();
+        crate::model::set_objects(&mut tree, vec![object]);
+        crate::model::set_selected_exact(&mut tree, vec![id]);
+        let context = egui::Context::default();
+        context.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("neural-sdf-status"),
+                std::collections::HashMap::from([(
+                    id,
+                    crate::renderer::NeuralStatus::Training { percent: 30 },
+                )]),
+            );
+        });
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 1000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| group_optimizations_panel(ui, &mut tree),
+        );
+        output.textures_delta.clear();
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((text.galley.text(), text.pos.y)),
+                _ => None,
+            })
+            .collect();
+        let button_y = labels
+            .iter()
+            .find(|(text, _)| *text == "Recompute")
+            .unwrap()
+            .1;
+        let progress_y = labels.iter().find(|(text, _)| *text == "30%").unwrap().1;
+        assert!(progress_y > button_y);
+        assert!(!labels
+            .iter()
+            .any(|(text, _)| text.contains("Training neural") || text.contains("pending")));
     }
 }

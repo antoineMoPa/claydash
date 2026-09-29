@@ -135,6 +135,13 @@ pub(super) fn specialized_shader_source(source: &str, capacity: u32) -> String {
     )
 }
 
+pub(super) fn specialized_neural_shader_source(source: &str, width: u32) -> String {
+    source.replace(
+        "const NEURAL_WIDTH: u32 = 1024u;",
+        &format!("const NEURAL_WIDTH: u32 = {width}u;"),
+    )
+}
+
 pub(super) fn mark_component_evaluation(
     objects: &mut [GpuObject],
     start: usize,
@@ -161,30 +168,6 @@ pub(super) fn mark_component_evaluation(
     };
     // The streaming paths need Boolean evaluation, but no per-object scratch.
     2
-}
-
-pub(super) fn create_scene_pipeline(
-    device: &wgpu::Device,
-    shader_source: &str,
-    pipeline_layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
-    use_bvh: bool,
-    capacity: u32,
-    transparent_background: bool,
-    fast_preview: bool,
-) -> wgpu::RenderPipeline {
-    create_scene_pipeline_for_materials(
-        device,
-        shader_source,
-        pipeline_layout,
-        format,
-        use_bvh,
-        capacity,
-        transparent_background,
-        fast_preview,
-        SceneShaderFeatures::ALL,
-        false,
-    )
 }
 
 fn scene_feature_constants(
@@ -245,7 +228,10 @@ pub(super) fn create_scene_pipeline_for_materials(
     features: SceneShaderFeatures,
     hybrid_splats: bool,
 ) -> wgpu::RenderPipeline {
-    let source = specialized_shader_source(shader_source, capacity);
+    let source = specialized_neural_shader_source(
+        &specialized_shader_source(shader_source, capacity),
+        features.neural_width,
+    );
     let mut constants = Vec::new();
     if shader_source.contains("override USE_BVH") {
         constants.push(("USE_BVH", f64::from(use_bvh)));
@@ -302,8 +288,12 @@ pub(super) fn create_hybrid_depth_pipeline(
     shader_source: &str,
     pipeline_layout: &wgpu::PipelineLayout,
     capacity: u32,
+    features: SceneShaderFeatures,
 ) -> wgpu::RenderPipeline {
-    let source = specialized_shader_source(shader_source, capacity);
+    let source = specialized_neural_shader_source(
+        &specialized_shader_source(shader_source, capacity),
+        features.neural_width,
+    );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("hybrid SDF depth shader"),
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -352,7 +342,10 @@ pub(super) fn create_deferred_geometry_pipeline(
     hybrid_splats: bool,
     features: SceneShaderFeatures,
 ) -> wgpu::RenderPipeline {
-    let source = specialized_shader_source(shader_source, capacity);
+    let source = specialized_neural_shader_source(
+        &specialized_shader_source(shader_source, capacity),
+        features.neural_width,
+    );
     let mut constants = scene_feature_constants(shader_source, features);
     constants.extend_from_slice(&[
         ("USE_BVH", 1.0),

@@ -319,7 +319,8 @@ impl Renderer {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = create_scene_pipeline(
+        let shader_features = SceneShaderFeatures::for_scene(&[], &[]);
+        let pipeline = create_scene_pipeline_for_materials(
             &device,
             &shader_source,
             &pipeline_layout,
@@ -328,8 +329,10 @@ impl Renderer {
             1,
             false,
             false,
+            shader_features,
+            false,
         );
-        let fast_pipeline = create_scene_pipeline(
+        let fast_pipeline = create_scene_pipeline_for_materials(
             &device,
             &shader_source,
             &pipeline_layout,
@@ -338,6 +341,8 @@ impl Renderer {
             1,
             false,
             true,
+            shader_features,
+            false,
         );
         let (splat_pipeline, splat_camera_buffer, splat_camera_bind_group, splat_buffer) =
             hybrid_splats::create_splat_resources(&device, render_format);
@@ -380,7 +385,7 @@ impl Renderer {
             node_count: 0,
             uploaded_object_count: 0,
             has_booleans: false,
-            scene_shader_features: SceneShaderFeatures::ALL,
+            scene_shader_features: shader_features,
             scene_pipelines_dirty: false,
             bind_group,
             bind_group_layout: layout,
@@ -400,6 +405,7 @@ impl Renderer {
             modifier_params_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
             neural_jobs: Default::default(),
+            group_compute_requests: Default::default(),
             group_capture_cache: std::collections::HashMap::new(),
             egui_renderer,
             material_preview_ids: None,

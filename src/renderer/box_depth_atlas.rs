@@ -15,19 +15,7 @@ pub(super) enum BoxCaptureStart {
     OutsideBounds,
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct BoxDepthAtlas {
-    pub local_min: Vec3,
-    pub local_max: Vec3,
-    pub resolution: u32,
-    pub layers: usize,
-    /// Six faces, each stored row-major as (depth, red, green, blue).
-    /// A negative value means the capture ray missed; its magnitude estimates
-    /// the distance to the nearest occupied projection.
-    pub texels: Vec<[f32; 4]>,
-    pub owners: Vec<Option<uuid::Uuid>>,
-    pub normals: Vec<Vec3>,
-}
+pub(super) use crate::model::SavedBoxDepthAtlas as BoxDepthAtlas;
 
 #[derive(Clone, Copy)]
 enum BoxFace {

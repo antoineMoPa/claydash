@@ -761,11 +761,11 @@ fn neural_settings_round_trip_defaults_and_reject_invalid_values() {
         NeuralSdfSettings::default()
     );
     object.neural_sdf.training.activation = NeuralActivation::Softplus;
-    object.neural_sdf.training.layers = 3;
+    object.neural_sdf.training.layers = 8;
     object.neural_sdf.training.width = 16;
     object.neural_sdf.training.epochs = 64;
     object.neural_sdf.training.seed = 0;
-    object.neural_sdf.training.samples_per_side = 17;
+    object.neural_sdf.training.samples = 4913;
     object.neural_sdf.hit_distance_cells = 1.25;
     let saved = serde_json::to_value(&object).unwrap();
     assert_eq!(
@@ -776,9 +776,11 @@ fn neural_settings_round_trip_defaults_and_reject_invalid_values() {
     );
     for (key, value) in [
         ("layers", serde_json::json!(0)),
-        ("samples_per_side", serde_json::json!(7)),
-        ("samples_per_side", serde_json::json!(1025)),
-        ("width", serde_json::json!(33)),
+        ("layers", serde_json::json!(9)),
+        ("samples", serde_json::json!(7)),
+        ("samples", serde_json::json!(1073741825)),
+        ("width", serde_json::json!(3)),
+        ("width", serde_json::json!(1025)),
         ("epochs", serde_json::json!(0)),
         ("learning_rate", serde_json::json!(-1)),
     ] {
@@ -789,6 +791,31 @@ fn neural_settings_round_trip_defaults_and_reject_invalid_values() {
     let mut bad = saved;
     bad["neural_sdf"]["hit_distance_cells"] = serde_json::json!(-1);
     assert!(serde_json::from_value::<SdfObject>(bad).is_err());
+}
+
+#[test]
+fn neural_legacy_sample_grid_maps_to_total_count() {
+    let legacy = serde_json::json!({"samples_per_side": 17, "seed": 42});
+    let settings: NeuralTrainingSettings = serde_json::from_value(legacy).unwrap();
+    assert_eq!(settings.samples, 4913);
+    assert_eq!(settings.seed, 42);
+    let saved = serde_json::to_value(settings).unwrap();
+    assert_eq!(saved["samples"], 4913);
+    assert!(saved.get("samples_per_side").is_none());
+    for side in [7, 1025, u32::MAX] {
+        assert!(serde_json::from_value::<NeuralTrainingSettings>(
+            serde_json::json!({"samples_per_side": side})
+        )
+        .is_err());
+    }
+    assert_eq!(
+        serde_json::from_value::<NeuralTrainingSettings>(
+            serde_json::json!({"samples": 1000, "samples_per_side": 17})
+        )
+        .unwrap()
+        .samples,
+        1000
+    );
 }
 
 #[test]

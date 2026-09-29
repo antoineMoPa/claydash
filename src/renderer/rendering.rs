@@ -24,7 +24,7 @@ impl Renderer {
         let requests = egui
             .data_mut(|data| {
                 data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(
-                    "neural-sdf-recompute",
+                    "group-optimization-recompute",
                 ))
             })
             .unwrap_or_default();
@@ -32,7 +32,10 @@ impl Renderer {
             self.neural_jobs
                 .reconcile(&objects[..objects.len().min(MAX_OBJECTS)]);
             for id in requests {
-                self.neural_jobs.recompute(id);
+                if !self.neural_jobs.recompute(id) {
+                    self.group_capture_cache.remove(&id);
+                    self.group_compute_requests.insert(id);
+                }
             }
             self.invalidate_scene();
         }
