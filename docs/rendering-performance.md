@@ -504,7 +504,7 @@ image comparison still pass.
 ## Neural SDF
 
 The optional `neural_sdf` representation fits a configurable ReLU network
-from 32,768 uniformly random distance samples by default (one hidden layer, width eight). Historic measurements below used grid samples. See [the representation contract](group-render-optimizations.md#neural-sdf).
+from 32,768 uniformly random distance samples by default (two hidden layers, width 24, learning rate 0.02). Historic measurements below used grid samples. See [the representation contract](group-render-optimizations.md#neural-sdf).
 Native benchmarks wait for training before measuring frames, so results do not
 silently measure the temporary Exact SDF fallback. Training now uses GPU compute
 for source-distance sampling, forward/backward passes, Adam updates, validation,

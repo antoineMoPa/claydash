@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum GroupRenderRepresentation {
     BoxDepthAtlas,
+    BoxAccelerator,
     SphereDepthAtlas,
+    SphereAccelerator,
     GaussianSplats,
     NeuralSdf,
     #[default]
@@ -15,10 +17,12 @@ pub enum GroupRenderRepresentation {
 }
 
 impl GroupRenderRepresentation {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::ExactSdf,
         Self::BoxDepthAtlas,
         Self::SphereDepthAtlas,
+        Self::SphereAccelerator,
+        Self::BoxAccelerator,
         Self::GaussianSplats,
         Self::NeuralSdf,
     ];
@@ -27,7 +31,9 @@ impl GroupRenderRepresentation {
         match self {
             Self::ExactSdf => "Exact SDF (current)",
             Self::BoxDepthAtlas => "Box depth + texture atlas",
+            Self::BoxAccelerator => "Box accelerator",
             Self::SphereDepthAtlas => "Sphere depth + texture atlas",
+            Self::SphereAccelerator => "Sphere accelerator",
             Self::GaussianSplats => "Gaussian splats",
             Self::NeuralSdf => "Neural SDF",
         }
@@ -39,6 +45,12 @@ impl GroupRenderRepresentation {
             Self::BoxDepthAtlas => "Capture depth and appearance from six box faces.",
             Self::SphereDepthAtlas => {
                 "Capture depth and appearance with inward rays from a sphere."
+            }
+            Self::BoxAccelerator => {
+                "Bake six box faces, then refine only the map-selected source surface."
+            }
+            Self::SphereAccelerator => {
+                "Bake sphere depth, then refine only the map-selected source surface."
             }
             Self::NeuralSdf => {
                 "Fit a configurable neural field to uniformly random distance samples."
@@ -56,11 +68,17 @@ impl GroupRenderRepresentation {
             Self::SphereDepthAtlas => {
                 "A single radial layer misses hidden surfaces and close parallax."
             }
+            Self::BoxAccelerator => "Fast, approximate refinement; artifacts at missing surfaces and Boolean seams are accepted.",
+            Self::SphereAccelerator => "Refines captured surfaces; features missing from the depth capture may still be missed.",
             Self::NeuralSdf => "Approximate geometry and material boundaries; thin details may disappear. Trains automatically; Exact SDF is shown while training.",
             Self::GaussianSplats => {
                 "Fast splats for opaque solid scenes; other materials use ray composition. Thin details may be lost."
             }
         }
+    }
+
+    pub fn is_depth_accelerator(self) -> bool {
+        matches!(self, Self::SphereAccelerator | Self::BoxAccelerator)
     }
 
     pub fn is_exact(&self) -> bool {
@@ -71,8 +89,8 @@ impl GroupRenderRepresentation {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NeuralActivation {
-    #[default]
     Relu,
+    #[default]
     Softplus,
 }
 impl NeuralActivation {
@@ -128,10 +146,10 @@ impl Default for NeuralTrainingSettings {
         Self {
             activation: NeuralActivation::default(),
             samples: 32_768,
-            layers: 1,
-            width: 8,
+            layers: 2,
+            width: 24,
             epochs: 32,
-            learning_rate: 0.001,
+            learning_rate: 0.02,
             seed: 0xabc123,
         }
     }
@@ -348,3 +366,53 @@ pub struct SavedGroupCapture {
     pub source_key: u64,
     pub capture: SavedDepthAtlas,
 }
+
+/// World-space distance from the captured surface at which exact refinement begins.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "StoredDepthAcceleratorSettings")]
+pub struct DepthAcceleratorSettings {
+    pub configurable_epsilon: f32,
+}
+impl Default for DepthAcceleratorSettings {
+    fn default() -> Self {
+        Self {
+            configurable_epsilon: 0.1,
+        }
+    }
+}
+impl DepthAcceleratorSettings {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    pub fn is_valid(&self) -> bool {
+        self.configurable_epsilon.is_finite()
+            && (0.0001..=1000.0).contains(&self.configurable_epsilon)
+    }
+}
+#[derive(Deserialize)]
+#[serde(default)]
+struct StoredDepthAcceleratorSettings {
+    configurable_epsilon: f32,
+}
+impl Default for StoredDepthAcceleratorSettings {
+    fn default() -> Self {
+        Self {
+            configurable_epsilon: DepthAcceleratorSettings::default().configurable_epsilon,
+        }
+    }
+}
+impl TryFrom<StoredDepthAcceleratorSettings> for DepthAcceleratorSettings {
+    type Error = &'static str;
+    fn try_from(stored: StoredDepthAcceleratorSettings) -> Result<Self, Self::Error> {
+        let settings = Self {
+            configurable_epsilon: stored.configurable_epsilon,
+        };
+        settings
+            .is_valid()
+            .then_some(settings)
+            .ok_or("Invalid depth accelerator distance")
+    }
+}
+
+pub type SphereAcceleratorSettings = DepthAcceleratorSettings;
+pub type BoxAcceleratorSettings = DepthAcceleratorSettings;

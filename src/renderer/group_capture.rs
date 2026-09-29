@@ -29,6 +29,96 @@ pub(super) struct CachedGroupCapture {
     capture: CachedCapture,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DepthAcceleratorStatus {
+    NotComputedYet,
+    Ready,
+}
+impl DepthAcceleratorStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::NotComputedYet => "Not computed yet",
+            Self::Ready => "Ready",
+        }
+    }
+}
+
+pub(crate) fn depth_accelerator_status(
+    context: &egui::Context,
+    source: &[SdfObject],
+    root: uuid::Uuid,
+    source_revision: i32,
+) -> DepthAcceleratorStatus {
+    let source = &source[..source.len().min(MAX_OBJECTS)];
+    let Some(object) = source
+        .iter()
+        .find(|object| object.uuid == root && object.render_representation.is_depth_accelerator())
+    else {
+        return DepthAcceleratorStatus::NotComputedYet;
+    };
+    let key = context
+        .data(|data| {
+            data.get_temp::<HashMap<uuid::Uuid, u64>>(egui::Id::new("depth-accelerator-ready"))
+        })
+        .and_then(|keys| keys.get(&root).copied());
+    let Some(key) = key else {
+        return DepthAcceleratorStatus::NotComputedYet;
+    };
+    let check_id = egui::Id::new("depth-accelerator-readiness-check").with(root);
+    if let Some((revision, checked_key, status)) =
+        context.data(|data| data.get_temp::<(i32, u64, DepthAcceleratorStatus)>(check_id))
+    {
+        if revision == source_revision && checked_key == key {
+            return status;
+        }
+    }
+    let status = if key == capture_key(source, object) {
+        DepthAcceleratorStatus::Ready
+    } else {
+        DepthAcceleratorStatus::NotComputedYet
+    };
+    // Fingerprint large source scenes only after an edit or a new bake.
+    context.data_mut(|data| data.insert_temp(check_id, (source_revision, key, status)));
+    status
+}
+
+pub(super) fn publish_depth_accelerator_status(
+    context: &egui::Context,
+    source: &[SdfObject],
+    cache: &HashMap<uuid::Uuid, CachedGroupCapture>,
+) {
+    let keys: HashMap<_, _> = source
+        .iter()
+        .filter(|object| object.render_representation.is_depth_accelerator())
+        .filter_map(|object| {
+            cache
+                .get(&object.uuid)
+                .filter(|entry| {
+                    matches!(
+                        (&entry.capture, object.render_representation),
+                        (
+                            CachedCapture::Sphere(_),
+                            GroupRenderRepresentation::SphereAccelerator
+                        ) | (
+                            CachedCapture::Box(_),
+                            GroupRenderRepresentation::BoxAccelerator
+                        )
+                    )
+                })
+                .map(|entry| (object.uuid, entry.key))
+        })
+        .collect();
+    let changed = context.data_mut(|data| {
+        let id = egui::Id::new("depth-accelerator-ready");
+        let changed = data.get_temp::<HashMap<uuid::Uuid, u64>>(id).as_ref() != Some(&keys);
+        data.insert_temp(id, keys);
+        changed
+    });
+    if changed {
+        context.request_repaint();
+    }
+}
+
 fn restored_capture(source: &[SdfObject], root: &SdfObject, key: u64) -> Option<CachedCapture> {
     let saved = root.saved_group_capture.as_deref()?;
     if saved.version != 1 || saved.source_key != key {
@@ -37,7 +127,9 @@ fn restored_capture(source: &[SdfObject], root: &SdfObject, key: u64) -> Option<
     let (texels, owners) = match (&saved.capture, root.render_representation) {
         (
             CachedCapture::Box(atlas),
-            GroupRenderRepresentation::BoxDepthAtlas | GroupRenderRepresentation::GaussianSplats,
+            GroupRenderRepresentation::BoxDepthAtlas
+            | GroupRenderRepresentation::BoxAccelerator
+            | GroupRenderRepresentation::GaussianSplats,
         ) => {
             let gaussian = root.render_representation == GroupRenderRepresentation::GaussianSplats;
             let resolution = if gaussian {
@@ -61,7 +153,11 @@ fn restored_capture(source: &[SdfObject], root: &SdfObject, key: u64) -> Option<
             }
             (&atlas.texels, &atlas.owners)
         }
-        (CachedCapture::Sphere(atlas), GroupRenderRepresentation::SphereDepthAtlas) => {
+        (
+            CachedCapture::Sphere(atlas),
+            GroupRenderRepresentation::SphereDepthAtlas
+            | GroupRenderRepresentation::SphereAccelerator,
+        ) => {
             if atlas.width != SPHERE_DEPTH_WIDTH
                 || atlas.height != SPHERE_DEPTH_HEIGHT
                 || atlas.texels.len() != (SPHERE_DEPTH_WIDTH * SPHERE_DEPTH_HEIGHT) as usize
@@ -96,6 +192,8 @@ pub(super) fn objects_with_saved_captures(
             object.render_representation,
             GroupRenderRepresentation::BoxDepthAtlas
                 | GroupRenderRepresentation::SphereDepthAtlas
+                | GroupRenderRepresentation::SphereAccelerator
+                | GroupRenderRepresentation::BoxAccelerator
                 | GroupRenderRepresentation::GaussianSplats
         ) {
             object.saved_group_capture = None;
@@ -220,6 +318,22 @@ pub(super) fn prepare_group_scene_with_neural(
         if root.render_representation == GroupRenderRepresentation::ExactSdf {
             continue;
         }
+        let mut ancestor = root.boolean_parent;
+        let mut captured_ancestor = false;
+        for _ in 0..source.len() {
+            let Some(id) = ancestor else { break };
+            let Some(parent) = source.iter().find(|object| object.uuid == id) else {
+                break;
+            };
+            if parent.render_representation.is_depth_accelerator() {
+                captured_ancestor = true;
+                break;
+            }
+            ancestor = parent.boolean_parent;
+        }
+        if captured_ancestor {
+            continue;
+        }
         let Some((minimum, maximum)) = crate::model::lattice_bounds(source, root.uuid) else {
             continue;
         };
@@ -239,6 +353,7 @@ pub(super) fn prepare_group_scene_with_neural(
         }
         match root.render_representation {
             GroupRenderRepresentation::BoxDepthAtlas
+            | GroupRenderRepresentation::BoxAccelerator
             | GroupRenderRepresentation::GaussianSplats => {
                 let gaussian =
                     root.render_representation == GroupRenderRepresentation::GaussianSplats;
@@ -256,7 +371,8 @@ pub(super) fn prepare_group_scene_with_neural(
                 let atlas =
                     if let Some(CachedCapture::Box(atlas)) = cached.map(|entry| &entry.capture) {
                         atlas.clone()
-                    } else if let Some(atlas) = compute_requests.contains(&root.uuid)
+                    } else if let Some(atlas) = compute_requests
+                        .contains(&root.uuid)
                         .then(|| bake_box_depth_atlas(source, root.uuid, resolution, start))
                         .flatten()
                     {
@@ -273,6 +389,12 @@ pub(super) fn prepare_group_scene_with_neural(
                     atlas.texels.len() * 3 + occupied.saturating_mul(2).saturating_sub(1) * 2
                 } else {
                     atlas.texels.len() * 2
+                        + if root.render_representation == GroupRenderRepresentation::BoxAccelerator
+                        {
+                            4
+                        } else {
+                            0
+                        }
                 };
                 if atlas_texels + required_texels > MAX_BOX_DEPTH_TEXELS {
                     continue;
@@ -293,6 +415,9 @@ pub(super) fn prepare_group_scene_with_neural(
                     atlas.local_max
                 };
                 box_depth_atlases.insert(root.uuid, atlas);
+                if root.render_representation == GroupRenderRepresentation::BoxAccelerator {
+                    continue;
+                }
                 proxy.object_type = PrimitiveKind::Box.object_type();
                 proxy.params = SdfParams::BoxParams(BoxParams {
                     box_q: proxy_extent,
@@ -302,14 +427,16 @@ pub(super) fn prepare_group_scene_with_neural(
                     gaussian_splats.insert(root.uuid);
                 }
             }
-            GroupRenderRepresentation::SphereDepthAtlas => {
+            GroupRenderRepresentation::SphereDepthAtlas
+            | GroupRenderRepresentation::SphereAccelerator => {
                 let (width, height) = (SPHERE_DEPTH_WIDTH, SPHERE_DEPTH_HEIGHT);
                 let cached = cache.get(&root.uuid).filter(|entry| entry.key == key);
                 let atlas = if let Some(CachedCapture::Sphere(atlas)) =
                     cached.map(|entry| &entry.capture)
                 {
                     atlas.clone()
-                } else if let Some(atlas) = compute_requests.contains(&root.uuid)
+                } else if let Some(atlas) = compute_requests
+                    .contains(&root.uuid)
                     .then(|| bake_sphere_depth_atlas(source, root.uuid, width, height))
                     .flatten()
                 {
@@ -317,7 +444,13 @@ pub(super) fn prepare_group_scene_with_neural(
                 } else {
                     continue;
                 };
-                let required_texels = atlas.texels.len() * 2;
+                let required_texels = atlas.texels.len() * 2
+                    + if root.render_representation == GroupRenderRepresentation::SphereAccelerator
+                    {
+                        4
+                    } else {
+                        0
+                    };
                 if atlas_texels + required_texels > MAX_BOX_DEPTH_TEXELS {
                     continue;
                 }
@@ -334,6 +467,10 @@ pub(super) fn prepare_group_scene_with_neural(
                     radius: atlas.radius,
                 });
                 sphere_depth_atlases.insert(root.uuid, atlas);
+                if root.render_representation == GroupRenderRepresentation::SphereAccelerator {
+                    // Keep the source subtree for exact finishing and shading.
+                    continue;
+                }
             }
             GroupRenderRepresentation::NeuralSdf => {
                 let Some(field) = ready_neural.get(&root.uuid) else {
@@ -447,6 +584,8 @@ mod saved_capture_tests {
         for mode in [
             GroupRenderRepresentation::BoxDepthAtlas,
             GroupRenderRepresentation::SphereDepthAtlas,
+            GroupRenderRepresentation::SphereAccelerator,
+            GroupRenderRepresentation::BoxAccelerator,
             GroupRenderRepresentation::GaussianSplats,
         ] {
             let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
@@ -454,12 +593,7 @@ mod saved_capture_tests {
             let id = root.uuid;
             let mut source = vec![root];
             let mut cache = HashMap::new();
-            prepare_group_scene_with_neural(
-                &source,
-                &mut cache,
-                &HashMap::new(),
-                &HashSet::new(),
-            );
+            prepare_group_scene_with_neural(&source, &mut cache, &HashMap::new(), &HashSet::new());
             assert!(cache.is_empty());
             prepare_group_scene_with_neural(
                 &source,
@@ -486,6 +620,8 @@ mod saved_capture_tests {
         for mode in [
             GroupRenderRepresentation::BoxDepthAtlas,
             GroupRenderRepresentation::SphereDepthAtlas,
+            GroupRenderRepresentation::SphereAccelerator,
+            GroupRenderRepresentation::BoxAccelerator,
             GroupRenderRepresentation::GaussianSplats,
         ] {
             let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
@@ -539,7 +675,10 @@ mod saved_capture_tests {
                 prepared.gaussian_splats.contains(&id),
                 mode == GroupRenderRepresentation::GaussianSplats
             );
-            assert_eq!(prepared.objects.len(), 1);
+            assert_eq!(
+                prepared.objects.len(),
+                if mode.is_depth_accelerator() { 2 } else { 1 }
+            );
             let mut edited = loaded.to_vec();
             edited[1].transform.scale *= 2.0;
             let key = capture_key(&edited, &edited[0]);
@@ -591,6 +730,140 @@ mod saved_capture_tests {
             assert!(
                 restored_capture(&source, &source[0], key).is_none(),
                 "case {case}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod sphere_accelerator_tests {
+    use super::*;
+
+    #[test]
+    fn accelerator_bakes_same_sphere_texture_and_retains_exact_subtree() {
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        root.render_representation = GroupRenderRepresentation::SphereAccelerator;
+        let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+        child.boolean_parent = Some(root.uuid);
+        child.operation = crate::model::BooleanOperation::Subtract;
+        child.transform.translation.x = 0.2;
+        // A capture on a descendant must not replace the exact finish geometry.
+        child.render_representation = GroupRenderRepresentation::BoxDepthAtlas;
+        let id = root.uuid;
+        let source = [root, child];
+        let mut cache = HashMap::new();
+        let pending =
+            prepare_group_scene_with_neural(&source, &mut cache, &HashMap::new(), &HashSet::new());
+        assert!(pending.sphere_depth_atlases.is_empty());
+        assert_eq!(pending.objects.len(), 2);
+        let prepared = prepare_group_scene_with_neural(
+            &source,
+            &mut cache,
+            &HashMap::new(),
+            &HashSet::from([id]),
+        );
+        let atlas = &prepared.sphere_depth_atlases[&id];
+        let expected =
+            bake_sphere_depth_atlas(&source, id, SPHERE_DEPTH_WIDTH, SPHERE_DEPTH_HEIGHT).unwrap();
+        assert_eq!(atlas.texels, expected.texels);
+        assert_eq!(atlas.owners, expected.owners);
+        assert_eq!(prepared.objects.len(), 2);
+        assert!(prepared.box_depth_atlases.is_empty());
+        for (actual, original) in prepared.objects.iter().zip(&source) {
+            assert_eq!(actual.object_type, original.object_type);
+            assert_eq!(actual.boolean_parent, original.boolean_parent);
+            assert_eq!(actual.operation, original.operation);
+        }
+        let mut edited = source.clone();
+        edited[0].sphere_accelerator.configurable_epsilon = 0.2;
+        let reused =
+            prepare_group_scene_with_neural(&edited, &mut cache, &HashMap::new(), &HashSet::new());
+        assert!(
+            std::sync::Arc::ptr_eq(atlas, &reused.sphere_depth_atlases[&id]),
+            "changing refinement distance must not rebake"
+        );
+    }
+}
+
+#[cfg(test)]
+mod depth_accelerator_status_tests {
+    use super::*;
+
+    #[test]
+    fn readiness_tracks_baking_source_edits_and_cache_restoration() {
+        for mode in [
+            GroupRenderRepresentation::SphereAccelerator,
+            GroupRenderRepresentation::BoxAccelerator,
+        ] {
+            let context = egui::Context::default();
+            let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+            root.render_representation = mode;
+            let id = root.uuid;
+            let mut source = vec![root];
+            let mut cache = HashMap::new();
+            let mut revision = 0;
+            publish_depth_accelerator_status(&context, &source, &cache);
+            assert_eq!(
+                depth_accelerator_status(&context, &source, id, revision),
+                DepthAcceleratorStatus::NotComputedYet
+            );
+            prepare_group_scene_with_neural(
+                &source,
+                &mut cache,
+                &HashMap::new(),
+                &HashSet::from([id]),
+            );
+            publish_depth_accelerator_status(&context, &source, &cache);
+            assert_eq!(
+                depth_accelerator_status(&context, &source, id, revision),
+                DepthAcceleratorStatus::Ready
+            );
+            match mode {
+                GroupRenderRepresentation::SphereAccelerator => {
+                    source[0].sphere_accelerator.configurable_epsilon = 0.2
+                }
+                GroupRenderRepresentation::BoxAccelerator => {
+                    source[0].box_accelerator.configurable_epsilon = 0.2
+                }
+                _ => unreachable!(),
+            }
+            revision += 1;
+            assert_eq!(
+                depth_accelerator_status(&context, &source, id, revision),
+                DepthAcceleratorStatus::Ready
+            );
+            source[0].transform.scale *= 1.5;
+            revision += 1;
+            assert_eq!(
+                depth_accelerator_status(&context, &source, id, revision),
+                DepthAcceleratorStatus::NotComputedYet,
+                "an edit must invalidate readiness before the next render"
+            );
+            prepare_group_scene_with_neural(&source, &mut cache, &HashMap::new(), &HashSet::new());
+            publish_depth_accelerator_status(&context, &source, &cache);
+            assert_eq!(
+                depth_accelerator_status(&context, &source, id, revision),
+                DepthAcceleratorStatus::NotComputedYet
+            );
+            prepare_group_scene_with_neural(
+                &source,
+                &mut cache,
+                &HashMap::new(),
+                &HashSet::from([id]),
+            );
+            let mut saved = source.clone();
+            objects_with_saved_captures(&source, &mut saved, &cache);
+            let mut restored = HashMap::new();
+            prepare_group_scene_with_neural(
+                &saved,
+                &mut restored,
+                &HashMap::new(),
+                &HashSet::new(),
+            );
+            publish_depth_accelerator_status(&context, &saved, &restored);
+            assert_eq!(
+                depth_accelerator_status(&context, &saved, id, revision + 1),
+                DepthAcceleratorStatus::Ready
             );
         }
     }

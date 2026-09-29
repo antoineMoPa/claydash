@@ -199,6 +199,8 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
 
     for mode in [
         GroupRenderRepresentation::ExactSdf,
+        GroupRenderRepresentation::SphereAccelerator,
+        GroupRenderRepresentation::BoxAccelerator,
         GroupRenderRepresentation::GaussianSplats,
         GroupRenderRepresentation::BoxDepthAtlas,
         GroupRenderRepresentation::SphereDepthAtlas,
@@ -209,7 +211,10 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
         assert!(prepared.box_depth_atlases.contains_key(&duck_id));
         assert!(prepared.objects.iter().any(|object| object.uuid == duck_id));
         assert!(prepared.objects.iter().any(|object| object.uuid == box_id));
-        if mode == GroupRenderRepresentation::ExactSdf {
+        if matches!(
+            mode,
+            GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::SphereAccelerator | GroupRenderRepresentation::BoxAccelerator
+        ) {
             assert_eq!(prepared.objects.len(), 4);
             assert!(prepared
                 .objects
@@ -232,7 +237,10 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
                 GroupRenderRepresentation::SphereDepthAtlas => {
                     assert!(prepared.sphere_depth_atlases.contains_key(&box_id));
                 }
-                GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::NeuralSdf => {
+                GroupRenderRepresentation::ExactSdf
+                | GroupRenderRepresentation::NeuralSdf
+                | GroupRenderRepresentation::SphereAccelerator
+                | GroupRenderRepresentation::BoxAccelerator => {
                     unreachable!()
                 }
             }

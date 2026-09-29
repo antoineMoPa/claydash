@@ -148,6 +148,16 @@ pub(super) fn mark_component_evaluation(
     root: usize,
 ) -> u32 {
     let size = root - start + 1;
+    let refinement_distance = objects[start..=root]
+        .iter()
+        .map(|object| f32::from_bits(object.operand_tree[3]))
+        .fold(0.0_f32, f32::max);
+    if refinement_distance > 0.0 {
+        // The coarse evaluator skips captured subtrees in postorder. Preserve
+        // parent indices and provide scratch for the whole enclosing component.
+        objects[root].operand_tree[3] = refinement_distance.to_bits();
+        return size.next_power_of_two() as u32;
+    }
     if size == 1 {
         return 1;
     }
@@ -394,4 +404,21 @@ pub(super) fn create_deferred_geometry_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+/// Map retained source operands to their outermost baked depth subtree.
+pub(super) fn mark_depth_accelerator_subtrees(objects: &mut [GpuObject]) {
+    for index in 0..objects.len() {
+        let mut ancestor = Some(index);
+        let mut capture_root = None;
+        for _ in 0..objects.len() {
+            let Some(current) = ancestor else { break };
+            if objects[current].operand_tree[3] != 0 {
+                capture_root = Some(current);
+            }
+            let parent = objects[current].meta[3];
+            ancestor = (parent >= 0).then_some(parent as usize);
+        }
+        objects[index].operand_tree[2] = capture_root.map_or(0, |root| root as u32 + 1);
+    }
 }

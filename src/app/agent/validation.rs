@@ -33,6 +33,12 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
         {
             return Err(format!("custom material asset missing on {}", object.uuid));
         }
+        if !object.sphere_accelerator.is_valid() || !object.box_accelerator.is_valid() {
+            return Err(format!(
+                "invalid depth accelerator distance on {}",
+                object.uuid
+            ));
+        }
         if !ids.insert(object.uuid) {
             return Err(format!("duplicate object id {}", object.uuid));
         }

@@ -7,11 +7,13 @@ fn operand_bvh_indexes_safe_flat_union_children() {
         object.distance_bound = [index as f32 * 10.0, 0.0, 0.0, 1.0];
     }
     objects[8].meta[3] = FLAT_UNION_ROOT;
+    objects[8].operand_tree[3] = 0.1_f32.to_bits();
     let mut nodes = Vec::new();
     append_operand_bvhs(&mut nodes, &mut objects, &[0; 9]);
     let [start, end, _, _] = objects[8].operand_tree;
     assert_eq!(start, 0);
     assert_eq!(end, 15);
+    assert_eq!(f32::from_bits(objects[8].operand_tree[3]), 0.1);
     let mut leaves: Vec<_> = nodes
         .iter()
         .filter(|node| node.metadata[0] != BVH_LEAF)
@@ -179,4 +181,28 @@ fn packed_inverse_rows_match_matrix_transformation() {
     );
     let expected = (inverse * homogeneous).truncate();
     assert!(packed.abs_diff_eq(expected, 0.000_001));
+}
+
+#[test]
+fn sphere_accelerator_keeps_nested_source_ranges_and_enough_shader_scratch() {
+    let mut objects = vec![GpuObject::zeroed(); 5];
+    objects[0].meta[3] = 2;
+    objects[1].meta[3] = 2;
+    objects[2].meta[3] = 4;
+    objects[3].meta[3] = 4;
+    objects[4].meta[3] = -1;
+    objects[2].operand_tree[3] = 0.1_f32.to_bits();
+    mark_depth_accelerator_subtrees(&mut objects);
+    assert_eq!(
+        objects
+            .iter()
+            .map(|o| o.operand_tree[2])
+            .collect::<Vec<_>>(),
+        [3, 3, 3, 0, 0]
+    );
+    flatten_nested_hard_unions(&mut objects);
+    assert_eq!(objects[0].meta[3], 2, "capture hierarchy must not flatten");
+    assert_eq!(mark_component_evaluation(&mut objects, 0, 4), 8);
+    assert_eq!(f32::from_bits(objects[4].operand_tree[3]), 0.1);
+    assert_eq!(objects[4].meta[3], -1);
 }

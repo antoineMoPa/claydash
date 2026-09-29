@@ -7,6 +7,7 @@ type SplatSample = (uuid::Uuid, Vec3, f32, [f32; 3], Vec3, u32);
 
 pub(super) struct UploadedAtlases {
     pub box_depth_metadata: HashMap<uuid::Uuid, DepthMetadata>,
+    pub depth_accelerator_transforms: HashMap<uuid::Uuid, u32>,
     pub splat_bvh_metadata: HashMap<uuid::Uuid, (u32, u32)>,
     pub splat_samples: Vec<SplatSample>,
     pub materials: material_gpu::PackedMaterials,
@@ -22,10 +23,16 @@ impl Renderer {
     ) -> UploadedAtlases {
         let mut box_depth_texels = Vec::new();
         let mut box_depth_metadata = std::collections::HashMap::new();
+        let mut depth_accelerator_transforms = HashMap::new();
         let mut splat_bounds = std::collections::HashMap::new();
         let mut splat_bvh_metadata = std::collections::HashMap::new();
         let mut splat_samples = Vec::new();
         let mut materials = material_gpu::PackedMaterials::default();
+        let source_indices: HashMap<_, _> = objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| (object.uuid, index as u32))
+            .collect();
         let source_lookup: std::collections::HashMap<_, _> = source_objects
             .iter()
             .map(|object| (object.uuid, object))
@@ -101,6 +108,17 @@ impl Renderer {
                 if let Some((texels, owners, normals, width, height, minimum, maximum, kind)) =
                     capture
                 {
+                    if object.render_representation.is_depth_accelerator() {
+                        if let Some(records) =
+                            depth_accelerator_capture_records(source_objects, object.uuid)
+                        {
+                            let transform = box_depth_texels.len() as u32;
+                            let mut records = records;
+                            records[3][1] = kind as f32;
+                            box_depth_texels.extend_from_slice(&records);
+                            depth_accelerator_transforms.insert(object.uuid, transform + 1);
+                        }
+                    }
                     let offset = box_depth_texels.len() as u32;
                     for (sample_index, (texel, owner)) in texels.iter().zip(owners).enumerate() {
                         let material_index = owner
@@ -181,7 +199,22 @@ impl Renderer {
                             box_depth_texels.push(normals[sample_index].extend(0.0).to_array());
                         } else {
                             box_depth_texels.push(*texel);
-                            box_depth_texels.push([material_index as f32, 0.0, 0.0, 0.0]);
+                            // Preserve depth-map ownership separately from its
+                            // material ID. Zero means an empty/unavailable owner.
+                            let source_owner =
+                                if object.render_representation.is_depth_accelerator() {
+                                    owner
+                                        .and_then(|id| source_indices.get(&id).copied())
+                                        .map_or(0, |index| index + 1)
+                                } else {
+                                    0
+                                };
+                            box_depth_texels.push([
+                                material_index as f32,
+                                source_owner as f32,
+                                0.0,
+                                0.0,
+                            ]);
                         }
                     }
                     box_depth_metadata
@@ -249,9 +282,64 @@ impl Renderer {
         UploadedAtlases {
             box_depth_metadata,
             splat_bvh_metadata,
+            depth_accelerator_transforms,
             splat_samples,
             materials,
             stencil_layers,
         }
+    }
+}
+
+/// Map the capture's centered local frame to packed world-to-capture rows.
+pub(super) fn depth_accelerator_capture_records(
+    source: &[SdfObject],
+    root: uuid::Uuid,
+) -> Option<[[f32; 4]; 4]> {
+    let (minimum, maximum) = crate::model::lattice_bounds(source, root)?;
+    let world = crate::model::lattice_world_matrix(source, root);
+    let capture = world * glam::Mat4::from_translation((minimum + maximum) * 0.5);
+    let inverse = capture.inverse();
+    let distance_scale = Vec3::new(
+        world.x_axis.truncate().length(),
+        world.y_axis.truncate().length(),
+        world.z_axis.truncate().length(),
+    )
+    .min_element();
+    if !inverse.is_finite() || !distance_scale.is_finite() || distance_scale <= 0.0 {
+        return None;
+    }
+    let rows = inverse_affine_rows(inverse);
+    Some([rows[0], rows[1], rows[2], [distance_scale, 0.0, 0.0, 0.0]])
+}
+
+#[cfg(test)]
+mod sphere_accelerator_tests {
+    use super::*;
+
+    #[test]
+    fn sphere_capture_rows_use_the_group_center_and_world_distance_scale() {
+        let mut root = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        root.group_transform.translation = Vec3::new(3.0, -2.0, 1.0);
+        root.group_transform.rotation = glam::Quat::from_rotation_y(0.7);
+        root.group_transform.scale = Vec3::splat(1.7);
+        let mut child = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        child.boolean_parent = Some(root.uuid);
+        child.transform.translation = Vec3::new(2.0, 0.0, 0.0);
+        let id = root.uuid;
+        let scene = [root, child];
+        let (minimum, maximum) = crate::model::lattice_bounds(&scene, id).unwrap();
+        let world = crate::model::lattice_world_matrix(&scene, id);
+        let center = (minimum + maximum) * 0.5;
+        let rows = depth_accelerator_capture_records(&scene, id).unwrap();
+        for local in [Vec3::ZERO, Vec3::new(0.2, -0.1, 0.3)] {
+            let point = world.transform_point3(center + local).extend(1.0);
+            let captured = Vec3::new(
+                glam::Vec4::from_array(rows[0]).dot(point),
+                glam::Vec4::from_array(rows[1]).dot(point),
+                glam::Vec4::from_array(rows[2]).dot(point),
+            );
+            assert!((captured - local).length() < 0.00001);
+        }
+        assert!((rows[3][0] - 1.7).abs() < 0.00001);
     }
 }

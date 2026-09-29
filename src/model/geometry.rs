@@ -208,6 +208,10 @@ pub struct SdfObject {
     pub render_representation: GroupRenderRepresentation,
     #[serde(default, skip_serializing_if = "NeuralSdfSettings::is_default")]
     pub neural_sdf: NeuralSdfSettings,
+    #[serde(default, skip_serializing_if = "SphereAcceleratorSettings::is_default")]
+    pub sphere_accelerator: SphereAcceleratorSettings,
+    #[serde(default, skip_serializing_if = "BoxAcceleratorSettings::is_default")]
+    pub box_accelerator: BoxAcceleratorSettings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_neural_field: Option<std::sync::Arc<SavedNeuralField>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -246,6 +250,14 @@ impl ImageStencil {
 }
 
 impl SdfObject {
+    pub fn depth_accelerator_settings(&self) -> Option<DepthAcceleratorSettings> {
+        match self.render_representation {
+            GroupRenderRepresentation::SphereAccelerator => Some(self.sphere_accelerator),
+            GroupRenderRepresentation::BoxAccelerator => Some(self.box_accelerator),
+            _ => None,
+        }
+    }
+
     pub fn create_image_plane() -> Self {
         let mut plane = Self::create_kind(PrimitiveKind::Box);
         plane.name = "Image plane".into();
@@ -269,6 +281,8 @@ impl SdfObject {
             group_transform: Transform::default(),
             render_representation: GroupRenderRepresentation::default(),
             neural_sdf: NeuralSdfSettings::default(),
+            sphere_accelerator: SphereAcceleratorSettings::default(),
+            box_accelerator: BoxAcceleratorSettings::default(),
             saved_neural_field: None,
             saved_group_capture: None,
             color: material.color,

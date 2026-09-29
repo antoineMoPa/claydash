@@ -69,7 +69,8 @@ pub(super) fn append_operand_bvhs(
             node.metadata[1] += offset;
         }
         nodes.extend(tree);
-        objects[root].operand_tree = [offset, nodes.len() as u32, 0, 0];
+        objects[root].operand_tree[0] = offset;
+        objects[root].operand_tree[1] = nodes.len() as u32;
     }
 }
 
@@ -136,6 +137,7 @@ pub(super) fn flatten_nested_hard_unions(objects: &mut [GpuObject]) {
                 .all(|(offset, object)| {
                     let index = start + offset;
                     object.meta[2] == 0
+                        && object.operand_tree[3] == 0
                         && (!has_children[index] || object.component[2] == 0)
                         && object.repeat_count[3] == 0
                         && object.mirror_axes[..3].iter().all(|&axis| axis == 0)

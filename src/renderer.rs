@@ -359,6 +359,7 @@ mod sphere_depth_atlas;
 pub(crate) use material_gpu::validate_custom_materials;
 mod atlas_upload;
 mod group_capture;
+pub(crate) use group_capture::{depth_accelerator_status, DepthAcceleratorStatus};
 mod neural_jobs;
 mod neural_sdf;
 pub(crate) use neural_jobs::NeuralStatus;
@@ -383,6 +384,8 @@ mod scene_tests;
 
 #[cfg(test)]
 mod bvh_tests;
+#[cfg(test)]
+mod depth_accelerator_tests;
 
 #[cfg(test)]
 mod tests {

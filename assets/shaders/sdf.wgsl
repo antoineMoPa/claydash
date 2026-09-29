@@ -20,6 +20,7 @@ struct Object {
     stencil_placement: vec4<f32>,
     stencil_meta: vec4<f32>,
     distance_bound: vec4<f32>,
+    // xy: operand BVH range; z: captured subtree root + 1; w: refinement distance, f32 bits.
     operand_tree: vec4<u32>,
     box_depth_meta: vec4<u32>,
     box_depth_min: vec4<f32>,
@@ -1267,6 +1268,18 @@ fn convex_primitive_normal(point: vec3<f32>, object: Object) -> vec3<f32> {
 fn scene_normal(point: vec3<f32>, index: u32) -> vec3<f32> {
     let component = objects[index].component;
     let neural_object = objects[index];
+    if bitcast<f32>(objects[component.y].operand_tree.w) > 0.0 {
+        let e = 0.003;
+        let a = vec3(1.0, -1.0, -1.0);
+        let b = vec3(-1.0, -1.0, 1.0);
+        let c = vec3(-1.0, 1.0, -1.0);
+        let d = vec3(1.0, 1.0, 1.0);
+        let gradient = a * depth_accelerator_source_distance(point + a * e, index)
+            + b * depth_accelerator_source_distance(point + b * e, index)
+            + c * depth_accelerator_source_distance(point + c * e, index)
+            + d * depth_accelerator_source_distance(point + d * e, index);
+        return gradient / max(length(gradient), 0.000001);
+    }
     if HAS_NEURAL_SDF && neural_object.state.y == 12 && component.x == component.y
         && neural_object.modifier.x == 0u && all(neural_object.mirror_axes == vec4<u32>(0u)) {
         let p = vec4(point, 1.0);
@@ -1465,6 +1478,110 @@ fn empty_splat_exclusions() -> array<u32, 12> {
     return excluded;
 }
 
+// The atlas only guides approach. Exact source objects stay in the GPU array.
+fn depth_accelerator_sample(point: vec3<f32>, direction: vec3<f32>, object: Object) -> vec2<f32> {
+    let transform = object.box_depth_meta.w - 1u;
+    let p = vec4(point, 1.0);
+    let local = vec3(dot(box_depth_texels[transform], p),
+        dot(box_depth_texels[transform + 1u], p), dot(box_depth_texels[transform + 2u], p));
+    let scale = box_depth_texels[transform + 3u].x;
+    if box_depth_texels[transform + 3u].y == 8.0 {
+        // Choose the box capture face facing this ray, including secondary rays.
+        let view = -vec3(dot(box_depth_texels[transform].xyz, direction),
+            dot(box_depth_texels[transform + 1u].xyz, direction),
+            dot(box_depth_texels[transform + 2u].xyz, direction));
+        let axis = abs(view);
+        var face = select(5u, 4u, view.z >= 0.0);
+        if axis.x >= axis.y && axis.x >= axis.z { face = select(1u, 0u, view.x >= 0.0); }
+        else if axis.y >= axis.z { face = select(3u, 2u, view.y >= 0.0); }
+        let depth = box_depth_face_depth(local, object, face);
+        if depth < 0.0 {
+            let q = max(object.box_depth_min.xyz - local, local - object.box_depth_max.xyz);
+            let bound = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+            let width = object.box_depth_max.xyz - object.box_depth_min.xyz;
+            return vec2(max(bound, max(-depth, min(width.x, min(width.y, width.z)) * 0.05)) * scale, -1.0);
+        }
+        let uv = box_depth_face_uv(local, object, face);
+        let pixel = vec2<i32>(floor(uv * f32(object.box_depth_meta.y)));
+        let offset = box_depth_texel_offset(object, face, pixel);
+        return vec2(box_depth_face_plane(local, object, face, depth) * scale,
+            box_depth_texels[offset + 1u].y - 1.0);
+    }
+    // Unlike the display-only sphere path, read radial depth even outside
+    // the capture sphere: the refinement band belongs to the captured surface.
+    let radius = object.box_depth_max.x;
+    let sphere_distance = length(local) - radius;
+    let depth = sphere_depth_at(local, object);
+    if depth < 0.0 { return vec2(max(sphere_distance, max(-depth, radius * 0.05)) * scale, -1.0); }
+    let uv = sphere_depth_uv(local);
+    let pixel = vec2<i32>(floor(uv * vec2<f32>(f32(object.box_depth_meta.y), f32(object.box_depth_meta.z))));
+    let offset = sphere_depth_texel_offset(object, pixel);
+    let source_owner = box_depth_texels[offset + 1u].y - 1.0;
+    return vec2((sphere_distance + depth) * scale, source_owner);
+}
+
+fn depth_accelerator_distance(point: vec3<f32>, direction: vec3<f32>, object: Object) -> f32 {
+    return depth_accelerator_sample(point, direction, object).x;
+}
+
+// Evaluate only the locked map owner, in the same modifier frame as its source.
+fn depth_accelerator_source_distance(point: vec3<f32>, owner: u32) -> f32 {
+    var object = objects[owner];
+    let root = object.component.y;
+    let parent = objects[root];
+    let mirrored_point = mirror_point(point, parent);
+    let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+    let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
+    if owner == root && group_repeated { object.repeat_count.w = 0; }
+    return object_distance_at(modifier_point(group_point, object), object);
+}
+
+fn refine_depth_accelerator_crossing(origin: vec3<f32>, direction: vec3<f32>,
+    low: f32, high: f32, owner: u32, epsilon: f32) -> vec3<f32> {
+    var a = low;
+    var b = high;
+    let negative_at_a = depth_accelerator_source_distance(origin + direction * a, owner) < 0.0;
+    var travel = (a + b) * 0.5;
+    for (var iteration = 0u; iteration < 12u; iteration++) {
+        travel = (a + b) * 0.5;
+        let value = depth_accelerator_source_distance(origin + direction * travel, owner);
+        if abs(value) <= epsilon { break; }
+        if (value < 0.0) == negative_at_a { a = travel; } else { b = travel; }
+    }
+    return vec3(travel, f32(owner), -1.0);
+}
+
+// Captured subtrees contribute one texture query. Uncaptured siblings retain
+// their native SDFs and the enclosing Boolean operations remain in effect.
+fn depth_accelerator_component_distance(point: vec3<f32>, direction: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    let parent = objects[root];
+    let mirrored_point = mirror_point(point, parent);
+    let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+    let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
+    let parent_point = modifier_point(group_point, parent);
+    var values: array<vec2<f32>, CSG_SIZE>;
+    for (var i = start; i <= root; i++) {
+        var object = objects[i];
+        let captured_root = object.operand_tree.z;
+        if captured_root != 0u && captured_root != i + 1u { continue; }
+        if captured_root == i + 1u {
+            values[i - start] = depth_accelerator_sample(point, direction, object);
+        } else {
+            var sample_point = parent_point;
+            if object.modifier.x != parent.modifier.x { sample_point = modifier_point(group_point, object); }
+            if i == root && group_repeated { object.repeat_count.w = 0; }
+            values[i - start] = vec2(object_distance_at(sample_point, object), f32(i));
+        }
+    }
+    for (var i = start; i < root; i++) {
+        let object = objects[i];
+        if object.operand_tree.z != 0u && object.operand_tree.z != i + 1u { continue; }
+        let parent_index = u32(object.state.w);
+        values[parent_index - start] = combine_operand(values[parent_index - start], values[i - start], object, objects[parent_index]);
+    }
+    return values[root - start];
+}
+
 fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
     excluded_splats: array<u32, 12>, skip_splats: bool) -> vec3<f32> {
     var closest = 100.0;
@@ -1510,7 +1627,9 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                 continue;
             }
             var travel = start;
-            if HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x) {
+            let refinement_distance = bitcast<f32>(object.operand_tree.w);
+            let accelerated = refinement_distance > 0.0;
+            if !accelerated && HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x) {
                 let interval = subtraction_entry(origin, direction, node.metadata.z, node.metadata.x);
                 if interval.y < 0.0 || interval.x > end {
                     node_index += 1u;
@@ -1528,9 +1647,9 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                 // Smooth subtraction only removes points from the hard result.
                 // Its first hit cannot precede the exact hard interval entry;
                 // start the original SDF marcher there to preserve the blend.
-                travel = max(start, interval.x - epsilon);
+                travel = max(travel, interval.x - epsilon);
             }
-            if node.metadata.z == node.metadata.x && has_analytic_interval(object) {
+            if !accelerated && node.metadata.z == node.metadata.x && has_analytic_interval(object) {
                 let interval = primitive_interval(origin, direction, object);
                 let candidate = max(0.0, interval.x);
                 if interval.y >= candidate && candidate < closest {
@@ -1542,20 +1661,54 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                 continue;
             }
             let smooth_pair = HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x);
-            let neural_component = component_has_neural(f32(node.metadata.x));
+            var neural_component = false;
+            if !accelerated { neural_component = component_has_neural(f32(node.metadata.x)); }
+            var selected_owner = -1.0;
             var previous_travel = travel;
             var previous_value = 0.0;
-            for (var step = 0u; step < 128u; step++) {
+            var refining = !accelerated;
+            var have_exact_sample = false;
+            let step_limit = select(128u, 192u, accelerated);
+            for (var step = 0u; step < step_limit; step++) {
+                if !refining {
+                    let coarse = depth_accelerator_component_distance(origin + direction * travel, direction,
+                        node.metadata.z, node.metadata.x);
+                    let band = max(refinement_distance, epsilon);
+                    if coarse.x <= band && coarse.y >= 0.0 {
+                        selected_owner = coarse.y;
+                        refining = true;
+                        travel = max(start, travel - band);
+                        continue;
+                    }
+                    travel += max((coarse.x - band) * 0.35, epsilon * 0.5);
+                    if travel > end { break; }
+                    continue;
+                }
                 let point = origin + direction * travel;
                 var sample: vec2<f32>;
-                if smooth_pair {
+                if accelerated {
+                    sample = vec2(depth_accelerator_source_distance(point, u32(selected_owner)), selected_owner);
+                } else if smooth_pair {
                     sample = smooth_subtraction_distance(point, node.metadata.z, node.metadata.x);
                 } else {
                     sample = component_distance(point, node.metadata.z, node.metadata.x);
                 }
                 let value = sample.x;
-                if neural_component && step > 0u && (value < 0.0) != (previous_value < 0.0) {
-                    let refined = refine_neural_crossing(origin, direction, previous_travel, travel, sample.y);
+                // If capture error put the handoff inside the source, restart
+                // this candidate's exact march at its bound rather than shade
+                // the texture or accept an interior point as a surface.
+                if accelerated && !have_exact_sample && value < -epsilon && travel > start + epsilon {
+                    travel = start;
+                    continue;
+                }
+                if (neural_component || accelerated) && have_exact_sample && (value < 0.0) != (previous_value < 0.0) {
+                    var refined: vec3<f32>;
+                    if accelerated {
+                        refined = refine_depth_accelerator_crossing(origin, direction,
+                            previous_travel, travel, u32(selected_owner), epsilon);
+                    } else {
+                        refined = refine_neural_crossing(origin, direction, previous_travel, travel, sample.y);
+                    }
                     closest = refined.x;
                     owner = refined.y;
                     splat_offset = -1.0;
@@ -1563,15 +1716,18 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                 }
                 let tolerance = surface_hit_tolerance(sample.y, epsilon);
                 let neural = HAS_NEURAL_SDF && sample.y >= 0.0 && objects[u32(max(sample.y, 0.0))].state.y == 12;
-                if select(value < epsilon, abs(value) <= tolerance, neural) {
+                if select(value < epsilon, abs(value) <= tolerance, neural || accelerated) {
                     closest = travel;
                     owner = sample.y;
                     splat_offset = -1.0;
                     break;
                 }
+                have_exact_sample = true;
                 previous_travel = travel;
                 previous_value = value;
-                travel += select(value, abs(value), neural_component) * bitcast<f32>(object.modifier.y);
+                var march_factor = bitcast<f32>(object.modifier.y);
+                if accelerated { march_factor = bitcast<f32>(objects[u32(selected_owner)].modifier.y); }
+                travel += select(value, abs(value), neural_component || accelerated) * march_factor;
                 if travel > end { break; }
             }
         }

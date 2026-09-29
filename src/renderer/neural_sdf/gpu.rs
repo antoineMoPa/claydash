@@ -896,10 +896,17 @@ mod tests {
                 .await
                 .unwrap();
             let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
-            for (layers, width, activation) in [
-                (1, 8, crate::model::NeuralActivation::Relu),
-                (2, 33, crate::model::NeuralActivation::Softplus),
-                (8, 5, crate::model::NeuralActivation::Softplus),
+            let defaults = NeuralTrainingSettings::default();
+            for (layers, width, activation, epochs) in [
+                (
+                    defaults.layers,
+                    defaults.width,
+                    defaults.activation,
+                    defaults.epochs,
+                ),
+                (1, 8, crate::model::NeuralActivation::Relu, 32),
+                (2, 33, crate::model::NeuralActivation::Softplus, 256),
+                (8, 5, crate::model::NeuralActivation::Softplus, 256),
             ] {
                 let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
                 object.neural_sdf.training = NeuralTrainingSettings {
@@ -907,7 +914,7 @@ mod tests {
                     width,
                     activation,
                     samples: 731,
-                    epochs: if layers == 1 { 32 } else { 256 },
+                    epochs,
                     ..Default::default()
                 };
                 let id = object.uuid;

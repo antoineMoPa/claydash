@@ -840,3 +840,44 @@ fn neural_presets_are_valid_and_manual_edits_become_custom() {
         0.5
     );
 }
+
+#[test]
+fn sphere_accelerator_settings_default_round_trip_and_reject_invalid_values() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+    object.render_representation = GroupRenderRepresentation::SphereAccelerator;
+    let mut saved = serde_json::to_value(&object).unwrap();
+    assert_eq!(saved["render_representation"], "sphere_accelerator");
+    assert!(saved.get("sphere_accelerator").is_none());
+    let loaded: SdfObject = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(loaded.sphere_accelerator.configurable_epsilon, 0.1);
+    object.sphere_accelerator.configurable_epsilon = 0.025;
+    let loaded: SdfObject = serde_json::from_value(serde_json::to_value(&object).unwrap()).unwrap();
+    assert_eq!(loaded.sphere_accelerator.configurable_epsilon, 0.025);
+    for invalid in [0.0, -0.1, 1001.0] {
+        saved["sphere_accelerator"] = serde_json::json!({"configurable_epsilon": invalid});
+        assert!(serde_json::from_value::<SdfObject>(saved.clone()).is_err());
+    }
+    for invalid in [f32::NAN, f32::INFINITY] {
+        assert!(!SphereAcceleratorSettings {
+            configurable_epsilon: invalid
+        }
+        .is_valid());
+    }
+}
+
+#[test]
+fn box_accelerator_settings_round_trip_with_independent_sphere_distance() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+    object.render_representation = GroupRenderRepresentation::BoxAccelerator;
+    object.box_accelerator.configurable_epsilon = 0.2;
+    let loaded: SdfObject = serde_json::from_value(serde_json::to_value(&object).unwrap()).unwrap();
+    assert_eq!(loaded.box_accelerator.configurable_epsilon, 0.2);
+    assert_eq!(loaded.sphere_accelerator.configurable_epsilon, 0.1);
+    assert_eq!(
+        loaded
+            .depth_accelerator_settings()
+            .unwrap()
+            .configurable_epsilon,
+        0.2
+    );
+}

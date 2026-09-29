@@ -20,6 +20,8 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
         return;
     };
     let saved_settings = scene[index].neural_sdf;
+    let saved_accelerator = scene[index].sphere_accelerator;
+    let saved_box_accelerator = scene[index].box_accelerator;
     let saved_mode = scene[index].render_representation;
     let mut selected_mode = saved_mode;
     egui::ComboBox::from_id_salt(ui.auto_id_with("group-render-representation"))
@@ -30,6 +32,19 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                     .on_hover_text(mode.description());
             }
         });
+    if selected_mode.is_depth_accelerator() {
+        let settings = match selected_mode {
+            crate::model::GroupRenderRepresentation::SphereAccelerator => &mut scene[index].sphere_accelerator,
+            crate::model::GroupRenderRepresentation::BoxAccelerator => &mut scene[index].box_accelerator,
+            _ => unreachable!(),
+        };
+        ui.horizontal(|ui| {
+            ui.label("Exact march distance").on_hover_text("World-space distance from the baked depth surface where tracing switches to the source SDF. Applies immediately without rebaking; independent of surface hit tolerance.");
+            ui.add(egui::DragValue::new(&mut settings.configurable_epsilon)
+                .update_while_editing(false).range(0.0001_f32..=1000.0_f32)
+                .speed(0.01).max_decimals(4));
+        });
+    }
     if selected_mode == crate::model::GroupRenderRepresentation::NeuralSdf {
         let settings = &mut scene[index].neural_sdf;
         let preset = crate::model::NeuralModelPreset::matching(settings.training);
@@ -99,18 +114,31 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     }
     if selected_mode != crate::model::GroupRenderRepresentation::ExactSdf
         && selected_mode != crate::model::GroupRenderRepresentation::NeuralSdf
-        && ui.button("Recompute").on_hover_text("Bake this group using the selected method.").clicked()
+        && ui
+            .button("Recompute")
+            .on_hover_text("Bake this group using the selected method.")
+            .clicked()
     {
         ui.ctx().data_mut(|data| {
             let id = egui::Id::new("group-optimization-recompute");
-            let mut requests = data.get_temp::<std::collections::HashSet<uuid::Uuid>>(id).unwrap_or_default();
+            let mut requests = data
+                .get_temp::<std::collections::HashSet<uuid::Uuid>>(id)
+                .unwrap_or_default();
             requests.insert(target);
             data.insert_temp(id, requests);
         });
         ui.ctx().request_repaint();
     }
+    if selected_mode.is_depth_accelerator() {
+        let status = if selected_mode == saved_mode {
+            crate::renderer::depth_accelerator_status(ui.ctx(), &scene, target, tree.path_version("scene.sdf_objects"))
+        } else { crate::renderer::DepthAcceleratorStatus::NotComputedYet };
+        ui.weak(status.label());
+    }
     if selected_mode != scene[index].render_representation
         || saved_settings != scene[index].neural_sdf
+        || saved_accelerator != scene[index].sphere_accelerator
+        || saved_box_accelerator != scene[index].box_accelerator
     {
         scene[index].render_representation = selected_mode;
         set_objects(tree, scene);

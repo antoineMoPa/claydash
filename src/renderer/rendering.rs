@@ -41,6 +41,11 @@ impl Renderer {
         }
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         self.neural_jobs.publish(egui);
+        super::group_capture::publish_depth_accelerator_status(
+            egui,
+            objects,
+            &self.group_capture_cache,
+        );
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],

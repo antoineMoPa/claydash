@@ -159,6 +159,8 @@ impl Renderer {
                     object.render_representation,
                     crate::model::GroupRenderRepresentation::BoxDepthAtlas
                         | crate::model::GroupRenderRepresentation::SphereDepthAtlas
+                        | crate::model::GroupRenderRepresentation::SphereAccelerator
+                        | crate::model::GroupRenderRepresentation::BoxAccelerator
                         | crate::model::GroupRenderRepresentation::GaussianSplats
                         | crate::model::GroupRenderRepresentation::NeuralSdf
                 )
@@ -249,6 +251,7 @@ impl Renderer {
         let super::atlas_upload::UploadedAtlases {
             box_depth_metadata,
             splat_bvh_metadata,
+            depth_accelerator_transforms,
             splat_samples,
             mut materials,
             stencil_layers,
@@ -512,13 +515,29 @@ impl Renderer {
                             -1.0
                         })
                         .to_array(),
-                    operand_tree: [0; 4],
+                    operand_tree: [
+                        0,
+                        0,
+                        0,
+                        if !training_only && depth_accelerator_transforms.contains_key(&object.uuid)
+                        {
+                            object
+                                .depth_accelerator_settings()
+                                .filter(|settings| settings.is_valid())
+                                .map_or(0, |settings| settings.configurable_epsilon.to_bits())
+                        } else {
+                            0
+                        },
+                    ],
                     box_depth_meta: box_depth.map_or([0; 4], |(offset, width, height, _, _, _)| {
                         [
                             offset,
                             width,
                             height,
-                            splat_bvh.map_or(0, |(start, _)| start),
+                            depth_accelerator_transforms
+                                .get(&object.uuid)
+                                .copied()
+                                .unwrap_or_else(|| splat_bvh.map_or(0, |(start, _)| start)),
                         ]
                     }),
                     box_depth_min: box_depth.map_or([0.0; 4], |(_, _, _, minimum, _, _)| {
@@ -539,7 +558,11 @@ impl Renderer {
                         .to_array(),
                     meta: [
                         i32::from(selected_ids.contains(&object.uuid)),
-                        box_depth.map_or(object.object_type, |(_, _, _, _, _, kind)| kind),
+                        if object.render_representation.is_depth_accelerator() {
+                            object.object_type
+                        } else {
+                            box_depth.map_or(object.object_type, |(_, _, _, _, _, kind)| kind)
+                        },
                         object.operation.gpu_code(),
                         object
                             .boolean_parent
@@ -692,6 +715,7 @@ impl Renderer {
                 mirror,
             );
         }
+        mark_depth_accelerator_subtrees(&mut gpu_objects);
         if !training_only {
             flatten_nested_hard_unions(&mut gpu_objects);
         }

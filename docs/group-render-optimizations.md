@@ -11,8 +11,8 @@ an intent to use a representation, not proof that a valid bake exists.
 
 The Object properties panel shows these candidates after Modifiers for an
 object or selected Boolean group. The selection is saved on that object or
-group root and survives document round-trips. **Exact SDF**, **Box depth atlas**, **Sphere depth atlas**, **Gaussian splats**, and **Neural SDF** have render paths today. The capture replaces the selected subtree with a
-depth capture for rendering; the editable source remains in the document. The
+group root and survives document round-trips. **Exact SDF**, **Box depth atlas**, **Sphere depth atlas**, **Sphere accelerator**, **Box accelerator**, **Gaussian splats**, and **Neural SDF** have render paths today. Display-only captures replace the selected subtree for rendering. Accelerators
+retain source objects for final refinement; the editable source stays in the document. The
 renderer does not gate this choice on modifiers or Boolean operations. Older
 documents that saved a removed choice now load as Exact SDF. Documents without
 a saved mode also default to Exact SDF.
@@ -30,6 +30,40 @@ map around the group. It stores the same depth, color, and material information.
 Empty directions let rays pass through; nearby occupied depths are interpolated
 within a continuous surface. The radial capture favors rounded groups and has
 one layer per direction, so deep concavities can remain approximate.
+
+Sphere accelerator and Box accelerator use the existing sphere and six-face box
+depth bakes respectively when **Recompute** is clicked. Sphere captures favor
+rounded shapes; box captures suit objects with broad, cube-like faces. The
+indicator below the button shows **Not computed yet** until a valid bake exists,
+then **Ready**. Geometry edits invalidate readiness; changing the refinement
+distance keeps the bake ready. Valid saved captures restore as Ready. Until a
+valid bake exists, rendering uses the exact source.
+
+The baked texture guides each ray toward the captured surface and identifies
+its source object. Within `configurable_epsilon` world units (default 0.1),
+tracing locks that owner and raymarches only that object's native SDF. Siblings
+and the complete Boolean component are not queried during refinement or normal
+calculation. Final material and color use the selected source owner. Bracketed
+crossings are refined against that same object; an interior handoff restarts
+its march at the component bound without selecting another owner. Box face
+selection follows the ray direction, including secondary rays.
+
+The panel's **Exact march distance** applies immediately without rebaking. Each
+mode saves its own distance in `sphere_accelerator.configurable_epsilon` or
+`box_accelerator.configurable_epsilon`; agents can set either with `PutObject`.
+The distance measures the refinement band around the captured surface,
+independent of surface hit tolerance. Captures persist and validate like the
+corresponding depth atlases. Source descendants remain in the GPU scene even
+when they have another representation selected. Nested captured subtrees
+contribute one texture query during coarse Boolean composition. Source queries
+for membership, interior rays, and neural training retain their existing paths.
+
+Both accelerators intentionally tolerate visual artifacts for reduced source
+work. Missing thin features or hidden layers, ownership boundaries, smooth
+blends, and Boolean seams can remain approximate because final refinement
+locks one primitive rather than evaluating the full composition. Capture errors
+outside the band may miss surfaces. A larger band allows more source refinement
+at greater cost, but does not recover absent ownership or depth layers.
 
 Gaussian splats capture up to eight surface crossings along rays from six box
 faces. Each occupied sample becomes an isotropic Gaussian centered at its
@@ -50,7 +84,7 @@ eligibility, shading limits, and measured rendering and editing costs.
 
 The local agent CLI and MCP server expose the working choices through
 `CreateObject.render_representation` and the `SetRenderRepresentation` action.
-`get_schema` lists the five available values. For a Boolean composition, set the
+`get_schema` lists the seven available values. For a Boolean composition, set the
 choice on the group root; its source operands stay editable.
 Nested hard unions of ordinary SDF operands now use the flat-union GPU path
 when no nested repetition, mirror, or smooth blend changes their semantics.
@@ -78,21 +112,22 @@ to include it. Captured textures and depth samples increase project file size.
 ## Neural SDF
 
 Choose **Neural SDF** on an object or Boolean group root. Its editable source
-is sampled at a fixed number of uniformly random positions (512–1,073,741,824 samples, default 32,768) inside a padded bounding cube. Positions are continuous and do not snap to the former grid. The default network has one width-eight ReLU hidden layer (`3 → 8 → 1`,
-41 parameters). The panel exposes these saved per-group controls:
+is sampled at a fixed number of uniformly random positions (512–1,073,741,824 samples, default 32,768) inside a padded bounding cube. Positions are continuous and do not snap to the former grid. The default network has two width-24 Softplus hidden layers (`3 → 24 → 24 → 1`,
+721 parameters). The panel exposes these saved per-group controls:
 
 | Control | Range | Default |
 | --- | --- | --- |
-| Hidden layers | 1–8 | 1 |
-| Width of each hidden layer | 4–1024 | 8 |
+| Activation | ReLU / Softplus | Softplus |
+| Hidden layers | 1–8 | 2 |
+| Width of each hidden layer | 4–1024 | 24 |
 | Samples (total) | 512–1,073,741,824 | 32,768 |
 | Epochs | 1–512 | 32 |
-| Learning rate | 0.00001–0.1 | 0.001 |
+| Learning rate | 0.00001–0.1 | 0.02 |
 | Seed | Any unsigned 32-bit integer | 11256099 |
 | Hit distance, equivalent sample spacing | 0.001–4 | 0.02 |
 
 The **Model size** dropdown offers calibrated presets. All use smooth Softplus
-activation (`log(1 + exp(10x)) / 10`), learning rate 0.001, the default seed, and
+activation (`log(1 + exp(10x)) / 10`), learning rate 0.02, the default seed, and
 hit distance 0.02 cells. Selecting a preset stages its training settings until
 **Recompute**; editing its fields switches the displayed choice to **Custom**.
 
@@ -103,7 +138,7 @@ hit distance 0.02 cells. Selecting a preset stages its training settings until
 | Detailed | 3 | 16 | 96 | 0.00793 |
 | High detail | 4 | 24 | 128 | 0.00580 |
 
-These are measured field-fit improvements on the default duck, not a guarantee
+These historical field-fit measurements used learning rate 0.001. They are not a guarantee
 for every model. Larger presets increase training and rendering cost. The
 **Activation** control also retains ReLU for comparison and old documents.
 ReLU produces planar patches; Softplus gives continuous hidden-layer derivatives.
@@ -210,8 +245,8 @@ when ready. Progress accounts for training, validation, and ownership sampling
 on desktop and browser. Sample-set RMS and maximum field errors and bake elapsed
 time are retained in saved field metadata.
 
-The default eight ReLU neurons deliberately limit quality: surfaces are faceted, small holes
-and disjoint parts can disappear, and larger hit tolerances expand silhouettes.
+The fitted field can lose small holes and disjoint parts, and larger hit
+tolerances expand silhouettes.
 A valid zero crossing is not a fidelity guarantee. Use Exact SDF for faithful
 geometry. See [neural measurements](rendering-performance.md#neural-sdf) for
 validation and timings; this mode is not automatically selected as an optimization.
@@ -223,6 +258,8 @@ validation and timings; this mode is not automatically selected as an optimizati
 | Exact SDF | None beyond current GPU upload and bounds | Correct editable baseline | Repeated SDF and shading work |
 | Box depth atlas | First-hit depth, base color, and material identity viewed from six box faces | A small fixed set of textured proxy faces | Occluded layers, silhouettes, and close parallax are approximate |
 | Sphere depth atlas | Radial depth and material samples over a sphere | More uniform angular sampling for round groups | Concavities and multiple crossings need layers; sampling near the center is problematic |
+| Sphere accelerator | Sphere depth and source ownership | Texture approach followed by one-object refinement | Missing layers and Boolean seams remain approximate |
+| Box accelerator | Six-face box depth and source ownership | One-object refinement suited to cube-like shapes | Face seams, missing layers, and Boolean seams remain approximate |
 | Box grid, coarse | Local box depth atlases on a 3 by 3 grid | Smaller cells reduce parallax error | More textures and seam handling |
 | Box grid, fine | Local box depth atlases on a 9 by 9 grid | Better local detail | Bake cost, memory, and draw work rise sharply |
 | Gaussian splats | Layered box-face surface positions, isotropic support radius, color, normal, and material | Instanced alpha splats for a costly group | Missed hidden layers and approximate shading; some scenes use ray composition |
