@@ -16,6 +16,10 @@
     h3 { font-size: 1.2rem; margin: 28px 0 8px; }
     p { max-width: 72ch; }
     .lede { color: #bdc7d7; font-size: 1.18rem; }
+    .repository-link { margin: 14px 0 0; }
+    .repository-link a { display: inline-flex; align-items: center; gap: 9px; border-radius: 4px; }
+    .repository-link a:focus-visible { outline: 2px solid #a9c7ff; outline-offset: 4px; }
+    .repository-link img { display: block; width: 28px; height: 28px; }
     nav { position: fixed; left: 0; top: 0; bottom: 0; width: 238px; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 48px 16px; border-right: 1px solid #353c47; background: #171a20; }
     nav .nav-title { color: #8e9aab; font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; margin: 0 12px 12px; }
     nav a { color: #c8d3e3; text-decoration: none; padding: 7px 12px; border-radius: 7px; }
@@ -38,6 +42,8 @@
 <body>
   <header>
     <h1>Claydash user guide</h1>
+    <p class="lede">Learn the basics of Claydash, an experimental 3D SDF modeler.</p>
+    <p class="repository-link"><a href="https://github.com/antoineMoPa/claydash"><img src="github-icon.svg" alt="" width="28" height="28">claydash</a></p>
     <nav aria-label="Guide sections">
       <span class="nav-title">On this page</span><a href="#window">App window</a><a href="#sdf">A word about SDF</a><a href="#shapes">Shapes</a><a href="#gizmos">Viewport gizmos</a><a href="#face-cut">Face cutting and extrusion</a><a href="#path-extrusion">Path extrusion</a><a href="#booleans">Boolean groups</a><a href="#materials">Materials</a><a href="#repeat">Repeat modifier</a><a href="#mirror">Mirror modifier</a><a href="#modifiers">Lattice modifier</a><a href="#camera">Cameras</a><a href="#animation">Animation</a><a href="#files">Files and renders</a><a href="#agents">Native app and MCP</a>
     </nav>
