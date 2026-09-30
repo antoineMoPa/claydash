@@ -958,9 +958,10 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
             bitcast<u32>(object.params.y),
             bitcast<u32>(object.params.z)
         );
-        let depth = abs(local.z) - object.params.x;
+        let softness = clamp(object.scale.w, 0.0, object.params.x);
+        let depth = abs(local.z) - (object.params.x - softness);
         let outside = length(max(vec2(polygon, depth), vec2(0.0)));
-        distance = outside + min(max(polygon, depth), 0.0);
+        distance = outside + min(max(polygon, depth), 0.0) - softness;
     } else if HAS_BEZIER_CURVES && object.state.y == 6 {
         distance = bezier_extrusion_distance(local, object);
     } else if HAS_LOFTS && object.state.y == 7 {

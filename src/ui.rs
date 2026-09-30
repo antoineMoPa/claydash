@@ -11,6 +11,7 @@ mod materials_panel;
 mod modifiers_panel;
 mod object_gizmos;
 mod object_panel;
+mod polygon_editor;
 pub(crate) mod scene_actions;
 mod scene_panel;
 mod secondary_panels;
@@ -149,6 +150,14 @@ impl Default for UiState {
 }
 
 impl UiState {
+    pub fn delete_active_polygon_point(&self, ctx: &egui::Context, tree: &mut DataTree) -> bool {
+        if polygon_editor::active(tree).is_none() {
+            return false;
+        }
+        polygon_editor::remove_point(ctx, tree);
+        true
+    }
+
     pub fn refine_viewport(&self) -> bool {
         self.refine_viewport
     }
@@ -322,6 +331,26 @@ impl UiState {
             .find_pane(|pane| *pane == EditorPane::Viewport)
             .and_then(|(pane, _)| self.frames.pane_rect(pane));
         if let Some(rect) = self.viewport_rect {
+            if let ClaydashValue::Uuid(id) = tree.get_path("editor.polygon_edit_requested") {
+                tree.set_transient_path("editor.polygon_edit_requested", ClaydashValue::None);
+                if polygon_editor::active(tree).is_none()
+                    && selected(tree) == [id]
+                    && crate::model::selection_scope(tree) == crate::model::SelectionScope::Exact
+                {
+                    polygon_editor::begin(viewport_ui.ctx(), tree, id);
+                }
+            }
+            if matches!(tree.get_path("editor.polygon_edit"), ClaydashValue::Uuid(_))
+                && polygon_editor::active(tree).is_none()
+            {
+                polygon_editor::finish(tree);
+            }
+            if polygon_editor::active(tree).is_some()
+                && (self.selection_tools.active() || self.selection_tools.box_mode())
+            {
+                self.cancel_face_cut(tree);
+                self.selection_tools = selection_tools::SelectionTools::default();
+            }
             let scale = viewport_ui.ctx().pixels_per_point();
             camera.viewport_origin = Vec2::new(rect.left(), rect.top()) * scale;
             camera.viewport = Vec2::new(rect.width().max(1.0), rect.height().max(1.0)) * scale;
@@ -330,44 +359,51 @@ impl UiState {
             viewport_ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 self.regions.extend(camera_overlay::draw(ui, tree, camera));
-                if let Some((curve, hit)) = object_gizmos::draw_bezier_paths(ui, tree, camera) {
-                    set_selected(tree, vec![curve]);
-                    self.regions.push(hit);
+                if polygon_editor::active(tree).is_none() {
+                    if let Some((curve, hit)) = object_gizmos::draw_bezier_paths(ui, tree, camera) {
+                        set_selected(tree, vec![curve]);
+                        self.regions.push(hit);
+                    }
                 }
                 self.ghosts = boolean_overlay::draw(ui, tree, camera);
-                // Resize handles must not intercept extrusion or operand-selection clicks.
-                if !matches!(
-                    tree.get_path("editor.state"),
-                    crate::model::ClaydashValue::EditorState(
-                        crate::model::EditorState::Extruding
-                            | crate::model::EditorState::DraggingFace
-                            | crate::model::EditorState::ExtendingCurve
-                    )
-                ) && !matches!(
-                    tree.get_path("editor.curve_grab_initial"),
-                    ClaydashValue::VecSDFObject(_)
-                ) && scene_actions::pending_boolean(tree).is_none()
-                {
-                    let object_gizmo_blocker_count = self.regions.len();
-                    self.draw_selection_tools(ui, tree, camera);
+                if polygon_editor::active(tree).is_some() {
+                    let blocker_count = self.regions.len();
+                    polygon_editor::draw(ui, tree, camera, &mut self.regions, blocker_count);
+                } else {
+                    // Resize handles must not intercept extrusion or operand-selection clicks.
                     if !matches!(
-                        tree.get_path("editor.place_cursor"),
-                        ClaydashValue::Bool(true)
-                    ) && !self.selection_tools.box_mode()
-                        && !self.selection_tools.face_cut_mode()
-                        && !self.selection_tools.active()
+                        tree.get_path("editor.state"),
+                        crate::model::ClaydashValue::EditorState(
+                            crate::model::EditorState::Extruding
+                                | crate::model::EditorState::DraggingFace
+                                | crate::model::EditorState::ExtendingCurve
+                        )
+                    ) && !matches!(
+                        tree.get_path("editor.curve_grab_initial"),
+                        ClaydashValue::VecSDFObject(_)
+                    ) && scene_actions::pending_boolean(tree).is_none()
                     {
-                        self.draw_object_gizmos_avoiding(
-                            ui,
-                            tree,
-                            camera,
-                            object_gizmo_blocker_count,
-                        );
-                    } else if !matches!(
-                        tree.get_path("editor.place_cursor"),
-                        ClaydashValue::Bool(true)
-                    ) {
-                        self.draw_selected_lattice_overlay(ui, tree, camera);
+                        let object_gizmo_blocker_count = self.regions.len();
+                        self.draw_selection_tools(ui, tree, camera);
+                        if !matches!(
+                            tree.get_path("editor.place_cursor"),
+                            ClaydashValue::Bool(true)
+                        ) && !self.selection_tools.box_mode()
+                            && !self.selection_tools.face_cut_mode()
+                            && !self.selection_tools.active()
+                        {
+                            self.draw_object_gizmos_avoiding(
+                                ui,
+                                tree,
+                                camera,
+                                object_gizmo_blocker_count,
+                            );
+                        } else if !matches!(
+                            tree.get_path("editor.place_cursor"),
+                            ClaydashValue::Bool(true)
+                        ) {
+                            self.draw_selected_lattice_overlay(ui, tree, camera);
+                        }
                     }
                 }
                 if let Some(active) = self.active_guide.or(interaction_guide) {

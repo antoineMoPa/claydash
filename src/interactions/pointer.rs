@@ -156,6 +156,21 @@ impl InteractionState {
             } else {
                 set_selected(tree, vec![target.id]);
             }
+            if target.scope == crate::model::SelectionScope::Exact
+                && !was_exact_target
+                && scene.iter().any(|object| {
+                    object.uuid == target.id
+                        && matches!(
+                            object.params,
+                            crate::model::SdfParams::PolygonPrismParams(_)
+                        )
+                })
+            {
+                tree.set_transient_path(
+                    "editor.polygon_edit_requested",
+                    ClaydashValue::Uuid(target.id),
+                );
+            }
             if was_exact_target && ghost.is_none() {
                 if let Some(position) = marched.map(|hit| hit.position) {
                     let face = crate::model::modeling_face_at_world_position(&scene, hit, position);

@@ -3,7 +3,7 @@ use super::*;
 mod frame;
 mod guides;
 mod paint;
-mod shape;
+pub(in crate::ui) mod shape;
 mod split;
 
 use frame::{point_on_face, point_world, projected_depth_axis, source_and_frame};
@@ -20,7 +20,7 @@ const ANCHOR_GUIDE_DISTANCE: f32 = 10.0;
 const FRACTION_MIN_SPACING: f32 = 24.0;
 
 impl UiState {
-    pub(super) fn cancel_face_cut(&mut self, tree: &mut DataTree) {
+    pub(in crate::ui) fn cancel_face_cut(&mut self, tree: &mut DataTree) {
         if let Some(FaceCutDraft {
             phase: FaceCutPhase::Depth { object, hole, .. },
             ..

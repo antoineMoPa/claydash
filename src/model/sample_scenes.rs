@@ -743,6 +743,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
             Vec2::new(-0.8, 0.7),
         ],
         half_depth: 0.35,
+        edge_softness: 0.0,
     });
     polygon_prism.transform.rotation = Quat::from_rotation_y(0.35);
     cases.push(("polygon-prism".into(), vec![polygon_prism]));

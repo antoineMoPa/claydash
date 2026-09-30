@@ -12,6 +12,13 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
     }
     if let Some(group) = commands::selected_group_id(tree) {
         group_transform_panel(ui, tree, runtime, group);
+        if objects(tree).iter().any(|object| {
+            object.uuid == group && matches!(object.params, SdfParams::PolygonPrismParams(_))
+        }) && ui.button("Edit shape in viewport").clicked()
+        {
+            polygon_editor::begin(ui.ctx(), tree, group);
+            return;
+        }
         ui.separator();
         modifiers_panel(ui, tree, runtime);
         group_optimizations_panel(ui, tree);
@@ -117,6 +124,23 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
         &mut keyframes,
     );
     ui.separator();
+    if matches!(object.params, SdfParams::PolygonPrismParams(_)) {
+        let editing = polygon_editor::active(tree) == Some(object_id);
+        if ui
+            .button(if editing {
+                "Finish shape editing"
+            } else {
+                "Edit shape in viewport"
+            })
+            .clicked()
+        {
+            if editing {
+                polygon_editor::finish(tree);
+            } else {
+                polygon_editor::begin(ui.ctx(), tree, object_id);
+            }
+        }
+    }
     changed |= params_editor(
         ui,
         tree,
@@ -617,9 +641,19 @@ pub(super) fn params_editor(
             animatable_response(ui, &minor_response, minor_binding, *minor_radius, keyframes);
             major_response.changed() | minor_response.changed()
         }
-        SdfParams::PolygonPrismParams(value) => ui
-            .add(egui::Slider::new(&mut value.half_depth, 0.005..=4.0).text("Half depth"))
-            .changed(),
+        SdfParams::PolygonPrismParams(value) => {
+            let depth_changed = ui
+                .add(egui::Slider::new(&mut value.half_depth, 0.005..=4.0).text("Half depth"))
+                .changed();
+            let softness_changed = ui
+                .add(
+                    egui::Slider::new(&mut value.edge_softness, 0.0..=value.half_depth.min(0.5))
+                        .text("Edge softness"),
+                )
+                .on_hover_text("Round the outline and its front and back edges")
+                .changed();
+            depth_changed | softness_changed
+        }
         SdfParams::LoftParams(value) => {
             ui.label("Closed sections along local X");
             ui.weak("Profile Y/Z values scale with the section's half height and half width. Matching point numbers connect along the loft.");

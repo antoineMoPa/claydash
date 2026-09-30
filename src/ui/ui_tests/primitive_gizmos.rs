@@ -774,6 +774,7 @@
                 Vec2::new(-1.0, 1.0),
             ],
             half_depth: 0.25,
+            edge_softness: 0.0,
         });
         let scene = [object.clone()];
         let cap = selected_polygon_face_vertices(

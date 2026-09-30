@@ -94,11 +94,12 @@ impl PrimitiveKind {
         Self::Loft,
         Self::Text,
     ];
-    pub const SPAWNABLE: [Self; 7] = [
+    pub const SPAWNABLE: [Self; 8] = [
         Self::Sphere,
         Self::Box,
         Self::Cylinder,
         Self::Torus,
+        Self::PolygonPrism,
         Self::BezierCurve,
         Self::Loft,
         Self::Text,
@@ -110,7 +111,7 @@ impl PrimitiveKind {
             Self::Box => "Box",
             Self::Cylinder => "Cylinder",
             Self::Torus => "Torus",
-            Self::PolygonPrism => "Face shape",
+            Self::PolygonPrism => "Polygon prism",
             Self::BezierCurve => "Bézier curve",
             Self::Loft => "Loft",
             Self::Text => "Text",
@@ -308,6 +309,7 @@ impl SdfObject {
                         Vec2::new(0.0, 0.25),
                     ],
                     half_depth: 0.1,
+                    edge_softness: 0.0,
                 }),
                 PrimitiveKind::BezierCurve => SdfParams::BezierCurveParams(BezierCurveParams {
                     points: vec![
@@ -474,9 +476,10 @@ impl SdfObject {
             }
             SdfParams::PolygonPrismParams(ref params) => {
                 let polygon = polygon_distance(local.truncate(), &params.vertices);
-                let depth = local.z.abs() - params.half_depth;
+                let softness = params.edge_softness.max(0.0).min(params.half_depth);
+                let depth = local.z.abs() - (params.half_depth - softness);
                 let outside = Vec2::new(polygon.max(0.0), depth.max(0.0)).length();
-                outside + polygon.max(depth).min(0.0)
+                outside + polygon.max(depth).min(0.0) - softness
             }
             SdfParams::LoftParams(ref params) => params.distance(local),
             SdfParams::TextParams(ref params) => text.map_or_else(
@@ -610,8 +613,10 @@ pub fn modeling_face_at_world_position(
                 .map(|point| point.abs().max_element())
                 .fold(0.0_f32, f32::max);
             let tolerance = planar_extent.max(params.half_depth).max(0.01) * 0.08 + 0.015;
+            let softness = params.edge_softness.max(0.0).min(params.half_depth);
             let cap_distance = (local.z.abs() - params.half_depth).abs();
-            let on_cap = polygon_distance(local.truncate(), &params.vertices) <= tolerance;
+            let on_cap =
+                polygon_distance(local.truncate(), &params.vertices) <= softness + tolerance;
             let mut best = on_cap.then_some((
                 cap_distance,
                 PolygonPrismFace::Cap {
@@ -629,7 +634,7 @@ pub fn modeling_face_at_world_position(
                     }
                     let closest = a + segment
                         * ((local.truncate() - a).dot(segment) / length_squared).clamp(0.0, 1.0);
-                    let distance = local.truncate().distance(closest);
+                    let distance = (local.truncate().distance(closest) - softness).abs();
                     if best.is_none_or(|(current, _)| distance < current) {
                         best = Some((distance, PolygonPrismFace::Side { edge }));
                     }

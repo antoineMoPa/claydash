@@ -1,8 +1,9 @@
 use super::*;
 
-const TOOLBAR_PRIMITIVES: [PrimitiveKind; 6] = [
+const TOOLBAR_PRIMITIVES: [PrimitiveKind; 7] = [
     PrimitiveKind::Sphere,
     PrimitiveKind::Box,
+    PrimitiveKind::PolygonPrism,
     PrimitiveKind::Cylinder,
     PrimitiveKind::Torus,
     PrimitiveKind::BezierCurve,
@@ -160,6 +161,11 @@ impl UiState {
         tree: &mut DataTree,
         camera: &mut Camera,
     ) {
+        if polygon_editor::active(tree).is_some()
+            && ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            polygon_editor::finish(tree);
+        }
         let viewport = self.viewport_rect.unwrap();
         let left = egui::Area::new("top-left-tools".into())
             .order(egui::Order::Foreground)
@@ -170,72 +176,116 @@ impl UiState {
                 egui::Frame::NONE.show(ui, |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     ui.horizontal_wrapped(|ui| {
-                        if viewport.width() >= 400.0 {
-                            for kind in TOOLBAR_PRIMITIVES {
-                                if view_button(
-                                    ui,
-                                    primitive_icon_source(kind),
-                                    &format!("Add {}", kind.label()),
-                                )
+                        if polygon_editor::active(tree).is_some() {
+                            let (can_add, can_remove) =
+                                polygon_editor::control_availability(ctx, tree);
+                            if ui
+                                .add_enabled_ui(can_add, |ui| {
+                                    view_button(
+                                        ui,
+                                        egui::include_image!("../../assets/icons/lucide/plus.svg"),
+                                        "Add point between the active and previous points",
+                                    )
+                                })
+                                .inner
                                 .clicked()
-                                {
-                                    commands::spawn(tree, kind.object_type());
-                                }
+                            {
+                                polygon_editor::add_point(ctx, tree);
+                            }
+                            if ui
+                                .add_enabled_ui(can_remove, |ui| {
+                                    view_button(
+                                        ui,
+                                        egui::include_image!("../../assets/icons/lucide/minus.svg"),
+                                        "Delete active point (Backspace)",
+                                    )
+                                })
+                                .inner
+                                .clicked()
+                            {
+                                polygon_editor::remove_point(ctx, tree);
+                            }
+                            if view_button(
+                                ui,
+                                egui::include_image!("../../assets/icons/lucide/check.svg"),
+                                "Finish editing polygon",
+                            )
+                            .clicked()
+                            {
+                                polygon_editor::finish(tree);
                             }
                         } else {
-                            ui.scope(|ui| {
-                                style_view_buttons(ui);
-                                egui::containers::menu::MenuButton::from_button(view_icon_button(
-                                    egui::include_image!("../../assets/icons/lucide/plus.svg"),
-                                    false,
-                                ))
-                                .ui(ui, |ui| {
-                                    for kind in TOOLBAR_PRIMITIVES {
-                                        if ui
-                                            .add(egui::Button::image_and_text(
-                                                icon_image(
-                                                    primitive_icon_source(kind),
-                                                    ui.visuals().text_color(),
-                                                ),
-                                                kind.label(),
-                                            ))
-                                            .clicked()
-                                        {
-                                            commands::spawn(tree, kind.object_type());
-                                            ui.close();
-                                        }
+                            if viewport.width() >= 400.0 {
+                                for kind in TOOLBAR_PRIMITIVES {
+                                    if view_button(
+                                        ui,
+                                        primitive_icon_source(kind),
+                                        &format!("Add {}", kind.label()),
+                                    )
+                                    .clicked()
+                                    {
+                                        commands::spawn(tree, kind.object_type());
                                     }
-                                })
-                                .0
-                                .on_hover_text("Add object");
-                            });
-                        }
-                        if view_button(
-                            ui,
-                            egui::include_image!("../../assets/icons/lucide/command.svg"),
-                            "Command palette (Cmd/Ctrl+Shift+P)",
-                        )
-                        .clicked()
-                        {
-                            self.palette.open();
-                        }
-                        if view_button(
-                            ui,
-                            egui::include_image!("../../assets/icons/lucide/undo-2.svg"),
-                            "Undo",
-                        )
-                        .clicked()
-                        {
-                            undo_redo::undo(tree);
-                        }
-                        if view_button(
-                            ui,
-                            egui::include_image!("../../assets/icons/lucide/redo-2.svg"),
-                            "Redo",
-                        )
-                        .clicked()
-                        {
-                            undo_redo::redo(tree);
+                                }
+                            } else {
+                                ui.scope(|ui| {
+                                    style_view_buttons(ui);
+                                    egui::containers::menu::MenuButton::from_button(
+                                        view_icon_button(
+                                            egui::include_image!(
+                                                "../../assets/icons/lucide/plus.svg"
+                                            ),
+                                            false,
+                                        ),
+                                    )
+                                    .ui(ui, |ui| {
+                                        for kind in TOOLBAR_PRIMITIVES {
+                                            if ui
+                                                .add(egui::Button::image_and_text(
+                                                    icon_image(
+                                                        primitive_icon_source(kind),
+                                                        ui.visuals().text_color(),
+                                                    ),
+                                                    kind.label(),
+                                                ))
+                                                .clicked()
+                                            {
+                                                commands::spawn(tree, kind.object_type());
+                                                ui.close();
+                                            }
+                                        }
+                                    })
+                                    .0
+                                    .on_hover_text("Add object");
+                                });
+                            }
+                            if view_button(
+                                ui,
+                                egui::include_image!("../../assets/icons/lucide/command.svg"),
+                                "Command palette (Cmd/Ctrl+Shift+P)",
+                            )
+                            .clicked()
+                            {
+                                self.palette.open();
+                            }
+                            if view_button(
+                                ui,
+                                egui::include_image!("../../assets/icons/lucide/undo-2.svg"),
+                                "Undo",
+                            )
+                            .clicked()
+                            {
+                                undo_redo::undo(tree);
+                            }
+                            if view_button(
+                                ui,
+                                egui::include_image!("../../assets/icons/lucide/redo-2.svg"),
+                                "Redo",
+                            )
+                            .clicked()
+                            {
+                                undo_redo::redo(tree);
+                            }
                         }
                     });
                 });
@@ -314,7 +364,9 @@ impl UiState {
                 });
             });
         self.regions.push(right.response.rect);
-        self.draw_selection_toolbar(ctx, viewport, tree);
+        if polygon_editor::active(tree).is_none() {
+            self.draw_selection_toolbar(ctx, viewport, tree);
+        }
     }
 
     pub(super) fn draw_view_gizmo(

@@ -1,5 +1,7 @@
 use command_central::{CommandBuilder, CommandMap};
-use sdf_consts::{TYPE_BOX, TYPE_CYLINDER, TYPE_LOFT, TYPE_SPHERE, TYPE_TEXT, TYPE_TORUS};
+use sdf_consts::{
+    TYPE_BOX, TYPE_CYLINDER, TYPE_LOFT, TYPE_POLYGON_PRISM, TYPE_SPHERE, TYPE_TEXT, TYPE_TORUS,
+};
 
 use crate::{
     animation,
@@ -176,6 +178,14 @@ pub fn register_all(commands: &mut Commands) {
         "Add a cylinder primitive.",
         "",
         |tree| spawn(tree, TYPE_CYLINDER),
+    );
+    register(
+        commands,
+        "spawn-polygon-prism",
+        "Add Polygon Prism",
+        "Add an extruded polygon. Edit its outline in Object settings.",
+        "",
+        |tree| spawn(tree, TYPE_POLYGON_PRISM),
     );
     register(
         commands,

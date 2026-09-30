@@ -401,7 +401,8 @@ pub fn lattice_bounds(scene: &[SdfObject], root: uuid::Uuid) -> Option<(Vec3, Ve
                     .vertices
                     .iter()
                     .fold(Vec2::ZERO, |size, point| size.max(point.abs()));
-                Vec3::new(planar.x, planar.y, p.half_depth)
+                let softness = p.edge_softness.max(0.0).min(p.half_depth);
+                Vec3::new(planar.x + softness, planar.y + softness, p.half_depth)
             }
             SdfParams::LoftParams(p) => p.local_extent(),
             SdfParams::BezierCurveParams(p) => p.local_extent(

@@ -460,7 +460,11 @@ impl Renderer {
                             .vertices
                             .iter()
                             .fold(Vec2::ZERO, |extent, point| extent.max(point.abs()));
-                        Vec3::new(planar.x, planar.y, polygon.half_depth)
+                        Vec3::new(
+                            planar.x + polygon.edge_softness.max(0.0).min(polygon.half_depth),
+                            planar.y + polygon.edge_softness.max(0.0).min(polygon.half_depth),
+                            polygon.half_depth,
+                        )
                     }
                     SdfParams::LoftParams(ref loft) => loft.local_extent(),
                     SdfParams::BezierCurveParams(ref curve) => {
@@ -580,6 +584,7 @@ impl Renderer {
                     scale: abs_scale
                         .extend(match &object.params {
                             SdfParams::BoxParams(box_params) => box_params.corner_radius,
+                            SdfParams::PolygonPrismParams(polygon) => polygon.edge_softness,
                             _ => path_profile_count,
                         })
                         .to_array(),

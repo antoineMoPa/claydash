@@ -362,10 +362,42 @@ fn polygon_prism_distance_covers_sides_caps_and_concavity() {
             Vec2::new(-1.0, 1.0),
         ],
         half_depth: 0.25,
+        edge_softness: 0.0,
     });
     assert!(prism.distance(Vec3::new(-0.5, 0.0, 0.0)) < 0.0);
     assert!(prism.distance(Vec3::new(0.8, 0.0, 0.0)) > 0.0);
     assert!(prism.distance(Vec3::new(-0.5, 0.0, 0.5)) > 0.0);
+}
+
+#[test]
+fn standalone_polygon_prism_edge_softness_rounds_its_outline_and_caps() {
+    let mut star = SdfObject::create_kind(PrimitiveKind::PolygonPrism);
+    star.params = SdfParams::PolygonPrismParams(PolygonPrismParams {
+        vertices: vec![
+            Vec2::new(-1.0, -1.0),
+            Vec2::new(1.0, -1.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(-1.0, 1.0),
+        ],
+        half_depth: 0.5,
+        edge_softness: 0.0,
+    });
+    let corner = Vec3::new(1.1, 1.1, 0.0);
+    assert!(star.distance(corner) > 0.0);
+    if let SdfParams::PolygonPrismParams(params) = &mut star.params {
+        params.edge_softness = 0.2;
+    }
+    assert!(star.distance(corner) < 0.0);
+    assert!(star.distance(Vec3::new(0.0, 0.0, 0.5)).abs() < 0.0001);
+    assert!(star.distance(Vec3::new(0.0, 0.0, 0.6)) > 0.0);
+
+    let mut stored = serde_json::to_value(&star).unwrap();
+    stored["params"]["PolygonPrismParams"]
+        .as_object_mut()
+        .unwrap()
+        .remove("edge_softness");
+    let old: SdfObject = serde_json::from_value(stored).unwrap();
+    assert!((old.distance(corner) - 0.1_f32.hypot(0.1)).abs() < 0.0001);
 }
 
 #[test]

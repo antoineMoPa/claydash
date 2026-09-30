@@ -39,7 +39,7 @@ fn segments_intersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
         || on_segment(c, d, b, cd_b)
 }
 
-pub(super) fn polygon_is_valid(vertices: &[Vec2]) -> bool {
+pub(in crate::ui) fn polygon_is_valid(vertices: &[Vec2]) -> bool {
     if vertices.len() < 3
         || signed_area(vertices).abs() < 0.000_01
         || vertices.iter().enumerate().any(|(index, point)| {
@@ -125,6 +125,7 @@ pub(super) fn create_face_shape(
     shape.params = SdfParams::PolygonPrismParams(crate::model::PolygonPrismParams {
         vertices: centered,
         half_depth: signed_depth.abs() * 0.5 + FACE_CUT_OVERLAP,
+        edge_softness: 0.0,
     });
     shape.color = source.color;
     shape.material = source.material;

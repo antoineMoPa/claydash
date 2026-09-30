@@ -451,6 +451,7 @@ mod state;
 mod gizmo;
 
 mod face_cut;
+pub(in crate::ui) use face_cut::shape::polygon_is_valid;
 
 #[cfg(test)]
 mod tests;

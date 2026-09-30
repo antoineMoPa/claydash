@@ -595,7 +595,13 @@ impl ApplicationHandler<AppEvent> for App {
                                 self.egui.pixels_per_point(),
                                 self.egui.input(|input| input.modifiers.shift),
                             );
-                        if !entered_box_selection && !timeline_shortcut {
+                        let deleted_polygon_point = key == winit::keyboard::KeyCode::Backspace
+                            && !wants_keyboard
+                            && !timeline_shortcut
+                            && self
+                                .ui
+                                .delete_active_polygon_point(&self.egui, &mut self.tree);
+                        if !entered_box_selection && !timeline_shortcut && !deleted_polygon_point {
                             self.interactions.key_pressed(
                                 key,
                                 wants_keyboard,

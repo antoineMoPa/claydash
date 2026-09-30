@@ -21,6 +21,9 @@ pub const MAX_POLYGON_PRISM_VERTICES: usize = 32;
 pub struct PolygonPrismParams {
     pub vertices: Vec<Vec2>,
     pub half_depth: f32,
+    /// Local-space radius of the rounded polygon outline and cap edges.
+    #[serde(default)]
+    pub edge_softness: f32,
 }
 
 /// Closed cross sections along local X. Profile points use unit ellipse coordinates.

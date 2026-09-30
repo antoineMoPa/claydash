@@ -136,6 +136,38 @@ fn selecting_an_object_then_its_face_takes_three_clicks() {
 }
 
 #[test]
+fn second_click_on_polygon_requests_shape_editing() {
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let polygon = SdfObject::create_kind(crate::model::PrimitiveKind::PolygonPrism);
+    let id = polygon.uuid;
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![polygon]);
+    let click = camera.viewport / 2.0;
+
+    InteractionState::select_at(&camera, &mut tree, click, Some(id), false);
+    assert_eq!(selected(&tree), vec![id]);
+    assert_eq!(
+        crate::model::selection_scope(&tree),
+        crate::model::SelectionScope::Group
+    );
+    assert!(matches!(
+        tree.get_path("editor.polygon_edit_requested"),
+        ClaydashValue::None
+    ));
+
+    InteractionState::select_at(&camera, &mut tree, click, Some(id), false);
+    assert_eq!(
+        crate::model::selection_scope(&tree),
+        crate::model::SelectionScope::Exact
+    );
+    assert!(matches!(
+        tree.get_path("editor.polygon_edit_requested"),
+        ClaydashValue::Uuid(requested) if requested == id
+    ));
+}
+
+#[test]
 fn clicking_an_extruded_polygon_selects_its_face_even_inside_a_group() {
     let mut camera = Camera::new();
     camera.viewport = Vec2::new(800.0, 600.0);

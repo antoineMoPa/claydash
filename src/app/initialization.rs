@@ -24,6 +24,7 @@ fn guide_face_scene() -> Vec<crate::model::SdfObject> {
             Vec2::new(0.0, 0.35),
         ],
         half_depth: 0.3,
+        edge_softness: 0.0,
     });
     cut.transform.translation = glam::Vec3::new(-1.0, 0.0, 0.85);
     cut.boolean_parent = Some(cut_source.uuid);

@@ -105,7 +105,12 @@ pub(super) fn pack_primitive(
                     f32::from_bits(count),
                     distance_scale,
                 ],
-                Vec2::new(planar_radius, polygon.half_depth).length() * abs_scale.max_element(),
+                Vec2::new(
+                    planar_radius + polygon.edge_softness.max(0.0).min(polygon.half_depth),
+                    polygon.half_depth,
+                )
+                .length()
+                    * abs_scale.max_element(),
             )
         }
         SdfParams::LoftParams(ref loft) => {
