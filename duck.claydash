@@ -5785,7 +5785,7 @@
       "subtree": {},
       "value": {
         "World": {
-          "render_pipeline": "exact",
+          "render_pipeline": "deferred",
           "screen_space_ambient_occlusion": true,
           "screen_space_reflections": true,
           "background": "NightSky",
