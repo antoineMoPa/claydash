@@ -129,12 +129,29 @@ impl Renderer {
                     })],
                     ..Default::default()
                 });
+                let fast = std::env::args().any(|arg| arg == "--benchmark-fast-preview");
                 pass.set_pipeline(if self.hybrid_enabled {
-                    self.hybrid_pipeline
-                        .as_ref()
-                        .expect("hybrid scene pipeline")
+                    if fast {
+                        self.hybrid_fast_pipeline
+                            .as_ref()
+                            .expect("hybrid fast pipeline")
+                    } else {
+                        self.hybrid_pipeline
+                            .as_ref()
+                            .expect("hybrid scene pipeline")
+                    }
                 } else if self.has_booleans {
-                    &self.boolean_pipeline.as_ref().expect("boolean pipeline").1
+                    if fast {
+                        &self
+                            .fast_boolean_pipeline
+                            .as_ref()
+                            .expect("fast boolean pipeline")
+                            .1
+                    } else {
+                        &self.boolean_pipeline.as_ref().expect("boolean pipeline").1
+                    }
+                } else if fast {
+                    &self.fast_pipeline
                 } else {
                     &self.pipeline
                 });

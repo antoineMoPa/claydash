@@ -20,6 +20,7 @@ impl Renderer {
         capture_ui: bool,
         offscreen_capture: bool,
         refine: bool,
+        animation_playback: bool,
     ) -> bool {
         let requests = egui
             .data_mut(|data| {
@@ -136,6 +137,7 @@ impl Renderer {
         let deferred = world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported;
         let viewport_refine = refine;
+        self.viewport.set_playback_budget(animation_playback);
         let work = self
             .viewport
             .prepare(&self.device, view_key.clone(), viewport_refine, deferred);

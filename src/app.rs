@@ -197,6 +197,7 @@ struct WebEncoding {
 struct UiBenchmark {
     edit_objects: bool,
     move_group: bool,
+    animation: bool,
     selection_click: bool,
     preview_pixels: Vec<u32>,
     frames: usize,

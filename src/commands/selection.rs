@@ -123,22 +123,35 @@ pub(crate) fn set_transform_target(
     target: TransformTargetKind,
     id: uuid::Uuid,
     transform: crate::model::Transform,
-) {
+) -> bool {
     match target {
         TransformTargetKind::Object => {
             if let Some(object) = scene.iter_mut().find(|object| object.uuid == id) {
+                if object.transform == transform {
+                    return false;
+                }
                 object.transform = transform;
+                return true;
             }
         }
         TransformTargetKind::Group => {
             if let Some(object) = scene.iter_mut().find(|object| object.uuid == id) {
+                if object.group_transform == transform {
+                    return false;
+                }
                 object.group_transform = transform;
+                return true;
             }
         }
         TransformTargetKind::Camera => {
             if let Some(camera) = cameras.iter_mut().find(|camera| camera.uuid == id) {
+                if camera.transform == transform {
+                    return false;
+                }
                 camera.transform = transform;
+                return true;
             }
         }
     }
+    false
 }

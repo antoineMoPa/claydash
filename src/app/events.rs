@@ -282,12 +282,16 @@ impl ApplicationHandler<AppEvent> for App {
                         );
                     }
                 } else {
+                    let mut world = crate::model::world(&self.tree);
+                    if std::env::args().any(|arg| arg == "--benchmark-deferred") {
+                        world.render_pipeline = crate::model::RenderPipelineMode::Deferred;
+                    }
                     renderer.benchmark_scene(
                         &self.camera,
                         objects_ref(&self.tree),
                         &commands::effective_selected_ids(&self.tree),
                         versions,
-                        crate::model::world(&self.tree),
+                        world,
                         "stress",
                     );
                 }
@@ -425,7 +429,9 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                     benchmark.last_frame = Some(now);
-                    if !benchmark.selection_click {
+                    if benchmark.animation {
+                        crate::animation::evaluate(&mut self.tree, (benchmark.frames % 30) as f32);
+                    } else if !benchmark.selection_click {
                         let angle = (benchmark.frames as f32 * 0.08).sin() * 0.3;
                         if benchmark.edit_objects {
                             let mut scene = objects_ref(&self.tree).to_vec();

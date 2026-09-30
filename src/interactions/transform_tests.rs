@@ -789,6 +789,11 @@ fn group_grab_moves_operands_and_escape_restores_them() {
     assert_eq!(moved[0].transform, scene[0].transform);
     assert_eq!(moved[1].transform, scene[1].transform);
     assert_ne!(moved[0].group_transform, scene[0].group_transform);
+    let settled_revision = tree.path_version("scene.sdf_objects");
+    for _ in 0..4 {
+        interactions.update(&mut camera, &mut tree);
+        assert_eq!(tree.path_version("scene.sdf_objects"), settled_revision);
+    }
     let mut commands = Commands::new();
     crate::commands::register_all(&mut commands);
     interactions.key_pressed(KeyCode::Escape, false, &commands, &mut tree);

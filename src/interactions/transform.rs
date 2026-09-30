@@ -125,6 +125,8 @@ impl InteractionState {
         };
         let mut scene = objects(tree);
         let mut cameras = crate::model::scene_cameras(tree);
+        let mut objects_changed = false;
+        let mut cameras_changed = false;
 
         for target in &session.targets {
             let operation = match mode {
@@ -166,7 +168,7 @@ impl InteractionState {
             };
             let local = target.parent_world.inverse() * operation * target.world;
             let (scale, rotation, translation) = local.to_scale_rotation_translation();
-            commands::set_transform_target(
+            let changed = commands::set_transform_target(
                 &mut scene,
                 &mut cameras,
                 target.kind,
@@ -177,9 +179,19 @@ impl InteractionState {
                     scale,
                 },
             );
+            match target.kind {
+                commands::TransformTargetKind::Object | commands::TransformTargetKind::Group => {
+                    objects_changed |= changed;
+                }
+                commands::TransformTargetKind::Camera => cameras_changed |= changed,
+            }
         }
-        set_objects(tree, scene);
-        crate::model::set_scene_cameras(tree, cameras);
+        if objects_changed {
+            set_objects(tree, scene);
+        }
+        if cameras_changed {
+            crate::model::set_scene_cameras(tree, cameras);
+        }
     }
 
     fn update_curve_extension(&mut self, camera: &Camera, tree: &mut DataTree) {
@@ -220,12 +232,20 @@ impl InteractionState {
         let world_pointer = camera.cursor_on_plane(self.mouse_position, world_anchor);
         let local_pointer = matrix.inverse().transform_point3(world_pointer);
         if from_start {
+            let control = local_pointer.lerp(anchor, 1.0 / 3.0);
+            if curve.points[0] == local_pointer && curve.points[1] == control {
+                return;
+            }
             curve.points[0] = local_pointer;
-            curve.points[1] = local_pointer.lerp(anchor, 1.0 / 3.0);
+            curve.points[1] = control;
         } else {
             let last = curve.points.len() - 1;
+            let control = anchor.lerp(local_pointer, 2.0 / 3.0);
+            if curve.points[last] == local_pointer && curve.points[last - 1] == control {
+                return;
+            }
             curve.points[last] = local_pointer;
-            curve.points[last - 1] = anchor.lerp(local_pointer, 2.0 / 3.0);
+            curve.points[last - 1] = control;
         }
         set_objects(tree, scene);
     }
@@ -288,7 +308,11 @@ impl InteractionState {
         let Some(current_point) = curve.points.get_mut(point.index) else {
             return;
         };
-        *current_point = initial_point + local_delta;
+        let next_point = initial_point + local_delta;
+        if *current_point == next_point {
+            return;
+        }
+        *current_point = next_point;
         if curve.closed && point.index == 0 {
             let last = curve.points.len() - 1;
             curve.points[last] = curve.points[0];
@@ -416,22 +440,29 @@ impl InteractionState {
         else {
             return;
         };
-        match &mut object.params {
+        let previous_transform = object.transform;
+        let extent_changed = match &mut object.params {
             crate::model::SdfParams::BoxParams(params) => {
+                let changed = params.box_q[session.axis.index()] != half_extent;
                 params.box_q[session.axis.index()] = half_extent;
+                changed
             }
             crate::model::SdfParams::CylinderParams { half_height, .. }
                 if session.axis == crate::model::VectorAxis::Y =>
             {
+                let changed = *half_height != half_extent;
                 *half_height = half_extent;
+                changed
             }
             _ => return,
-        }
+        };
         object.transform = session.initial_transform;
         object.transform.translation += session
             .initial_transform
             .matrix()
             .transform_vector3(local_direction * half_extent_delta);
-        set_objects(tree, scene);
+        if extent_changed || object.transform != previous_transform {
+            set_objects(tree, scene);
+        }
     }
 }

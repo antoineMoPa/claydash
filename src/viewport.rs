@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 
 const TILE: u32 = 32;
 const INITIAL_PIXELS: u32 = 48 * 1024;
-const TARGET_MS: f64 = 6.0;
+const EDIT_TARGET_MS: f64 = 6.0;
+const PLAYBACK_TARGET_MS: f64 = 12.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewKey {
@@ -147,6 +148,7 @@ pub struct Viewport {
     targets: Option<Targets>,
     completed: u32,
     pixel_budget: u32,
+    target_ms: f64,
     initial_budget: u32,
     pending: bool,
     pending_frames: u32,
@@ -293,6 +295,7 @@ impl Viewport {
             targets: None,
             completed: 0,
             pixel_budget: INITIAL_PIXELS,
+            target_ms: EDIT_TARGET_MS,
             initial_budget: INITIAL_PIXELS,
             pending: false,
             pending_frames: 0,
@@ -341,6 +344,19 @@ impl Viewport {
         }
     }
 
+    pub fn set_playback_budget(&mut self, playing: bool) {
+        let target = if playing {
+            PLAYBACK_TARGET_MS
+        } else {
+            EDIT_TARGET_MS
+        };
+        if self.target_ms != target {
+            self.pixel_budget = ((self.pixel_budget as f64 * target / self.target_ms) as u32)
+                .clamp(TILE * TILE, 4 * 1024 * 1024);
+            self.target_ms = target;
+        }
+    }
+
     pub fn invalidate(&mut self) {
         self.key = None;
         self.completed = 0;
@@ -366,6 +382,7 @@ impl Viewport {
                     self.submitted_budget,
                     self.submitted_pixels,
                     ms,
+                    self.target_ms,
                 );
             }
         }
@@ -881,13 +898,13 @@ fn draw_splat_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], 
     }
 }
 
-fn adjusted_budget(previous: u32, milliseconds: f64) -> u32 {
+fn adjusted_budget(previous: u32, milliseconds: f64, target_ms: f64) -> u32 {
     if !milliseconds.is_finite() || milliseconds <= 0.0 {
         return previous;
     }
     // React quickly to expensive views, grow cautiously, and cap the minimum
     // batch at one tile. Timings come from the GPU, not the vsync interval.
-    let ratio = (TARGET_MS / milliseconds).max(0.25);
+    let ratio = (target_ms / milliseconds).max(0.25);
     ((previous as f64 * ratio) as u32).clamp(TILE * TILE, 4 * 1024 * 1024)
 }
 
@@ -896,6 +913,7 @@ fn budget_after_sample(
     submitted_budget: u32,
     rendered_pixels: u32,
     milliseconds: f64,
+    target_ms: f64,
 ) -> u32 {
     // The final refinement batch can be just a few edge pixels. Its fixed GPU
     // overhead says nothing about the cost of a full batch, so retain the
@@ -903,7 +921,7 @@ fn budget_after_sample(
     if rendered_pixels < submitted_budget / 2 {
         return budget;
     }
-    adjusted_budget(rendered_pixels, milliseconds).min(budget.saturating_mul(6) / 5)
+    adjusted_budget(rendered_pixels, milliseconds, target_ms).min(budget.saturating_mul(6) / 5)
 }
 
 fn preview_size(size: [u32; 2], budget: u32) -> [u32; 2] {
@@ -1005,17 +1023,30 @@ mod tests {
     }
     #[test]
     fn gpu_budget_recovers_from_expensive_views_without_vsync_feedback() {
-        assert!(adjusted_budget(INITIAL_PIXELS, 35.0) < INITIAL_PIXELS);
-        assert!(adjusted_budget(INITIAL_PIXELS, 2.0) > INITIAL_PIXELS);
-        assert_eq!(adjusted_budget(INITIAL_PIXELS, f64::NAN), INITIAL_PIXELS);
-        assert_eq!(adjusted_budget(TILE * TILE, 100.0), TILE * TILE);
+        assert!(adjusted_budget(INITIAL_PIXELS, 35.0, EDIT_TARGET_MS) < INITIAL_PIXELS);
+        assert!(adjusted_budget(INITIAL_PIXELS, 2.0, EDIT_TARGET_MS) > INITIAL_PIXELS);
+        assert_eq!(
+            adjusted_budget(INITIAL_PIXELS, f64::NAN, EDIT_TARGET_MS),
+            INITIAL_PIXELS
+        );
+        assert_eq!(
+            adjusted_budget(TILE * TILE, 100.0, EDIT_TARGET_MS),
+            TILE * TILE
+        );
+        assert!(
+            adjusted_budget(INITIAL_PIXELS, 10.0, PLAYBACK_TARGET_MS)
+                > adjusted_budget(INITIAL_PIXELS, 10.0, EDIT_TARGET_MS)
+        );
     }
 
     #[test]
     fn final_partial_tile_keeps_the_budget_for_the_next_view() {
         let budget = 16 * 1024;
-        assert_eq!(budget_after_sample(budget, budget * 2, 288, 1.0), budget);
-        assert!(budget_after_sample(budget, budget * 2, budget * 2, 20.0) < budget);
+        assert_eq!(
+            budget_after_sample(budget, budget * 2, 288, 1.0, EDIT_TARGET_MS),
+            budget
+        );
+        assert!(budget_after_sample(budget, budget * 2, budget * 2, 20.0, EDIT_TARGET_MS) < budget);
     }
 }
 

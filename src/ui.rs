@@ -152,6 +152,10 @@ impl UiState {
     pub fn refine_viewport(&self) -> bool {
         self.refine_viewport
     }
+
+    pub fn animation_playing(&self) -> bool {
+        self.animation.playing
+    }
     pub fn animation_timeline_contains_pointer(
         &self,
         physical_pointer: Vec2,

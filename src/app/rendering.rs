@@ -282,6 +282,14 @@ impl App {
         };
         #[cfg(target_arch = "wasm32")]
         let refine = self.pending_render.is_some() || self.ui.refine_viewport();
+        #[cfg(not(target_arch = "wasm32"))]
+        let animation_playback = self.ui.animation_playing()
+            || self
+                .ui_benchmark
+                .as_ref()
+                .is_some_and(|benchmark| benchmark.animation);
+        #[cfg(target_arch = "wasm32")]
+        let animation_playback = self.ui.animation_playing();
         if let Some(renderer) = &mut self.renderer {
             // Selection is drawn by the editor gizmos. Keep the cached scene
             // image when only selection changes, avoiding a full refinement.
@@ -307,6 +315,7 @@ impl App {
                 capture_ui,
                 offscreen_capture,
                 refine,
+                animation_playback,
             );
             #[cfg(target_arch = "wasm32")]
             if presented && !self.web_loading_complete {

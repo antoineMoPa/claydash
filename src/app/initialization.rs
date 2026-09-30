@@ -390,6 +390,7 @@ impl App {
                     edit_objects: std::env::args()
                         .any(|arg| arg == "--benchmark-edit" || arg == "--benchmark-move-group"),
                     move_group: std::env::args().any(|arg| arg == "--benchmark-move-group"),
+                    animation: std::env::args().any(|arg| arg == "--benchmark-animation"),
                     selection_click: std::env::args()
                         .any(|arg| arg == "--benchmark-selection-click"),
                     preview_pixels: Vec::new(),
