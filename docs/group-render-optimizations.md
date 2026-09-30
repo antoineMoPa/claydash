@@ -31,22 +31,38 @@ Empty directions let rays pass through; nearby occupied depths are interpolated
 within a continuous surface. The radial capture favors rounded groups and has
 one layer per direction, so deep concavities can remain approximate.
 
+Box and sphere depth atlases, both depth accelerators, and Gaussian splats bake
+automatically when selected or when source geometry changes. A valid saved
+capture is reused without rebaking. Neural SDF keeps its explicit **Recompute**
+control for training-setting edits.
+
 Sphere accelerator and Box accelerator use the existing sphere and six-face box
-depth bakes respectively when **Recompute** is clicked. Sphere captures favor
+depth bakes respectively. Sphere captures favor
 rounded shapes; box captures suit objects with broad, cube-like faces. The
-indicator below the button shows **Not computed yet** until a valid bake exists,
+indicator shows **Not computed yet** until a valid bake exists,
 then **Ready**. Geometry edits invalidate readiness; changing the refinement
 distance keeps the bake ready. Valid saved captures restore as Ready. Until a
 valid bake exists, rendering uses the exact source.
 
 The baked texture guides each ray toward the captured surface and identifies
 its source object. Within `configurable_epsilon` world units (default 0.1),
-tracing locks that owner and raymarches only that object's native SDF. Siblings
-and the complete Boolean component are not queried during refinement or normal
-calculation. Final material and color use the selected source owner. Bracketed
-crossings are refined against that same object; an interior handoff restarts
-its march at the component bound without selecting another owner. Box face
-selection follows the ray direction, including secondary rays.
+tracing locks one owner and raymarches only that object's native SDF. For hard
+unions of analytic primitives, a cheap one-time ray-interval check replaces a
+map owner that lies behind or beside the ray's nearer surface. If refinement
+still misses, it can retry one other interval candidate. This avoids holes on
+the default duck where a radial texel names the head over a body ray. Siblings
+and the complete Boolean component are not distance-queried during refinement
+or normal calculation. Final material and color use the selected source owner.
+Bracketed crossings are refined against that same object; an interior handoff
+restarts its march at the component bound. Box face selection follows the ray
+direction, including secondary rays.
+
+If the one-object march misses a texel that the atlas captured, tracing uses
+that atlas surface as a last resort, with an atlas-derived normal. This keeps
+thin or repeated details visible, including the concrete tower facade, when
+the texture looks better than the selected primitive's camera-ray intersection.
+The fallback reads the existing bake; it does not evaluate the other source
+objects or the complete Boolean group.
 
 The panel's **Exact march distance** applies immediately without rebaking. Each
 mode saves its own distance in `sphere_accelerator.configurable_epsilon` or
@@ -125,11 +141,14 @@ is sampled at a fixed number of uniformly random positions (512–1,073,741,824 
 | Learning rate | 0.00001–0.1 | 0.02 |
 | Seed | Any unsigned 32-bit integer | 11256099 |
 | Hit distance, equivalent sample spacing | 0.001–4 | 0.02 |
+| Raymarch last segment | Off / on | Off |
+| Training offset, world-space distance | 0–10 | 0.3 |
 
 The **Model size** dropdown offers calibrated presets. All use smooth Softplus
 activation (`log(1 + exp(10x)) / 10`), learning rate 0.02, the default seed, and
 hit distance 0.02 cells. Selecting a preset stages its training settings until
 **Recompute**; editing its fields switches the displayed choice to **Custom**.
+The last-segment checkbox and offset are independent of the network-size preset.
 
 | Preset | Hidden layers | Width | Epochs | Default-duck field RMS |
 | --- | ---: | ---: | ---: | ---: |
@@ -162,6 +181,13 @@ object and participate in undo/redo; documents without them use the defaults.
 Numeric text edits commit on Enter or focus loss, so an empty or partial value
 can be typed without changing the setting. Dragging still updates the value.
 Invalid saved settings are rejected rather than silently rewritten.
+
+With **Raymarch last segment** enabled, training subtracts the configured
+world-space offset from every exact distance target. The fitted zero surface
+therefore lies farther out, so the ray can hand off before reaching the source.
+The sampling cube grows with the offset, including when the source is small or
+scaled. The source-distance dropout rule and the ownership grid still use the
+unshifted source. The checkbox and offset take effect after **Recompute**.
 
 **Recompute** restarts the selected group's bake without changing its saved
 settings or adding an undo entry. It also retries a failed fit. Network/training
@@ -227,8 +253,20 @@ distance scale / 31)`, with 0.02 equivalent sample-spacing units at the default 
 tolerance is unchanged. Standalone proxies use analytic
 network gradients for normals; composed or deformed proxies use the existing
 field-gradient path. Reflection and transmission origins account for the
-larger tolerance. Source repetition, mirror, path, and inlay effects are baked
-once rather than reapplied to the proxy.
+larger tolerance. In the default neural mode, source repetition, mirror, path,
+and inlay effects are baked once rather than reapplied to the proxy.
+
+With **Raymarch last segment** enabled, the renderer keeps the native source
+subtree. The learned field guides the ray until it is within at least 0.1 world
+units of its predicted surface, or within the configured offset if that is
+larger. The 32³ ownership grid then selects one source object for the final
+raymarch, crossing correction, normal, and material. This keeps the final
+surface sharper while avoiding a full subtree distance query at every step.
+The grid is approximate, so thin features, Boolean blends, and owner boundaries
+can still show artifacts. If the selected native object does not intersect the
+ray, the neural prediction is rejected instead of displayed as a surface.
+Source effects are evaluated on the selected native object during the final
+march.
 
 Nearest-grid ownership supplies the original child material and base color.
 Material boundaries are approximate; material programs are evaluated at the
@@ -243,7 +281,9 @@ is retained until source inputs change. Below Recompute, the panel shows only
 the integer percentage (for example, `30%`), from `0%` while queued to `100%`
 when ready. Progress accounts for training, validation, and ownership sampling
 on desktop and browser. Sample-set RMS and maximum field errors and bake elapsed
-time are retained in saved field metadata.
+time are retained in saved field metadata. The last-segment option adds four
+transform records and one source-index record per grid cell (about 0.5 MiB),
+and keeps the source objects in the GPU scene.
 
 The fitted field can lose small holes and disjoint parts, and larger hit
 tolerances expand silhouettes.

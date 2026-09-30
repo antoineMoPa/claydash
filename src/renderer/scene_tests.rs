@@ -632,3 +632,108 @@ fn capture_cache_retains_only_admitted_atlases() {
         "dormant Exact captures must release CPU memory"
     );
 }
+
+#[test]
+fn duck_sphere_capture_can_name_a_surface_beside_the_view_ray() {
+    use crate::model::{object_world_matrix, PreparedSubtreeSampler};
+    let document: serde_json::Value = serde_json::from_str(crate::duck::DEFAULT_DUCK).unwrap();
+    let source: Vec<SdfObject> =
+        serde_json::from_value(document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone())
+            .unwrap();
+    let root = source[0].uuid;
+    let atlas =
+        bake_sphere_depth_atlas(&source, root, SPHERE_DEPTH_WIDTH, SPHERE_DEPTH_HEIGHT).unwrap();
+    // A front-facing ray at this position hits the body. The radial map
+    // labels its surface point as Head, which lies farther along this ray.
+    let point = Vec3::new(-0.32, 0.1, 0.19);
+    let (distance, true_owner) = PreparedSubtreeSampler::new(&source, root)
+        .unwrap()
+        .sample(point);
+    assert!(distance.abs() < 0.02);
+    assert_eq!(true_owner, root);
+    let (minimum, maximum) = crate::model::lattice_bounds(&source, root).unwrap();
+    let center = (minimum + maximum) * 0.5;
+    let local = crate::model::lattice_world_matrix(&source, root)
+        .inverse()
+        .transform_point3(point)
+        - center;
+    let uv = Vec2::new(
+        (local.z.atan2(local.x) / std::f32::consts::TAU + 0.5).fract(),
+        (local.y / local.length()).clamp(-1.0, 1.0).acos() / std::f32::consts::PI,
+    );
+    let x = (uv.x * atlas.width as f32).floor() as usize;
+    let y = (uv.y * atlas.height as f32)
+        .floor()
+        .min((atlas.height - 1) as f32) as usize;
+    let map_owner = atlas.owners[y * atlas.width as usize + x].unwrap();
+    assert_eq!(
+        source
+            .iter()
+            .find(|object| object.uuid == map_owner)
+            .unwrap()
+            .name,
+        "Head"
+    );
+    let head = source
+        .iter()
+        .find(|object| object.uuid == map_owner)
+        .unwrap();
+    let head_world = object_world_matrix(&source, head.uuid);
+    let body_world = object_world_matrix(&source, root);
+    let mut head_entry = None;
+    let mut body_entry = None;
+    for sample in 0..300 {
+        let along_ray = Vec3::new(point.x, point.y, 1.5 - sample as f32 * 0.01);
+        if head_entry.is_none()
+            && head.distance_with_matrix_with_geometry(along_ray, head_world, true, None, None)
+                < 0.001
+        {
+            head_entry = Some(sample);
+        }
+        if body_entry.is_none()
+            && source[0].distance_with_matrix_with_geometry(along_ray, body_world, true, None, None)
+                < 0.001
+        {
+            body_entry = Some(sample);
+        }
+    }
+    assert!(body_entry.unwrap() < head_entry.unwrap());
+}
+
+#[test]
+fn concrete_tower_box_accelerator_reuses_occupied_box_atlas() {
+    use crate::model::GroupRenderRepresentation;
+    let document: serde_json::Value =
+        serde_json::from_str(include_str!("../../examples/concrete_tower.claydash")).unwrap();
+    let mut source: Vec<SdfObject> =
+        serde_json::from_value(document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone())
+            .unwrap();
+    let root = source[0].uuid;
+    let atlas = bake_box_depth_atlas(
+        &source,
+        root,
+        BOX_DEPTH_RESOLUTION,
+        BoxCaptureStart::AtBounds,
+    )
+    .unwrap();
+    let repeated: std::collections::HashSet<_> = source
+        .iter()
+        .filter(|object| object.repetition.enabled)
+        .map(|object| object.uuid)
+        .collect();
+    assert!(atlas
+        .owners
+        .iter()
+        .any(|owner| owner.is_some_and(|id| repeated.contains(&id))));
+    source[0].render_representation = GroupRenderRepresentation::BoxAccelerator;
+    let mut cache = std::collections::HashMap::new();
+    let prepared = super::group_capture::prepare_group_scene_with_neural(
+        &source,
+        &mut cache,
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::from([root]),
+    );
+    assert_eq!(prepared.objects.len(), source.len());
+    assert_eq!(prepared.box_depth_atlases[&root].texels, atlas.texels);
+    assert_eq!(prepared.box_depth_atlases[&root].owners, atlas.owners);
+}

@@ -20,7 +20,10 @@
       .loading-message {
           position: fixed;
           inset: 0;
+          z-index: 1;
           margin: 0;
+          background: linear-gradient(188deg, #540d8e, #0c0312, #741683);
+          background-size: 600% 600%;
           font-size: 3em;
           color: #ffffff;
           font-family: sans-serif;
@@ -46,7 +49,7 @@
   </head>
   <!-- Fix orbit camera -->
   <body oncontextmenu="return false">
-    <p class="loading-message" role="status" aria-label="Loading">
+    <p id="loading-message" class="loading-message" role="status" aria-label="Loading">
       <img class="loading-spinner" src="./target/loader-circle.svg" alt="" />
     </p>
     <script type="module">

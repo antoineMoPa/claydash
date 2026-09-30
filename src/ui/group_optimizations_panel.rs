@@ -54,7 +54,11 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             .show_ui(ui, |ui| {
                 for choice in crate::model::NeuralModelPreset::ALL {
                     if ui.selectable_label(preset == Some(choice), choice.label()).clicked() {
+                        let raymarch_last_segment = settings.training.raymarch_last_segment;
+                        let distance_offset = settings.training.distance_offset;
                         settings.training = choice.settings();
+                        settings.training.raymarch_last_segment = raymarch_last_segment;
+                        settings.training.distance_offset = distance_offset;
                         settings.hit_distance_cells = crate::model::NeuralSdfSettings::default().hit_distance_cells;
                     }
                 }
@@ -80,6 +84,12 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             ui.add(egui::DragValue::new(&mut settings.training.seed).update_while_editing(false)); ui.end_row();
             ui.label("Hit distance").on_hover_text("Distance from zero accepted as a hit, in equivalent sample-spacing units. Larger values stop sooner and expand the silhouette. Applies immediately without retraining.");
             ui.add(egui::DragValue::new(&mut settings.hit_distance_cells).update_while_editing(false).range(0.001..=4.0).speed(0.001).max_decimals(3)); ui.end_row();
+            ui.label("Raymarch last segment").on_hover_text("Use the fitted field to approach, then finish against the original source. Applies after Recompute.");
+            ui.checkbox(&mut settings.training.raymarch_last_segment, ""); ui.end_row();
+            if settings.training.raymarch_last_segment {
+                ui.label("Training offset").on_hover_text("Subtract this world-space distance from every training target so the fitted surface expands and hands off before the source. Applies after Recompute.");
+                ui.add(egui::DragValue::new(&mut settings.training.distance_offset).update_while_editing(false).range(0.0..=10.0).speed(0.01).max_decimals(3)); ui.end_row();
+            }
         });
         let status = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, crate::renderer::NeuralStatus>>(egui::Id::new("neural-sdf-status")))
             .and_then(|statuses| statuses.get(&target).cloned());
@@ -111,23 +121,6 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                 ui.weak("0%");
             }
         }
-    }
-    if selected_mode != crate::model::GroupRenderRepresentation::ExactSdf
-        && selected_mode != crate::model::GroupRenderRepresentation::NeuralSdf
-        && ui
-            .button("Recompute")
-            .on_hover_text("Bake this group using the selected method.")
-            .clicked()
-    {
-        ui.ctx().data_mut(|data| {
-            let id = egui::Id::new("group-optimization-recompute");
-            let mut requests = data
-                .get_temp::<std::collections::HashSet<uuid::Uuid>>(id)
-                .unwrap_or_default();
-            requests.insert(target);
-            data.insert_temp(id, requests);
-        });
-        ui.ctx().request_repaint();
     }
     if selected_mode.is_depth_accelerator() {
         let status = if selected_mode == saved_mode {

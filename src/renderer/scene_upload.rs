@@ -482,6 +482,17 @@ impl Renderer {
                 let uniform_scale = (abs_scale.max_element() - abs_scale.min_element())
                     <= abs_scale.max_element() * 0.00001;
                 let box_depth = box_depth_metadata.get(&object.uuid).copied();
+                let neural_accelerator_offset = if !training_only
+                    && depth_accelerator_transforms.contains_key(&object.uuid)
+                {
+                    prepared_scene
+                        .as_ref()
+                        .and_then(|prepared| prepared.neural_fields.get(&object.uuid))
+                        .filter(|field| field.raymarch_last_segment)
+                        .map(|field| field.distance_offset)
+                } else {
+                    None
+                };
                 let splat_bvh = splat_bvh_metadata.get(&object.uuid).copied();
                 let safe_distance_bound = box_depth.is_none()
                     && uniform_scale
@@ -519,7 +530,10 @@ impl Renderer {
                         0,
                         0,
                         0,
-                        if !training_only && depth_accelerator_transforms.contains_key(&object.uuid)
+                        if let Some(offset) = neural_accelerator_offset {
+                            offset.max(0.1).to_bits()
+                        } else if !training_only
+                            && depth_accelerator_transforms.contains_key(&object.uuid)
                         {
                             object
                                 .depth_accelerator_settings()
@@ -558,7 +572,9 @@ impl Renderer {
                         .to_array(),
                     meta: [
                         i32::from(selected_ids.contains(&object.uuid)),
-                        if object.render_representation.is_depth_accelerator() {
+                        if object.render_representation.is_depth_accelerator()
+                            || neural_accelerator_offset.is_some()
+                        {
                             object.object_type
                         } else {
                             box_depth.map_or(object.object_type, |(_, _, _, _, _, kind)| kind)
@@ -873,6 +889,9 @@ impl Renderer {
         self.resize_lattice_atlas_for(lattice_atlas_uploads.len());
         let mut shader_features =
             SceneShaderFeatures::for_scene(&materials.materials, &gpu_objects);
+        shader_features.neural_sdf |= prepared_scene
+            .as_ref()
+            .is_some_and(|prepared| !prepared.neural_fields.is_empty());
         shader_features.neural_width = prepared_scene.as_ref().map_or(4, |prepared| {
             prepared
                 .neural_fields

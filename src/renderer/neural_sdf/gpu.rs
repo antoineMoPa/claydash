@@ -11,7 +11,7 @@ const STAGING_BATCHES: usize = 8;
 const SHARED: &str = r#"
 struct TrainParams {
     world: mat4x4<f32>, cube: vec4<f32>, control: vec4<u32>,
-    options: vec4<f32>, component: vec4<u32>,
+    options: vec4<f32>, component: vec4<u32>, distance_target: vec4<f32>,
 }
 struct TrainSample { point: vec4<f32>, owner: vec4<u32> }
 "#;
@@ -24,6 +24,7 @@ struct Params {
     control: [u32; 4],
     options: [f32; 4],
     component: [u32; 4],
+    distance_target: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
@@ -209,6 +210,7 @@ impl GpuTrainingJob {
             control: [0, 0, 0, 0],
             options: [state.distance_unit, settings.learning_rate, 1.0, 1.0],
             component: [packed.start, packed.root, settings.seed, 0],
+            distance_target: [if settings.raymarch_last_segment { settings.distance_offset } else { 0.0 }, 0.0, 0.0, 0.0],
         };
         let params_buffer: Vec<_> = (0..STAGING_BATCHES)
             .map(|_| {
@@ -884,6 +886,53 @@ mod tests {
                 assert!(count <= 8, "{} uses {count} storage buffers", entry.name);
             }
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn gpu_neural_accelerator_samples_shift_training_targets_outward() {
+        pollster::block_on(async {
+            let adapter = wgpu::Instance::default()
+                .request_adapter(&Default::default())
+                .await
+                .unwrap();
+            let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+            let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+            object.neural_sdf.training = NeuralTrainingSettings {
+                layers: 1,
+                width: 8,
+                samples: 512,
+                epochs: 1,
+                raymarch_last_segment: true,
+                distance_offset: 0.3,
+                ..Default::default()
+            };
+            let id = object.uuid;
+            let source = Arc::new(vec![object]);
+            let packed = sphere_scene(&source);
+            let mut gpu = GpuTrainingJob::new(device.clone(), queue.clone(), source.clone(), id, packed)
+                .unwrap();
+            assert_eq!(gpu.params.distance_target[0], 0.3);
+            let state = TrainingState::new(source.clone(), id).unwrap();
+            gpu.advance(std::time::Duration::ZERO).unwrap();
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(30)),
+                })
+                .unwrap();
+            let values = read_buffer(&device, &queue, &gpu.samples);
+            let mut sampler = PreparedSubtreeSampler::new(&source, id).unwrap();
+            for sample in values.chunks_exact(8).take(32) {
+                let point = Vec3::from_slice(sample);
+                let world = state
+                    .world
+                    .transform_point3(state.center + point * state.half_extent);
+                let expected = (sampler.sample(world).0 - 0.3) / state.distance_unit;
+                assert!((sample[3] - expected).abs() < 1e-5);
+            }
+        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]

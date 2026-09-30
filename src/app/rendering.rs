@@ -294,7 +294,7 @@ impl App {
                 .unwrap_or_else(|| objects_ref(&self.tree));
             #[cfg(any(target_arch = "wasm32", not(unix)))]
             let scene_objects = objects_ref(&self.tree);
-            renderer.render(
+            let presented = renderer.render(
                 &render_camera,
                 scene_objects,
                 &effective_selection,
@@ -308,6 +308,18 @@ impl App {
                 offscreen_capture,
                 refine,
             );
+            #[cfg(target_arch = "wasm32")]
+            if presented && !self.web_loading_complete {
+                if let Some(loader) = web_sys::window()
+                    .and_then(|window| window.document())
+                    .and_then(|document| document.get_element_by_id("loading-message"))
+                {
+                    loader.remove();
+                }
+                self.web_loading_complete = true;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = presented;
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(result) = renderer.take_capture() {
                 #[cfg(unix)]

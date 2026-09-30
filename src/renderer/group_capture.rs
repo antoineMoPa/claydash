@@ -285,12 +285,7 @@ pub(super) fn prepare_group_scene(
     source: &[SdfObject],
     cache: &mut HashMap<uuid::Uuid, CachedGroupCapture>,
 ) -> PreparedGroupScene {
-    let requests = source
-        .iter()
-        .filter(|object| restored_capture(source, object, capture_key(source, object)).is_none())
-        .map(|object| object.uuid)
-        .collect();
-    prepare_group_scene_with_neural(source, cache, &HashMap::new(), &requests)
+    prepare_group_scene_with_neural(source, cache, &HashMap::new(), &HashSet::new())
 }
 
 pub(super) fn prepare_group_scene_with_neural(
@@ -325,7 +320,11 @@ pub(super) fn prepare_group_scene_with_neural(
             let Some(parent) = source.iter().find(|object| object.uuid == id) else {
                 break;
             };
-            if parent.render_representation.is_depth_accelerator() {
+            if parent.render_representation.is_depth_accelerator()
+                || ready_neural
+                    .get(&id)
+                    .is_some_and(|field| field.raymarch_last_segment)
+            {
                 captured_ancestor = true;
                 break;
             }
@@ -371,10 +370,8 @@ pub(super) fn prepare_group_scene_with_neural(
                 let atlas =
                     if let Some(CachedCapture::Box(atlas)) = cached.map(|entry| &entry.capture) {
                         atlas.clone()
-                    } else if let Some(atlas) = compute_requests
-                        .contains(&root.uuid)
-                        .then(|| bake_box_depth_atlas(source, root.uuid, resolution, start))
-                        .flatten()
+                    } else if let Some(atlas) =
+                        bake_box_depth_atlas(source, root.uuid, resolution, start)
                     {
                         std::sync::Arc::new(atlas)
                     } else {
@@ -435,10 +432,8 @@ pub(super) fn prepare_group_scene_with_neural(
                     cached.map(|entry| &entry.capture)
                 {
                     atlas.clone()
-                } else if let Some(atlas) = compute_requests
-                    .contains(&root.uuid)
-                    .then(|| bake_sphere_depth_atlas(source, root.uuid, width, height))
-                    .flatten()
+                } else if let Some(atlas) =
+                    bake_sphere_depth_atlas(source, root.uuid, width, height)
                 {
                     std::sync::Arc::new(atlas)
                 } else {
@@ -476,10 +471,20 @@ pub(super) fn prepare_group_scene_with_neural(
                 let Some(field) = ready_neural.get(&root.uuid) else {
                     continue;
                 };
-                if atlas_texels + field.network.payload_records() > MAX_BOX_DEPTH_TEXELS {
+                let records = field.network.payload_records()
+                    + if field.raymarch_last_segment {
+                        4 + 32 * 32 * 32
+                    } else {
+                        0
+                    };
+                if atlas_texels + records > MAX_BOX_DEPTH_TEXELS {
                     continue;
                 }
-                atlas_texels += field.network.payload_records();
+                atlas_texels += records;
+                neural_fields.insert(root.uuid, field.clone());
+                if field.raymarch_last_segment {
+                    continue;
+                }
                 proxy.object_type = PrimitiveKind::Box.object_type();
                 proxy.params = SdfParams::BoxParams(BoxParams {
                     box_q: Vec3::splat(field.half_extent),
@@ -489,7 +494,6 @@ pub(super) fn prepare_group_scene_with_neural(
                 proxy.mirror = None;
                 proxy.path_extrusion = None;
                 proxy.surface_inlay = None;
-                neural_fields.insert(root.uuid, field.clone());
             }
             GroupRenderRepresentation::ExactSdf => continue,
         }
@@ -533,7 +537,7 @@ pub(super) fn prepare_group_scene_with_neural(
         );
     }
     // The admitted atlas payload bounds retained CPU captures too. Returning
-    // a group to Exact frees its capture; conversion waits for a compute request.
+    // a group to Exact frees its capture; selecting a capture bakes it automatically.
     cache.retain(|id, _| {
         box_depth_atlases.contains_key(id) || sphere_depth_atlases.contains_key(id)
     });
@@ -580,7 +584,7 @@ mod saved_capture_tests {
     use super::*;
 
     #[test]
-    fn depth_and_gaussian_captures_wait_for_compute_request() {
+    fn depth_and_gaussian_captures_compute_on_selection_and_source_edit() {
         for mode in [
             GroupRenderRepresentation::BoxDepthAtlas,
             GroupRenderRepresentation::SphereDepthAtlas,
@@ -593,15 +597,18 @@ mod saved_capture_tests {
             let id = root.uuid;
             let mut source = vec![root];
             let mut cache = HashMap::new();
-            prepare_group_scene_with_neural(&source, &mut cache, &HashMap::new(), &HashSet::new());
-            assert!(cache.is_empty());
-            prepare_group_scene_with_neural(
+            let prepared = prepare_group_scene_with_neural(
                 &source,
                 &mut cache,
                 &HashMap::new(),
-                &HashSet::from([id]),
+                &HashSet::new(),
             );
             assert!(cache.contains_key(&id));
+            assert_eq!(
+                prepared.gaussian_splats.contains(&id),
+                mode == GroupRenderRepresentation::GaussianSplats
+            );
+            let original_key = cache[&id].key;
             source[0].transform.scale *= 2.0;
             let prepared = prepare_group_scene_with_neural(
                 &source,
@@ -609,9 +616,25 @@ mod saved_capture_tests {
                 &HashMap::new(),
                 &HashSet::new(),
             );
-            assert!(cache.is_empty());
-            assert!(prepared.box_depth_atlases.is_empty());
-            assert!(prepared.sphere_depth_atlases.is_empty());
+            assert!(cache.contains_key(&id));
+            assert_ne!(cache[&id].key, original_key);
+            assert_eq!(
+                prepared.box_depth_atlases.contains_key(&id),
+                matches!(
+                    mode,
+                    GroupRenderRepresentation::BoxDepthAtlas
+                        | GroupRenderRepresentation::BoxAccelerator
+                        | GroupRenderRepresentation::GaussianSplats
+                )
+            );
+            assert_eq!(
+                prepared.sphere_depth_atlases.contains_key(&id),
+                matches!(
+                    mode,
+                    GroupRenderRepresentation::SphereDepthAtlas
+                        | GroupRenderRepresentation::SphereAccelerator
+                )
+            );
         }
     }
 
@@ -752,16 +775,9 @@ mod sphere_accelerator_tests {
         let id = root.uuid;
         let source = [root, child];
         let mut cache = HashMap::new();
-        let pending =
+        let prepared =
             prepare_group_scene_with_neural(&source, &mut cache, &HashMap::new(), &HashSet::new());
-        assert!(pending.sphere_depth_atlases.is_empty());
-        assert_eq!(pending.objects.len(), 2);
-        let prepared = prepare_group_scene_with_neural(
-            &source,
-            &mut cache,
-            &HashMap::new(),
-            &HashSet::from([id]),
-        );
+        assert_eq!(prepared.objects.len(), 2);
         let atlas = &prepared.sphere_depth_atlases[&id];
         let expected =
             bake_sphere_depth_atlas(&source, id, SPHERE_DEPTH_WIDTH, SPHERE_DEPTH_HEIGHT).unwrap();
@@ -807,12 +823,7 @@ mod depth_accelerator_status_tests {
                 depth_accelerator_status(&context, &source, id, revision),
                 DepthAcceleratorStatus::NotComputedYet
             );
-            prepare_group_scene_with_neural(
-                &source,
-                &mut cache,
-                &HashMap::new(),
-                &HashSet::from([id]),
-            );
+            prepare_group_scene_with_neural(&source, &mut cache, &HashMap::new(), &HashSet::new());
             publish_depth_accelerator_status(&context, &source, &cache);
             assert_eq!(
                 depth_accelerator_status(&context, &source, id, revision),
@@ -843,13 +854,7 @@ mod depth_accelerator_status_tests {
             publish_depth_accelerator_status(&context, &source, &cache);
             assert_eq!(
                 depth_accelerator_status(&context, &source, id, revision),
-                DepthAcceleratorStatus::NotComputedYet
-            );
-            prepare_group_scene_with_neural(
-                &source,
-                &mut cache,
-                &HashMap::new(),
-                &HashSet::from([id]),
+                DepthAcceleratorStatus::Ready
             );
             let mut saved = source.clone();
             objects_with_saved_captures(&source, &mut saved, &cache);

@@ -29,7 +29,7 @@ impl GroupRenderRepresentation {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::ExactSdf => "Exact SDF (current)",
+            Self::ExactSdf => "Exact SDF",
             Self::BoxDepthAtlas => "Box depth + texture atlas",
             Self::BoxAccelerator => "Box accelerator",
             Self::SphereDepthAtlas => "Sphere depth + texture atlas",
@@ -140,6 +140,9 @@ pub struct NeuralTrainingSettings {
     pub epochs: u32,
     pub learning_rate: f32,
     pub seed: u32,
+    pub raymarch_last_segment: bool,
+    /// World-space outward shift of training targets before exact refinement.
+    pub distance_offset: f32,
 }
 impl Default for NeuralTrainingSettings {
     fn default() -> Self {
@@ -151,6 +154,8 @@ impl Default for NeuralTrainingSettings {
             epochs: 32,
             learning_rate: 0.02,
             seed: 0xabc123,
+            raymarch_last_segment: false,
+            distance_offset: 0.3,
         }
     }
 }
@@ -166,6 +171,8 @@ struct StoredNeuralTrainingSettings {
     epochs: u32,
     learning_rate: f32,
     seed: u32,
+    raymarch_last_segment: bool,
+    distance_offset: f32,
 }
 impl Default for StoredNeuralTrainingSettings {
     fn default() -> Self {
@@ -179,6 +186,8 @@ impl Default for StoredNeuralTrainingSettings {
             epochs: settings.epochs,
             learning_rate: settings.learning_rate,
             seed: settings.seed,
+            raymarch_last_segment: settings.raymarch_last_segment,
+            distance_offset: settings.distance_offset,
         }
     }
 }
@@ -199,6 +208,8 @@ impl TryFrom<StoredNeuralTrainingSettings> for NeuralTrainingSettings {
             epochs: stored.epochs,
             learning_rate: stored.learning_rate,
             seed: stored.seed,
+            raymarch_last_segment: stored.raymarch_last_segment,
+            distance_offset: stored.distance_offset,
         };
         settings
             .is_valid()
@@ -239,9 +250,16 @@ impl NeuralModelPreset {
         }
     }
     pub fn matching(settings: NeuralTrainingSettings) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|preset| preset.settings() == settings)
+        Self::ALL.into_iter().find(|preset| {
+            let choice = preset.settings();
+            settings.activation == choice.activation
+                && settings.samples == choice.samples
+                && settings.layers == choice.layers
+                && settings.width == choice.width
+                && settings.epochs == choice.epochs
+                && settings.learning_rate == choice.learning_rate
+                && settings.seed == choice.seed
+        })
     }
 }
 
@@ -257,6 +275,8 @@ impl NeuralTrainingSettings {
             && (1..=512).contains(&self.epochs)
             && self.learning_rate.is_finite()
             && (0.00001..=0.1).contains(&self.learning_rate)
+            && self.distance_offset.is_finite()
+            && (0.0..=10.0).contains(&self.distance_offset)
     }
     pub fn parameter_count(&self) -> Option<usize> {
         self.is_valid().then(|| {

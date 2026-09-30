@@ -20,7 +20,7 @@ impl Renderer {
         capture_ui: bool,
         offscreen_capture: bool,
         refine: bool,
-    ) {
+    ) -> bool {
         let requests = egui
             .data_mut(|data| {
                 data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(
@@ -96,13 +96,13 @@ impl Renderer {
                 wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                     self.surface.configure(&self.device, &self.config);
                     self.free_textures(output);
-                    return;
+                    return false;
                 }
                 wgpu::CurrentSurfaceTexture::Timeout
                 | wgpu::CurrentSurfaceTexture::Occluded
                 | wgpu::CurrentSurfaceTexture::Validation => {
                     self.free_textures(output);
-                    return;
+                    return false;
                 }
             })
         };
@@ -380,6 +380,7 @@ impl Renderer {
             .submit(callback_commands.into_iter().chain([encoder.finish()]));
         self.viewport.submitted(&self.queue, work, readback);
         self.free_textures(output);
+        let presented = frame.is_some();
         if let Some(frame) = frame {
             self.queue.present(frame);
         }
@@ -421,6 +422,7 @@ impl Renderer {
                     *result_slot.lock().unwrap() = Some(frame);
                 });
         }
+        presented
     }
 
     pub fn capture_pending(&self) -> bool {

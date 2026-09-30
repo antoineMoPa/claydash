@@ -66,6 +66,6 @@ fn train_sample_sdf(@builtin(global_invocation_id) id: vec3<u32>) {
     let sample = train_exact_component_distance(point, training_params.component.x, training_params.component.y);
     let drop = training_params.component.w != 0u && sample.x > 0.4
         && (train_sample_hash(index ^ training_params.component.z ^ 0xa511e9b3u) & 1u) != 0u;
-    training_samples[id.x] = TrainSample(vec4(p, sample.x / training_params.options.x),
+    training_samples[id.x] = TrainSample(vec4(p, (sample.x - training_params.distance_target.x) / training_params.options.x),
         vec4<u32>(u32(sample.y), u32(drop), 0u, 0u));
 }

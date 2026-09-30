@@ -23,6 +23,7 @@ pub(super) fn payload_records(settings: NeuralTrainingSettings) -> Option<usize>
             + (settings.layers as usize - 1) * width * (width + 1).div_ceil(4)
             + (width + 1).div_ceil(4)
             + MATERIAL_SAMPLES
+            + if settings.raymarch_last_segment { MATERIAL_SAMPLES + 4 } else { 0 }
     })
 }
 
@@ -316,6 +317,8 @@ pub(super) struct NeuralField {
     pub rms_error: f32,
     pub max_error: f32,
     pub bake_ms: f64,
+    pub raymarch_last_segment: bool,
+    pub distance_offset: f32,
 }
 
 impl NeuralField {
@@ -374,6 +377,8 @@ impl NeuralField {
             rms_error: saved.rms_error,
             max_error: saved.max_error,
             bake_ms: saved.bake_ms,
+            raymarch_last_segment: settings.raymarch_last_segment,
+            distance_offset: settings.distance_offset,
         })
     }
 }
@@ -477,13 +482,22 @@ impl TrainingState {
         let (minimum, maximum) = lattice_bounds(&source, root)?;
         let world = lattice_world_matrix(&source, root);
         let extent = sampler.deformation_extent(world.inverse());
-        let half_extent = ((maximum - minimum) * 0.5 + extent).max_element() * 1.1;
         let scale = world
             .x_axis
             .truncate()
             .length()
             .min(world.y_axis.truncate().length())
             .min(world.z_axis.truncate().length());
+        if !scale.is_finite() || scale <= 1e-6 {
+            return None;
+        }
+        let outward_offset = if settings.raymarch_last_segment {
+            settings.distance_offset / scale
+        } else {
+            0.0
+        };
+        let half_extent =
+            (((maximum - minimum) * 0.5 + extent).max_element() + outward_offset) * 1.1;
         let distance_unit = half_extent * scale;
         if !minimum.is_finite()
             || !maximum.is_finite()
@@ -525,6 +539,8 @@ impl TrainingState {
             rms_error: (self.best_loss / samples as f32).sqrt() * self.distance_unit,
             max_error: self.best_max_error * self.distance_unit,
             bake_ms: self.started.elapsed().as_secs_f64() * 1000.0,
+            raymarch_last_segment: self.settings.raymarch_last_segment,
+            distance_offset: self.settings.distance_offset,
         })
     }
 }
@@ -533,6 +549,22 @@ impl TrainingState {
 mod tests {
     use super::*;
     use crate::model::{BooleanOperation, GroupRenderRepresentation, PrimitiveKind};
+
+    #[test]
+    fn neural_last_segment_sampling_cube_includes_shifted_surface() {
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let id = root.uuid;
+        let ordinary = TrainingState::new(Arc::new(vec![root.clone()]), id).unwrap();
+        root.neural_sdf.training.raymarch_last_segment = true;
+        root.neural_sdf.training.distance_offset = 0.3;
+        let expanded = TrainingState::new(Arc::new(vec![root.clone()]), id).unwrap();
+        assert!((expanded.half_extent - ordinary.half_extent - 0.33).abs() < 1e-5);
+        root.group_transform.scale = Vec3::splat(2.0);
+        let scaled = TrainingState::new(Arc::new(vec![root.clone()]), id).unwrap();
+        root.neural_sdf.training.raymarch_last_segment = false;
+        let scaled_ordinary = TrainingState::new(Arc::new(vec![root]), id).unwrap();
+        assert!((scaled.half_extent - scaled_ordinary.half_extent - 0.165).abs() < 1e-5);
+    }
 
     #[test]
     fn wide_neural_networks_have_correct_gradients_and_payloads() {
@@ -695,6 +727,40 @@ mod tests {
         );
         assert_eq!(prepared.objects.len(), 1);
         assert!(!prepared.objects[0].repetition.enabled);
+        assert!(prepared.neural_fields.contains_key(&source[0].uuid));
+    }
+    #[test]
+    fn neural_last_segment_keeps_native_sources_and_fit_payload() {
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        root.render_representation = GroupRenderRepresentation::NeuralSdf;
+        root.neural_sdf.training.raymarch_last_segment = true;
+        let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+        child.boolean_parent = Some(root.uuid);
+        let source = vec![root, child];
+        let mut state = TrainingState::new(Arc::new(source.clone()), source[0].uuid).unwrap();
+        state.best_loss = 0.01;
+        state.best_min = -0.1;
+        state.best_max = 0.1;
+        state.owners = (0..MATERIAL_SAMPLES)
+            .map(|index| source[index % source.len()].uuid)
+            .collect();
+        let field = state.finish().unwrap();
+        assert!(field.raymarch_last_segment);
+        assert_eq!(field.distance_offset, 0.3);
+        assert_eq!(
+            payload_records(source[0].neural_sdf.training),
+            Some(field.network.payload_records() + MATERIAL_SAMPLES + 4)
+        );
+        let ready = [(source[0].uuid, Arc::new(field))].into_iter().collect();
+        let prepared = super::super::group_capture::prepare_group_scene_with_neural(
+            &source,
+            &mut Default::default(),
+            &ready,
+            &Default::default(),
+        );
+        assert_eq!(prepared.objects.len(), source.len());
+        assert_eq!(prepared.objects[0].object_type, source[0].object_type);
+        assert_eq!(prepared.objects[1].boolean_parent, Some(source[0].uuid));
         assert!(prepared.neural_fields.contains_key(&source[0].uuid));
     }
     #[test]

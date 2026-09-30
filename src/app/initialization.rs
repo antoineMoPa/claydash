@@ -405,6 +405,8 @@ impl App {
             document_rx,
             #[cfg(target_arch = "wasm32")]
             document_request: 0,
+            #[cfg(target_arch = "wasm32")]
+            web_loading_complete: false,
         }
     }
 }

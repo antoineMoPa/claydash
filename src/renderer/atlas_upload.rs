@@ -40,6 +40,16 @@ impl Renderer {
         if let Some(prepared) = &prepared_scene {
             for object in objects {
                 if let Some(field) = prepared.neural_fields.get(&object.uuid) {
+                    if field.raymarch_last_segment {
+                        if let Some(mut records) =
+                            depth_accelerator_capture_records(source_objects, object.uuid)
+                        {
+                            let transform = box_depth_texels.len() as u32;
+                            records[3][1] = 12.0;
+                            box_depth_texels.extend_from_slice(&records);
+                            depth_accelerator_transforms.insert(object.uuid, transform + 1);
+                        }
+                    }
                     let offset = box_depth_texels.len() as u32;
                     box_depth_texels.extend_from_slice(
                         &field
@@ -68,6 +78,15 @@ impl Renderer {
                             source.color.y,
                             source.color.z,
                         ]);
+                        if field.raymarch_last_segment {
+                            box_depth_texels.push([
+                                source_indices.get(owner).copied().map_or(0, |index| index + 1)
+                                    as f32,
+                                0.0,
+                                0.0,
+                                0.0,
+                            ]);
+                        }
                     }
                     let extent = Vec3::splat(field.half_extent);
                     box_depth_metadata.insert(object.uuid, (offset, 32, 32, -extent, extent, 12));

@@ -132,6 +132,8 @@ pub struct App {
     document_rx: Receiver<WebDocumentMessage>,
     #[cfg(target_arch = "wasm32")]
     document_request: u64,
+    #[cfg(target_arch = "wasm32")]
+    web_loading_complete: bool,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), unix))]

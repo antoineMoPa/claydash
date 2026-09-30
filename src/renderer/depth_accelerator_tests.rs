@@ -49,18 +49,43 @@ var<private> queries: u32;
 var<private> component_queries: u32;
 var<private> source_queries: vec3<u32>;
 var<private> ray_node_start: u32;
+var<private> disable_analytic: bool;
 const HAS_BOOLEANS: bool = false;
 const HAS_NEURAL_SDF: bool = false;
 fn analytic_subtraction(a: u32, b: u32) -> bool {{ return false; }}
 fn hard_subtraction(a: u32, b: u32) -> bool {{ return false; }}
 fn component_has_neural(owner: f32) -> bool {{ return false; }}
-fn has_analytic_interval(object: Object) -> bool {{ return false; }}
+fn has_analytic_interval(object: Object) -> bool {{ return !disable_analytic && object.operand_tree.z != 0u && (object.state.y == 1 || object.state.y == 2); }}
 fn gaussian_splat_ray_entry(o: vec3<f32>, d: vec3<f32>, object: Object, a: f32, b: f32) -> vec2<f32> {{ return vec2(100.0, -1.0); }}
 fn subtraction_entry(o: vec3<f32>, d: vec3<f32>, a: u32, b: u32) -> vec3<f32> {{ return vec3(100.0, -1.0, 0.0); }}
-fn primitive_interval(o: vec3<f32>, d: vec3<f32>, object: Object) -> vec2<f32> {{ return vec2(100.0, -1.0); }}
+fn primitive_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -> vec2<f32> {{
+    let p = vec4(origin, 1.0);
+    let v = vec4(direction, 0.0);
+    let o = vec3(dot(object.inverse_rows[0], p), dot(object.inverse_rows[1], p), dot(object.inverse_rows[2], p));
+    let d = vec3(dot(object.inverse_rows[0], v), dot(object.inverse_rows[1], v), dot(object.inverse_rows[2], v));
+    if object.state.y == 1 {{
+        let a = dot(d, d);
+        let b = dot(o, d);
+        let c = dot(o, o) - object.params.x * object.params.x;
+        let discriminant = b * b - a * c;
+        if discriminant < 0.0 {{ return vec2(1.0, -1.0); }}
+        let chord = sqrt(discriminant);
+        return vec2(-b - chord, -b + chord) / a;
+    }}
+    let safe_d = select(vec3(-1.0), vec3(1.0), d >= vec3(0.0)) * max(abs(d), vec3(1e-20));
+    let first = (-object.params.xyz - o) / safe_d;
+    let second = (object.params.xyz - o) / safe_d;
+    let entry = min(first, second);
+    let exit = max(first, second);
+    return vec2(max(entry.x, max(entry.y, entry.z)), min(exit.x, min(exit.y, exit.z)));
+}}
 fn mirror_point(point: vec3<f32>, object: Object) -> vec3<f32> {{ return point; }}
 fn group_repeat_point(point: vec3<f32>, object: Object) -> vec3<f32> {{ return point; }}
 fn modifier_point(point: vec3<f32>, object: Object) -> vec3<f32> {{ return point; }}
+fn neural_shape(local: vec3<f32>, object: Object) -> f32 {{
+    if variant == 8u {{ return length(local - vec3(0.0, 0.0, 1.2)) - 0.65; }}
+    return 100.0;
+}}
 fn test_source_distance(point: vec3<f32>, object: Object) -> f32 {{
     let p = vec4(point, 1.0);
     let local = vec3(dot(object.inverse_rows[0], p), dot(object.inverse_rows[1], p), dot(object.inverse_rows[2], p));
@@ -91,7 +116,8 @@ fn smooth_subtraction_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<
 @compute @workgroup_size(1)
 fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
     variant = id.x / 8u;
-    let grouped_start = arrayLength(&bvh) - 2u;
+    disable_analytic = id.x == 49u || id.x == 57u;
+    let grouped_start = arrayLength(&bvh) - 4u;
     camera.count.y = grouped_start;
     if variant >= 5u {{
         ray_node_start = grouped_start + variant - 5u;
@@ -119,7 +145,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
         }}
     }}
     hits[id.x] = vec4(hit, f32(queries));
-    hits[56u + id.x] = vec4(vec3<f32>(source_queries), f32(component_queries));
+    hits[72u + id.x] = vec4(vec3<f32>(source_queries), f32(component_queries));
 }}
 "#
         );
@@ -259,10 +285,9 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
         records[3][1] = 8.0;
         texels.extend_from_slice(&records);
         let box_offset = texels.len() as u32;
-        for (texel, owner) in box_atlas.texels.iter().zip(&box_atlas.owners) {
-            let owner_index = owner
-                .and_then(|id| box_group.iter().position(|object| object.uuid == id))
-                .map_or(0, |index| index + 1);
+        for texel in &box_atlas.texels {
+            // A stale nearby thin-feature owner leaves the box depth intact.
+            let owner_index = if texel[0] >= 0.0 { 2 } else { 0 };
             texels.push([
                 if texel[0] >= 0.0 {
                     texel[0] + 0.04
@@ -301,6 +326,50 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
             }
             objects.push(object);
         }
+        // Reuse the sphere depths but swap the front child and body owners.
+        // This covers both an owner that misses the ray and one behind the
+        // true first hit; neither should force a full-component march.
+        let wrong_transform = texels.len() as u32;
+        let captured = texels[transform as usize..box_transform as usize].to_vec();
+        texels.extend_from_slice(&captured);
+        let wrong_offset = wrong_transform + 4;
+        for index in 0..atlas.texels.len() {
+            if texels[wrong_offset as usize + index * 2][0] >= 0.0 {
+                texels[wrong_offset as usize + index * 2 + 1][1] =
+                    if atlas.owners[index] == Some(group[1].uuid) {
+                        1.0
+                    } else {
+                        2.0
+                    };
+            }
+        }
+        let recovered_objects = objects[15..18].to_vec();
+        for mut object in recovered_objects {
+            if object.meta[0] == 2 {
+                object.box_depth_meta[0] = wrong_offset;
+                object.box_depth_meta[3] = wrong_transform + 1;
+            }
+            objects.push(object);
+        }
+        // A fitted field expanded by the 0.3 training offset hands off to
+        // one original source object before reaching its true surface.
+        let neural_transform = texels.len() as u32;
+        texels.extend_from_slice(&inverse_affine_rows(glam::Mat4::IDENTITY));
+        texels.push([1.0, 12.0, 0.0, 0.0]);
+        let neural_offset = texels.len() as u32;
+        texels.push([0.0, 0.0, 0.0, 1.0]);
+        for _ in 0..32 * 32 * 32 {
+            texels.push([0.0; 4]);
+            texels.push([2.0, 0.0, 0.0, 0.0]);
+        }
+        for mut object in objects[15..18].to_vec() {
+            if object.meta[0] == 2 {
+                object.operand_tree[3] = 0.3_f32.to_bits();
+                object.box_depth_meta = [neural_offset, 32, 32, neural_transform + 1];
+                object.box_depth_max = [2.0, 2.0, 2.0, 0.0];
+            }
+            objects.push(object);
+        }
         // The loose sphere and box admit rays that miss the source. The second
         // sphere sits nearer the camera and must win despite traversal order.
         let mut bounds: Vec<_> = spheres
@@ -333,6 +402,20 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
             aabb_min: [-0.4, -0.4, -1.4, 0.0],
             aabb_max: [0.4, 0.4, 1.35, 0.0],
         });
+        let recovery_end = nodes.len() as u32 + 1;
+        nodes.push(GpuBvhNode {
+            center_radius: [0.0, 0.0, 0.0, 2.0],
+            metadata: [2, recovery_end, 0, 0],
+            aabb_min: [-0.4, -0.4, -1.4, 0.0],
+            aabb_max: [0.4, 0.4, 1.35, 0.0],
+        });
+        let neural_end = nodes.len() as u32 + 1;
+        nodes.push(GpuBvhNode {
+            center_radius: [0.0, 0.0, 0.0, 2.0],
+            metadata: [2, neural_end, 0, 0],
+            aabb_min: [-0.8, -0.8, -1.4, 0.0],
+            aabb_max: [0.8, 0.8, 1.35, 0.0],
+        });
         let storage = |label, contents: &[u8]| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -345,7 +428,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
         let texture_buffer = storage("baked sphere depth", bytemuck::cast_slice(&texels));
         let result = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 112 * 16,
+            size: 144 * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -382,7 +465,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(56, 1, 1);
+            pass.dispatch_workgroups(72, 1, 1);
         }
         encoder.copy_buffer_to_buffer(&result, 0, &readback, 0, result.size());
         queue.submit([encoder.finish()]);
@@ -448,7 +531,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
             "the sphere map must select the front child"
         );
         assert!((hits[40][0] - 1.65).abs() < 0.002);
-        let counts = hits[56 + 40];
+        let counts = hits[72 + 40];
         assert_eq!(counts[0], 0.0, "unselected sibling must not be marched");
         assert!(counts[1] > 0.0, "selected map owner must be refined");
         assert_eq!(counts[2], 0.0, "unselected group root must not be marched");
@@ -458,7 +541,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
         );
         assert_eq!(hits[48][1], 1.0, "box map must select the front child");
         assert!((hits[48][0] - 1.65).abs() < 0.002);
-        let box_counts = hits[56 + 48];
+        let box_counts = hits[72 + 48];
         assert_eq!(box_counts[0], 0.0);
         assert!(box_counts[1] > 0.0);
         assert_eq!(box_counts[2], 0.0);
@@ -471,6 +554,57 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
             -1.0,
             "box rays outside the group should miss"
         );
+        assert_eq!(hits[49][1], 1.0, "box atlas fallback must remain visible");
+        assert_eq!(hits[49][2], -2.0);
+        assert!((hits[49][0] - 2.6).abs() < 0.12);
+        let box_fallback_counts = hits[72 + 49];
+        assert_eq!(box_fallback_counts[0], 0.0);
+        assert!(box_fallback_counts[1] > 0.0);
+        assert_eq!(box_fallback_counts[2], 0.0);
+        assert_eq!(box_fallback_counts[3], 0.0);
+        assert_eq!(
+            hits[56 + 1][1],
+            1.0,
+            "atlas fallback must preserve an occupied texel"
+        );
+        assert_eq!(hits[56 + 1][2], -2.0, "fallback must mark an atlas normal");
+        assert!((hits[56 + 1][0] - 2.65).abs() < 0.12);
+        let recovery_counts = hits[72 + 56 + 1];
+        assert_eq!(recovery_counts[0], 0.0, "fallback must not march a sibling");
+        assert!(recovery_counts[1] > 0.0, "only the mapped owner is tried");
+        assert_eq!(
+            recovery_counts[2], 0.0,
+            "far group root must not be marched"
+        );
+        assert_eq!(
+            recovery_counts[3], 0.0,
+            "recovery must not march the component"
+        );
+        assert_eq!(hits[56][1], 1.0, "nearer front child must beat mapped body");
+        assert!((hits[56][0] - 1.65).abs() < 0.002);
+        let nearer_counts = hits[72 + 56];
+        assert_eq!(
+            nearer_counts[0], 0.0,
+            "farther mapped body must not be marched"
+        );
+        assert!(nearer_counts[1] > 0.0);
+        assert_eq!(nearer_counts[2], 0.0);
+        assert_eq!(nearer_counts[3], 0.0);
+        assert_eq!(hits[64][1], 1.0, "neural handoff must keep the source owner");
+        assert!((hits[64][0] - 1.65).abs() < 0.01);
+        let neural_counts = hits[72 + 64];
+        assert_eq!(neural_counts[0], 0.0);
+        assert!(neural_counts[1] > 0.0);
+        assert_eq!(neural_counts[2], 0.0);
+        assert_eq!(neural_counts[3], 0.0);
+        assert_eq!(
+            hits[64 + 2][1],
+            -1.0,
+            "a neural surface with no contacted source must not become a hit"
+        );
+        let neural_miss_counts = hits[72 + 64 + 2];
+        assert!(neural_miss_counts[1] > 0.0, "the selected source was tested");
+        assert_eq!(neural_miss_counts[3], 0.0, "the subtree was not marched");
         eprintln!("grouped sphere source query counts: {counts:?}; box: {box_counts:?}");
         eprintln!("raw texture depth {}, refined depth {}, exact reference {}; missed-ray exact queries {} -> {}", hits[32][0], hits[16][0], hits[0][0], hits[3][3], hits[19][3]);
     });

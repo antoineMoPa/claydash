@@ -766,6 +766,8 @@ fn neural_settings_round_trip_defaults_and_reject_invalid_values() {
     object.neural_sdf.training.epochs = 64;
     object.neural_sdf.training.seed = 0;
     object.neural_sdf.training.samples = 4913;
+    object.neural_sdf.training.raymarch_last_segment = true;
+    object.neural_sdf.training.distance_offset = 0.3;
     object.neural_sdf.hit_distance_cells = 1.25;
     let saved = serde_json::to_value(&object).unwrap();
     assert_eq!(
@@ -783,6 +785,8 @@ fn neural_settings_round_trip_defaults_and_reject_invalid_values() {
         ("width", serde_json::json!(1025)),
         ("epochs", serde_json::json!(0)),
         ("learning_rate", serde_json::json!(-1)),
+        ("distance_offset", serde_json::json!(-0.1)),
+        ("distance_offset", serde_json::json!(11.0)),
     ] {
         let mut bad = saved.clone();
         bad["neural_sdf"]["training"][key] = value;

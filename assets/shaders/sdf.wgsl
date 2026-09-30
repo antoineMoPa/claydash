@@ -1485,6 +1485,15 @@ fn depth_accelerator_sample(point: vec3<f32>, direction: vec3<f32>, object: Obje
     let local = vec3(dot(box_depth_texels[transform], p),
         dot(box_depth_texels[transform + 1u], p), dot(box_depth_texels[transform + 2u], p));
     let scale = box_depth_texels[transform + 3u].x;
+    if box_depth_texels[transform + 3u].y == 12.0 {
+        let last = 31.0;
+        let cell = vec3<u32>(clamp(round((local / object.box_depth_max.x + vec3(1.0)) * (last * 0.5)),
+            vec3(0.0), vec3(last)));
+        let index = cell.x + 32u * (cell.y + 32u * cell.z);
+        let owner_offset = object.box_depth_meta.x
+            + u32(box_depth_texels[object.box_depth_meta.x].w) + 2u * index + 1u;
+        return vec2(neural_shape(local, object) * scale, box_depth_texels[owner_offset].x - 1.0);
+    }
     if box_depth_texels[transform + 3u].y == 8.0 {
         // Choose the box capture face facing this ray, including secondary rays.
         let view = -vec3(dot(box_depth_texels[transform].xyz, direction),
@@ -1524,6 +1533,21 @@ fn depth_accelerator_distance(point: vec3<f32>, direction: vec3<f32>, object: Ob
     return depth_accelerator_sample(point, direction, object).x;
 }
 
+fn depth_accelerator_texture_normal(point: vec3<f32>, direction: vec3<f32>, owner: u32) -> vec3<f32> {
+    let root = objects[owner].operand_tree.z - 1u;
+    let capture = objects[root];
+    let e = 0.01;
+    let a = vec3(1.0, -1.0, -1.0);
+    let b = vec3(-1.0, -1.0, 1.0);
+    let c = vec3(-1.0, 1.0, -1.0);
+    let d = vec3(1.0, 1.0, 1.0);
+    let gradient = a * depth_accelerator_distance(point + a * e, direction, capture)
+        + b * depth_accelerator_distance(point + b * e, direction, capture)
+        + c * depth_accelerator_distance(point + c * e, direction, capture)
+        + d * depth_accelerator_distance(point + d * e, direction, capture);
+    return gradient / max(length(gradient), 0.000001);
+}
+
 // Evaluate only the locked map owner, in the same modifier frame as its source.
 fn depth_accelerator_source_distance(point: vec3<f32>, owner: u32) -> f32 {
     var object = objects[owner];
@@ -1534,6 +1558,50 @@ fn depth_accelerator_source_distance(point: vec3<f32>, owner: u32) -> f32 {
     let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
     if owner == root && group_repeated { object.repeat_count.w = 0; }
     return object_distance_at(modifier_point(group_point, object), object);
+}
+
+// A depth texel can name a surface behind or beside the camera ray's first
+// hit. Rank cheap analytic intervals in the same baked union once, then still
+// march only the selected source.
+fn depth_accelerator_alternative_owner(origin: vec3<f32>, direction: vec3<f32>,
+    start: u32, root: u32, selected: u32, exclude_selected: bool,
+    ray_start: f32, limit: f32) -> vec2<f32> {
+    let captured_root = objects[selected].operand_tree.z;
+    if captured_root == 0u || bitcast<f32>(objects[captured_root - 1u].component.z) > 0.0 {
+        return vec2(-1.0, limit);
+    }
+    var best = vec2(-1.0, limit);
+    for (var index = start; index <= root; index++) {
+        let object = objects[index];
+        if object.operand_tree.z != captured_root { continue; }
+        if index != captured_root - 1u && object.state.z != 0 { return vec2(-1.0, limit); }
+        if (exclude_selected && index == selected) || !has_analytic_interval(object) { continue; }
+        let interval = primitive_interval(origin, direction, object);
+        let entry = max(ray_start, interval.x);
+        if interval.y >= entry && entry < best.y {
+            best = vec2(f32(index), entry);
+        }
+    }
+    return best;
+}
+
+// Keep an occupied depth-atlas texel visible if its chosen native primitive
+// misses the camera ray. A learned field has no measured surface to preserve.
+fn depth_accelerator_texture_hit(origin: vec3<f32>, direction: vec3<f32>,
+    start: f32, end: f32, selected: u32, epsilon: f32) -> vec2<f32> {
+    let capture_root = objects[selected].operand_tree.z;
+    if capture_root == 0u { return vec2(end, -1.0); }
+    let capture = objects[capture_root - 1u];
+    let transform = capture.box_depth_meta.w - 1u;
+    if box_depth_texels[transform + 3u].y == 12.0 { return vec2(end, -1.0); }
+    var travel = start;
+    for (var step = 0u; step < 192u; step++) {
+        let sample = depth_accelerator_sample(origin + direction * travel, direction, capture);
+        if sample.y >= 0.0 && sample.x <= epsilon { return vec2(travel, sample.y); }
+        travel += max(sample.x * 0.35, epsilon * 0.5);
+        if travel > end { break; }
+    }
+    return vec2(end, -1.0);
 }
 
 fn refine_depth_accelerator_crossing(origin: vec3<f32>, direction: vec3<f32>,
@@ -1664,6 +1732,8 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
             var neural_component = false;
             if !accelerated { neural_component = component_has_neural(f32(node.metadata.x)); }
             var selected_owner = -1.0;
+            var recovered_owner = false;
+            var hit_leaf = false;
             var previous_travel = travel;
             var previous_value = 0.0;
             var refining = !accelerated;
@@ -1676,8 +1746,19 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                     let band = max(refinement_distance, epsilon);
                     if coarse.x <= band && coarse.y >= 0.0 {
                         selected_owner = coarse.y;
+                        // A sphere texel may belong to a nearby eye while
+                        // the camera ray first crosses the duck's body.
+                        if has_analytic_interval(objects[u32(selected_owner)]) {
+                            let alternative = depth_accelerator_alternative_owner(origin, direction,
+                                node.metadata.z, node.metadata.x, u32(selected_owner), false, start, end);
+                            if alternative.x >= 0.0 && alternative.x != selected_owner {
+                                selected_owner = alternative.x;
+                                recovered_owner = true;
+                                travel = max(start, alternative.y - epsilon);
+                            }
+                        }
                         refining = true;
-                        travel = max(start, travel - band);
+                        if !recovered_owner { travel = max(start, travel - band); }
                         continue;
                     }
                     travel += max((coarse.x - band) * 0.35, epsilon * 0.5);
@@ -1712,6 +1793,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                     closest = refined.x;
                     owner = refined.y;
                     splat_offset = -1.0;
+                    hit_leaf = true;
                     break;
                 }
                 let tolerance = surface_hit_tolerance(sample.y, epsilon);
@@ -1720,6 +1802,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                     closest = travel;
                     owner = sample.y;
                     splat_offset = -1.0;
+                    hit_leaf = true;
                     break;
                 }
                 have_exact_sample = true;
@@ -1728,7 +1811,29 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                 var march_factor = bitcast<f32>(object.modifier.y);
                 if accelerated { march_factor = bitcast<f32>(objects[u32(selected_owner)].modifier.y); }
                 travel += select(value, abs(value), neural_component || accelerated) * march_factor;
-                if travel > end { break; }
+                if travel > end {
+                    if accelerated && !recovered_owner {
+                        let alternative = depth_accelerator_alternative_owner(origin, direction,
+                            node.metadata.z, node.metadata.x, u32(selected_owner), true, start, end);
+                        if alternative.x >= 0.0 {
+                            selected_owner = alternative.x;
+                            recovered_owner = true;
+                            have_exact_sample = false;
+                            travel = max(start, alternative.y - epsilon);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+            }
+            if accelerated && !hit_leaf && selected_owner >= 0.0 {
+                let fallback = depth_accelerator_texture_hit(origin, direction, start, end,
+                    u32(selected_owner), epsilon);
+                if fallback.y >= 0.0 && fallback.x < closest {
+                    closest = fallback.x;
+                    owner = fallback.y;
+                    splat_offset = -2.0;
+                }
             }
         }
         node_index += 1u;
@@ -1950,7 +2055,12 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
         if reflecting {
             var reflected_color = background(direction);
             if hit {
-                let reflected_normal = scene_normal(point, index);
+                var reflected_normal: vec3<f32>;
+                if splat_offset == -2.0 {
+                    reflected_normal = depth_accelerator_texture_normal(point, direction, index);
+                } else {
+                    reflected_normal = scene_normal(point, index);
+                }
                 reflected_color = surface_light(point, reflected_normal, -direction, objects[index],
                     material_surface(point, reflected_normal, -direction, objects[index]), false);
             }
@@ -2013,7 +2123,12 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 continue;
             }
             bounce += 1;
-            let outward = scene_normal(point, index);
+            var outward: vec3<f32>;
+            if splat_offset == -2.0 {
+                outward = depth_accelerator_texture_normal(point, direction, index);
+            } else {
+                outward = scene_normal(point, index);
+            }
             let entering = dot(direction, outward) < 0.0;
             let normal = select(-outward, outward, entering);
             if FAST_PREVIEW {
