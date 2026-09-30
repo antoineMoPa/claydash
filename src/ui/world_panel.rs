@@ -46,6 +46,23 @@ pub(super) fn world_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
             });
         }
         BackgroundMode::Transparent => {}
+        BackgroundMode::NightSky => {
+            ui.add(
+                egui::Slider::new(&mut settings.night_star_density, 0.0..=0.5).text("Star density"),
+            );
+            ui.add(egui::Slider::new(&mut settings.night_star_size, 0.25..=2.5).text("Star size"));
+            ui.add(
+                egui::Slider::new(&mut settings.night_star_brightness, 0.0..=6.0)
+                    .text("Star brightness"),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Star color");
+                ui.color_edit_button_rgb(&mut settings.night_star_color);
+            });
+            ui.add(
+                egui::Slider::new(&mut settings.night_horizon_glow, 0.0..=3.0).text("Horizon glow"),
+            );
+        }
         BackgroundMode::Sky => {
             ui.add(egui::Slider::new(&mut settings.latitude, -90.0..=90.0).text("Latitude °"));
             ui.add(egui::Slider::new(&mut settings.day_of_year, 1..=365).text("Day of year"));
@@ -62,6 +79,7 @@ pub(super) fn world_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
             ui.add(egui::Slider::new(&mut settings.sun_intensity, 0.0..=4.0).text("Sun intensity"));
         }
     }
+    ui.add(egui::Slider::new(&mut settings.ambient_light, 0.0..=30.0).text("Ambient light"));
     if settings != before {
         tree.set_path("scene.world", ClaydashValue::World(settings));
     }

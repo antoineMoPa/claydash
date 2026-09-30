@@ -3,6 +3,8 @@
 struct Camera {
     inverse_view_projection: mat4x4<f32>, position: vec4<f32>, count: vec4<u32>,
     world_mode: vec4<u32>, world_color: vec4<f32>, sun_direction: vec4<f32>, sky_params: vec4<f32>,
+    night_params: vec4<f32>, night_color: vec4<f32>,
+    lighting_params: vec4<f32>,
     view_projection: mat4x4<f32>,
 }
 struct Object {
@@ -1328,9 +1330,34 @@ fn scene_normal(point: vec3<f32>, index: u32) -> vec3<f32> {
     );
 }
 
+fn night_sky(ray: vec3<f32>) -> vec3<f32> {
+    let glow = exp(-abs(ray.y) * 7.0) * camera.night_params.w;
+    var color = vec3(0.003, 0.005, 0.017) + vec3(0.018, 0.013, 0.031) * glow;
+    // Hash spherical cells so stars stay fixed in world space as the camera moves.
+    let coordinates = vec2(atan2(ray.z, ray.x) * 0.15915494 + 0.5,
+        asin(clamp(ray.y, -1.0, 1.0)) * 0.31830989 + 0.5) * vec2(360.0, 180.0);
+    let cell = floor(coordinates);
+    let seed = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+    if seed > 1.0 - camera.night_params.x {
+        let offset = vec2(
+            fract(sin(dot(cell, vec2(269.5, 183.3))) * 43758.5453),
+            fract(sin(dot(cell, vec2(419.2, 371.9))) * 43758.5453));
+        let center = mix(vec2(0.4), vec2(0.6), offset);
+        let distance = length(fract(coordinates) - center);
+        let size = mix(0.10, 0.17, offset.y) * camera.night_params.z;
+        let core = 1.0 - smoothstep(0.0, size * 0.55, distance);
+        let halo = 1.0 - smoothstep(size * 0.4, min(size * 2.2, 0.39), distance);
+        let tint = mix(vec3(1.0, 0.78, 0.65), vec3(0.72, 0.85, 1.0), offset.x);
+        color += tint * camera.night_color.rgb * (core + halo * 0.45)
+            * camera.night_params.y * mix(0.65, 1.25, offset.y);
+    }
+    return color;
+}
+
 fn background(ray: vec3<f32>) -> vec3<f32> {
     if camera.world_mode.x == 2u { return camera.world_color.rgb; }
     if camera.world_mode.x == 3u { return vec3(0.0); }
+    if camera.world_mode.x == 4u { return night_sky(ray); }
     if camera.world_mode.x == 1u {
         let sun = normalize(camera.sun_direction.xyz);
         let elevation = sun.y;
@@ -2102,7 +2129,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 if FAST_PREVIEW {
                     let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
                         normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
-                    let shade = 0.22 + 0.78 * max(dot(normal, light), 0.0);
+                    let shade = 0.22 * camera.lighting_params.x + 0.78 * max(dot(normal, light), 0.0);
                     radiance += throughput * surface.color * shade * alpha;
                 } else {
                     radiance += throughput * surface_light(point, normal, -direction,
@@ -2136,7 +2163,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                     normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
                 var surface = material_surface(point, normal, -direction, object);
                 let decal = stencil_color(point, normal, object);
-                let shade = 0.22 + 0.78 * max(dot(normal, light), 0.0);
+                let shade = 0.22 * camera.lighting_params.x + 0.78 * max(dot(normal, light), 0.0);
                 if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 {
                     surface.color = decal.rgb;
                     surface.opacity = decal.a;

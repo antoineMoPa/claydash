@@ -85,7 +85,9 @@ impl App {
             }
             crate::model::set_selected(&mut tree, Vec::new());
         }
-        let camera = Camera::new();
+        let mut camera = Camera::new();
+        // Open the default duck at the front-facing view chosen for its scene.
+        camera.position = glam::Vec3::new(0.0, 0.0, 7.673_228_3);
         #[cfg(not(target_arch = "wasm32"))]
         let camera = if benchmark || std::env::args().any(|arg| arg == "--stress-ui-benchmark") {
             let mut camera = camera;
@@ -424,4 +426,18 @@ pub(super) fn data_tree_with_scene(scene: DataTree) -> DataTree {
     );
     tree.make_undo_redo_snapshot();
     tree
+}
+
+#[cfg(test)]
+#[test]
+fn startup_view_matches_the_default_scene_front_view() {
+    let app = App::new();
+    let camera = &app.camera;
+    assert_eq!(camera.position, glam::Vec3::new(0.0, 0.0, 7.673_228_3));
+    assert_eq!(camera.target, glam::Vec3::ZERO);
+    assert_eq!(camera.up, glam::Vec3::Y);
+    assert_eq!(
+        camera.projection_mode,
+        crate::camera::ProjectionMode::Perspective
+    );
 }

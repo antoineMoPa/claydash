@@ -44,10 +44,17 @@ pub enum BackgroundMode {
     Sky,
     Flat,
     Transparent,
+    NightSky,
 }
 
 impl BackgroundMode {
-    pub const ALL: [Self; 4] = [Self::Studio, Self::Sky, Self::Flat, Self::Transparent];
+    pub const ALL: [Self; 5] = [
+        Self::Studio,
+        Self::Sky,
+        Self::NightSky,
+        Self::Flat,
+        Self::Transparent,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -55,6 +62,7 @@ impl BackgroundMode {
             Self::Sky => "Sky & Sun",
             Self::Flat => "Flat color",
             Self::Transparent => "Transparent",
+            Self::NightSky => "Night sky",
         }
     }
 
@@ -64,6 +72,7 @@ impl BackgroundMode {
             Self::Sky => 1,
             Self::Flat => 2,
             Self::Transparent => 3,
+            Self::NightSky => 4,
         }
     }
 }
@@ -94,7 +103,13 @@ pub struct World {
     pub screen_space_ambient_occlusion: bool,
     pub screen_space_reflections: bool,
     pub background: BackgroundMode,
+    pub ambient_light: f32,
     pub flat_color: [f32; 3],
+    pub night_star_color: [f32; 3],
+    pub night_star_density: f32,
+    pub night_star_brightness: f32,
+    pub night_star_size: f32,
+    pub night_horizon_glow: f32,
     pub latitude: f32,
     pub day_of_year: u32,
     pub solar_time: f32,
@@ -111,7 +126,13 @@ impl Default for World {
             screen_space_ambient_occlusion: true,
             screen_space_reflections: false,
             background: BackgroundMode::Studio,
+            ambient_light: 1.0,
             flat_color: [0.32, 0.43, 0.6],
+            night_star_color: [0.83, 0.90, 1.0],
+            night_star_density: 0.18,
+            night_star_brightness: 2.5,
+            night_star_size: 1.0,
+            night_horizon_glow: 1.0,
             latitude: 45.0,
             day_of_year: 172,
             solar_time: 12.0,
@@ -161,6 +182,41 @@ mod tests {
         let restored: World =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored, settings);
+    }
+
+    #[test]
+    fn night_sky_background_round_trips_with_its_shader_mode() {
+        let legacy: World = serde_json::from_str(r#"{"background":"NightSky"}"#).unwrap();
+        assert_eq!(
+            legacy.night_star_density,
+            World::default().night_star_density
+        );
+        let world = World {
+            background: BackgroundMode::NightSky,
+            night_star_density: 0.42,
+            night_star_brightness: 4.0,
+            night_star_size: 1.8,
+            night_horizon_glow: 0.4,
+            night_star_color: [1.0, 0.5, 0.4],
+            ..World::default()
+        };
+        let restored: World =
+            serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        assert_eq!(restored, world);
+        assert_eq!(restored.background.shader_id(), 4);
+    }
+
+    #[test]
+    fn ambient_light_round_trips_and_legacy_world_keeps_default() {
+        let legacy: World = serde_json::from_str(r#"{"background":"Studio"}"#).unwrap();
+        assert_eq!(legacy.ambient_light, 1.0);
+        let world = World {
+            ambient_light: 1.7,
+            ..World::default()
+        };
+        let restored: World =
+            serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        assert_eq!(restored.ambient_light, 1.7);
     }
 
     #[test]

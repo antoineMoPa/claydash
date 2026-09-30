@@ -1,5 +1,11 @@
 {
   "subtree": {
+    "active_camera": {
+      "subtree": {},
+      "value": {
+        "Uuid": "203be576-062e-4c0c-a954-7427251bdbc2"
+      }
+    },
     "animation": {
       "subtree": {},
       "value": {
@@ -18,21 +24,21 @@
               "keyframes": [
                 {
                   "frame": 0,
-                  "value": -0.2763243,
+                  "value": -0.24931887,
                   "interpolation": "Bezier",
                   "incoming_handle": null,
                   "outgoing_handle": null
                 },
                 {
                   "frame": 10,
-                  "value": -0.2763243,
+                  "value": -0.1906568,
                   "interpolation": "Bezier",
                   "incoming_handle": null,
                   "outgoing_handle": null
                 },
                 {
                   "frame": 20,
-                  "value": -0.2763243,
+                  "value": -0.25569314,
                   "interpolation": "Bezier",
                   "incoming_handle": null,
                   "outgoing_handle": null
@@ -49,21 +55,21 @@
               "keyframes": [
                 {
                   "frame": 0,
-                  "value": -0.05530733,
+                  "value": -0.023157615,
                   "interpolation": "Bezier",
                   "incoming_handle": null,
                   "outgoing_handle": null
                 },
                 {
                   "frame": 10,
-                  "value": 0.42604482,
+                  "value": 0.45460662,
                   "interpolation": "Bezier",
                   "incoming_handle": null,
                   "outgoing_handle": null
                 },
                 {
                   "frame": 20,
-                  "value": -0.10761142,
+                  "value": -0.07507184,
                   "interpolation": "Bezier",
                   "incoming_handle": null,
                   "outgoing_handle": null
@@ -108,7 +114,42 @@
     "cameras": {
       "subtree": {},
       "value": {
-        "VecCamera": []
+        "VecCamera": [
+          {
+            "uuid": "203be576-062e-4c0c-a954-7427251bdbc2",
+            "name": "Camera 1",
+            "transform": {
+              "translation": [
+                3.3797312,
+                1.6194695,
+                5.0106564
+              ],
+              "rotation": [
+                -0.12482277,
+                0.2898705,
+                0.03816216,
+                0.9481234
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "focal_distance": 6.257151,
+            "projection_mode": "Perspective"
+          }
+        ]
+      }
+    },
+    "cursor_position": {
+      "subtree": {},
+      "value": {
+        "Vec3": [
+          0.25048804,
+          -1.013876,
+          3.0500593
+        ]
       }
     },
     "sdf_objects": {
@@ -120,8 +161,8 @@
             "transform": {
               "translation": [
                 0.0,
-                0.0,
-                0.0
+                0.1,
+                0.06
               ],
               "rotation": [
                 0.0,
@@ -130,33 +171,33 @@
                 0.70710677
               ],
               "scale": [
-                2.9846828,
-                2.0542152,
-                2.0542152
+                3.8800876,
+                2.6704798,
+                2.6704798
               ]
             },
             "group_transform": {
               "translation": [
-                -0.2763243,
-                -0.10761142,
+                -0.25569314,
+                -0.07507184,
                 -0.32021177
               ],
               "rotation": [
                 0.0,
                 0.0,
-                0.0,
-                1.0
+                -0.06104854,
+                0.9981348
               ],
               "scale": [
                 1.0,
                 1.0,
-                1.0
+                0.5
               ]
             },
             "color": [
-              0.9607843,
-              0.47058824,
-              0.0,
+              1.0,
+              0.61,
+              0.035,
               1.0
             ],
             "object_type": 1,
@@ -172,25 +213,60 @@
             "material": {
               "kind": "Solid",
               "color": [
-                0.9607843,
-                0.47058824,
-                0.0,
+                1.0,
+                0.61,
+                0.035,
                 1.0
               ],
               "roughness": 0.55,
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -202,26 +278,19 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
             "uuid": "fcd905e5-3692-42fd-b36d-1106dc39428e",
             "transform": {
               "translation": [
-                0.01474497,
-                0.39191306,
-                0.39629334
+                0.01916846,
+                0.609487,
+                0.57518137
               ],
               "rotation": [
                 0.0,
@@ -230,9 +299,9 @@
                 0.70710677
               ],
               "scale": [
-                1.0200547,
-                1.1013157,
-                1.2369081
+                1.3260711,
+                1.4317105,
+                1.6079805
               ]
             },
             "group_transform": {
@@ -254,9 +323,9 @@
               ]
             },
             "color": [
-              0.9607843,
-              0.47058824,
-              0.0,
+              1.0,
+              0.61,
+              0.035,
               1.0
             ],
             "object_type": 1,
@@ -272,25 +341,60 @@
             "material": {
               "kind": "Solid",
               "color": [
-                0.9607843,
-                0.47058824,
-                0.0,
+                1.0,
+                0.61,
+                0.035,
                 1.0
               ],
               "roughness": 0.55,
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -302,26 +406,19 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
             "uuid": "25fe69fd-4e67-498f-9ff0-9ebfcdeca716",
             "transform": {
               "translation": [
-                0.02597317,
-                0.35354978,
-                0.6374083
+                0.03376512,
+                0.5596147,
+                0.8886308
               ],
               "rotation": [
                 0.0,
@@ -330,9 +427,9 @@
                 0.70710677
               ],
               "scale": [
-                0.6127368,
-                0.29784858,
-                0.68878657
+                0.79655784,
+                0.38720316,
+                0.8954225
               ]
             },
             "group_transform": {
@@ -354,9 +451,9 @@
               ]
             },
             "color": [
-              0.96862745,
-              0.09019608,
-              0.003921569,
+              1.0,
+              0.23,
+              0.15,
               1.0
             ],
             "object_type": 1,
@@ -372,25 +469,60 @@
             "material": {
               "kind": "Solid",
               "color": [
-                0.96862745,
-                0.09019608,
-                0.003921569,
+                1.0,
+                0.23,
+                0.15,
                 1.0
               ],
               "roughness": 0.55,
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -402,26 +534,19 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
             "uuid": "83cb6349-a194-4c94-ad87-1b6ad1942a87",
             "transform": {
               "translation": [
-                -0.0700866,
-                0.4359824,
-                0.54620296
+                -0.09111258,
+                0.66677713,
+                0.7700638
               ],
               "rotation": [
                 0.0,
@@ -430,9 +555,9 @@
                 0.70710677
               ],
               "scale": [
-                0.34238243,
-                0.42364347,
-                0.38934505
+                0.44509715,
+                0.5507365,
+                0.5061486
               ]
             },
             "group_transform": {
@@ -481,16 +606,51 @@
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -502,26 +662,19 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
             "uuid": "c424bca1-18f1-4929-bf4b-ac66c2d24e3c",
             "transform": {
               "translation": [
-                0.09971054,
-                0.44245258,
-                0.546779
+                0.1296237,
+                0.67518836,
+                0.7708127
               ],
               "rotation": [
                 0.0,
@@ -530,9 +683,9 @@
                 0.70710677
               ],
               "scale": [
-                0.34238243,
-                0.42364347,
-                0.38934505
+                0.44509715,
+                0.5507365,
+                0.5061486
               ]
             },
             "group_transform": {
@@ -581,16 +734,51 @@
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -602,26 +790,19 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
             "uuid": "0bc162ca-1ca7-4306-9caf-fce36617241c",
             "transform": {
               "translation": [
-                -0.0804006,
-                0.43433255,
-                0.61413854
+                -0.10452078,
+                0.6646323,
+                0.8583801
               ],
               "rotation": [
                 0.0,
@@ -630,9 +811,9 @@
                 0.70710677
               ],
               "scale": [
-                0.12807572,
-                0.20933676,
-                0.17503834
+                0.16649844,
+                0.2721378,
+                0.22754984
               ]
             },
             "group_transform": {
@@ -681,16 +862,51 @@
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -702,26 +918,19 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
             "uuid": "24ef5e99-59aa-46ff-afe8-197a16bf2aa1",
             "transform": {
               "translation": [
-                0.09494735,
-                0.4379727,
-                0.62251645
+                0.123431556,
+                0.6693645,
+                0.8692714
               ],
               "rotation": [
                 0.0,
@@ -730,9 +939,9 @@
                 0.70710677
               ],
               "scale": [
-                0.12807572,
-                0.20933676,
-                0.17503834
+                0.16649844,
+                0.2721378,
+                0.22754984
               ]
             },
             "group_transform": {
@@ -781,16 +990,51 @@
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -802,37 +1046,2676 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
-            "uuid": "90a0fada-f805-4518-b15b-326888e4cd9c",
+            "uuid": "ae61783f-a489-487c-96b0-1b64c8437a38",
             "transform": {
               "translation": [
-                -0.7937822,
-                0.13603075,
-                0.17136851
+                1.1622366e-9,
+                -0.26,
+                -0.19
               ],
               "rotation": [
                 0.0,
-                0.70710677,
                 0.0,
-                0.70710677
+                -0.06104854,
+                0.9981348
               ],
               "scale": [
-                0.655612,
-                0.655612,
-                0.655612
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.17,
+              0.56,
+              0.62,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  1.25,
+                  1.86,
+                  0.35
+                ],
+                "corner_radius": 0.14
+              }
+            },
+            "name": "Handheld shell",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.17,
+                0.56,
+                0.62,
+                1.0
+              ],
+              "roughness": 0.37,
+              "metallic": 0.0,
+              "reflectivity": 0.16,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "d0656781-807c-44d4-a2ca-d45a40ba0371",
+            "transform": {
+              "translation": [
+                -0.7299358,
+                -1.1174344,
+                0.21
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.055,
+              0.105,
+              0.16,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.28,
+                  0.07,
+                  0.035
+                ],
+                "corner_radius": 0.025
+              }
+            },
+            "name": "D-pad horizontal",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.055,
+                0.105,
+                0.16,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "5236c569-59fb-4526-85c6-1abdc77eea13",
+            "transform": {
+              "translation": [
+                -0.7299358,
+                -1.1174344,
+                0.225
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.055,
+              0.105,
+              0.16,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.07,
+                  0.28,
+                  0.035
+                ],
+                "corner_radius": 0.025
+              }
+            },
+            "name": "D-pad vertical",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.055,
+                0.105,
+                0.16,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "9495aa24-ad30-4d11-9725-9b0dc0916e99",
+            "transform": {
+              "translation": [
+                0.57517445,
+                -1.2373813,
+                0.23
+              ],
+              "rotation": [
+                0.7057879,
+                -0.043167837,
+                -0.043167837,
+                0.7057879
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.98,
+              0.25,
+              0.22,
+              1.0
+            ],
+            "object_type": 3,
+            "params": {
+              "CylinderParams": {
+                "radius": 0.135,
+                "half_height": 0.05
+              }
+            },
+            "name": "A button",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.98,
+                0.25,
+                0.22,
+                1.0
+              ],
+              "roughness": 0.28,
+              "metallic": 0.0,
+              "reflectivity": 0.13,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "07527b6e-6e14-45bc-9672-73dbc52bf1fa",
+            "transform": {
+              "translation": [
+                0.28037572,
+                -1.4228368,
+                0.23
+              ],
+              "rotation": [
+                0.7057879,
+                -0.043167837,
+                -0.043167837,
+                0.7057879
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              1.0,
+              0.68,
+              0.2,
+              1.0
+            ],
+            "object_type": 3,
+            "params": {
+              "CylinderParams": {
+                "radius": 0.135,
+                "half_height": 0.05
+              }
+            },
+            "name": "B button",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                1.0,
+                0.68,
+                0.2,
+                1.0
+              ],
+              "roughness": 0.28,
+              "metallic": 0.0,
+              "reflectivity": 0.13,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "9caae5a1-4469-47e0-87ab-fc61ec24d7c4",
+            "transform": {
+              "translation": [
+                -0.30226138,
+                -1.5729501,
+                0.2
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.09,
+              0.2,
+              0.27,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.11,
+                  0.035,
+                  0.025
+                ],
+                "corner_radius": 0.03
+              }
+            },
+            "name": "Select button",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.09,
+                0.2,
+                0.27,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "af0509f2-cdb0-4134-a7c7-b49c1249753f",
+            "transform": {
+              "translation": [
+                -0.0044975425,
+                -1.609511,
+                0.2
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.09,
+              0.2,
+              0.27,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.11,
+                  0.035,
+                  0.025
+                ],
+                "corner_radius": 0.03
+              }
+            },
+            "name": "Start button",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.09,
+                0.2,
+                0.27,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "6daf51ba-34a6-4a41-8e1f-31a7c8cdbd0e",
+            "transform": {
+              "translation": [
+                1.0597248,
+                1.231973,
+                0.18
+              ],
+              "rotation": [
+                0.7057879,
+                -0.043167837,
+                -0.043167837,
+                0.7057879
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.55,
+              1.0,
+              0.42,
+              1.0
+            ],
+            "object_type": 3,
+            "params": {
+              "CylinderParams": {
+                "radius": 0.036,
+                "half_height": 0.015
+              }
+            },
+            "name": "Power light",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.55,
+                1.0,
+                0.42,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "b8aaae19-1cdd-4b7a-951c-200890a6a19f",
+            "transform": {
+              "translation": [
+                0.22936651,
+                -1.9203286,
+                0.16
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.26,
+              0.32,
+              0.32,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.019,
+                  0.065,
+                  0.07
+                ],
+                "corner_radius": 0.018
+              }
+            },
+            "name": "Speaker slot 1",
+            "operation": "Subtract",
+            "boolean_parent": "ae61783f-a489-487c-96b0-1b64c8437a38",
+            "softness": 0.005,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.26,
+                0.32,
+                0.32,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "f2b14691-50ee-4718-b4df-0d7aac4757d1",
+            "transform": {
+              "translation": [
+                0.3385466,
+                -1.9337342,
+                0.16
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.26,
+              0.32,
+              0.32,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.019,
+                  0.065,
+                  0.07
+                ],
+                "corner_radius": 0.018
+              }
+            },
+            "name": "Speaker slot 2",
+            "operation": "Subtract",
+            "boolean_parent": "ae61783f-a489-487c-96b0-1b64c8437a38",
+            "softness": 0.005,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.26,
+                0.32,
+                0.32,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "2b55f108-f53f-4bde-8d5e-69cb83327539",
+            "transform": {
+              "translation": [
+                0.44772664,
+                -1.9471399,
+                0.16
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.26,
+              0.32,
+              0.32,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.019,
+                  0.065,
+                  0.07
+                ],
+                "corner_radius": 0.018
+              }
+            },
+            "name": "Speaker slot 3",
+            "operation": "Subtract",
+            "boolean_parent": "ae61783f-a489-487c-96b0-1b64c8437a38",
+            "softness": 0.005,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.26,
+                0.32,
+                0.32,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "2e5b2650-4944-411e-aed4-33d977892a29",
+            "transform": {
+              "translation": [
+                0.55690676,
+                -1.9605454,
+                0.16
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.26,
+              0.32,
+              0.32,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.019,
+                  0.065,
+                  0.07
+                ],
+                "corner_radius": 0.018
+              }
+            },
+            "name": "Speaker slot 4",
+            "operation": "Subtract",
+            "boolean_parent": "ae61783f-a489-487c-96b0-1b64c8437a38",
+            "softness": 0.005,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.26,
+                0.32,
+                0.32,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "56dd665e-988e-4caf-b677-5eb6fa4b31ad",
+            "transform": {
+              "translation": [
+                0.6660868,
+                -1.9739511,
+                0.16
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.26,
+              0.32,
+              0.32,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.019,
+                  0.065,
+                  0.07
+                ],
+                "corner_radius": 0.018
+              }
+            },
+            "name": "Speaker slot 5",
+            "operation": "Subtract",
+            "boolean_parent": "ae61783f-a489-487c-96b0-1b64c8437a38",
+            "softness": 0.005,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.26,
+                0.32,
+                0.32,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "2a02be1f-d6a7-41bf-8bc6-ddc3f4657baa",
+            "transform": {
+              "translation": [
+                -0.015843013,
+                -0.389031,
+                0.045
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.43,
+              0.88,
+              0.56,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.82,
+                  0.025,
+                  0.01
+                ],
+                "corner_radius": 0.006
+              }
+            },
+            "name": "Pixel horizon",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.43,
+                0.88,
+                0.56,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "7e752da0-1b16-4742-a7d7-38770d762191",
+            "transform": {
+              "translation": [
+                -0.44301507,
+                0.9731819,
+                0.045
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.82,
+              0.96,
+              0.96,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.18,
+                  0.03,
+                  0.01
+                ],
+                "corner_radius": 0.004
+              }
+            },
+            "name": "Cloud left bar",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.82,
+                0.96,
+                0.96,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "c5387488-7302-4174-81fc-b9e520a1d741",
+            "transform": {
+              "translation": [
+                -0.42699614,
+                1.0215905,
+                0.045
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.82,
+              0.96,
+              0.96,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.09,
+                  0.025,
+                  0.01
+                ],
+                "corner_radius": 0.004
+              }
+            },
+            "name": "Cloud left crown",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.82,
+                0.96,
+                0.96,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "acabd09c-10f5-4f4c-b4b3-891cd2688eb2",
+            "transform": {
+              "translation": [
+                0.7480403,
+                0.82693875,
+                0.045
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.82,
+              0.96,
+              0.96,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.15,
+                  0.03,
+                  0.01
+                ],
+                "corner_radius": 0.004
+              }
+            },
+            "name": "Cloud right bar",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.82,
+                0.96,
+                0.96,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "1f5872a4-5070-4f91-a685-8f004d2704b0",
+            "transform": {
+              "translation": [
+                0.7640592,
+                0.8753473,
+                0.045
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.82,
+              0.96,
+              0.96,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.075,
+                  0.025,
+                  0.01
+                ],
+                "corner_radius": 0.004
+              }
+            },
+            "name": "Cloud right crown",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.82,
+                0.96,
+                0.96,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "aff05467-5949-41e3-94e6-aa08d5514a10",
+            "transform": {
+              "translation": [
+                -0.091037475,
+                -1.7399366,
+                0.18
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.9,
+              0.98,
+              0.96,
+              1.0
+            ],
+            "object_type": 11,
+            "params": {
+              "TextParams": {
+                "text": "START",
+                "size": 0.06,
+                "half_depth": 0.006,
+                "tracking": 0.0,
+                "line_spacing": 1.3
+              }
+            },
+            "name": "Start marking",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.9,
+                0.98,
+                0.96,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "2c1b7bf0-4772-41ca-b7ee-2351e2efb2bc",
+            "transform": {
+              "translation": [
+                -0.40865225,
+                -1.7009383,
+                0.18
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.9,
+              0.98,
+              0.96,
+              1.0
+            ],
+            "object_type": 11,
+            "params": {
+              "TextParams": {
+                "text": "SELECT",
+                "size": 0.06,
+                "half_depth": 0.006,
+                "tracking": 0.0,
+                "line_spacing": 1.3
+              }
+            },
+            "name": "Select marking",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.9,
+                0.98,
+                0.96,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "1dc812cc-06d8-415b-9310-1c0e49e08267",
+            "transform": {
+              "translation": [
+                0.07190114,
+                0.32558784,
+                0.14
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
               ]
             },
             "group_transform": {
@@ -863,16 +3746,17 @@
             "params": {
               "BoxParams": {
                 "box_q": [
-                  0.3,
-                  0.3,
-                  0.3
-                ]
+                  0.95,
+                  0.8899855,
+                  0.22
+                ],
+                "corner_radius": 0.1
               }
             },
-            "name": "Cube 1",
-            "operation": "Union",
-            "boolean_parent": null,
-            "softness": 0.0,
+            "name": "Display opening",
+            "operation": "Subtract",
+            "boolean_parent": "ae61783f-a489-487c-96b0-1b64c8437a38",
+            "softness": 0.02,
             "material": {
               "kind": "Solid",
               "color": [
@@ -885,16 +3769,51 @@
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -906,37 +3825,30 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
-            "uuid": "a9bb0c17-36bd-4ccf-8ee7-1136aedc224c",
+            "uuid": "e5502a43-a62a-4177-bbcf-fd952ca7b1ce",
             "transform": {
               "translation": [
-                -0.6571355,
-                0.30512357,
-                -0.76288575
+                -0.057278592,
+                -0.7264967,
+                0.169
               ],
               "rotation": [
                 0.0,
-                0.70710677,
                 0.0,
-                0.70710677
+                -0.06104854,
+                0.9981348
               ],
               "scale": [
-                1.04097,
-                1.04097,
-                1.04097
+                1.0,
+                1.0,
+                1.0
               ]
             },
             "group_transform": {
@@ -958,47 +3870,83 @@
               ]
             },
             "color": [
-              0.8,
-              0.0,
-              0.3,
+              1.0,
+              0.37,
+              0.35,
               1.0
             ],
             "object_type": 2,
             "params": {
               "BoxParams": {
                 "box_q": [
-                  0.3,
-                  0.3,
-                  0.3
-                ]
+                  0.74,
+                  0.015,
+                  0.006
+                ],
+                "corner_radius": 0.012
               }
             },
-            "name": "Cube 2",
+            "name": "Coral accent stripe",
             "operation": "Union",
             "boolean_parent": null,
-            "softness": 0.0,
+            "softness": 0.05,
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                1.0,
+                0.37,
+                0.35,
                 1.0
               ],
-              "roughness": 0.55,
+              "roughness": 0.45,
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -1010,37 +3958,30 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
-              ],
-              "mirror_offset": [
-                0.0,
-                0.0,
-                0.0
-              ]
-            }
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           },
           {
-            "uuid": "ff68a9c9-e797-4067-bdc2-1e6227cd3a2f",
+            "uuid": "f6d1e186-2e05-4621-a27f-5bfd4e8ecef6",
             "transform": {
               "translation": [
-                0.10008672,
-                0.0916934,
-                -0.9278898
+                -0.5251953,
+                0.5500431,
+                0.052
               ],
               "rotation": [
                 0.0,
-                0.70710677,
                 0.0,
-                0.70710677
+                -0.06104854,
+                0.9981348
               ],
               "scale": [
-                0.5556836,
-                0.5556836,
-                0.5556836
+                1.0,
+                1.0,
+                1.0
               ]
             },
             "group_transform": {
@@ -1062,47 +4003,83 @@
               ]
             },
             "color": [
-              0.8,
-              0.0,
-              0.3,
+              1.0,
+              0.85,
+              0.27,
               1.0
             ],
             "object_type": 2,
             "params": {
               "BoxParams": {
                 "box_q": [
-                  0.3,
-                  0.3,
-                  0.3
-                ]
+                  0.052,
+                  0.01,
+                  0.005
+                ],
+                "corner_radius": 0.003
               }
             },
-            "name": "Cube 3",
+            "name": "Star left horizontal",
             "operation": "Union",
             "boolean_parent": null,
-            "softness": 0.0,
+            "softness": 0.05,
             "material": {
               "kind": "Solid",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                1.0,
+                0.85,
+                0.27,
                 1.0
               ],
               "roughness": 0.55,
               "metallic": 0.0,
               "reflectivity": 0.04,
               "refractive_index": 1.45,
-              "opacity": 1.0
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
             },
             "material_id": null,
             "repetition": {
               "enabled": false,
-              "axes": [
-                true,
-                false,
-                false
-              ],
               "count": [
                 3,
                 1,
@@ -1114,18 +4091,1680 @@
                 0.8
               ]
             },
-            "modifiers": {
-              "mirror_axes": [
-                false,
-                false,
-                false
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "2e945a09-1f16-4722-8ef6-8d4baa1fc07b",
+            "transform": {
+              "translation": [
+                -0.5251953,
+                0.5500431,
+                0.054
               ],
-              "mirror_offset": [
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
                 0.0,
                 0.0,
                 0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
               ]
-            }
+            },
+            "color": [
+              1.0,
+              0.85,
+              0.27,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.01,
+                  0.052,
+                  0.005
+                ],
+                "corner_radius": 0.003
+              }
+            },
+            "name": "Star left vertical",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                1.0,
+                0.85,
+                0.27,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "7dd89a9c-0386-4e77-a5b0-81019bb3f7cf",
+            "transform": {
+              "translation": [
+                0.6940659,
+                0.5514632,
+                0.052
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.87,
+              1.0,
+              0.96,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.052,
+                  0.01,
+                  0.005
+                ],
+                "corner_radius": 0.003
+              }
+            },
+            "name": "Star upper right horizontal",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.87,
+                1.0,
+                0.96,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "9a9c1901-2d83-418a-8347-580b11ce3452",
+            "transform": {
+              "translation": [
+                0.6940659,
+                0.5514632,
+                0.054
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.87,
+              1.0,
+              0.96,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.01,
+                  0.052,
+                  0.005
+                ],
+                "corner_radius": 0.003
+              }
+            },
+            "name": "Star upper right vertical",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.87,
+                1.0,
+                0.96,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "b8c03677-f3d7-45ab-b801-acab4316efbc",
+            "transform": {
+              "translation": [
+                0.61502683,
+                -0.17431423,
+                0.052
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.43,
+              0.94,
+              0.68,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.052,
+                  0.01,
+                  0.005
+                ],
+                "corner_radius": 0.003
+              }
+            },
+            "name": "Star lower right horizontal",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.43,
+                0.94,
+                0.68,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "b8849353-7b46-4601-a249-0547881a447a",
+            "transform": {
+              "translation": [
+                0.61502683,
+                -0.17431423,
+                0.054
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.06104854,
+                0.9981348
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.43,
+              0.94,
+              0.68,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.01,
+                  0.052,
+                  0.005
+                ],
+                "corner_radius": 0.003
+              }
+            },
+            "name": "Star lower right vertical",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.43,
+                0.94,
+                0.68,
+                1.0
+              ],
+              "roughness": 0.55,
+              "metallic": 0.0,
+              "reflectivity": 0.04,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "b46aafdd-9eef-488c-9d7f-78d771c1e545",
+            "transform": {
+              "translation": [
+                0.8288513,
+                0.17221008,
+                0.065
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.24958184,
+                0.9683496
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.34,
+              0.62,
+              0.69,
+              1.0
+            ],
+            "object_type": 2,
+            "params": {
+              "BoxParams": {
+                "box_q": [
+                  0.007,
+                  0.17,
+                  0.003
+                ],
+                "corner_radius": 0.005
+              }
+            },
+            "name": "Screen glass glint",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.34,
+                0.62,
+                0.69,
+                1.0
+              ],
+              "roughness": 0.08,
+              "metallic": 0.0,
+              "reflectivity": 0.48,
+              "refractive_index": 1.45,
+              "opacity": 0.24,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "64d4b412-e830-4c6a-9637-7ea4df3d5441",
+            "transform": {
+              "translation": [
+                -3.9,
+                1.2,
+                -2.35
+              ],
+              "rotation": [
+                0.0,
+                0.2923717,
+                0.0,
+                0.9563047
+              ],
+              "scale": [
+                0.60414404,
+                0.60414404,
+                0.60414404
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              1.0,
+              0.77,
+              0.24,
+              1.0
+            ],
+            "object_type": 5,
+            "params": {
+              "PolygonPrismParams": {
+                "vertices": [
+                  [
+                    2.0206672e-17,
+                    -0.33
+                  ],
+                  [
+                    0.082289934,
+                    -0.11326238
+                  ],
+                  [
+                    0.31384864,
+                    -0.101975605
+                  ],
+                  [
+                    0.13314791,
+                    0.043262377
+                  ],
+                  [
+                    0.19396913,
+                    0.2669756
+                  ],
+                  [
+                    8.572528e-18,
+                    0.14
+                  ],
+                  [
+                    -0.19396913,
+                    0.2669756
+                  ],
+                  [
+                    -0.13314791,
+                    0.043262377
+                  ],
+                  [
+                    -0.31384864,
+                    -0.101975605
+                  ],
+                  [
+                    -0.082289934,
+                    -0.11326238
+                  ]
+                ],
+                "half_depth": 0.65
+              }
+            },
+            "name": "Backdrop left star",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                1.0,
+                0.77,
+                0.24,
+                1.0
+              ],
+              "roughness": 0.35,
+              "metallic": 0.0,
+              "reflectivity": 0.13,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "db4eac4f-1a28-40f3-8c6c-8e4c5918f423",
+            "transform": {
+              "translation": [
+                2.464085,
+                1.0598605,
+                -2.35
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.04222022,
+                0.9991084
+              ],
+              "scale": [
+                1.6998118,
+                1.6998118,
+                1.6998118
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.98,
+              0.42,
+              0.41,
+              1.0
+            ],
+            "object_type": 5,
+            "params": {
+              "PolygonPrismParams": {
+                "vertices": [
+                  [
+                    1.5308086e-17,
+                    -0.25
+                  ],
+                  [
+                    0.06171745,
+                    -0.08494678
+                  ],
+                  [
+                    0.23776414,
+                    -0.07725425
+                  ],
+                  [
+                    0.09986094,
+                    0.032446783
+                  ],
+                  [
+                    0.14694631,
+                    0.20225425
+                  ],
+                  [
+                    6.4293957e-18,
+                    0.105
+                  ],
+                  [
+                    -0.14694631,
+                    0.20225425
+                  ],
+                  [
+                    -0.09986094,
+                    0.032446783
+                  ],
+                  [
+                    -0.23776414,
+                    -0.07725425
+                  ],
+                  [
+                    -0.06171745,
+                    -0.08494678
+                  ]
+                ],
+                "half_depth": 0.5
+              }
+            },
+            "name": "Backdrop right star",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.98,
+                0.42,
+                0.41,
+                1.0
+              ],
+              "roughness": 0.35,
+              "metallic": 0.0,
+              "reflectivity": 0.13,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "33a41fbe-b38a-4bd6-8708-76e99bd29ed3",
+            "transform": {
+              "translation": [
+                -1.95,
+                -1.02,
+                0.5
+              ],
+              "rotation": [
+                0.70710677,
+                0.0,
+                0.0,
+                0.70710677
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.98,
+              0.4,
+              0.38,
+              1.0
+            ],
+            "object_type": 4,
+            "params": {
+              "TorusParams": {
+                "major_radius": 0.4,
+                "minor_radius": 0.1
+              }
+            },
+            "name": "Backdrop coral ring",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.98,
+                0.4,
+                0.38,
+                1.0
+              ],
+              "roughness": 0.35,
+              "metallic": 0.0,
+              "reflectivity": 0.13,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "f5abb801-9421-419e-a33d-64a0e570e567",
+            "transform": {
+              "translation": [
+                2.25,
+                -1.2,
+                -0.4489374
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.26339877,
+                0.96468705
+              ],
+              "scale": [
+                1.5445195,
+                1.5445195,
+                1.5445195
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.72,
+              0.98,
+              0.8,
+              1.0
+            ],
+            "object_type": 5,
+            "params": {
+              "PolygonPrismParams": {
+                "vertices": [
+                  [
+                    0.0,
+                    0.21
+                  ],
+                  [
+                    0.17,
+                    0.0
+                  ],
+                  [
+                    0.0,
+                    -0.21
+                  ],
+                  [
+                    -0.17,
+                    0.0
+                  ]
+                ],
+                "half_depth": 0.25
+              }
+            },
+            "name": "Backdrop lower diamond",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.72,
+                0.98,
+                0.8,
+                1.0
+              ],
+              "roughness": 0.35,
+              "metallic": 0.0,
+              "reflectivity": 0.13,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "21ef12e7-2457-4d2f-bdc7-ec7a156e0967",
+            "transform": {
+              "translation": [
+                -3.05,
+                0.03,
+                -1.35
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              0.72,
+              0.98,
+              0.8,
+              1.0
+            ],
+            "object_type": 1,
+            "params": {
+              "SphereParams": {
+                "radius": 0.4
+              }
+            },
+            "name": "Backdrop left dot",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                0.72,
+                0.98,
+                0.8,
+                1.0
+              ],
+              "roughness": 0.35,
+              "metallic": 0.0,
+              "reflectivity": 0.13,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
+          },
+          {
+            "uuid": "deba0e89-0959-4553-b9c8-d9be65fbd7f5",
+            "transform": {
+              "translation": [
+                2.05,
+                -0.16,
+                -0.55
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "group_transform": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "color": [
+              1.0,
+              0.78,
+              0.28,
+              1.0
+            ],
+            "object_type": 1,
+            "params": {
+              "SphereParams": {
+                "radius": 0.2
+              }
+            },
+            "name": "Backdrop right dot",
+            "operation": "Union",
+            "boolean_parent": null,
+            "softness": 0.05,
+            "material": {
+              "kind": "Solid",
+              "color": [
+                1.0,
+                0.78,
+                0.28,
+                1.0
+              ],
+              "roughness": 0.35,
+              "metallic": 0.0,
+              "reflectivity": 0.13,
+              "refractive_index": 1.45,
+              "opacity": 1.0,
+              "wood": {
+                "species": "Oak",
+                "ring_spacing": 0.06,
+                "ring_contrast": 0.52,
+                "pores": 0.72,
+                "figure": 0.48,
+                "cut_angle": 0.15,
+                "ring_relief": 0.18,
+                "ring_variation": 0.62,
+                "bump": 0.65,
+                "fiber_relief": 0.62,
+                "fiber_pigment": 0.9,
+                "fiber_directionality": 11.0,
+                "scale_falloff": 0.85,
+                "sanding_grit": 0.48,
+                "sanding_angle": 0.0,
+                "knots": 0.42,
+                "end_checks": 0.35,
+                "stain_color": "Honey",
+                "stain_load": 0.0,
+                "coat": 0.5,
+                "coat_sheen": 0.46,
+                "coat_amber": 0.25
+              },
+              "brick": {
+                "width": 0.52,
+                "course_height": 0.25,
+                "mortar_width": 0.03,
+                "wear": 0.42,
+                "relief": 0.038,
+                "bevel": 0.015,
+                "porosity": 0.62,
+                "firing": 0.48,
+                "mortar_color": [
+                  0.7,
+                  0.67,
+                  0.61
+                ],
+                "efflorescence": 0.16
+              }
+            },
+            "material_id": null,
+            "repetition": {
+              "enabled": false,
+              "count": [
+                3,
+                1,
+                1
+              ],
+              "spacing": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            },
+            "mirror": null,
+            "lattice": null,
+            "path_extrusion": null,
+            "surface_inlay": null,
+            "image_stencil": null
           }
         ]
       }
@@ -1133,15 +5772,46 @@
     "selected_uuids": {
       "subtree": {},
       "value": {
-        "VecUuid": [
-          "6183084e-b025-4c72-bb5c-071eadf939e4"
-        ]
+        "VecUuid": []
       }
     },
     "selection_scope": {
       "subtree": {},
       "value": {
         "SelectionScope": "Group"
+      }
+    },
+    "world": {
+      "subtree": {},
+      "value": {
+        "World": {
+          "render_pipeline": "exact",
+          "screen_space_ambient_occlusion": true,
+          "screen_space_reflections": true,
+          "background": "NightSky",
+          "ambient_light": 13.5,
+          "flat_color": [
+            0.32,
+            0.42999986,
+            0.6
+          ],
+          "night_star_color": [
+            0.83,
+            0.8999998,
+            1.0
+          ],
+          "night_star_density": 0.08,
+          "night_star_brightness": 2.35,
+          "night_star_size": 0.97,
+          "night_horizon_glow": 0.4,
+          "latitude": 45.0,
+          "day_of_year": 172,
+          "solar_time": 3.5,
+          "azimuth": 0.0,
+          "turbidity": 2.5,
+          "sun_temperature": 5778.0,
+          "sun_intensity": 1.0
+        }
       }
     }
   },

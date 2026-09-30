@@ -162,6 +162,9 @@ struct GpuCamera {
     world_color: [f32; 4],
     sun_direction: [f32; 4],
     sky_params: [f32; 4],
+    night_params: [f32; 4],
+    night_color: [f32; 4],
+    lighting_params: [f32; 4],
     view_projection: [[f32; 4]; 4],
 }
 

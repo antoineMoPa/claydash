@@ -120,12 +120,14 @@ impl Renderer {
                 0.035 + 0.165 * daylight,
                 world.sun_intensity * daylight,
             )
+        } else if world.background == crate::model::BackgroundMode::NightSky {
+            (Vec3::new(2.0, 3.0, 2.0).normalize(), 0.08, 0.12)
         } else {
             (Vec3::new(2.0, 3.0, 2.0).normalize(), 0.13, 0.75)
         };
         let mut right = view.x_axis.to_array();
         let mut up = view.y_axis.to_array();
-        right[3] = ambient;
+        right[3] = ambient * world.ambient_light;
         up[3] = 1.0;
         let data = SplatCamera {
             view_projection: (camera.projection() * camera.view()).to_cols_array_2d(),

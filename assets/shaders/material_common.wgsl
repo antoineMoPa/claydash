@@ -101,10 +101,15 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
     if use_ao { ao = ambient_occlusion(point, normal); }
     let sky_daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);
     let sky_ambient = mix(0.035, 0.20, sky_daylight);
-    let ambient = select(select(0.13, 0.23, header.kind == MATERIAL_WOOD), sky_ambient,
+    var ambient = select(select(0.13, 0.23, header.kind == MATERIAL_WOOD), sky_ambient,
         camera.world_mode.x == 1u) * ao;
-    let direct_strength = select(0.75, camera.sun_direction.w * sky_daylight,
+    var direct_strength = select(0.75, camera.sun_direction.w * sky_daylight,
         camera.world_mode.x == 1u);
+    if camera.world_mode.x == 4u {
+        ambient = 0.08 * ao;
+        direct_strength = 0.12;
+    }
+    ambient *= camera.lighting_params.x;
     return color * (ambient + diffuse * direct_strength * mix(0.55, 1.0, ao)) * (1.0 - metallic)
         + specular_color * specular * (1.0 - roughness * 0.5) * (1.0 - 0.72 * coat)
         + color * fiber_light + vec3(1.0, 0.98, 0.93) * coat_light;

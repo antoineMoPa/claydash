@@ -2,6 +2,8 @@
 struct Camera {
     inverse_view_projection: mat4x4<f32>, position: vec4<f32>, count: vec4<u32>,
     world_mode: vec4<u32>, world_color: vec4<f32>, sun_direction: vec4<f32>, sky_params: vec4<f32>,
+    night_params: vec4<f32>, night_color: vec4<f32>,
+    lighting_params: vec4<f32>,
     view_projection: mat4x4<f32>,
 }
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -23,9 +25,34 @@ fn pixel(uv: vec2<f32>) -> vec2<i32> {
     return clamp(vec2<i32>(uv * vec2<f32>(textureDimensions(positions))), vec2<i32>(0), vec2<i32>(textureDimensions(positions)) - 1);
 }
 
+fn night_sky(ray: vec3<f32>) -> vec3<f32> {
+    let glow = exp(-abs(ray.y) * 7.0) * camera.night_params.w;
+    var color = vec3(0.003, 0.005, 0.017) + vec3(0.018, 0.013, 0.031) * glow;
+    // Hash spherical cells so stars stay fixed in world space as the camera moves.
+    let coordinates = vec2(atan2(ray.z, ray.x) * 0.15915494 + 0.5,
+        asin(clamp(ray.y, -1.0, 1.0)) * 0.31830989 + 0.5) * vec2(360.0, 180.0);
+    let cell = floor(coordinates);
+    let seed = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+    if seed > 1.0 - camera.night_params.x {
+        let offset = vec2(
+            fract(sin(dot(cell, vec2(269.5, 183.3))) * 43758.5453),
+            fract(sin(dot(cell, vec2(419.2, 371.9))) * 43758.5453));
+        let center = mix(vec2(0.4), vec2(0.6), offset);
+        let distance = length(fract(coordinates) - center);
+        let size = mix(0.10, 0.17, offset.y) * camera.night_params.z;
+        let core = 1.0 - smoothstep(0.0, size * 0.55, distance);
+        let halo = 1.0 - smoothstep(size * 0.4, min(size * 2.2, 0.39), distance);
+        let tint = mix(vec3(1.0, 0.78, 0.65), vec3(0.72, 0.85, 1.0), offset.x);
+        color += tint * camera.night_color.rgb * (core + halo * 0.45)
+            * camera.night_params.y * mix(0.65, 1.25, offset.y);
+    }
+    return color;
+}
+
 fn background(ray: vec3<f32>) -> vec3<f32> {
     if camera.world_mode.x == 2u { return camera.world_color.rgb; }
     if camera.world_mode.x == 3u { return vec3(0.0); }
+    if camera.world_mode.x == 4u { return night_sky(ray); }
     let horizon = clamp(ray.y * 0.5 + 0.5, 0.0, 1.0);
     if camera.world_mode.x == 1u {
         let daylight = smoothstep(-0.14, 0.20, camera.sun_direction.y);
@@ -54,8 +81,10 @@ fn lit(position: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, roughness: f32
     let diffuse = max(dot(normal, light), 0.0);
     let specular = pow(max(dot(normal, halfway), 0.0), mix(256.0, 3.0, roughness * roughness));
     let daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);
-    let ambient = select(0.16, mix(0.035, 0.20, daylight), camera.world_mode.x == 1u);
-    let direct = select(0.75, camera.sun_direction.w * daylight, camera.world_mode.x == 1u);
+    var ambient = select(0.16, mix(0.035, 0.20, daylight), camera.world_mode.x == 1u);
+    var direct = select(0.75, camera.sun_direction.w * daylight, camera.world_mode.x == 1u);
+    if camera.world_mode.x == 4u { ambient = 0.08; direct = 0.12; }
+    ambient *= camera.lighting_params.x;
     return albedo * (ambient * ao + diffuse * direct * mix(0.55, 1.0, ao)) * (1.0 - metallic)
         + mix(vec3(reflectivity), albedo, metallic) * specular * (1.0 - roughness * 0.5);
 }

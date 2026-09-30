@@ -230,6 +230,19 @@ impl Renderer {
                 ]
             },
             sky_params: [world.turbidity, world.sun_temperature, 0.0, 0.0],
+            night_params: [
+                world.night_star_density,
+                world.night_star_brightness,
+                world.night_star_size,
+                world.night_horizon_glow,
+            ],
+            night_color: [
+                world.night_star_color[0],
+                world.night_star_color[1],
+                world.night_star_color[2],
+                1.0,
+            ],
+            lighting_params: [world.ambient_light, 0.0, 0.0, 0.0],
         };
         if !training_only {
             self.queue
