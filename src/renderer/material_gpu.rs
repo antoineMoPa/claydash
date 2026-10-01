@@ -2,6 +2,8 @@ use super::*;
 use std::collections::HashSet;
 mod fabric;
 use fabric::pack_fabric;
+mod metal;
+use metal::pack_metal;
 
 // One header per distinct material value. Vec4 slots have 16-byte alignment in WGSL.
 pub(super) const MAX_PARAM_SLOTS: usize = 8;
@@ -52,6 +54,7 @@ impl PackedMaterials {
         match material.kind {
             MaterialKind::Wood => pack_wood(material, &mut self.params),
             MaterialKind::Fabric => pack_fabric(material, &mut self.params),
+            MaterialKind::Metal => pack_metal(material, &mut self.params),
             MaterialKind::Brick => self.params.extend_from_slice(&[
                 [
                     material.brick.width,
@@ -160,6 +163,8 @@ pub(super) fn shader_source_for_assets(assets: &[MaterialAsset]) -> String {
                 &common,
                 include_str!("../../assets/shaders/material_wood.wgsl"),
                 include_str!("../../assets/shaders/material_fabric.wgsl"),
+                include_str!("../../assets/shaders/material_metal.wgsl"),
+                include_str!("../../assets/shaders/material_metal_light.wgsl"),
                 include_str!("../../assets/shaders/material_brick.wgsl"),
                 include_str!("../../assets/shaders/material_diagnostic.wgsl"),
                 include_str!("../../assets/shaders/ambient_occlusion.wgsl"),
@@ -216,7 +221,7 @@ pub(crate) fn validate_custom_materials(assets: &[MaterialAsset]) -> Result<(), 
 
 fn validate_custom_body(body: &str) -> Result<(), String> {
     let source = format!(
-        "struct Surface {{ color: vec3<f32>, normal: vec3<f32>, roughness: f32, metallic: f32, reflectivity: f32, opacity: f32, ior: f32, coat: f32, sheen: f32, fiber: vec3<f32>, figure: f32, }}\nfn custom_material(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, base: Surface) -> Surface {{\n{body}\n}}"
+        "struct Surface {{ color: vec3<f32>, normal: vec3<f32>, roughness: f32, metallic: f32, reflectivity: f32, opacity: f32, ior: f32, coat: f32, sheen: f32, fiber: vec3<f32>, figure: f32, tangent: vec3<f32>, anisotropy: f32, metal_response: bool, }}\nfn custom_material(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, base: Surface) -> Surface {{\n{body}\n}}"
     );
     let module = wgpu::naga::front::wgsl::parse_str(&source)
         .map_err(|error| error.emit_to_string(&source))?;
@@ -281,6 +286,63 @@ mod tests {
             assert_eq!(material.display_name(), preset.label());
         }
         assert_eq!(packed.materials.len(), 10);
+    }
+
+    #[test]
+    fn metal_records_pack_all_controls_without_changing_legacy_records() {
+        use crate::model::{MetalSpecies, MetalStudy};
+        let mut packed = PackedMaterials::default();
+        let legacy = Material::preset(MaterialKind::Metallic);
+        packed.insert(legacy);
+        assert_eq!(packed.headers[0].kind, 3);
+        assert_eq!(packed.headers[0].length, 2);
+        for study in MetalStudy::ALL {
+            let mut material = study.material();
+            material.metal.brush_angle = 0.37;
+            material.metal.image_relief = 0.42;
+            let index = packed.insert(material) as usize;
+            let header = packed.headers[index];
+            assert_eq!(header.kind, 8);
+            assert_eq!(header.length as usize, MAX_PARAM_SLOTS);
+            let slots =
+                &packed.params[header.offset as usize..(header.offset + header.length) as usize];
+            assert_eq!(
+                slots[2],
+                [
+                    material.metal.finish.gpu_code(),
+                    material.metal.tangent.gpu_code(),
+                    material.metal.anisotropy,
+                    0.37
+                ]
+            );
+            assert_eq!(
+                slots[3],
+                [
+                    material.metal.texture_scale,
+                    material.metal.relief_strength,
+                    material.metal.scratches,
+                    material.metal.oxidation
+                ]
+            );
+            assert_eq!(
+                slots[4],
+                [
+                    material.metal.paint_coverage,
+                    material.metal.paint_roughness,
+                    0.42,
+                    0.0
+                ]
+            );
+            assert_eq!(&slots[5][..3], &material.metal.paint_color.to_array());
+            assert_eq!(&slots[6][..3], &material.metal.species.f0().to_array());
+            assert_eq!(&slots[7][..3], &material.metal.species.oxide().to_array());
+            assert_eq!(packed.insert(material), index as u32);
+        }
+        let mut distinct = PackedMaterials::default();
+        for species in MetalSpecies::ALL {
+            distinct.insert(Material::metal_preset(species));
+        }
+        assert_eq!(distinct.headers.len(), 9);
     }
 
     #[test]

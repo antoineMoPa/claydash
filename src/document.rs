@@ -528,6 +528,43 @@ mod tests {
     }
 
     #[test]
+    fn scene_round_trip_keeps_metal_layers_tint_and_object_height_image() {
+        let mut tree = DataTree::default();
+        let mut material = crate::model::MetalStudy::ChippedPaint.material();
+        material.metal.image_relief = 0.72;
+        material.metal.brush_angle = -0.61;
+        material.metal.texture_scale = 7.2;
+        let id = crate::model::ensure_material_asset(&mut tree, material);
+        let mut object = SdfObject::create(TYPE_SPHERE);
+        object.material = material;
+        object.material_id = Some(id);
+        object.color = glam::Vec4::new(0.8, 0.6, 0.9, 1.0);
+        let mut stencil =
+            crate::model::ImageStencil::new("height.png".into(), vec![1, 2, 3], false);
+        stencil.rotation = 42.0;
+        stencil.offset = glam::Vec2::new(0.25, -0.11);
+        object.image_stencil = Some(stencil);
+        set_objects(&mut tree, vec![object.clone()]);
+        let bytes = serialize_scene(&tree).unwrap();
+        let scene = deserialize_scene(&bytes).unwrap();
+        let mut restored = DataTree::default();
+        restored.set_tree("scene", scene);
+        let loaded = &objects(&restored)[0];
+        assert_eq!(loaded.material, material);
+        assert_eq!(loaded.material_id, Some(id));
+        assert_eq!(loaded.color, object.color);
+        let loaded_image = loaded.image_stencil.as_ref().unwrap();
+        let original_image = object.image_stencil.as_ref().unwrap();
+        assert_eq!(loaded_image.image, original_image.image);
+        assert_eq!(loaded_image.offset, original_image.offset);
+        assert_eq!(loaded_image.rotation, original_image.rotation);
+        assert_eq!(
+            crate::model::material_assets(&restored)[0].material,
+            material
+        );
+    }
+
+    #[test]
     fn scene_round_trip_keeps_custom_material_source() {
         let mut tree = DataTree::default();
         let asset = crate::model::MaterialAsset::custom("Ocean".into());

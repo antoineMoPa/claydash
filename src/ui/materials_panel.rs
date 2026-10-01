@@ -1,5 +1,47 @@
 use super::*;
 mod fabric;
+mod metal;
+
+const BASIC_MATERIAL_KINDS: [MaterialKind; 4] = [
+    MaterialKind::Transparent,
+    MaterialKind::Metallic,
+    MaterialKind::Solid,
+    MaterialKind::Brick,
+];
+
+fn material_matches_filter(label: &str, filter: &str) -> bool {
+    label.to_lowercase().contains(&filter.trim().to_lowercase())
+}
+
+fn material_group(
+    ui: &mut egui::Ui,
+    tree: &mut DataTree,
+    title: &str,
+    default_open: bool,
+    filter: &str,
+    presets: impl IntoIterator<Item = (&'static str, Material)>,
+) -> bool {
+    let presets: Vec<_> = presets
+        .into_iter()
+        .filter(|(label, _)| material_matches_filter(label, filter))
+        .collect();
+    if presets.is_empty() {
+        return false;
+    }
+    egui::CollapsingHeader::new(title)
+        .default_open(default_open)
+        .open((!filter.trim().is_empty()).then_some(true))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (label, material) in presets {
+                    if material_preview(ui, label, material.kind, material).clicked() {
+                        apply_material(tree, material);
+                    }
+                }
+            });
+        });
+    true
+}
 
 pub(super) fn materials_panel(
     ui: &mut egui::Ui,
@@ -7,38 +49,57 @@ pub(super) fn materials_panel(
     runtime: &mut AnimationRuntime,
 ) {
     ui.label(RichText::new("Material library").strong());
-    ui.horizontal_wrapped(|ui| {
-        for kind in [
-            MaterialKind::Transparent,
-            MaterialKind::Metallic,
-            MaterialKind::Solid,
-            MaterialKind::Brick,
-            MaterialKind::Diagnostic,
-        ] {
-            let preset = Material::preset(kind);
-            if material_preview(ui, kind.label(), kind, preset).clicked() {
-                apply_material(tree, preset);
-            }
-        }
-        for species in WoodSpecies::ALL {
-            let preset = Material::wood_preset(species);
-            if material_preview(ui, species.label(), MaterialKind::Wood, preset).clicked() {
-                apply_material(tree, preset);
-            }
-        }
-        for preset_kind in crate::model::FabricPreset::ALL {
-            let preset = Material::fabric_preset(preset_kind);
-            if material_preview(ui, preset_kind.label(), MaterialKind::Fabric, preset).clicked() {
-                apply_material(tree, preset);
-            }
-        }
-    });
-    ui.add_space(4.0);
     let picker_id = ui.id().with("material-filter");
     let mut filter = ui
         .ctx()
         .data(|data| data.get_temp::<String>(picker_id))
         .unwrap_or_default();
+    ui.add(
+        egui::TextEdit::singleline(&mut filter)
+            .hint_text("Filter materials")
+            .desired_width(ui.available_width()),
+    );
+    let mut matches = material_group(
+        ui,
+        tree,
+        "Basic",
+        true,
+        &filter,
+        BASIC_MATERIAL_KINDS
+            .into_iter()
+            .map(|kind| (kind.label(), Material::preset(kind))),
+    );
+    matches |= material_group(
+        ui,
+        tree,
+        "Wood",
+        false,
+        &filter,
+        WoodSpecies::ALL.into_iter()
+            .map(|species| (species.label(), Material::wood_preset(species))),
+    );
+    matches |= material_group(
+        ui,
+        tree,
+        "Fabrics",
+        false,
+        &filter,
+        crate::model::FabricPreset::ALL.into_iter()
+            .map(|preset| (preset.label(), Material::fabric_preset(preset))),
+    );
+    matches |= metal::library(ui, tree, &filter);
+    matches |= material_group(
+        ui,
+        tree,
+        "Misc",
+        false,
+        &filter,
+        [(MaterialKind::Diagnostic.label(), Material::preset(MaterialKind::Diagnostic))],
+    );
+    if !matches {
+        ui.weak("No matching presets");
+    }
+    ui.separator();
     let selected_name = crate::model::picked_material_id(tree)
         .and_then(|id| {
             crate::model::material_assets(tree)
@@ -48,20 +109,8 @@ pub(super) fn materials_panel(
         })
         .unwrap_or_else(|| "Choose material…".into());
     ui.menu_button(selected_name, |ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut filter)
-                .hint_text("Filter materials")
-                .desired_width(190.0),
-        );
-        ui.separator();
-        for kind in [
-            MaterialKind::Transparent,
-            MaterialKind::Metallic,
-            MaterialKind::Solid,
-            MaterialKind::Brick,
-            MaterialKind::Diagnostic,
-        ] {
-            if (filter.is_empty() || kind.label().contains(&filter))
+        for kind in BASIC_MATERIAL_KINDS.into_iter().chain([MaterialKind::Diagnostic]) {
+            if material_matches_filter(kind.label(), &filter)
                 && ui.button(kind.label()).clicked()
             {
                 apply_material(tree, Material::preset(kind));
@@ -69,7 +118,7 @@ pub(super) fn materials_panel(
             }
         }
         for species in WoodSpecies::ALL {
-            if (filter.is_empty() || species.label().contains(&filter))
+            if material_matches_filter(species.label(), &filter)
                 && ui.button(species.label()).clicked()
             {
                 apply_material(tree, Material::wood_preset(species));
@@ -77,17 +126,14 @@ pub(super) fn materials_panel(
             }
         }
         for preset_kind in crate::model::FabricPreset::ALL {
-            if (filter.is_empty()
-                || preset_kind
-                    .label()
-                    .to_lowercase()
-                    .contains(&filter.to_lowercase()))
+            if material_matches_filter(preset_kind.label(), &filter)
                 && ui.button(preset_kind.label()).clicked()
             {
                 apply_material(tree, Material::fabric_preset(preset_kind));
                 ui.close();
             }
         }
+        metal::picker(ui, tree, &filter);
         let assets = crate::model::material_assets(tree);
         if !assets.is_empty() {
             ui.separator();
@@ -97,7 +143,7 @@ pub(super) fn materials_panel(
                 )
             });
             for asset in assets {
-                if !filter.is_empty() && !asset.name.contains(&filter) {
+                if !material_matches_filter(&asset.name, &filter) {
                     continue;
                 }
                 let clicked = ui
@@ -169,7 +215,6 @@ pub(super) fn materials_panel(
     }) {
         custom_shader_editor(ui, tree, &asset);
     }
-    ui.separator();
     if selection.is_empty() {
         ui.label("Pick a material for new objects, or select objects to edit their material.");
         return;
@@ -288,13 +333,23 @@ pub(super) fn materials_panel(
         ui.weak(format!("Linked material · {linked} object(s)"));
     }
     let mut keyframes = Vec::new();
+    if material.kind == MaterialKind::Metal {
+        ui.label("Metal tint");
+    }
     let mut rgba = material.color.to_array();
     let color_binding = AnimationBinding {
         object: first_id,
         property: AnimatableProperty::MaterialColor(ColorChannel::Red),
     };
     let color_response = animatable_widget(ui, tree, runtime, color_binding, |ui| {
-        ui.color_edit_button_rgba_unmultiplied(&mut rgba)
+        if material.kind == MaterialKind::Metal {
+            let mut rgb = [rgba[0], rgba[1], rgba[2]];
+            let response = ui.color_edit_button_rgb(&mut rgb);
+            rgba[..3].copy_from_slice(&rgb);
+            response
+        } else {
+            ui.color_edit_button_rgba_unmultiplied(&mut rgba)
+        }
     });
     let mut changed = color_response.changed();
     material.color = Vec4::from_array(rgba);
@@ -304,6 +359,7 @@ pub(super) fn materials_panel(
             .filter(|object| selection.contains(&object.uuid))
         {
             for channel in ColorChannel::ALL {
+                if material.kind == MaterialKind::Metal && channel == ColorChannel::Alpha { continue; }
                 keyframes.push(KeyframeRequest {
                     binding: AnimationBinding {
                         object: object.uuid,
@@ -314,7 +370,14 @@ pub(super) fn materials_panel(
             }
         }
     }
-    color_response.on_hover_text("Press I to keyframe all four color channels");
+    color_response.on_hover_text(if material.kind == MaterialKind::Metal {
+        "Press I to keyframe the three tint channels"
+    } else {
+        "Press I to keyframe all four color channels"
+    });
+    if material.kind == MaterialKind::Metal {
+        changed |= metal::controls(ui, &mut material);
+    }
     if material.kind == MaterialKind::Fabric {
         changed |= fabric::fabric_controls(ui, &mut material);
     }
@@ -520,6 +583,10 @@ pub(super) fn materials_panel(
             0.02..=1.0,
         ),
     ] {
+        if material.kind == MaterialKind::Metal && property != AnimatableProperty::MaterialRoughness
+        {
+            continue;
+        }
         let label = ui.label(label);
         ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(24.0);
         let binding = AnimationBinding {

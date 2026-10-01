@@ -156,5 +156,5 @@ fn evaluate_wood(point: vec3<f32>, normal: vec3<f32>, object: Object, base: Surf
         + normalize(object.inverse_rows[2].xyz) * local_fiber.z);
     roughness = clamp(roughness + 0.26 * pores + 0.05 * abs(fiber_value)
         + 0.13 * crack + 0.09 * knot_core - 0.17 * coat, 0.08, 0.96);
-    return Surface(color, shade_normal, roughness, base.metallic, base.reflectivity, base.opacity, base.ior, coat, sheen, fiber, wood_settings.w);
+    return Surface(color, shade_normal, roughness, base.metallic, base.reflectivity, base.opacity, base.ior, coat, sheen, fiber, wood_settings.w, base.tangent, base.anisotropy, base.metal_response);
 }

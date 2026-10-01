@@ -2,6 +2,8 @@ use glam::{Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 mod fabric;
 pub use fabric::*;
+mod metal;
+pub use metal::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MaterialKind {
@@ -14,6 +16,7 @@ pub enum MaterialKind {
     Diagnostic,
     Custom,
     Fabric,
+    Metal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,7 +173,7 @@ impl WoodSettings {
 }
 
 impl MaterialKind {
-    pub const BUILTINS: [Self; 7] = [
+    pub const BUILTINS: [Self; 8] = [
         Self::Transparent,
         Self::Metallic,
         Self::Solid,
@@ -178,6 +181,7 @@ impl MaterialKind {
         Self::Brick,
         Self::Diagnostic,
         Self::Fabric,
+        Self::Metal,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -189,6 +193,7 @@ impl MaterialKind {
             Self::Diagnostic => "Diagnostic",
             Self::Custom => "Custom WGSL",
             Self::Fabric => "Fabric",
+            Self::Metal => "Metal",
         }
     }
 
@@ -202,6 +207,7 @@ impl MaterialKind {
             Self::Diagnostic => 4,
             Self::Custom => 6,
             Self::Fabric => 7,
+            Self::Metal => 8,
         }
     }
 }
@@ -221,6 +227,8 @@ pub struct Material {
     pub brick: BrickSettings,
     #[serde(default)]
     pub fabric: FabricSettings,
+    #[serde(default)]
+    pub metal: MetalSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -268,6 +276,7 @@ impl Default for Material {
             wood: WoodSettings::default(),
             brick: BrickSettings::default(),
             fabric: FabricSettings::default(),
+            metal: MetalSettings::default(),
         }
     }
 }
@@ -277,6 +286,7 @@ impl Material {
         match self.kind {
             MaterialKind::Wood => self.wood.species.label(),
             MaterialKind::Fabric => self.fabric.preset.label(),
+            MaterialKind::Metal => self.metal.species.label(),
             kind => kind.label(),
         }
     }
@@ -326,6 +336,7 @@ impl Material {
                 ..Self::default()
             },
             MaterialKind::Fabric => Self::fabric_preset(FabricPreset::Jersey),
+            MaterialKind::Metal => Self::metal_preset(MetalSpecies::Steel),
         }
     }
 

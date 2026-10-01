@@ -7,8 +7,8 @@ use winit::{dpi::PhysicalSize, window::Window};
 use crate::{
     camera::{Camera, ProjectionMode},
     model::{
-        FabricPreset, Material, MaterialAsset, MaterialKind, SdfObject, SdfParams, WoodSpecies,
-        World,
+        FabricPreset, Material, MaterialAsset, MaterialKind, MetalSpecies, MetalStudy, SdfObject,
+        SdfParams, WoodSpecies, World,
     },
 };
 
@@ -33,6 +33,7 @@ struct BuiltinMaterialFeatures {
     wood: bool,
     brick: bool,
     fabric: bool,
+    metal: bool,
     diagnostic: bool,
 }
 
@@ -41,6 +42,7 @@ impl BuiltinMaterialFeatures {
         wood: true,
         brick: true,
         fabric: true,
+        metal: true,
         diagnostic: true,
     };
 
@@ -49,6 +51,7 @@ impl BuiltinMaterialFeatures {
             wood: false,
             brick: false,
             fabric: false,
+            metal: false,
             diagnostic: false,
         };
         for material in materials {
@@ -56,6 +59,7 @@ impl BuiltinMaterialFeatures {
                 MaterialKind::Wood => features.wood = true,
                 MaterialKind::Brick => features.brick = true,
                 MaterialKind::Fabric => features.fabric = true,
+                MaterialKind::Metal => features.metal = true,
                 MaterialKind::Diagnostic => features.diagnostic = true,
                 _ => {}
             }
@@ -322,6 +326,8 @@ pub(crate) struct MaterialPreviewIds {
     pub pine: egui::TextureId,
     pub maple: egui::TextureId,
     pub fabric: [egui::TextureId; 10],
+    pub metal: [egui::TextureId; 9],
+    pub metal_presets: [egui::TextureId; 8],
     pub assets: Vec<(uuid::Uuid, egui::TextureId)>,
 }
 
@@ -349,6 +355,11 @@ impl MaterialPreviewIds {
                     .position(|preset| *preset == material.fabric.preset)
                     .unwrap_or(0)]
             }
+            MaterialKind::Metal => MetalStudy::ALL
+                .iter()
+                .position(|preset| preset.material() == material)
+                .map(|index| self.metal_presets[index])
+                .unwrap_or(self.metal[material.metal.species as usize]),
             MaterialKind::Custom => self.solid,
         }
     }

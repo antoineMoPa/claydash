@@ -588,6 +588,7 @@ fn applying_material_to_a_group_links_every_descendant() {
 #[test]
 fn material_library_keeps_the_visual_preset_cards() {
     let ctx = egui::Context::default();
+    ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
     ctx.data_mut(|data| {
         data.insert_temp(
             crate::renderer::MaterialPreviewIds::egui_id(),
@@ -602,6 +603,8 @@ fn material_library_keeps_the_visual_preset_cards() {
                 pine: egui::TextureId::User(6),
                 maple: egui::TextureId::User(7),
                 fabric: std::array::from_fn(|index| egui::TextureId::User(10 + index as u64)),
+                metal: std::array::from_fn(|index| egui::TextureId::User(20 + index as u64)),
+                metal_presets: std::array::from_fn(|index| egui::TextureId::User(29 + index as u64)),
                 assets: Vec::new(),
             },
         );
@@ -634,6 +637,16 @@ fn material_library_keeps_the_visual_preset_cards() {
     }
     for preset in crate::model::FabricPreset::ALL {
         assert!(labels.iter().any(|label| label == preset.label()));
+    }
+    for preset in crate::model::MetalStudy::ALL {
+        assert!(labels.iter().any(|label| label == preset.label()));
+    }
+    assert!(!labels.iter().any(|label| label == "Metal studies"));
+    for index in 0..crate::model::MetalStudy::ALL.len() {
+        let texture = egui::TextureId::User(29 + index as u64);
+        assert!(output.shapes.iter().any(|shape| matches!(
+            &shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == texture
+        )));
     }
     let long_name = crate::model::FabricPreset::CompactStretchWeave.label();
     assert!(output.shapes.iter().any(|shape| match &shape.shape {

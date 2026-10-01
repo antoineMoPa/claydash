@@ -4,6 +4,8 @@ const MATERIAL_DIAGNOSTIC: u32 = 4u;
 const MATERIAL_BRICK: u32 = 5u;
 const MATERIAL_CUSTOM: u32 = 6u;
 const MATERIAL_FABRIC: u32 = 7u;
+const MATERIAL_METAL: u32 = 8u;
+override HAS_METAL_MATERIAL: bool = true;
 override HAS_WOOD_MATERIAL: bool = true;
 override HAS_BRICK_MATERIAL: bool = true;
 override HAS_FABRIC_MATERIAL: bool = true;
@@ -15,6 +17,7 @@ struct Surface {
     color: vec3<f32>, normal: vec3<f32>, roughness: f32, metallic: f32,
     reflectivity: f32, opacity: f32, ior: f32, coat: f32,
     sheen: f32, fiber: vec3<f32>, figure: f32,
+    tangent: vec3<f32>, anisotropy: f32, metal_response: bool,
 }
 fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object) -> Surface {
     var material_object = object;
@@ -40,7 +43,7 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
     let common_values = material_params[header.offset];
     let optics = material_params[header.offset + 1u];
     let base = Surface(captured_color, normal, clamp(common_values.x, 0.03, 1.0), common_values.y,
-        common_values.z, common_values.w, optics.x, 0.0, 0.0, vec3(0.0, 1.0, 0.0), 0.0);
+        common_values.z, common_values.w, optics.x, 0.0, 0.0, vec3(0.0, 1.0, 0.0), 0.0, vec3(1.0, 0.0, 0.0), 0.0, false);
     switch header.kind {
         case MATERIAL_WOOD: {
             if HAS_WOOD_MATERIAL { return evaluate_wood(point, normal, material_object, base, header.offset); }
@@ -58,6 +61,10 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
             if HAS_FABRIC_MATERIAL { return evaluate_fabric(point, normal, material_object, base, header.offset); }
             return base;
         }
+        case MATERIAL_METAL: {
+            if HAS_METAL_MATERIAL { return evaluate_metal(point, normal, material_object, base, header.offset); }
+            return base;
+        }
         case MATERIAL_CUSTOM: {
             switch header.reserved {
                 // CUSTOM_MATERIAL_CASES
@@ -68,6 +75,11 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
     }
 }
 fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object, surface: Surface, use_ao: bool) -> vec3<f32> {
+    if HAS_METAL_MATERIAL && surface.metal_response {
+        var metal_ao = 1.0;
+        if use_ao { metal_ao = ambient_occlusion(point, normal); }
+        return metal_light(point, view, surface, metal_ao);
+    }
     var material_index = object.component.w;
     if object.state.y == 12 {
         material_index = neural_surface_sample(point, object).material_index;
@@ -120,4 +132,17 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
         + specular_color * specular * (1.0 - roughness * 0.5) * (1.0 - 0.72 * coat)
         + color * fiber_light + vec3(1.0, 0.98, 0.93) * coat_light
         + select(vec3(0.0), fabric_extra_light(surface, light, view), HAS_FABRIC_MATERIAL && header.kind == MATERIAL_FABRIC);
+}
+
+// A metal height image uses the existing object atlas and placement; other stencils keep their color semantics.
+fn metal_image_detail_enabled(object: Object) -> bool {
+    let header = material_headers[object.component.w];
+    if HAS_METAL_MATERIAL && header.kind == MATERIAL_METAL {
+        return material_params[header.offset + METAL_PAINT].z > 0.0;
+    }
+    return false;
+}
+fn material_stencil_color(point: vec3<f32>, normal: vec3<f32>, object: Object) -> vec4<f32> {
+    if metal_image_detail_enabled(object) { return vec4(0.0); }
+    return stencil_color(point, normal, object);
 }

@@ -2171,16 +2171,20 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
                     normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
                 var surface = material_surface(point, normal, -direction, object);
-                let decal = stencil_color(point, normal, object);
+                let decal = material_stencil_color(point, normal, object);
                 let shade = 0.22 * camera.lighting_params.x + 0.78 * max(dot(normal, light), 0.0);
-                if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 {
+                if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 && !metal_image_detail_enabled(object) {
                     surface.color = decal.rgb;
                     surface.opacity = decal.a;
                 } else if decal.a > 0.0 {
                     surface.color = mix(surface.color, decal.rgb, decal.a);
                 }
                 let opacity = clamp(surface.opacity, 0.0, 1.0);
-                radiance += throughput * surface.color * shade * opacity;
+                var preview_color = surface.color * shade;
+                if HAS_METAL_MATERIAL && surface.metal_response {
+                    preview_color = surface_light(point, normal, -direction, object, surface, false);
+                }
+                radiance += throughput * preview_color * opacity;
                 throughput *= 1.0 - opacity;
                 if opacity >= 0.999 || max(throughput.x, max(throughput.y, throughput.z)) < 0.01 {
                     break;
@@ -2194,13 +2198,33 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 continue;
             }
             var surface = material_surface(point, normal, -direction, object);
-            let decal = stencil_color(point, normal, object);
+            let decal = material_stencil_color(point, normal, object);
             surface.color = mix(surface.color, decal.rgb, decal.a);
-            if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 {
+            if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 && !metal_image_detail_enabled(object) {
                 surface.opacity = decal.a;
                 surface.reflectivity = 0.0;
                 surface.ior = 1.0;
                 surface.metallic = 0.0;
+            }
+            if HAS_METAL_MATERIAL && surface.metal_response {
+                let opacity = clamp(surface.opacity, 0.0, 1.0);
+                var metal_ao = 1.0;
+                if bounce == 1 { metal_ao = ambient_occlusion(point, normal); }
+                var metal_color = metal_light(point, -direction, surface, metal_ao);
+                if bounce == 1 && opacity > 0.0 {
+                    metal_color += metal_scene_reflection(point, -direction, surface, metal_ao);
+                }
+                radiance += throughput * max(metal_color, vec3(0.0)) * opacity;
+                throughput *= 1.0 - opacity;
+                opaque = opacity >= 0.999;
+                if opaque || max(throughput.x, max(throughput.y, throughput.z)) < 0.01 { break; }
+                let metal_origin = point + direction * max(0.007, 2.0 * surface_hit_tolerance(f32(index), 0.0));
+                let next = trace(metal_origin, direction, entering, index);
+                hit = next.y >= 0.0;
+                point = metal_origin + direction * next.x;
+                index = u32(max(next.y, 0.0));
+                splat_offset = next.z;
+                continue;
             }
             let ior = max(surface.ior, 1.0);
             let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);

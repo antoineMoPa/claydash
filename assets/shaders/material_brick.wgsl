@@ -219,5 +219,5 @@ fn evaluate_brick(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: 
     let roughness = clamp(mix(0.97, base.roughness + 0.06 * relief.z * abs(sand)
         + 0.20 * profile.pit, profile.clay), 0.65, 1.0);
     return Surface(color, shade_normal, roughness, base.metallic, base.reflectivity,
-        base.opacity, base.ior, base.coat, base.sheen, base.fiber, base.figure);
+        base.opacity, base.ior, base.coat, base.sheen, base.fiber, base.figure, base.tangent, base.anisotropy, base.metal_response);
 }

@@ -8,8 +8,8 @@ struct GeometryOutput {
 
 fn gbuffer_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object) -> Surface {
     var surface = material_surface(point, normal, view, object);
-    let decal = stencil_color(point, normal, object);
-    if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 {
+    let decal = material_stencil_color(point, normal, object);
+    if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 && !metal_image_detail_enabled(object) {
         surface.color = decal.rgb;
         surface.opacity = decal.a;
     } else if decal.a > 0.0 {

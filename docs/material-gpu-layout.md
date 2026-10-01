@@ -33,3 +33,32 @@ The assembler uses static `include_str!` files and one marker in the core shader
 ## Verification and limits
 
 `cargo test` validates assembled shader variants through Naga (including CSG scratch sizes). `cargo check --target wasm32-unknown-unknown` passes. The benchmark command is `cargo run -- --stress-benchmark-suite --benchmark-size=320x180 --benchmark-images=/tmp/claydash-materials`; use `--benchmark-case=brick` to capture just the brick case. The SDF core still owns the shared lighting call site while material algorithms and dispatch live in separate modules.
+
+## Metal materials
+
+`Metal` is kind 8. `Metallic` remains kind 3, retains its original shader and controls, and old files without `metal` deserialize with default settings. Nine typed species map to linear RGB conductor reflectance and species-specific oxide/tarnish proxies. The five finish presets set roughness, anisotropy and relief defaults; the eight study presets only set material properties, without changing geometry or the world.
+
+The six metal slots after the common slots are:
+
+| Slot | Values |
+| --- | --- |
+| 2 | finish, tangent mode, anisotropy, brush angle in radians |
+| 3 | texture scale, relief strength, scratches, oxidation/tarnish |
+| 4 | paint coverage, paint roughness, image relief, unused |
+| 5 | paint RGB, unused |
+| 6 | conductor F0 RGB, unused |
+| 7 | oxide RGB, unused |
+
+Object color multiplies the bare conductor's F0; paint color and species oxide color remain independent. Scratches alter relief, roughness and paint chips. Oxide and paint lose the conductor response and use dielectric reflection plus diffuse lighting. Relief perturbs the shading normal on existing geometry; it does not displace the silhouette. Linear, radial and local-Z wire tangent fields rotate with the object. `material_metal.wgsl` evaluates those fields, while `material_metal_light.wgsl` uses anisotropic GGX and 16 deterministic environment samples from Claydash's current world, plus the current direct light. This is an interactive approximation; smooth surfaces additionally trace one scene reflection to replace a bounded portion of the sampled world. Rough surfaces retain the world integration, secondary reflections do not recurse, and transparent reflected hits retain the world contribution. New metals use the ray compositor through an explicit material eligibility fallback from the deferred path. Library and viewport share these material modules.
+
+The optional `image_relief` parameter reuses an object's existing Image stencil upload and atlas. Zero preserves its original color-decal behavior. Positive values interpret grayscale as normal relief using the stencil's size, offset, rotation and side settings; an absent image and transparent pixels produce no relief. This image remains object-owned, survives scene save/load, and is not included in shared material/library sphere previews. PNG, JPEG and WebP upload uses the existing Object panel. No separate material image asset or HDR world pipeline is introduced.
+
+Validation covers old Metallic deserialization, full metal settings and object image scene round trips, record packing/deduplication, and portable assembled WGSL variants. Native visual cases are available as `metal-Machined-steel`, `metal-Polished-chrome`, `metal-Brushed-aluminum`, `metal-Chipped-red-paint` and the other study labels in the benchmark suite.
+
+### Material scale reference
+
+The default handheld shell measures 2.5 × 3.72 × 0.7 scene units in its local axes. Scene units currently have no metre contract. Using a 15 cm shell height as an illustrative reference gives approximately 40 mm per scene unit. At that reference the calibrated jersey pitch (0.045 / 4 scene units) is about 0.45 mm.
+
+New metal presets start at texture scale 1 instead of 4: procedural defects are four times wider. At scale 1, the hammered noise cell is 1/18 scene unit (about 2.2 mm under the reference above), while the primary oxide field has cells of 1/6.1 scene unit (about 6.6 mm). These are procedural cell sizes, not measured pit diameters or guaranteed coating patch sizes. Higher texture scale means finer detail, consistently with the fabric control; the metal slider supports 0.05–16. Saved materials retain their explicit scale values.
+
+A future metre-based scene migration must scale geometry, translations, cameras, animation distances, material pitches and relief amplitudes together, and audit ray tolerances, normal offsets, AO distances and editor snapping. Changing the scene dimensions alone does not establish consistent physical material scale. The current calibration preserves the established fabric appearance.

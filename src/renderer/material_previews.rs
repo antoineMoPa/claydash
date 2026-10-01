@@ -108,6 +108,12 @@ impl Renderer {
             ] {
                 self.egui_renderer.free_texture(&id);
             }
+            for id in ids.metal {
+                self.egui_renderer.free_texture(&id);
+            }
+            for id in ids.metal_presets {
+                self.egui_renderer.free_texture(&id);
+            }
             for id in ids.fabric {
                 self.egui_renderer.free_texture(&id);
             }
@@ -137,6 +143,9 @@ impl Renderer {
             Material::wood_preset(WoodSpecies::Maple),
         ];
         presets.extend(FabricPreset::ALL.map(Material::fabric_preset));
+        presets.extend(MetalSpecies::ALL.map(Material::metal_preset));
+        let metal_presets_start = presets.len();
+        presets.extend(MetalStudy::ALL.map(MetalStudy::material));
         let mut ids = Vec::with_capacity(presets.len());
         for (index, material) in presets.into_iter().enumerate() {
             let (id, texture) =
@@ -155,6 +164,8 @@ impl Renderer {
             pine: ids[7],
             maple: ids[8],
             fabric: std::array::from_fn(|index| ids[9 + index]),
+            metal: std::array::from_fn(|index| ids[19 + index]),
+            metal_presets: std::array::from_fn(|index| ids[metal_presets_start + index]),
             assets: Vec::new(),
         });
         self.material_preview_pipeline = Some(pipeline);

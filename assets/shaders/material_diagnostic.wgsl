@@ -7,5 +7,5 @@ fn evaluate_diagnostic(point: vec3<f32>, object: Object, base: Surface, offset: 
     let checker = (i32(floor(local.x * settings.x)) + i32(floor(local.z * settings.x))) & 1;
     return Surface(mix(base.color, settings.yzw, f32(checker) * 0.65), base.normal,
         base.roughness, base.metallic, base.reflectivity, base.opacity, base.ior,
-        base.coat, base.sheen, base.fiber, base.figure);
+        base.coat, base.sheen, base.fiber, base.figure, base.tangent, base.anisotropy, base.metal_response);
 }

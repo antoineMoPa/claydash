@@ -193,6 +193,7 @@ fn scene_feature_constants(
             ("HAS_WOOD_MATERIAL", f64::from(features.materials.wood)),
             ("HAS_BRICK_MATERIAL", f64::from(features.materials.brick)),
             ("HAS_FABRIC_MATERIAL", f64::from(features.materials.fabric)),
+            ("HAS_METAL_MATERIAL", f64::from(features.materials.metal)),
             (
                 "HAS_DIAGNOSTIC_MATERIAL",
                 f64::from(features.materials.diagnostic),

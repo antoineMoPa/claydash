@@ -899,6 +899,17 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
     opening.material = brick_wall.material;
     opening.color = brick_wall.color;
     cases.push(("brick-window".into(), vec![brick_wall, opening]));
+    for study in crate::model::MetalStudy::ALL {
+        let mut sphere = SdfObject::create_kind(PrimitiveKind::Sphere);
+        sphere.name = study.label().into();
+        sphere.params = SdfParams::SphereParams(SphereParams { radius: 0.95 });
+        sphere.material = study.material();
+        sphere.color = sphere.material.color;
+        cases.push((
+            format!("metal-{}", study.label().replace(' ', "-")),
+            vec![sphere],
+        ));
+    }
     for kind in MaterialKind::BUILTINS {
         let mut scene = renderer_stress_scene();
         for object in &mut scene {
@@ -907,6 +918,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
                 || kind == MaterialKind::Brick
                 || kind == MaterialKind::Diagnostic
                 || kind == MaterialKind::Fabric
+                || kind == MaterialKind::Metal
             {
                 object.color = object.material.color;
             }
@@ -919,6 +931,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
             MaterialKind::Brick => "brick",
             MaterialKind::Diagnostic => "diagnostic",
             MaterialKind::Fabric => "fabric",
+            MaterialKind::Metal => "metal",
             MaterialKind::Custom => unreachable!(),
         };
         cases.push((name.into(), scene));

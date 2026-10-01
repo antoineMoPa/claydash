@@ -10,6 +10,8 @@ pub fn deferred_fallback_reason(objects: &[SdfObject]) -> Option<&'static str> {
         .any(|object| object.material.kind == MaterialKind::Custom)
     {
         Some("custom shader material")
+    } else if objects.iter().any(|object| object.material.kind == MaterialKind::Metal) {
+        Some("anisotropic metal material")
     } else if objects.iter().any(|object| {
         object
             .image_stencil
@@ -238,6 +240,18 @@ mod tests {
             deferred_fallback_reason(&[object]),
             Some("image plane with alpha")
         );
+    }
+
+    #[test]
+    fn anisotropic_metals_use_the_complete_material_compositor() {
+        let mut object = SdfObject::create_kind(super::super::PrimitiveKind::Sphere);
+        object.material = super::super::Material::metal_preset(super::super::MetalSpecies::Steel);
+        assert_eq!(
+            deferred_fallback_reason(&[object.clone()]),
+            Some("anisotropic metal material")
+        );
+        object.material.kind = MaterialKind::Metallic;
+        assert_eq!(deferred_fallback_reason(&[object]), None);
     }
 
     #[test]
