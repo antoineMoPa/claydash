@@ -6,10 +6,7 @@ use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
     camera::{Camera, ProjectionMode},
-    model::{
-        FabricPreset, Material, MaterialAsset, MaterialKind, MetalSpecies, MetalStudy, SdfObject,
-        SdfParams, WoodSpecies, World,
-    },
+    model::{Material, MaterialAsset, MaterialKind, SdfObject, SdfParams, World},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,14 +35,6 @@ struct BuiltinMaterialFeatures {
 }
 
 impl BuiltinMaterialFeatures {
-    const ALL: Self = Self {
-        wood: true,
-        brick: true,
-        fabric: true,
-        metal: true,
-        diagnostic: true,
-    };
-
     fn for_materials(materials: &[Material]) -> Self {
         let mut features = Self {
             wood: false,
@@ -132,12 +121,9 @@ struct SceneShaderFeatures {
 
 impl SceneShaderFeatures {
     // Material thumbnails only draw an unmodified sphere. Enabling unrelated
-    // geometry here can stall Chrome's GPU process compiling unused code.
-    fn for_material_previews() -> Self {
-        Self {
-            materials: BuiltinMaterialFeatures::ALL,
-            ..Self::for_scene(&[], &[])
-        }
+    // geometry or material families can stall Chrome compiling unused code.
+    fn for_material_previews(material: Material) -> Self {
+        Self::for_scene(&[material], &[])
     }
 
     fn for_scene(materials: &[Material], objects: &[GpuObject]) -> Self {
@@ -299,36 +285,39 @@ pub struct Renderer {
     viewport: crate::viewport::Viewport,
     post_processing: post_processing::PostProcessor,
     initial_pixel_budget: u32,
-    material_preview_ids: Option<MaterialPreviewIds>,
-    material_preview_pipeline: Option<wgpu::RenderPipeline>,
-    material_preview_textures: Vec<wgpu::Texture>,
-    material_asset_previews: Vec<MaterialAssetPreview>,
+    material_previews: Vec<MaterialPreview>,
+    material_preview_pipelines: Vec<(BuiltinMaterialFeatures, material_previews::pipeline::PreviewPipelineState)>,
+    material_preview_in_flight: Arc<std::sync::atomic::AtomicBool>,
     capture_result: Arc<std::sync::Mutex<Option<Result<CapturedFrame, String>>>>,
     capture_pending: bool,
 }
 
-struct MaterialAssetPreview {
-    uuid: uuid::Uuid,
-    material: Material,
+struct MaterialPreview {
+    request: MaterialPreviewRequest,
     id: egui::TextureId,
     _texture: wgpu::Texture,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct MaterialPreviewRequest {
+    pub material: Material,
+    pub asset_id: Option<uuid::Uuid>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct MaterialPreviewRequests(pub Vec<MaterialPreviewRequest>);
+
+impl MaterialPreviewRequests {
+    pub fn egui_id() -> egui::Id {
+        egui::Id::new("visible-material-preview-requests")
+    }
+}
+
+#[derive(Clone, Default)]
 pub(crate) struct MaterialPreviewIds {
-    pub transparent: egui::TextureId,
-    pub metallic: egui::TextureId,
-    pub solid: egui::TextureId,
-    pub diagnostic: egui::TextureId,
-    pub brick: egui::TextureId,
-    pub oak: egui::TextureId,
-    pub walnut: egui::TextureId,
-    pub pine: egui::TextureId,
-    pub maple: egui::TextureId,
-    pub fabric: [egui::TextureId; 10],
-    pub metal: [egui::TextureId; 9],
-    pub metal_presets: [egui::TextureId; 8],
+    pub materials: Vec<(Material, egui::TextureId)>,
     pub assets: Vec<(uuid::Uuid, egui::TextureId)>,
+    failures: Vec<(BuiltinMaterialFeatures, String)>,
 }
 
 impl MaterialPreviewIds {
@@ -336,32 +325,15 @@ impl MaterialPreviewIds {
         egui::Id::new("material-preview-ids")
     }
 
-    pub fn for_material(&self, material: Material) -> egui::TextureId {
-        match material.kind {
-            MaterialKind::Transparent => self.transparent,
-            MaterialKind::Metallic => self.metallic,
-            MaterialKind::Solid => self.solid,
-            MaterialKind::Diagnostic => self.diagnostic,
-            MaterialKind::Brick => self.brick,
-            MaterialKind::Wood => match material.wood.species {
-                WoodSpecies::Oak => self.oak,
-                WoodSpecies::Walnut => self.walnut,
-                WoodSpecies::Pine => self.pine,
-                WoodSpecies::Maple => self.maple,
-            },
-            MaterialKind::Fabric => {
-                self.fabric[FabricPreset::ALL
-                    .iter()
-                    .position(|preset| *preset == material.fabric.preset)
-                    .unwrap_or(0)]
-            }
-            MaterialKind::Metal => MetalStudy::ALL
-                .iter()
-                .position(|preset| preset.material() == material)
-                .map(|index| self.metal_presets[index])
-                .unwrap_or(self.metal[material.metal.species as usize]),
-            MaterialKind::Custom => self.solid,
-        }
+    pub fn for_material(&self, material: Material) -> Option<egui::TextureId> {
+        self.materials
+            .iter()
+            .find_map(|(value, texture)| (*value == material).then_some(*texture))
+    }
+
+    pub fn error_for(&self, material: Material) -> Option<&str> {
+        let family = BuiltinMaterialFeatures::for_materials(&[material]);
+        self.failures.iter().find_map(|(failed, error)| (*failed == family).then_some(error.as_str()))
     }
 
     pub fn for_asset(&self, id: uuid::Uuid) -> Option<egui::TextureId> {
@@ -417,6 +389,19 @@ mod depth_accelerator_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn material_preview_pipeline_enables_only_its_family() {
+        use super::*;
+        let features = SceneShaderFeatures::for_material_previews(Material::preset(MaterialKind::Metal));
+        assert!(features.materials.metal);
+        assert!(!features.materials.wood && !features.materials.brick
+            && !features.materials.fabric && !features.materials.diagnostic);
+        assert!(!features.primitives.polygon_prisms && !features.primitives.bezier_curves
+            && !features.primitives.lofts && !features.primitives.text);
+        assert!(!features.spatial.lattice && !features.spatial.mirror && !features.spatial.repetition);
+        assert!(!features.flat_unions && !features.neural_sdf);
+    }
+
     #[test]
     fn presentation_formats_use_srgb_views_when_available() {
         assert_eq!(

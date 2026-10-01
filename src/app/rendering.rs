@@ -171,7 +171,6 @@ impl App {
         self.egui.data_mut(|data| {
             data.insert_temp(egui::Id::new("custom-material-render-error"), shader_error)
         });
-        renderer.sync_material_asset_previews(&material_assets);
         if self.camera.viewport == Vec2::ONE {
             self.camera.viewport = renderer.size();
         }
@@ -189,11 +188,16 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let input = self.egui_state.take(&window);
         let egui = self.egui.clone();
-        if let Some(ids) = renderer.material_preview_ids() {
-            egui.data_mut(|data| {
-                data.insert_temp(crate::renderer::MaterialPreviewIds::egui_id(), ids)
-            });
-        }
+        egui.data_mut(|data| {
+            data.insert_temp(
+                crate::renderer::MaterialPreviewIds::egui_id(),
+                renderer.material_preview_ids(&material_assets),
+            );
+            data.insert_temp(
+                crate::renderer::MaterialPreviewRequests::egui_id(),
+                crate::renderer::MaterialPreviewRequests::default(),
+            );
+        });
         let mut file_action = None;
         let mut cancel_render = false;
         let material_version_before_ui = self.tree.path_version("scene.materials");
@@ -210,6 +214,15 @@ impl App {
                 render_progress,
             );
         });
+        let preview_requests = egui.data(|data| {
+            data.get_temp::<crate::renderer::MaterialPreviewRequests>(
+                crate::renderer::MaterialPreviewRequests::egui_id(),
+            )
+            .unwrap_or_default()
+        });
+        if let Some(renderer) = &mut self.renderer {
+            renderer.sync_visible_material_previews(&preview_requests.0, &egui);
+        }
         // UI edits happen after shader synchronization at the start of this frame.
         // Schedule one more frame so a newly applied WGSL body is compiled promptly.
         if self.tree.path_version("scene.materials") != material_version_before_ui {

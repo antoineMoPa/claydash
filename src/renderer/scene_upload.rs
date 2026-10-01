@@ -128,11 +128,12 @@ impl Renderer {
     ) -> Option<PackedTrainingScene> {
         let source_objects = &objects[..objects.len().min(MAX_OBJECTS)];
         let training_only = pipeline_preparation == ScenePipelinePreparation::NeuralTraining;
+        let manage_scene_jobs = pipeline_preparation == ScenePipelinePreparation::Viewport;
         let document_changed = training_only || self.uploaded_scene_versions != scene_versions;
-        if document_changed && !training_only {
+        if document_changed && manage_scene_jobs {
             self.neural_jobs.reconcile(source_objects);
         }
-        let neural_changed = if training_only {
+        let neural_changed = if !manage_scene_jobs {
             false
         } else {
             let mut jobs = std::mem::take(&mut self.neural_jobs);
@@ -173,7 +174,7 @@ impl Renderer {
                 &self.group_compute_requests,
             )
         });
-        if !training_only {
+        if manage_scene_jobs {
             self.group_compute_requests.clear();
         }
         if let Some(prepared) = &prepared_scene {
@@ -185,7 +186,7 @@ impl Renderer {
                 }
             }
         }
-        if scene_changed && prepared_scene.is_none() && !training_only {
+        if scene_changed && prepared_scene.is_none() && manage_scene_jobs {
             self.group_capture_cache.clear();
         }
         let scene_objects = prepared_scene

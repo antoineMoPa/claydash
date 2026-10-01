@@ -34,7 +34,7 @@ fn material_group(
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (label, material) in presets {
-                    if material_preview(ui, label, material.kind, material).clicked() {
+                    if material_preview(ui, label, material).clicked() {
                         apply_material(tree, material);
                     }
                 }
@@ -148,10 +148,19 @@ pub(super) fn materials_panel(
                 }
                 let clicked = ui
                     .horizontal(|ui| {
-                        if let Some(texture) =
-                            previews.as_ref().and_then(|ids| ids.for_asset(asset.uuid))
-                        {
-                            ui.add(egui::Image::new((texture, egui::vec2(32.0, 21.0))));
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(32.0, 21.0), egui::Sense::hover(),
+                        );
+                        request_material_preview(ui, rect, asset.material, Some(asset.uuid));
+                        if let Some(texture) = previews.as_ref().and_then(|ids| ids.for_asset(asset.uuid)) {
+                            ui.painter().image(
+                                texture,
+                                rect,
+                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        } else {
+                            material_preview_loading(ui, rect, asset.material);
                         }
                         ui.button(&asset.name).clicked()
                     })

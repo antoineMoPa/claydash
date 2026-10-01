@@ -59,15 +59,32 @@ fn metal_frame(point: vec3<f32>, normal: vec3<f32>, object: Object, finish: vec4
     uv = vec2(c * uv.x + s * uv.y, -s * uv.x + c * uv.y);
     return MetalFrame(local, uv, rotated, bitangent);
 }
+// Sparse, jittered finite scratches. Neighbor cells keep marks continuous at cell edges.
+// Pixel filtering reduces contrast instead of widening distant scratches into paint stripes.
 fn metal_scratch(uv: vec2<f32>, footprint: f32) -> f32 {
-    let g = uv * vec2(3.0, 100.0);
-    let cell = floor(g);
-    let f = fract(g);
-    let center = 0.2 + 0.6 * metal_hash(vec3(cell, 7.0));
-    let width = max(0.013, footprint * 100.0);
-    let line = 1.0 - smoothstep(width, width * 2.0, abs(f.y - center));
-    let segment = smoothstep(0.02, 0.15, f.x) * (1.0 - smoothstep(0.58, 0.98, f.x));
-    return line * segment * step(0.62, metal_hash(vec3(cell, 3.1)));
+    let pitch = 0.28;
+    let cell = floor(uv / pitch);
+    let aa = max(footprint * 0.5, 0.00005);
+    var coverage = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let id = cell + vec2(f32(x), f32(y));
+            let seed = metal_hash(vec3(id, 3.1));
+            if seed < 0.35 { continue; }
+            let center = (id + vec2(0.12) + 0.76 * vec2(
+                metal_hash(vec3(id, 7.0)), metal_hash(vec3(id, 19.0)))) * pitch;
+            let angle = (metal_hash(vec3(id, 29.0)) - 0.5) * 1.2;
+            let direction = vec2(cos(angle), sin(angle));
+            let half_length = (0.08 + 0.34 * metal_hash(vec3(id, 43.0))) * pitch;
+            let delta = uv - center;
+            let distance = length(delta - direction * clamp(dot(delta, direction), -half_length, half_length));
+            let radius = 0.0005 + 0.0009 * seed;
+            let mark = (1.0 - smoothstep(max(0.0, radius - aa), radius + aa, distance))
+                * min(1.0, radius / aa);
+            coverage = max(coverage, mark);
+        }
+    }
+    return coverage * (1.0 - smoothstep(0.02, 0.05, footprint));
 }
 fn metal_height(local: vec3<f32>, uv: vec2<f32>, finish: f32, detail: vec4<f32>, footprint: f32) -> f32 {
     let q = uv * detail.x;
@@ -122,6 +139,8 @@ fn evaluate_metal(point: vec3<f32>, normal: vec3<f32>, object: Object, base: Sur
     let bare = (1.0 - oxide) * (1.0 - coating);
     let micro = metal_noise(q * 48.0);
     var surface = base;
+    // Opaque paint and oxide bury most substrate microgrooves.
+    gradient *= 1.0 - 0.8 * max(oxide, coating);
     surface.normal = normalize(normal - frame.tangent * gradient.x - frame.bitangent * gradient.y);
     surface.roughness = clamp(base.roughness + (micro - 0.5) * 0.12 * detail.y + scratch * 0.25, 0.025, 1.0);
     surface.roughness = mix(mix(surface.roughness, 0.83, oxide), paint.y, coating);

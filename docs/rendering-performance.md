@@ -39,3 +39,9 @@ cargo check --target wasm32-unknown-unknown
 ```
 
 `--benchmark-progressive` compares the completed viewport against a direct render of the same scene and pipeline (maximum one 8-bit channel of error). `--benchmark-images=PATH` saves PPM images for visual comparison. For an Exact comparison, use a temporary copy of the scene with `world.render_pipeline` set to `exact`; compare images as well as timings. Native GPU results are hardware-specific, and WebAssembly compilation alone does not measure browser performance.
+
+## Material library previews
+
+Material spheres are requested by visible UI rectangles, after filtering and section expansion. Startup and closed sections generate no thumbnails. Requests are refreshed each frame, so scrolling away discards pending demand. The renderer produces at most one new sphere per frame and waits for GPU completion before starting another. Cached textures are reused when reopening sections; edited or deleted shared materials invalidate their own entries. WGSL source changes invalidate preview pipelines and textures.
+
+Preview pipelines enable only the requested material family and sphere geometry. Combining every material family in an eagerly compiled preview pipeline stalled Chrome's GPU queue. Preview compilation now runs asynchronously: browsers use WebGPU's `createRenderPipelineAsync` through a small device-handle bridge; native builds use a worker thread. Pending cards display spinners, and failed compilations show an error tooltip instead of retrying every frame. No draw using a new preview pipeline is submitted until compilation completes. Filtering/closing a section drops its thumbnail demand; a completed compiler job only populates the pipeline cache. Source changes discard the old result channel, so stale jobs cannot replace newer shaders. Preview uploads preserve scene background jobs and captures, and restore scene buffers before drawing the viewport.

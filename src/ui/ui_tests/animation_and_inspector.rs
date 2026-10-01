@@ -592,20 +592,25 @@ fn material_library_keeps_the_visual_preset_cards() {
     ctx.data_mut(|data| {
         data.insert_temp(
             crate::renderer::MaterialPreviewIds::egui_id(),
-            crate::renderer::MaterialPreviewIds {
-                transparent: egui::TextureId::User(1),
-                metallic: egui::TextureId::User(2),
-                solid: egui::TextureId::User(3),
-                diagnostic: egui::TextureId::User(8),
-                brick: egui::TextureId::User(9),
-                oak: egui::TextureId::User(4),
-                walnut: egui::TextureId::User(5),
-                pine: egui::TextureId::User(6),
-                maple: egui::TextureId::User(7),
-                fabric: std::array::from_fn(|index| egui::TextureId::User(10 + index as u64)),
-                metal: std::array::from_fn(|index| egui::TextureId::User(20 + index as u64)),
-                metal_presets: std::array::from_fn(|index| egui::TextureId::User(29 + index as u64)),
-                assets: Vec::new(),
+            {
+                let mut ids = crate::renderer::MaterialPreviewIds::default();
+                ids.materials = [
+                    (Material::preset(MaterialKind::Transparent), 1),
+                    (Material::preset(MaterialKind::Metallic), 2),
+                    (Material::preset(MaterialKind::Solid), 3),
+                    (Material::preset(MaterialKind::Diagnostic), 8),
+                    (Material::preset(MaterialKind::Brick), 9),
+                ].into_iter().map(|(material, id)| (material, egui::TextureId::User(id)))
+                .chain(WoodSpecies::ALL.into_iter().enumerate().map(|(index, species)|
+                    (Material::wood_preset(species), egui::TextureId::User(4 + index as u64))))
+                .chain(crate::model::FabricPreset::ALL.into_iter().enumerate().map(|(index, preset)|
+                    (Material::fabric_preset(preset), egui::TextureId::User(10 + index as u64))))
+                .chain(crate::model::MetalSpecies::ALL.into_iter().enumerate().map(|(index, species)|
+                    (Material::metal_preset(species), egui::TextureId::User(20 + index as u64))))
+                .chain(crate::model::MetalStudy::ALL.into_iter().enumerate().map(|(index, preset)|
+                    (preset.material(), egui::TextureId::User(29 + index as u64))))
+                .collect();
+                ids
             },
         );
     });
@@ -1063,4 +1068,37 @@ fn inline_rename_updates_the_tree_and_undoes() {
     assert_eq!(objects(&tree)[0].display_name(), "Box");
     undo_redo::redo(&mut tree);
     assert_eq!(objects(&tree)[0].display_name(), "Workbench");
+}
+
+#[test]
+fn material_previews_request_only_visible_matching_cards() {
+    use crate::renderer::MaterialPreviewRequests;
+    fn requests(filter: &str, clip_height: f32) -> Vec<Material> {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let mut runtime = AnimationRuntime::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(380.0);
+            let mut clip = ui.clip_rect();
+            clip.max.y = clip.min.y + clip_height;
+            ui.set_clip_rect(clip);
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(ui.id().with("material-filter"), filter.to_owned());
+            });
+            materials_panel(ui, &mut tree, &mut runtime);
+        });
+        output.textures_delta.clear();
+        ctx.data(|data| data.get_temp::<MaterialPreviewRequests>(MaterialPreviewRequests::egui_id()))
+            .unwrap_or_default().0.into_iter().map(|request| request.material).collect()
+    }
+    let basic = requests("", 900.0);
+    assert_eq!(basic.len(), 4);
+    assert!(basic.iter().all(|material| matches!(material.kind,
+        MaterialKind::Transparent | MaterialKind::Metallic | MaterialKind::Solid | MaterialKind::Brick)));
+    let copper = requests("copper", 900.0);
+    assert_eq!(copper.len(), 2);
+    assert_eq!(requests("oak", 900.0).len(), 1);
+    assert!(copper.iter().all(|material| material.kind == MaterialKind::Metal));
+    assert!(requests("no such material", 900.0).is_empty());
+    assert!(requests("", 1.0).is_empty());
 }

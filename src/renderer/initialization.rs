@@ -353,7 +353,7 @@ impl Renderer {
         );
         let viewport = crate::viewport::Viewport::new(&device, render_format, timestamps, &layout);
         let post_processing = post_processing::PostProcessor::new(&device, render_format);
-        let mut renderer = Self {
+        let renderer = Self {
             viewport,
             post_processing,
             initial_pixel_budget: 48 * 1024,
@@ -408,14 +408,12 @@ impl Renderer {
             group_compute_requests: Default::default(),
             group_capture_cache: std::collections::HashMap::new(),
             egui_renderer,
-            material_preview_ids: None,
-            material_preview_pipeline: None,
-            material_preview_textures: Vec::new(),
-            material_asset_previews: Vec::new(),
+            material_previews: Vec::new(),
+            material_preview_pipelines: Vec::new(),
+            material_preview_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             capture_result: Arc::new(std::sync::Mutex::new(None)),
             capture_pending: false,
         };
-        renderer.create_material_previews();
         renderer
     }
 

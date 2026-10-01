@@ -1,5 +1,7 @@
 use super::*;
+pub(super) mod pipeline;
 use crate::model::{PrimitiveKind, SphereParams};
+use pipeline::{PreviewPipeline, PreviewPipelineState};
 
 const PREVIEW_WIDTH: u32 = 112;
 const PREVIEW_HEIGHT: u32 = 72;
@@ -27,158 +29,127 @@ impl Renderer {
         self.shader_source = shader_source;
         self.custom_material_sources = sources;
         self.uploaded_scene_versions = [i32::MIN; 2];
-        for preview in std::mem::take(&mut self.material_asset_previews) {
+        for preview in std::mem::take(&mut self.material_previews) {
             self.egui_renderer.free_texture(&preview.id);
         }
-        self.create_material_previews();
+        self.material_preview_pipelines.clear();
         self.invalidate_scene();
         Ok(())
     }
 
-    pub(crate) fn material_preview_ids(&self) -> Option<MaterialPreviewIds> {
-        self.material_preview_ids.clone().map(|mut ids| {
-            ids.assets = self
-                .material_asset_previews
-                .iter()
-                .map(|preview| (preview.uuid, preview.id))
-                .collect();
-            ids
-        })
-    }
-
-    pub(crate) fn sync_material_asset_previews(&mut self, assets: &[MaterialAsset]) {
-        let mut retained = Vec::new();
-        for preview in std::mem::take(&mut self.material_asset_previews) {
-            if assets
-                .iter()
-                .any(|asset| asset.uuid == preview.uuid && asset.material == preview.material)
-            {
-                retained.push(preview);
-            } else {
+    pub(crate) fn material_preview_ids(&mut self, assets: &[MaterialAsset]) -> MaterialPreviewIds {
+        // Invalidate changed/deleted shared materials without rendering hidden assets.
+        self.material_previews.retain(|preview| {
+            let valid = preview.request.asset_id.is_none_or(|id| {
+                assets
+                    .iter()
+                    .any(|asset| asset.uuid == id && asset.material == preview.request.material)
+            });
+            if !valid {
                 self.egui_renderer.free_texture(&preview.id);
             }
+            valid
+        });
+
+        let mut ids = MaterialPreviewIds::default();
+        for (family, state) in &self.material_preview_pipelines {
+            if let PreviewPipelineState::Failed(error) = state {
+                ids.failures.push((*family, error.clone()));
+            }
         }
-        self.material_asset_previews = retained;
-        let missing: Vec<_> = assets
-            .iter()
-            .filter(|asset| {
-                !self
-                    .material_asset_previews
-                    .iter()
-                    .any(|preview| preview.uuid == asset.uuid)
-            })
-            .collect();
-        if missing.is_empty() {
-            return;
+        for preview in &self.material_previews {
+            if let Some(asset) = preview.request.asset_id {
+                ids.assets.push((asset, preview.id));
+            } else {
+                ids.materials.push((preview.request.material, preview.id));
+            }
         }
-        let pipeline = self
-            .material_preview_pipeline
-            .as_ref()
-            .expect("material preview pipeline")
-            .clone();
-        for (index, asset) in missing.into_iter().enumerate() {
-            let (id, texture) = self.render_material_preview(
-                asset.material,
-                Some(asset.uuid),
-                index as i32 + 100,
-                &pipeline,
-            );
-            self.material_asset_previews.push(MaterialAssetPreview {
-                uuid: asset.uuid,
-                material: asset.material,
-                id,
-                _texture: texture,
-            });
-        }
-        self.uploaded_scene_versions = [i32::MIN; 2];
+        ids
     }
 
-    pub(super) fn create_material_previews(&mut self) {
-        if let Some(ids) = self.material_preview_ids.take() {
-            for id in [
-                ids.transparent,
-                ids.metallic,
-                ids.solid,
-                ids.diagnostic,
-                ids.brick,
-                ids.oak,
-                ids.walnut,
-                ids.pine,
-                ids.maple,
-            ] {
-                self.egui_renderer.free_texture(&id);
-            }
-            for id in ids.metal {
-                self.egui_renderer.free_texture(&id);
-            }
-            for id in ids.metal_presets {
-                self.egui_renderer.free_texture(&id);
-            }
-            for id in ids.fabric {
-                self.egui_renderer.free_texture(&id);
-            }
+    pub(crate) fn sync_visible_material_previews(
+        &mut self,
+        requests: &[MaterialPreviewRequest],
+        context: &egui::Context,
+    ) {
+        use std::sync::atomic::Ordering;
+        // Poll completed compilations without ever waiting on the UI thread.
+        for (_, state) in &mut self.material_preview_pipelines {
+            state.poll();
         }
-        self.material_preview_textures.clear();
-        let pipeline = create_scene_pipeline_for_materials(
-            &self.device,
-            &self.shader_source,
-            &self.pipeline_layout,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            self.use_bvh,
-            1,
-            true,
-            false,
-            SceneShaderFeatures::for_material_previews(),
-            false,
-        );
-        let mut presets = vec![
-            Material::preset(MaterialKind::Transparent),
-            Material::preset(MaterialKind::Metallic),
-            Material::preset(MaterialKind::Solid),
-            Material::preset(MaterialKind::Diagnostic),
-            Material::preset(MaterialKind::Brick),
-            Material::wood_preset(WoodSpecies::Oak),
-            Material::wood_preset(WoodSpecies::Walnut),
-            Material::wood_preset(WoodSpecies::Pine),
-            Material::wood_preset(WoodSpecies::Maple),
-        ];
-        presets.extend(FabricPreset::ALL.map(Material::fabric_preset));
-        presets.extend(MetalSpecies::ALL.map(Material::metal_preset));
-        let metal_presets_start = presets.len();
-        presets.extend(MetalStudy::ALL.map(MetalStudy::material));
-        let mut ids = Vec::with_capacity(presets.len());
-        for (index, material) in presets.into_iter().enumerate() {
-            let (id, texture) =
-                self.render_material_preview(material, None, index as i32, &pipeline);
-            ids.push(id);
-            self.material_preview_textures.push(texture);
+
+        if self.material_preview_in_flight.load(Ordering::Acquire) {
+            return;
         }
-        self.material_preview_ids = Some(MaterialPreviewIds {
-            transparent: ids[0],
-            metallic: ids[1],
-            solid: ids[2],
-            diagnostic: ids[3],
-            brick: ids[4],
-            oak: ids[5],
-            walnut: ids[6],
-            pine: ids[7],
-            maple: ids[8],
-            fabric: std::array::from_fn(|index| ids[9 + index]),
-            metal: std::array::from_fn(|index| ids[19 + index]),
-            metal_presets: std::array::from_fn(|index| ids[metal_presets_start + index]),
-            assets: Vec::new(),
+        let Some(request) = requests
+            .iter()
+            .find(|request| {
+                !self
+                    .material_preview_pipelines
+                    .iter()
+                    .any(|(family, state)| {
+                        *family == BuiltinMaterialFeatures::for_materials(&[request.material])
+                            && matches!(state, PreviewPipelineState::Failed(_))
+                    })
+                    && !self
+                        .material_previews
+                        .iter()
+                        .any(|preview| preview.request == **request)
+            })
+            .copied()
+        else {
+            return;
+        };
+        let features = SceneShaderFeatures::for_material_previews(request.material);
+        let pipeline = match self
+            .material_preview_pipelines
+            .iter()
+            .find(|(family, _)| *family == features.materials)
+            .map(|(_, state)| state)
+        {
+            Some(PreviewPipelineState::Ready(pipeline)) => pipeline.clone(),
+            Some(PreviewPipelineState::Compiling(_) | PreviewPipelineState::Failed(_)) => return,
+            None => {
+                // Only one compiler job at a time, even while scrolling/filtering.
+                if self
+                    .material_preview_pipelines
+                    .iter()
+                    .any(|(_, state)| matches!(state, PreviewPipelineState::Compiling(_)))
+                {
+                    return;
+                }
+                let state = self.compile_preview_pipeline(features, context);
+                self.material_preview_pipelines
+                    .push((features.materials, state));
+                context.request_repaint();
+                return;
+            }
+        };
+        self.material_preview_in_flight
+            .store(true, Ordering::Release);
+        let (id, texture) =
+            self.render_material_preview(request.material, request.asset_id, &pipeline);
+        self.material_previews.push(MaterialPreview {
+            request,
+            id,
+            _texture: texture,
         });
-        self.material_preview_pipeline = Some(pipeline);
-        // The next scene upload must replace the temporary preview object.
+        // Temporary sphere/camera buffers must be replaced before the scene is drawn.
         self.uploaded_scene_versions = [i32::MIN; 2];
+        let pending = Arc::clone(&self.material_preview_in_flight);
+        let completion_context = context.clone();
+        self.queue.on_submitted_work_done(move || {
+            pending.store(false, Ordering::Release);
+            completion_context.request_repaint();
+        });
+        context.request_repaint();
     }
 
     fn render_material_preview(
         &mut self,
         material: Material,
         material_id: Option<uuid::Uuid>,
-        index: i32,
-        pipeline: &wgpu::RenderPipeline,
+        pipeline: &PreviewPipeline,
     ) -> (egui::TextureId, wgpu::Texture) {
         let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
         object.params = SdfParams::SphereParams(SphereParams { radius: 0.58 });
@@ -188,7 +159,10 @@ impl Renderer {
         let mut camera = Camera::new();
         camera.position *= 0.52;
         camera.viewport = Vec2::new(PREVIEW_WIDTH as f32, PREVIEW_HEIGHT as f32);
-        self.upload_scene_with_exposure(&camera, &[object], &[], [index, 0], 1.5);
+        let was_boolean = self.has_booleans;
+        self.uploaded_scene_versions = [i32::MIN; 2];
+        self.upload_scene_with_exposure(&camera, &[object], &[], [0, 0], 1.5);
+        self.has_booleans = was_boolean;
 
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("material preview sphere"),
@@ -205,30 +179,35 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("material preview encoder"),
-            });
+        #[cfg(target_arch = "wasm32")]
+        self.draw_web_preview(pipeline, &view);
+        #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("material preview sphere"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("material preview encoder"),
+                });
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("material preview sphere"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            self.queue.submit([encoder.finish()]);
         }
-        self.queue.submit([encoder.finish()]);
         let id = self.egui_renderer.register_native_texture(
             &self.device,
             &view,

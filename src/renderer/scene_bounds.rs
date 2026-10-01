@@ -180,7 +180,7 @@ pub(super) fn mark_component_evaluation(
     2
 }
 
-fn scene_feature_constants(
+pub(super) fn scene_feature_constants(
     shader_source: &str,
     features: SceneShaderFeatures,
 ) -> Vec<(&'static str, f64)> {
