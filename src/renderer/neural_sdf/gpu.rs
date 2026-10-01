@@ -136,7 +136,12 @@ fn source_shader(capacity: u32) -> String {
         "brick_geometry_visible(object)",
         "train_brick_geometry_enabled(object)",
     );
+    let source = source.replace(
+        "fabric_geometry_visible(object)",
+        "train_fabric_geometry_enabled(object)",
+    );
     let native = format!("{native}\nfn train_brick_geometry_enabled(object: Object) -> bool {{\n    let header = material_headers[object.component.w];\n    return header.kind == MATERIAL_BRICK && material_params[header.offset + BRICK_RELIEF].x >= 0.001;\n}}\n");
+    let native = format!("{native}\nfn train_fabric_geometry_enabled(object: Object) -> bool {{\n    if object.state.y != 1 && object.state.y != 2 {{ return false; }}\n    let header = material_headers[object.component.w];\n    return header.kind == MATERIAL_FABRIC && material_params[header.offset + FABRIC_PITCH].z >= 0.0005;\n}}\n");
     let source = source.replace(
         "let distance = primitive_distance(local, object);",
         "let distance = train_native_primitive_distance(local, object);",

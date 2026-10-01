@@ -1,1005 +1,722 @@
-    #[test]
-    fn animation_timeline_is_optional_and_starts_closed() {
-        let mut ui = UiState::default();
-        assert!(!ui.animation_timeline_open());
-        ui.set_animation_timeline_open(true);
-        assert!(ui.animation_timeline_open());
-        ui.set_animation_timeline_open(false);
-        assert!(!ui.animation_timeline_open());
-    }
+#[test]
+fn animation_timeline_is_optional_and_starts_closed() {
+    let mut ui = UiState::default();
+    assert!(!ui.animation_timeline_open());
+    ui.set_animation_timeline_open(true);
+    assert!(ui.animation_timeline_open());
+    ui.set_animation_timeline_open(false);
+    assert!(!ui.animation_timeline_open());
+}
 
-    #[test]
-    fn bezier_handles_do_not_change_timeline_value_bounds() {
-        let object = SdfObject::create_kind(PrimitiveKind::Sphere);
-        let track = AnimationTrack {
-            binding: AnimationBinding {
-                object: object.uuid,
-                property: AnimatableProperty::Position(VectorAxis::Y),
+#[test]
+fn bezier_handles_do_not_change_timeline_value_bounds() {
+    let object = SdfObject::create_kind(PrimitiveKind::Sphere);
+    let track = AnimationTrack {
+        binding: AnimationBinding {
+            object: object.uuid,
+            property: AnimatableProperty::Position(VectorAxis::Y),
+        },
+        keyframes: vec![
+            crate::model::Keyframe {
+                frame: 0,
+                value: 0.0,
+                interpolation: KeyframeInterpolation::Bezier,
+                incoming_handle: None,
+                outgoing_handle: Some(crate::model::BezierHandle {
+                    frame_offset: 3.0,
+                    value_offset: 10_000.0,
+                }),
             },
-            keyframes: vec![
-                crate::model::Keyframe {
-                    frame: 0,
-                    value: 0.0,
-                    interpolation: KeyframeInterpolation::Bezier,
-                    incoming_handle: None,
-                    outgoing_handle: Some(crate::model::BezierHandle {
-                        frame_offset: 3.0,
-                        value_offset: 10_000.0,
-                    }),
-                },
-                crate::model::Keyframe {
-                    frame: 10,
-                    value: 10.0,
-                    interpolation: KeyframeInterpolation::Bezier,
-                    incoming_handle: Some(crate::model::BezierHandle {
-                        frame_offset: -3.0,
-                        value_offset: -10_000.0,
-                    }),
-                    outgoing_handle: None,
+            crate::model::Keyframe {
+                frame: 10,
+                value: 10.0,
+                interpolation: KeyframeInterpolation::Bezier,
+                incoming_handle: Some(crate::model::BezierHandle {
+                    frame_offset: -3.0,
+                    value_offset: -10_000.0,
+                }),
+                outgoing_handle: None,
+            },
+        ],
+    };
+
+    let (minimum, maximum) = timeline_value_bounds(&track);
+    assert!((minimum + 1.2).abs() < 0.0001);
+    assert!((maximum - 11.2).abs() < 0.0001);
+}
+
+#[test]
+fn timeline_scroll_modifiers_choose_time_and_vertical_zoom_explicitly() {
+    let modifiers = |command, ctrl, shift| egui::Modifiers {
+        command,
+        ctrl,
+        shift,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        timeline_scroll_zoom(modifiers(false, false, false)),
+        TimelineScrollZoom::None
+    );
+    assert_eq!(
+        timeline_scroll_zoom(modifiers(true, false, false)),
+        TimelineScrollZoom::Time
+    );
+    assert_eq!(
+        timeline_scroll_zoom(modifiers(false, true, false)),
+        TimelineScrollZoom::Time
+    );
+    assert_eq!(
+        timeline_scroll_zoom(modifiers(false, false, true)),
+        TimelineScrollZoom::Vertical
+    );
+    assert_eq!(
+        timeline_scroll_zoom(modifiers(true, false, true)),
+        TimelineScrollZoom::Both
+    );
+}
+
+#[test]
+fn timeline_scroll_snaps_to_its_dominant_axis() {
+    assert_eq!(
+        dominant_timeline_scroll_axis(egui::vec2(24.0, 6.0)),
+        Some(TimelineScrollAxis::Horizontal)
+    );
+    assert_eq!(
+        dominant_timeline_scroll_axis(egui::vec2(4.0, -18.0)),
+        Some(TimelineScrollAxis::Vertical)
+    );
+    assert_eq!(dominant_timeline_scroll_axis(egui::Vec2::ZERO), None);
+}
+
+#[test]
+fn timeline_zoom_keeps_the_frame_under_the_pointer_anchored() {
+    let mut runtime = AnimationRuntime::default();
+    apply_timeline_zoom(&mut runtime, 0, 100, 0.25, 50.0, TimelineScrollZoom::Time);
+    let (start, end) = timeline_time_bounds(&runtime, 0, 100);
+
+    assert!((start + (end - start) * 0.25 - 25.0).abs() < 0.001);
+    assert!(end - start < 100.0);
+    assert_eq!(runtime.timeline_track_height, 64.0);
+
+    apply_timeline_zoom(
+        &mut runtime,
+        0,
+        100,
+        0.5,
+        -30.0,
+        TimelineScrollZoom::Vertical,
+    );
+    assert!(runtime.timeline_track_height < 64.0);
+}
+
+#[test]
+fn timeline_accepts_ctrl_wheel_as_an_egui_zoom_gesture() {
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let object = SdfObject::create_kind(PrimitiveKind::Sphere);
+    let object_id = object.uuid;
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![object_id]);
+    animation::insert_keyframe(
+        &mut tree,
+        AnimationBinding {
+            object: object_id,
+            property: AnimatableProperty::Position(VectorAxis::X),
+        },
+        0,
+        0.0,
+    );
+    let modifiers = egui::Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let mut runtime = AnimationRuntime::default();
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 500.0),
+            )),
+            events: vec![
+                egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, 30.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers,
                 },
             ],
-        };
-
-        let (minimum, maximum) = timeline_value_bounds(&track);
-        assert!((minimum + 1.2).abs() < 0.0001);
-        assert!((maximum - 11.2).abs() < 0.0001);
-    }
-
-    #[test]
-    fn timeline_scroll_modifiers_choose_time_and_vertical_zoom_explicitly() {
-        let modifiers = |command, ctrl, shift| egui::Modifiers {
-            command,
-            ctrl,
-            shift,
             ..Default::default()
-        };
+        },
+        |ui| {
+            ui.set_width(800.0);
+            ui.set_height(500.0);
+            animation_panel(ui, &mut tree, &mut runtime);
+        },
+    );
+    output.textures_delta.clear();
 
-        assert_eq!(
-            timeline_scroll_zoom(modifiers(false, false, false)),
-            TimelineScrollZoom::None
-        );
-        assert_eq!(
-            timeline_scroll_zoom(modifiers(true, false, false)),
-            TimelineScrollZoom::Time
-        );
-        assert_eq!(
-            timeline_scroll_zoom(modifiers(false, true, false)),
-            TimelineScrollZoom::Time
-        );
-        assert_eq!(
-            timeline_scroll_zoom(modifiers(false, false, true)),
-            TimelineScrollZoom::Vertical
-        );
-        assert_eq!(
-            timeline_scroll_zoom(modifiers(true, false, true)),
-            TimelineScrollZoom::Both
-        );
+    assert!(runtime.timeline_time_scale < 1.0);
+    let (start, end) = timeline_time_bounds(&runtime, 0, 250);
+    assert!(end - start > 250.0);
+
+    runtime.timeline_time_scale = 1.0;
+    runtime.timeline_time_center = None;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 500.0),
+            )),
+            events: vec![
+                egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
+                egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+                egui::Event::Zoom(1.25),
+            ],
+            ..Default::default()
+        },
+        |ui| {
+            ui.set_width(800.0);
+            ui.set_height(500.0);
+            animation_panel(ui, &mut tree, &mut runtime);
+        },
+    );
+    output.textures_delta.clear();
+
+    assert!(runtime.timeline_time_scale > 1.0);
+
+    runtime.timeline_time_scale = 2.0;
+    runtime.timeline_time_center = Some(125.0);
+    let (before_start, _) = timeline_time_bounds(&runtime, 0, 250);
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 500.0),
+            )),
+            events: vec![
+                egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(40.0, 8.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        },
+        |ui| {
+            ui.set_width(800.0);
+            ui.set_height(500.0);
+            animation_panel(ui, &mut tree, &mut runtime);
+        },
+    );
+    output.textures_delta.clear();
+    let (after_start, _) = timeline_time_bounds(&runtime, 0, 250);
+
+    assert!(after_start < before_start);
+}
+
+#[test]
+fn timeline_time_zoom_can_extend_far_beyond_the_animation_range() {
+    let mut runtime = AnimationRuntime::default();
+    for _ in 0..20 {
+        apply_timeline_zoom(&mut runtime, 0, 250, 0.5, -50.0, TimelineScrollZoom::Time);
     }
+    let (start, end) = timeline_time_bounds(&runtime, 0, 250);
 
-    #[test]
-    fn timeline_scroll_snaps_to_its_dominant_axis() {
-        assert_eq!(
-            dominant_timeline_scroll_axis(egui::vec2(24.0, 6.0)),
-            Some(TimelineScrollAxis::Horizontal)
-        );
-        assert_eq!(
-            dominant_timeline_scroll_axis(egui::vec2(4.0, -18.0)),
-            Some(TimelineScrollAxis::Vertical)
-        );
-        assert_eq!(
-            dominant_timeline_scroll_axis(egui::Vec2::ZERO),
-            None
-        );
-    }
+    assert!(start < -100_000.0);
+    assert!(end > 100_000.0);
+}
 
-    #[test]
-    fn timeline_zoom_keeps_the_frame_under_the_pointer_anchored() {
-        let mut runtime = AnimationRuntime::default();
-        apply_timeline_zoom(
-            &mut runtime,
-            0,
-            100,
-            0.25,
-            50.0,
-            TimelineScrollZoom::Time,
-        );
-        let (start, end) = timeline_time_bounds(&runtime, 0, 100);
+#[test]
+fn touchpad_horizontal_scroll_pans_time_without_changing_zoom() {
+    let mut runtime = AnimationRuntime::default();
+    apply_timeline_zoom(&mut runtime, 0, 100, 0.5, 40.0, TimelineScrollZoom::Time);
+    let scale = runtime.timeline_time_scale;
+    let (before_start, before_end) = timeline_time_bounds(&runtime, 0, 100);
 
-        assert!((start + (end - start) * 0.25 - 25.0).abs() < 0.001);
-        assert!(end - start < 100.0);
-        assert_eq!(runtime.timeline_track_height, 64.0);
+    pan_timeline_time(&mut runtime, 0, 100, 80.0, 400.0);
 
-        apply_timeline_zoom(
-            &mut runtime,
-            0,
-            100,
-            0.5,
-            -30.0,
-            TimelineScrollZoom::Vertical,
-        );
-        assert!(runtime.timeline_track_height < 64.0);
-    }
+    let (after_start, after_end) = timeline_time_bounds(&runtime, 0, 100);
+    assert!(after_start < before_start);
+    assert!(after_end < before_end);
+    assert_eq!(runtime.timeline_time_scale, scale);
+    assert!((after_end - after_start - (before_end - before_start)).abs() < 0.001);
+}
 
-    #[test]
-    fn timeline_accepts_ctrl_wheel_as_an_egui_zoom_gesture() {
-        let ctx = egui::Context::default();
-        let mut tree = DataTree::default();
-        let object = SdfObject::create_kind(PrimitiveKind::Sphere);
-        let object_id = object.uuid;
-        set_objects(&mut tree, vec![object]);
-        set_selected(&mut tree, vec![object_id]);
+#[test]
+fn moving_keyframes_previews_their_curve_anchors_at_the_dragged_frame() {
+    let object = SdfObject::create_kind(PrimitiveKind::Box);
+    let selected = SelectedKeyframe {
+        binding: AnimationBinding {
+            object: object.uuid,
+            property: AnimatableProperty::Position(VectorAxis::X),
+        },
+        frame: 12,
+    };
+    let drag = KeyframeDrag {
+        anchor: selected,
+        keyframes: vec![selected],
+        preview_delta: 7,
+        start_pointer_x: 0.0,
+        pixels_per_frame: 1.0,
+        keyboard_initiated: false,
+    };
+
+    assert_eq!(displayed_keyframe_frame(selected, Some(&drag)), 19);
+}
+
+#[test]
+fn animation_lanes_share_one_origin_with_truncated_labels() {
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
+    object.name = "A deliberately very long animated object name".into();
+    let object_id = object.uuid;
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![object_id]);
+    for property in [
+        AnimatableProperty::Position(VectorAxis::X),
+        AnimatableProperty::MaterialReflectivity,
+    ] {
         animation::insert_keyframe(
             &mut tree,
             AnimationBinding {
                 object: object_id,
-                property: AnimatableProperty::Position(VectorAxis::X),
+                property,
             },
             0,
             0.0,
         );
-        let modifiers = egui::Modifiers {
-            ctrl: true,
-            ..Default::default()
-        };
-        let mut runtime = AnimationRuntime::default();
+    }
+    let mut runtime = AnimationRuntime::default();
+
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.set_width(760.0);
+        animation_panel(ui, &mut tree, &mut runtime);
+    });
+    output.textures_delta.clear();
+    let lanes: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) if rect.fill == Color32::from_rgb(34, 35, 39) => {
+                Some(rect.rect)
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(lanes.len(), 2);
+    assert!((lanes[0].left() - lanes[1].left()).abs() < 0.01);
+    assert!((lanes[0].width() - lanes[1].width()).abs() < 0.01);
+}
+
+#[test]
+fn viewport_animation_shortcuts_toggle_and_step_playback() {
+    let ctx = egui::Context::default();
+    let mut ui_state = UiState::default();
+    let mut tree = DataTree::default();
+    ui_state.animation.current_frame = 5.0;
+    fn press(
+        ctx: &egui::Context,
+        ui_state: &mut UiState,
+        tree: &mut DataTree,
+        key: egui::Key,
+        repeat: bool,
+        modifiers: egui::Modifiers,
+    ) {
         let mut output = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 500.0),
-                )),
-                events: vec![
-                    egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
-                    egui::Event::ModifiersChanged(modifiers),
-                    egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: egui::vec2(0.0, 30.0),
-                        phase: egui::TouchPhase::Move,
-                        modifiers,
-                    },
-                ],
-                ..Default::default()
-            },
-            |ui| {
-                ui.set_width(800.0);
-                ui.set_height(500.0);
-                animation_panel(ui, &mut tree, &mut runtime);
-            },
-        );
-        output.textures_delta.clear();
-
-        assert!(runtime.timeline_time_scale < 1.0);
-        let (start, end) = timeline_time_bounds(&runtime, 0, 250);
-        assert!(end - start > 250.0);
-
-        runtime.timeline_time_scale = 1.0;
-        runtime.timeline_time_center = None;
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 500.0),
-                )),
-                events: vec![
-                    egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
-                    egui::Event::ModifiersChanged(egui::Modifiers::NONE),
-                    egui::Event::Zoom(1.25),
-                ],
-                ..Default::default()
-            },
-            |ui| {
-                ui.set_width(800.0);
-                ui.set_height(500.0);
-                animation_panel(ui, &mut tree, &mut runtime);
-            },
-        );
-        output.textures_delta.clear();
-
-        assert!(runtime.timeline_time_scale > 1.0);
-
-        runtime.timeline_time_scale = 2.0;
-        runtime.timeline_time_center = Some(125.0);
-        let (before_start, _) = timeline_time_bounds(&runtime, 0, 250);
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 500.0),
-                )),
-                events: vec![
-                    egui::Event::PointerMoved(egui::pos2(500.0, 80.0)),
-                    egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: egui::vec2(40.0, 8.0),
-                        phase: egui::TouchPhase::Move,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-                ..Default::default()
-            },
-            |ui| {
-                ui.set_width(800.0);
-                ui.set_height(500.0);
-                animation_panel(ui, &mut tree, &mut runtime);
-            },
-        );
-        output.textures_delta.clear();
-        let (after_start, _) = timeline_time_bounds(&runtime, 0, 250);
-
-        assert!(after_start < before_start);
-    }
-
-    #[test]
-    fn timeline_time_zoom_can_extend_far_beyond_the_animation_range() {
-        let mut runtime = AnimationRuntime::default();
-        for _ in 0..20 {
-            apply_timeline_zoom(
-                &mut runtime,
-                0,
-                250,
-                0.5,
-                -50.0,
-                TimelineScrollZoom::Time,
-            );
-        }
-        let (start, end) = timeline_time_bounds(&runtime, 0, 250);
-
-        assert!(start < -100_000.0);
-        assert!(end > 100_000.0);
-    }
-
-    #[test]
-    fn touchpad_horizontal_scroll_pans_time_without_changing_zoom() {
-        let mut runtime = AnimationRuntime::default();
-        apply_timeline_zoom(
-            &mut runtime,
-            0,
-            100,
-            0.5,
-            40.0,
-            TimelineScrollZoom::Time,
-        );
-        let scale = runtime.timeline_time_scale;
-        let (before_start, before_end) = timeline_time_bounds(&runtime, 0, 100);
-
-        pan_timeline_time(&mut runtime, 0, 100, 80.0, 400.0);
-
-        let (after_start, after_end) = timeline_time_bounds(&runtime, 0, 100);
-        assert!(after_start < before_start);
-        assert!(after_end < before_end);
-        assert_eq!(runtime.timeline_time_scale, scale);
-        assert!((after_end - after_start - (before_end - before_start)).abs() < 0.001);
-    }
-
-    #[test]
-    fn moving_keyframes_previews_their_curve_anchors_at_the_dragged_frame() {
-        let object = SdfObject::create_kind(PrimitiveKind::Box);
-        let selected = SelectedKeyframe {
-            binding: AnimationBinding {
-                object: object.uuid,
-                property: AnimatableProperty::Position(VectorAxis::X),
-            },
-            frame: 12,
-        };
-        let drag = KeyframeDrag {
-            anchor: selected,
-            keyframes: vec![selected],
-            preview_delta: 7,
-            start_pointer_x: 0.0,
-            pixels_per_frame: 1.0,
-            keyboard_initiated: false,
-        };
-
-        assert_eq!(displayed_keyframe_frame(selected, Some(&drag)), 19);
-    }
-
-    #[test]
-    fn animation_lanes_share_one_origin_with_truncated_labels() {
-        let ctx = egui::Context::default();
-        let mut tree = DataTree::default();
-        let mut object = SdfObject::create_kind(PrimitiveKind::Sphere);
-        object.name = "A deliberately very long animated object name".into();
-        let object_id = object.uuid;
-        set_objects(&mut tree, vec![object]);
-        set_selected(&mut tree, vec![object_id]);
-        for property in [
-            AnimatableProperty::Position(VectorAxis::X),
-            AnimatableProperty::MaterialReflectivity,
-        ] {
-            animation::insert_keyframe(
-                &mut tree,
-                AnimationBinding {
-                    object: object_id,
-                    property,
-                },
-                0,
-                0.0,
-            );
-        }
-        let mut runtime = AnimationRuntime::default();
-
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            ui.set_width(760.0);
-            animation_panel(ui, &mut tree, &mut runtime);
-        });
-        output.textures_delta.clear();
-        let lanes: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Rect(rect) if rect.fill == Color32::from_rgb(34, 35, 39) => {
-                    Some(rect.rect)
-                }
-                _ => None,
-            })
-            .collect();
-
-        assert_eq!(lanes.len(), 2);
-        assert!((lanes[0].left() - lanes[1].left()).abs() < 0.01);
-        assert!((lanes[0].width() - lanes[1].width()).abs() < 0.01);
-    }
-
-    #[test]
-    fn viewport_animation_shortcuts_toggle_and_step_playback() {
-        let ctx = egui::Context::default();
-        let mut ui_state = UiState::default();
-        let mut tree = DataTree::default();
-        ui_state.animation.current_frame = 5.0;
-        fn press(
-            ctx: &egui::Context,
-            ui_state: &mut UiState,
-            tree: &mut DataTree,
-            key: egui::Key,
-            repeat: bool,
-            modifiers: egui::Modifiers,
-        ) {
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    events: vec![egui::Event::Key {
-                        key,
-                        physical_key: None,
-                        pressed: true,
-                        repeat,
-                        modifiers,
-                    }],
-                    ..Default::default()
-                },
-                |_ui| ui_state.handle_animation_shortcuts(ctx, tree),
-            );
-            output.textures_delta.clear();
-        }
-        press(
-            &ctx,
-            &mut ui_state,
-            &mut tree,
-            egui::Key::Space,
-            false,
-            egui::Modifiers::NONE,
-        );
-        assert!(ui_state.animation.playing);
-        press(
-            &ctx,
-            &mut ui_state,
-            &mut tree,
-            egui::Key::Space,
-            true,
-            egui::Modifiers::NONE,
-        );
-        assert!(ui_state.animation.playing);
-        press(
-            &ctx,
-            &mut ui_state,
-            &mut tree,
-            egui::Key::ArrowLeft,
-            false,
-            egui::Modifiers::NONE,
-        );
-        assert!(!ui_state.animation.playing);
-        assert_eq!(ui_state.animation.current_frame, 4.0);
-        press(
-            &ctx,
-            &mut ui_state,
-            &mut tree,
-            egui::Key::ArrowRight,
-            true,
-            egui::Modifiers::NONE,
-        );
-        assert_eq!(ui_state.animation.current_frame, 5.0);
-        press(
-            &ctx,
-            &mut ui_state,
-            &mut tree,
-            egui::Key::ArrowRight,
-            false,
-            egui::Modifiers::SHIFT,
-        );
-        assert_eq!(ui_state.animation.current_frame, 15.0);
-        press(
-            &ctx,
-            &mut ui_state,
-            &mut tree,
-            egui::Key::ArrowLeft,
-            true,
-            egui::Modifiers::SHIFT,
-        );
-        assert_eq!(ui_state.animation.current_frame, 5.0);
-    }
-
-    #[test]
-    fn insert_keyframe_menu_is_compact_and_cursor_anchored() {
-        let ctx = egui::Context::default();
-        let mut ui_state = UiState::default();
-        let mut tree = DataTree::default();
-        let cursor = egui::pos2(240.0, 180.0);
-        ui_state.insert_keyframe_menu_position = Some(cursor);
-
-        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-            ui_state.draw_insert_keyframe_menu(&ctx, &mut tree);
-        });
-        output.textures_delta.clear();
-
-        let popup = *ui_state.regions.last().expect("keyframe popup region");
-        assert!(popup.left() >= cursor.x);
-        assert!(popup.top() >= cursor.y);
-        assert!(popup.left() - cursor.x <= 12.0);
-        assert!(popup.top() - cursor.y <= 12.0);
-        assert!(popup.height() < 135.0);
-    }
-
-    #[test]
-    fn hovering_a_transform_input_and_pressing_i_inserts_a_keyframe() {
-        let ctx = egui::Context::default();
-        let mut tree = DataTree::default();
-        let object = SdfObject::create_kind(PrimitiveKind::Box);
-        let object_id = object.uuid;
-        set_selected(&mut tree, vec![object_id]);
-        set_objects(&mut tree, vec![object]);
-        tree.make_undo_redo_snapshot();
-        let mut runtime = AnimationRuntime::default();
-        runtime.current_frame = 18.0;
-        let frame = |tree: &mut DataTree, runtime: &mut AnimationRuntime, events| {
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    ui.set_width(350.0);
-                    object_panel(ui, tree, runtime);
-                },
-            );
-            output.textures_delta.clear();
-            output.shapes
-        };
-        let shapes = frame(&mut tree, &mut runtime, vec![]);
-        let position = shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text().starts_with("X ") => {
-                    Some(text.pos + text.galley.size() * 0.5)
-                }
-                _ => None,
-            })
-            .expect("position X input");
-        frame(
-            &mut tree,
-            &mut runtime,
-            vec![
-                egui::Event::PointerMoved(position),
-                egui::Event::Key {
-                    key: egui::Key::I,
+                events: vec![egui::Event::Key {
+                    key,
                     physical_key: None,
                     pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::COMMAND,
-                },
-            ],
+                    repeat,
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |_ui| ui_state.handle_animation_shortcuts(ctx, tree),
         );
-        assert!(animation::animation_data(&tree).tracks.is_empty());
-        frame(
-            &mut tree,
-            &mut runtime,
-            vec![egui::Event::Key {
+        output.textures_delta.clear();
+    }
+    press(
+        &ctx,
+        &mut ui_state,
+        &mut tree,
+        egui::Key::Space,
+        false,
+        egui::Modifiers::NONE,
+    );
+    assert!(ui_state.animation.playing);
+    press(
+        &ctx,
+        &mut ui_state,
+        &mut tree,
+        egui::Key::Space,
+        true,
+        egui::Modifiers::NONE,
+    );
+    assert!(ui_state.animation.playing);
+    press(
+        &ctx,
+        &mut ui_state,
+        &mut tree,
+        egui::Key::ArrowLeft,
+        false,
+        egui::Modifiers::NONE,
+    );
+    assert!(!ui_state.animation.playing);
+    assert_eq!(ui_state.animation.current_frame, 4.0);
+    press(
+        &ctx,
+        &mut ui_state,
+        &mut tree,
+        egui::Key::ArrowRight,
+        true,
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(ui_state.animation.current_frame, 5.0);
+    press(
+        &ctx,
+        &mut ui_state,
+        &mut tree,
+        egui::Key::ArrowRight,
+        false,
+        egui::Modifiers::SHIFT,
+    );
+    assert_eq!(ui_state.animation.current_frame, 15.0);
+    press(
+        &ctx,
+        &mut ui_state,
+        &mut tree,
+        egui::Key::ArrowLeft,
+        true,
+        egui::Modifiers::SHIFT,
+    );
+    assert_eq!(ui_state.animation.current_frame, 5.0);
+}
+
+#[test]
+fn insert_keyframe_menu_is_compact_and_cursor_anchored() {
+    let ctx = egui::Context::default();
+    let mut ui_state = UiState::default();
+    let mut tree = DataTree::default();
+    let cursor = egui::pos2(240.0, 180.0);
+    ui_state.insert_keyframe_menu_position = Some(cursor);
+
+    let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+        ui_state.draw_insert_keyframe_menu(&ctx, &mut tree);
+    });
+    output.textures_delta.clear();
+
+    let popup = *ui_state.regions.last().expect("keyframe popup region");
+    assert!(popup.left() >= cursor.x);
+    assert!(popup.top() >= cursor.y);
+    assert!(popup.left() - cursor.x <= 12.0);
+    assert!(popup.top() - cursor.y <= 12.0);
+    assert!(popup.height() < 135.0);
+}
+
+#[test]
+fn hovering_a_transform_input_and_pressing_i_inserts_a_keyframe() {
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let object = SdfObject::create_kind(PrimitiveKind::Box);
+    let object_id = object.uuid;
+    set_selected(&mut tree, vec![object_id]);
+    set_objects(&mut tree, vec![object]);
+    tree.make_undo_redo_snapshot();
+    let mut runtime = AnimationRuntime::default();
+    runtime.current_frame = 18.0;
+    let frame = |tree: &mut DataTree, runtime: &mut AnimationRuntime, events| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(350.0);
+                object_panel(ui, tree, runtime);
+            },
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    let shapes = frame(&mut tree, &mut runtime, vec![]);
+    let position = shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text().starts_with("X ") => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("position X input");
+    frame(
+        &mut tree,
+        &mut runtime,
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::Key {
                 key: egui::Key::I,
                 physical_key: None,
-                pressed: false,
+                pressed: true,
                 repeat: false,
                 modifiers: egui::Modifiers::COMMAND,
-            }],
-        );
-        frame(
-            &mut tree,
-            &mut runtime,
-            vec![
-                egui::Event::PointerMoved(position),
-                egui::Event::Key {
-                    key: egui::Key::I,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ],
-        );
+            },
+        ],
+    );
+    assert!(animation::animation_data(&tree).tracks.is_empty());
+    frame(
+        &mut tree,
+        &mut runtime,
+        vec![egui::Event::Key {
+            key: egui::Key::I,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }],
+    );
+    frame(
+        &mut tree,
+        &mut runtime,
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::Key {
+                key: egui::Key::I,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
 
-        let data = animation::animation_data(&tree);
-        assert_eq!(data.tracks.len(), 1);
-        assert_eq!(data.tracks[0].binding.object, object_id);
-        assert_eq!(
-            data.tracks[0].binding.property,
-            AnimatableProperty::Position(VectorAxis::X)
+    let data = animation::animation_data(&tree);
+    assert_eq!(data.tracks.len(), 1);
+    assert_eq!(data.tracks[0].binding.object, object_id);
+    assert_eq!(
+        data.tracks[0].binding.property,
+        AnimatableProperty::Position(VectorAxis::X)
+    );
+    assert_eq!(data.tracks[0].keyframes[0].frame, 18);
+}
+
+#[test]
+fn transform_keying_menu_inserts_blender_style_location_rotation_scale_sets() {
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+    object.transform.translation = Vec3::new(1.0, 2.0, 3.0);
+    object.transform.rotation = glam::Quat::from_euler(EulerRot::XYZ, 0.1, 0.2, 0.3);
+    object.transform.scale = Vec3::new(2.0, 3.0, 4.0);
+    let object_id = object.uuid;
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![object_id]);
+    let mut runtime = AnimationRuntime::default();
+    runtime.current_frame = 14.0;
+
+    insert_transform_keyframes(
+        &mut tree,
+        &mut runtime,
+        TransformKeySet::LocationRotationScale,
+    );
+
+    let data = animation::animation_data(&tree);
+    assert_eq!(data.tracks.len(), 9);
+    assert!(data
+        .tracks
+        .iter()
+        .all(|track| { track.binding.object == object_id && track.keyframes[0].frame == 14 }));
+}
+
+#[test]
+fn location_keyframes_animate_the_selected_boolean_group_transform() {
+    let mut tree = DataTree::default();
+    let root = SdfObject::create_kind(PrimitiveKind::Box);
+    let root_id = root.uuid;
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root_id);
+    set_objects(&mut tree, vec![root, child]);
+    set_selected(&mut tree, vec![root_id]);
+    let mut runtime = AnimationRuntime::default();
+
+    insert_transform_keyframes(&mut tree, &mut runtime, TransformKeySet::Location);
+    let mut scene = objects(&tree);
+    scene[0].group_transform.translation.y = 3.0;
+    set_objects(&mut tree, scene);
+    runtime.current_frame = 10.0;
+    insert_transform_keyframes(&mut tree, &mut runtime, TransformKeySet::Location);
+
+    let data = animation::animation_data(&tree);
+    assert_eq!(data.tracks.len(), 3);
+    assert!(data
+        .tracks
+        .iter()
+        .all(|track| matches!(track.binding.property, AnimatableProperty::GroupPosition(_))));
+    assert!(animation::evaluate(&mut tree, 0.0));
+    assert_eq!(objects(&tree)[0].group_transform.translation.y, 0.0);
+    assert!(animation::evaluate(&mut tree, 10.0));
+    assert_eq!(objects(&tree)[0].group_transform.translation.y, 3.0);
+}
+
+#[test]
+fn applying_material_to_a_group_links_every_descendant() {
+    let mut tree = DataTree::default();
+    let root = SdfObject::create_kind(PrimitiveKind::Box);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    set_selected(&mut tree, vec![root.uuid]);
+    set_objects(&mut tree, vec![root, child]);
+
+    let material = Material::preset(MaterialKind::Metallic);
+    apply_material(&mut tree, material);
+
+    let scene = objects(&tree);
+    let shared = scene[0].material_id.expect("linked material");
+    assert!(scene.iter().all(|object| {
+        object.material_id == Some(shared) && object.material.kind == MaterialKind::Metallic
+    }));
+    assert_eq!(crate::model::material_assets(&tree).len(), 1);
+}
+
+#[test]
+fn material_library_keeps_the_visual_preset_cards() {
+    let ctx = egui::Context::default();
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            crate::renderer::MaterialPreviewIds::egui_id(),
+            crate::renderer::MaterialPreviewIds {
+                transparent: egui::TextureId::User(1),
+                metallic: egui::TextureId::User(2),
+                solid: egui::TextureId::User(3),
+                diagnostic: egui::TextureId::User(8),
+                brick: egui::TextureId::User(9),
+                oak: egui::TextureId::User(4),
+                walnut: egui::TextureId::User(5),
+                pine: egui::TextureId::User(6),
+                maple: egui::TextureId::User(7),
+                fabric: std::array::from_fn(|index| egui::TextureId::User(10 + index as u64)),
+                assets: Vec::new(),
+            },
         );
-        assert_eq!(data.tracks[0].keyframes[0].frame, 18);
+    });
+    let mut tree = DataTree::default();
+    let mut runtime = AnimationRuntime::default();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.set_width(380.0);
+        materials_panel(ui, &mut tree, &mut runtime);
+    });
+    output.textures_delta.clear();
+    let labels: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    for kind in [
+        MaterialKind::Transparent,
+        MaterialKind::Metallic,
+        MaterialKind::Solid,
+        MaterialKind::Brick,
+    ] {
+        assert!(labels.iter().any(|label| label == kind.label()));
     }
+    for species in WoodSpecies::ALL {
+        assert!(labels.iter().any(|label| label == species.label()));
+    }
+    for preset in crate::model::FabricPreset::ALL {
+        assert!(labels.iter().any(|label| label == preset.label()));
+    }
+    let long_name = crate::model::FabricPreset::CompactStretchWeave.label();
+    assert!(output.shapes.iter().any(|shape| match &shape.shape {
+        egui::Shape::Text(text) if text.galley.text() == long_name => {
+            let left = text.pos.x + text.galley.rect.left();
+            let right = text.pos.x + text.galley.rect.right();
+            text.galley.rows.len() > 1
+                && left >= shape.clip_rect.left() - 0.5
+                && right <= shape.clip_rect.right() + 0.5
+                && (text.pos.x - shape.clip_rect.center().x).abs() < 0.5
+        }
+        _ => false,
+    }));
+    let preview_images = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
+            _ => None,
+        })
+        .filter(|id| matches!(id, egui::TextureId::User(1..=7)))
+        .count();
+    assert_eq!(preview_images, 7);
+}
 
-    #[test]
-    fn transform_keying_menu_inserts_blender_style_location_rotation_scale_sets() {
+#[test]
+fn keyboard_then_tree_click_combines_whole_groups_and_undoes() {
+    use winit::keyboard::KeyCode;
+    for (key, operation) in [
+        (KeyCode::Equal, BooleanOperation::Union),
+        (KeyCode::Minus, BooleanOperation::Subtract),
+        (KeyCode::NumpadMultiply, BooleanOperation::Intersect),
+    ] {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let mut target = SdfObject::create_kind(PrimitiveKind::Box);
+        target.name = "First target".into();
+        let mut group = SdfObject::create_kind(PrimitiveKind::Sphere);
+        group.name = "Other group".into();
+        let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+        child.boolean_parent = Some(group.uuid);
+        child.operation = BooleanOperation::Subtract;
+        set_objects(
+            &mut tree,
+            vec![target.clone(), group.clone(), child.clone()],
+        );
+        tree.make_undo_redo_snapshot();
+        click_scene_text(&ctx, &mut tree, "First target", egui::Modifiers::NONE);
+        let mut interactions = crate::interactions::InteractionState::default();
+        interactions.key_pressed(
+            key,
+            ctx.egui_wants_keyboard_input(),
+            &Commands::new(),
+            &mut tree,
+        );
+        assert_eq!(
+            scene_actions::pending_boolean(&tree).unwrap().target,
+            target.uuid
+        );
+        click_scene_text(&ctx, &mut tree, "Other group", egui::Modifiers::NONE);
+        let scene = objects(&tree);
+        assert_eq!(scene[1].boolean_parent, Some(target.uuid));
+        assert_eq!(scene[1].operation, operation);
+        assert_eq!(scene[2].boolean_parent, Some(group.uuid));
+        assert_eq!(scene[2].operation, BooleanOperation::Subtract);
+        assert!(scene_actions::pending_boolean(&tree).is_none());
+        undo_redo::undo(&mut tree);
+        assert!(objects(&tree)[1].boolean_parent.is_none());
+        assert!(scene_actions::pending_boolean(&tree).is_none());
+    }
+}
+
+#[test]
+fn inspector_resets_only_requested_transform_property_and_undoes() {
+    for reset_index in 0..2 {
+        let ctx = egui::Context::default();
         let mut tree = DataTree::default();
         let mut object = SdfObject::create_kind(PrimitiveKind::Box);
         object.transform.translation = Vec3::new(1.0, 2.0, 3.0);
-        object.transform.rotation = glam::Quat::from_euler(EulerRot::XYZ, 0.1, 0.2, 0.3);
+        object.transform.rotation = glam::Quat::from_rotation_y(0.7);
         object.transform.scale = Vec3::new(2.0, 3.0, 4.0);
-        let object_id = object.uuid;
-        set_objects(&mut tree, vec![object]);
-        set_selected(&mut tree, vec![object_id]);
-        let mut runtime = AnimationRuntime::default();
-        runtime.current_frame = 14.0;
-
-        insert_transform_keyframes(
-            &mut tree,
-            &mut runtime,
-            TransformKeySet::LocationRotationScale,
-        );
-
-        let data = animation::animation_data(&tree);
-        assert_eq!(data.tracks.len(), 9);
-        assert!(data.tracks.iter().all(|track| {
-            track.binding.object == object_id && track.keyframes[0].frame == 14
-        }));
-    }
-
-    #[test]
-    fn location_keyframes_animate_the_selected_boolean_group_transform() {
-        let mut tree = DataTree::default();
-        let root = SdfObject::create_kind(PrimitiveKind::Box);
-        let root_id = root.uuid;
-        let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
-        child.boolean_parent = Some(root_id);
-        set_objects(&mut tree, vec![root, child]);
-        set_selected(&mut tree, vec![root_id]);
-        let mut runtime = AnimationRuntime::default();
-
-        insert_transform_keyframes(
-            &mut tree,
-            &mut runtime,
-            TransformKeySet::Location,
-        );
-        let mut scene = objects(&tree);
-        scene[0].group_transform.translation.y = 3.0;
-        set_objects(&mut tree, scene);
-        runtime.current_frame = 10.0;
-        insert_transform_keyframes(
-            &mut tree,
-            &mut runtime,
-            TransformKeySet::Location,
-        );
-
-        let data = animation::animation_data(&tree);
-        assert_eq!(data.tracks.len(), 3);
-        assert!(data.tracks.iter().all(|track| matches!(
-            track.binding.property,
-            AnimatableProperty::GroupPosition(_)
-        )));
-        assert!(animation::evaluate(&mut tree, 0.0));
-        assert_eq!(objects(&tree)[0].group_transform.translation.y, 0.0);
-        assert!(animation::evaluate(&mut tree, 10.0));
-        assert_eq!(objects(&tree)[0].group_transform.translation.y, 3.0);
-    }
-
-    #[test]
-    fn applying_material_to_a_group_links_every_descendant() {
-        let mut tree = DataTree::default();
-        let root = SdfObject::create_kind(PrimitiveKind::Box);
-        let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
-        child.boolean_parent = Some(root.uuid);
-        set_selected(&mut tree, vec![root.uuid]);
-        set_objects(&mut tree, vec![root, child]);
-
-        let material = Material::preset(MaterialKind::Metallic);
-        apply_material(&mut tree, material);
-
-        let scene = objects(&tree);
-        let shared = scene[0].material_id.expect("linked material");
-        assert!(scene.iter().all(|object| {
-            object.material_id == Some(shared) && object.material.kind == MaterialKind::Metallic
-        }));
-        assert_eq!(crate::model::material_assets(&tree).len(), 1);
-    }
-
-    #[test]
-    fn material_library_keeps_the_visual_preset_cards() {
-        let ctx = egui::Context::default();
-        ctx.data_mut(|data| {
-            data.insert_temp(
-                crate::renderer::MaterialPreviewIds::egui_id(),
-                crate::renderer::MaterialPreviewIds {
-                    transparent: egui::TextureId::User(1),
-                    metallic: egui::TextureId::User(2),
-                    solid: egui::TextureId::User(3),
-                    diagnostic: egui::TextureId::User(8),
-                    brick: egui::TextureId::User(9),
-                    oak: egui::TextureId::User(4),
-                    walnut: egui::TextureId::User(5),
-                    pine: egui::TextureId::User(6),
-                    maple: egui::TextureId::User(7),
-                    assets: Vec::new(),
-                },
-            );
-        });
-        let mut tree = DataTree::default();
-        let mut runtime = AnimationRuntime::default();
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            ui.set_width(380.0);
-            materials_panel(ui, &mut tree, &mut runtime);
-        });
-        output.textures_delta.clear();
-        let labels: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                _ => None,
-            })
-            .collect();
-        for kind in [
-            MaterialKind::Transparent,
-            MaterialKind::Metallic,
-            MaterialKind::Solid,
-            MaterialKind::Brick,
-        ] {
-            assert!(labels.iter().any(|label| label == kind.label()));
-        }
-        for species in WoodSpecies::ALL {
-            assert!(labels.iter().any(|label| label == species.label()));
-        }
-        let preview_images = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
-                _ => None,
-            })
-            .filter(|id| matches!(id, egui::TextureId::User(1..=7)))
-            .count();
-        assert_eq!(preview_images, 7);
-    }
-
-    #[test]
-    fn keyboard_then_tree_click_combines_whole_groups_and_undoes() {
-        use winit::keyboard::KeyCode;
-        for (key, operation) in [
-            (KeyCode::Equal, BooleanOperation::Union),
-            (KeyCode::Minus, BooleanOperation::Subtract),
-            (KeyCode::NumpadMultiply, BooleanOperation::Intersect),
-        ] {
-            let ctx = egui::Context::default();
-            let mut tree = DataTree::default();
-            let mut target = SdfObject::create_kind(PrimitiveKind::Box);
-            target.name = "First target".into();
-            let mut group = SdfObject::create_kind(PrimitiveKind::Sphere);
-            group.name = "Other group".into();
-            let mut child = SdfObject::create_kind(PrimitiveKind::Box);
-            child.boolean_parent = Some(group.uuid);
-            child.operation = BooleanOperation::Subtract;
-            set_objects(
-                &mut tree,
-                vec![target.clone(), group.clone(), child.clone()],
-            );
-            tree.make_undo_redo_snapshot();
-            click_scene_text(&ctx, &mut tree, "First target", egui::Modifiers::NONE);
-            let mut interactions = crate::interactions::InteractionState::default();
-            interactions.key_pressed(
-                key,
-                ctx.egui_wants_keyboard_input(),
-                &Commands::new(),
-                &mut tree,
-            );
-            assert_eq!(
-                scene_actions::pending_boolean(&tree).unwrap().target,
-                target.uuid
-            );
-            click_scene_text(&ctx, &mut tree, "Other group", egui::Modifiers::NONE);
-            let scene = objects(&tree);
-            assert_eq!(scene[1].boolean_parent, Some(target.uuid));
-            assert_eq!(scene[1].operation, operation);
-            assert_eq!(scene[2].boolean_parent, Some(group.uuid));
-            assert_eq!(scene[2].operation, BooleanOperation::Subtract);
-            assert!(scene_actions::pending_boolean(&tree).is_none());
-            undo_redo::undo(&mut tree);
-            assert!(objects(&tree)[1].boolean_parent.is_none());
-            assert!(scene_actions::pending_boolean(&tree).is_none());
-        }
-    }
-
-    #[test]
-    fn inspector_resets_only_requested_transform_property_and_undoes() {
-        for reset_index in 0..2 {
-            let ctx = egui::Context::default();
-            let mut tree = DataTree::default();
-            let mut object = SdfObject::create_kind(PrimitiveKind::Box);
-            object.transform.translation = Vec3::new(1.0, 2.0, 3.0);
-            object.transform.rotation = glam::Quat::from_rotation_y(0.7);
-            object.transform.scale = Vec3::new(2.0, 3.0, 4.0);
-            set_selected(&mut tree, vec![object.uuid]);
-            set_objects(&mut tree, vec![object.clone()]);
-            tree.make_undo_redo_snapshot();
-            let mut animation = AnimationRuntime::default();
-            let mut frame = |events| {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| object_panel(ui, &mut tree, &mut animation),
-                );
-                output.textures_delta.clear();
-                output.shapes
-            };
-            let shapes = frame(vec![]);
-            let positions: Vec<_> = shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Reset" => {
-                        Some(text.pos + text.galley.size() * 0.5)
-                    }
-                    _ => None,
-                })
-                .collect();
-            let position = positions[reset_index];
-            for pressed in [true, false] {
-                frame(vec![
-                    egui::Event::PointerMoved(position),
-                    egui::Event::PointerButton {
-                        pos: position,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ]);
-            }
-            let result = objects(&tree)[0].transform;
-            assert_eq!(
-                result.translation,
-                if reset_index == 0 {
-                    Vec3::ZERO
-                } else {
-                    object.transform.translation
-                }
-            );
-            assert_eq!(
-                result.rotation,
-                if reset_index == 1 {
-                    glam::Quat::IDENTITY
-                } else {
-                    object.transform.rotation
-                }
-            );
-            assert_eq!(result.scale, object.transform.scale);
-            undo_redo::undo(&mut tree);
-            let restored = objects(&tree)[0].transform;
-            assert_eq!(restored.translation, object.transform.translation);
-            assert_eq!(restored.rotation, object.transform.rotation);
-        }
-    }
-
-    #[test]
-    fn group_selection_shows_only_group_transform_until_drilling_into_a_primitive() {
-        let ctx = egui::Context::default();
-        let mut tree = DataTree::default();
-        let root = SdfObject::create_kind(PrimitiveKind::Sphere);
-        let mut child = SdfObject::create_kind(PrimitiveKind::Box);
-        child.boolean_parent = Some(root.uuid);
-        set_objects(&mut tree, vec![root.clone(), child]);
-        set_selected(&mut tree, vec![root.uuid]);
-        let mut runtime = AnimationRuntime::default();
-        let labels = |tree: &mut DataTree, runtime: &mut AnimationRuntime| {
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                object_panel(ui, tree, runtime);
-            });
-            output.textures_delta.clear();
-            output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        };
-        let group_labels = labels(&mut tree, &mut runtime);
-        assert!(group_labels.iter().any(|label| label == "Group transform"));
-        assert!(group_labels.iter().any(|label| label == "Modifiers"));
-        assert!(group_labels.iter().any(|label| label == "Group optimizations"));
-        assert!(
-            group_labels.iter().position(|label| label == "Group optimizations")
-                > group_labels.iter().position(|label| label == "Modifiers")
-        );
-        assert!(!group_labels.iter().any(|label| label == "Object settings"));
-        assert!(!group_labels.iter().any(|label| label.contains("Radius")));
-
-        crate::model::set_selected_exact(&mut tree, vec![root.uuid]);
-        let object_labels = labels(&mut tree, &mut runtime);
-        assert!(object_labels.iter().any(|label| label == "Object settings"));
-        assert!(object_labels.iter().any(|label| label == "Modifiers"));
-        assert!(object_labels.iter().any(|label| label == "Group optimizations"));
-        assert!(
-            object_labels.iter().position(|label| label == "Group optimizations")
-                > object_labels.iter().position(|label| label == "Modifiers")
-        );
-        assert!(object_labels.iter().any(|label| label.contains("Radius")));
-    }
-
-    #[test]
-    fn nested_union_group_exposes_its_own_optimization_choice() {
-        let ctx = egui::Context::default();
-        let mut tree = DataTree::default();
-        let outer = SdfObject::create_kind(PrimitiveKind::Box);
-        let mut inner = SdfObject::create_kind(PrimitiveKind::Sphere);
-        inner.boolean_parent = Some(outer.uuid);
-        let mut leaf = SdfObject::create_kind(PrimitiveKind::Box);
-        leaf.boolean_parent = Some(inner.uuid);
-        let leaf_id = leaf.uuid;
-        set_objects(&mut tree, vec![outer, inner.clone(), leaf]);
-        set_selected(&mut tree, vec![inner.uuid]);
-        assert_eq!(commands::selected_group_id(&tree), Some(inner.uuid));
-        let mut runtime = AnimationRuntime::default();
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            object_panel(ui, &mut tree, &mut runtime);
-        });
-        output.textures_delta.clear();
-        let labels: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                _ => None,
-            })
-            .collect();
-        assert!(labels.iter().any(|label| label == "Group optimizations"));
-
-        crate::model::set_selected_exact(&mut tree, vec![leaf_id]);
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            object_panel(ui, &mut tree, &mut runtime);
-        });
-        output.textures_delta.clear();
-        assert!(output.shapes.iter().any(|shape| match &shape.shape {
-            egui::Shape::Text(text) => text.galley.text() == "Group optimizations",
-            _ => false,
-        }));
-    }
-
-    #[test]
-    fn adding_repeat_modifier_creates_visible_copies_with_defaults() {
-        let ctx = egui::Context::default();
-        let mut tree = DataTree::default();
-        let object = SdfObject::create_kind(PrimitiveKind::Sphere);
-        let crate::model::SdfParams::SphereParams(params) = &object.params else {
-            panic!("expected a sphere");
-        };
-        let diameter = params.radius * 2.0;
         set_selected(&mut tree, vec![object.uuid]);
-        set_objects(&mut tree, vec![object]);
-        let mut runtime = AnimationRuntime::default();
-        let frame =
-            |events: Vec<egui::Event>, tree: &mut DataTree, runtime: &mut AnimationRuntime| {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        ui.set_width(350.0);
-                        modifiers_panel(ui, tree, runtime);
-                    },
-                );
-                output.textures_delta.clear();
-                output.shapes
-            };
-        let position_of = |shapes: &[egui::epaint::ClippedShape], label: &str| {
-            shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == label => {
-                        Some(text.pos + text.galley.size() * 0.5)
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("missing modifier control: {label}"))
-        };
-        let pointer_event = |position, pressed| {
-            vec![
-                egui::Event::PointerMoved(position),
-                egui::Event::PointerButton {
-                    pos: position,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ]
-        };
-        let shapes = frame(vec![], &mut tree, &mut runtime);
-        let add = position_of(&shapes, "+ Add modifier");
-        frame(pointer_event(add, true), &mut tree, &mut runtime);
-        frame(pointer_event(add, false), &mut tree, &mut runtime);
-        let shapes = frame(vec![], &mut tree, &mut runtime);
-        let repeat = position_of(&shapes, "Repeat");
-        frame(pointer_event(repeat, true), &mut tree, &mut runtime);
-        frame(pointer_event(repeat, false), &mut tree, &mut runtime);
-
-        let repetition = objects(&tree)[0].repetition;
-        assert!(repetition.enabled);
-        assert_eq!(repetition.count, [3, 1, 1]);
-        assert!(repetition.spacing.x > diameter);
-        let object_id = objects(&tree)[0].uuid;
-        for property in [
-            AnimatableProperty::RepetitionEnabled,
-            AnimatableProperty::RepetitionCount(VectorAxis::X),
-            AnimatableProperty::Position(VectorAxis::X),
-        ] {
-            animation::insert_keyframe(
-                &mut tree,
-                AnimationBinding {
-                    object: object_id,
-                    property,
-                },
-                0,
-                1.0,
-            );
-        }
-
-        let shapes = frame(vec![], &mut tree, &mut runtime);
-        let remove = position_of(&shapes, "Remove");
-        frame(pointer_event(remove, true), &mut tree, &mut runtime);
-        frame(pointer_event(remove, false), &mut tree, &mut runtime);
-        assert!(!objects(&tree)[0].repetition.enabled);
-        let tracks = animation::animation_data(&tree).tracks;
-        assert_eq!(tracks.len(), 1);
-        assert_eq!(
-            tracks[0].binding.property,
-            AnimatableProperty::Position(VectorAxis::X)
-        );
-    }
-
-    #[test]
-    fn picking_wood_without_selection_sets_material_for_new_objects_and_cutters() {
-        let mut tree = DataTree::default();
-        let material = Material::preset(MaterialKind::Wood);
-        apply_material(&mut tree, material);
-        commands::spawn(&mut tree, sdf_consts::TYPE_BOX);
-        let target = objects(&tree)[0].uuid;
-        scene_actions::add_operand(
-            &mut tree,
-            target,
-            PrimitiveKind::Sphere,
-            BooleanOperation::Subtract,
-        );
-        for object in objects(&tree) {
-            assert_eq!(object.material.kind, MaterialKind::Wood);
-            assert_eq!(object.color, material.color);
-        }
-    }
-
-    #[test]
-    fn operand_softness_is_editable_on_a_selected_nested_group_and_undoes() {
-        let ctx = egui::Context::default();
-        let mut tree = DataTree::default();
-        let target = SdfObject::create_kind(PrimitiveKind::Box);
-        let mut operand = SdfObject::create_kind(PrimitiveKind::Sphere);
-        operand.boolean_parent = Some(target.uuid);
-        let mut nested = SdfObject::create_kind(PrimitiveKind::Box);
-        nested.boolean_parent = Some(operand.uuid);
-        set_selected(&mut tree, vec![operand.uuid]);
-        set_objects(&mut tree, vec![target, operand, nested]);
+        set_objects(&mut tree, vec![object.clone()]);
         tree.make_undo_redo_snapshot();
         let mut animation = AnimationRuntime::default();
         let mut frame = |events| {
@@ -1008,24 +725,22 @@
                     events,
                     ..Default::default()
                 },
-                |ui| {
-                    ui.set_width(350.0);
-                    operand_panel(ui, &mut tree, &mut animation);
-                },
+                |ui| object_panel(ui, &mut tree, &mut animation),
             );
             output.textures_delta.clear();
             output.shapes
         };
         let shapes = frame(vec![]);
-        let label = shapes
+        let positions: Vec<_> = shapes
             .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "Group softness" => Some(text.pos),
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Reset" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
                 _ => None,
             })
-            .expect("softness control");
-        // Slider track occupies the left side of the same row.
-        let position = egui::pos2(65.0, label.y + 7.0);
+            .collect();
+        let position = positions[reset_index];
         for pressed in [true, false] {
             frame(vec![
                 egui::Event::PointerMoved(position),
@@ -1037,25 +752,302 @@
                 },
             ]);
         }
-        assert!(objects(&tree)[1].softness > 0.1);
-        assert_eq!(objects(&tree)[2].softness, 0.05);
+        let result = objects(&tree)[0].transform;
+        assert_eq!(
+            result.translation,
+            if reset_index == 0 {
+                Vec3::ZERO
+            } else {
+                object.transform.translation
+            }
+        );
+        assert_eq!(
+            result.rotation,
+            if reset_index == 1 {
+                glam::Quat::IDENTITY
+            } else {
+                object.transform.rotation
+            }
+        );
+        assert_eq!(result.scale, object.transform.scale);
         undo_redo::undo(&mut tree);
-        assert_eq!(objects(&tree)[1].softness, 0.05);
+        let restored = objects(&tree)[0].transform;
+        assert_eq!(restored.translation, object.transform.translation);
+        assert_eq!(restored.rotation, object.transform.rotation);
+    }
+}
+
+#[test]
+fn group_selection_shows_only_group_transform_until_drilling_into_a_primitive() {
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let root = SdfObject::create_kind(PrimitiveKind::Sphere);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+    child.boolean_parent = Some(root.uuid);
+    set_objects(&mut tree, vec![root.clone(), child]);
+    set_selected(&mut tree, vec![root.uuid]);
+    let mut runtime = AnimationRuntime::default();
+    let labels = |tree: &mut DataTree, runtime: &mut AnimationRuntime| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            object_panel(ui, tree, runtime);
+        });
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let group_labels = labels(&mut tree, &mut runtime);
+    assert!(group_labels.iter().any(|label| label == "Group transform"));
+    assert!(group_labels.iter().any(|label| label == "Modifiers"));
+    assert!(group_labels
+        .iter()
+        .any(|label| label == "Group optimizations"));
+    assert!(
+        group_labels
+            .iter()
+            .position(|label| label == "Group optimizations")
+            > group_labels.iter().position(|label| label == "Modifiers")
+    );
+    assert!(!group_labels.iter().any(|label| label == "Object settings"));
+    assert!(!group_labels.iter().any(|label| label.contains("Radius")));
+
+    crate::model::set_selected_exact(&mut tree, vec![root.uuid]);
+    let object_labels = labels(&mut tree, &mut runtime);
+    assert!(object_labels.iter().any(|label| label == "Object settings"));
+    assert!(object_labels.iter().any(|label| label == "Modifiers"));
+    assert!(object_labels
+        .iter()
+        .any(|label| label == "Group optimizations"));
+    assert!(
+        object_labels
+            .iter()
+            .position(|label| label == "Group optimizations")
+            > object_labels.iter().position(|label| label == "Modifiers")
+    );
+    assert!(object_labels.iter().any(|label| label.contains("Radius")));
+}
+
+#[test]
+fn nested_union_group_exposes_its_own_optimization_choice() {
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let outer = SdfObject::create_kind(PrimitiveKind::Box);
+    let mut inner = SdfObject::create_kind(PrimitiveKind::Sphere);
+    inner.boolean_parent = Some(outer.uuid);
+    let mut leaf = SdfObject::create_kind(PrimitiveKind::Box);
+    leaf.boolean_parent = Some(inner.uuid);
+    let leaf_id = leaf.uuid;
+    set_objects(&mut tree, vec![outer, inner.clone(), leaf]);
+    set_selected(&mut tree, vec![inner.uuid]);
+    assert_eq!(commands::selected_group_id(&tree), Some(inner.uuid));
+    let mut runtime = AnimationRuntime::default();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        object_panel(ui, &mut tree, &mut runtime);
+    });
+    output.textures_delta.clear();
+    let labels: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(labels.iter().any(|label| label == "Group optimizations"));
+
+    crate::model::set_selected_exact(&mut tree, vec![leaf_id]);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        object_panel(ui, &mut tree, &mut runtime);
+    });
+    output.textures_delta.clear();
+    assert!(output.shapes.iter().any(|shape| match &shape.shape {
+        egui::Shape::Text(text) => text.galley.text() == "Group optimizations",
+        _ => false,
+    }));
+}
+
+#[test]
+fn adding_repeat_modifier_creates_visible_copies_with_defaults() {
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let object = SdfObject::create_kind(PrimitiveKind::Sphere);
+    let crate::model::SdfParams::SphereParams(params) = &object.params else {
+        panic!("expected a sphere");
+    };
+    let diameter = params.radius * 2.0;
+    set_selected(&mut tree, vec![object.uuid]);
+    set_objects(&mut tree, vec![object]);
+    let mut runtime = AnimationRuntime::default();
+    let frame = |events: Vec<egui::Event>, tree: &mut DataTree, runtime: &mut AnimationRuntime| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(350.0);
+                modifiers_panel(ui, tree, runtime);
+            },
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    let position_of = |shapes: &[egui::epaint::ClippedShape], label: &str| {
+        shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing modifier control: {label}"))
+    };
+    let pointer_event = |position, pressed| {
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    let shapes = frame(vec![], &mut tree, &mut runtime);
+    let add = position_of(&shapes, "+ Add modifier");
+    frame(pointer_event(add, true), &mut tree, &mut runtime);
+    frame(pointer_event(add, false), &mut tree, &mut runtime);
+    let shapes = frame(vec![], &mut tree, &mut runtime);
+    let repeat = position_of(&shapes, "Repeat");
+    frame(pointer_event(repeat, true), &mut tree, &mut runtime);
+    frame(pointer_event(repeat, false), &mut tree, &mut runtime);
+
+    let repetition = objects(&tree)[0].repetition;
+    assert!(repetition.enabled);
+    assert_eq!(repetition.count, [3, 1, 1]);
+    assert!(repetition.spacing.x > diameter);
+    let object_id = objects(&tree)[0].uuid;
+    for property in [
+        AnimatableProperty::RepetitionEnabled,
+        AnimatableProperty::RepetitionCount(VectorAxis::X),
+        AnimatableProperty::Position(VectorAxis::X),
+    ] {
+        animation::insert_keyframe(
+            &mut tree,
+            AnimationBinding {
+                object: object_id,
+                property,
+            },
+            0,
+            1.0,
+        );
     }
 
-    #[test]
-    fn inline_rename_updates_the_tree_and_undoes() {
-        let mut tree = DataTree::default();
-        let object = SdfObject::create_kind(PrimitiveKind::Box);
-        let id = object.uuid;
-        set_objects(&mut tree, vec![object]);
-        tree.make_undo_redo_snapshot();
+    let shapes = frame(vec![], &mut tree, &mut runtime);
+    let remove = position_of(&shapes, "Remove");
+    frame(pointer_event(remove, true), &mut tree, &mut runtime);
+    frame(pointer_event(remove, false), &mut tree, &mut runtime);
+    assert!(!objects(&tree)[0].repetition.enabled);
+    let tracks = animation::animation_data(&tree).tracks;
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(
+        tracks[0].binding.property,
+        AnimatableProperty::Position(VectorAxis::X)
+    );
+}
 
-        rename_object(&mut tree, id, "Workbench".into());
-
-        assert_eq!(objects(&tree)[0].display_name(), "Workbench");
-        undo_redo::undo(&mut tree);
-        assert_eq!(objects(&tree)[0].display_name(), "Box");
-        undo_redo::redo(&mut tree);
-        assert_eq!(objects(&tree)[0].display_name(), "Workbench");
+#[test]
+fn picking_wood_without_selection_sets_material_for_new_objects_and_cutters() {
+    let mut tree = DataTree::default();
+    let material = Material::preset(MaterialKind::Wood);
+    apply_material(&mut tree, material);
+    commands::spawn(&mut tree, sdf_consts::TYPE_BOX);
+    let target = objects(&tree)[0].uuid;
+    scene_actions::add_operand(
+        &mut tree,
+        target,
+        PrimitiveKind::Sphere,
+        BooleanOperation::Subtract,
+    );
+    for object in objects(&tree) {
+        assert_eq!(object.material.kind, MaterialKind::Wood);
+        assert_eq!(object.color, material.color);
     }
+}
+
+#[test]
+fn operand_softness_is_editable_on_a_selected_nested_group_and_undoes() {
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let target = SdfObject::create_kind(PrimitiveKind::Box);
+    let mut operand = SdfObject::create_kind(PrimitiveKind::Sphere);
+    operand.boolean_parent = Some(target.uuid);
+    let mut nested = SdfObject::create_kind(PrimitiveKind::Box);
+    nested.boolean_parent = Some(operand.uuid);
+    set_selected(&mut tree, vec![operand.uuid]);
+    set_objects(&mut tree, vec![target, operand, nested]);
+    tree.make_undo_redo_snapshot();
+    let mut animation = AnimationRuntime::default();
+    let mut frame = |events| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(350.0);
+                operand_panel(ui, &mut tree, &mut animation);
+            },
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    let shapes = frame(vec![]);
+    let label = shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Group softness" => Some(text.pos),
+            _ => None,
+        })
+        .expect("softness control");
+    // Slider track occupies the left side of the same row.
+    let position = egui::pos2(65.0, label.y + 7.0);
+    for pressed in [true, false] {
+        frame(vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+    }
+    assert!(objects(&tree)[1].softness > 0.1);
+    assert_eq!(objects(&tree)[2].softness, 0.05);
+    undo_redo::undo(&mut tree);
+    assert_eq!(objects(&tree)[1].softness, 0.05);
+}
+
+#[test]
+fn inline_rename_updates_the_tree_and_undoes() {
+    let mut tree = DataTree::default();
+    let object = SdfObject::create_kind(PrimitiveKind::Box);
+    let id = object.uuid;
+    set_objects(&mut tree, vec![object]);
+    tree.make_undo_redo_snapshot();
+
+    rename_object(&mut tree, id, "Workbench".into());
+
+    assert_eq!(objects(&tree)[0].display_name(), "Workbench");
+    undo_redo::undo(&mut tree);
+    assert_eq!(objects(&tree)[0].display_name(), "Box");
+    undo_redo::redo(&mut tree);
+    assert_eq!(objects(&tree)[0].display_name(), "Workbench");
+}

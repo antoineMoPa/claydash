@@ -1,4 +1,5 @@
 use super::*;
+mod fabric;
 
 pub(super) fn materials_panel(
     ui: &mut egui::Ui,
@@ -22,6 +23,12 @@ pub(super) fn materials_panel(
         for species in WoodSpecies::ALL {
             let preset = Material::wood_preset(species);
             if material_preview(ui, species.label(), MaterialKind::Wood, preset).clicked() {
+                apply_material(tree, preset);
+            }
+        }
+        for preset_kind in crate::model::FabricPreset::ALL {
+            let preset = Material::fabric_preset(preset_kind);
+            if material_preview(ui, preset_kind.label(), MaterialKind::Fabric, preset).clicked() {
                 apply_material(tree, preset);
             }
         }
@@ -66,6 +73,18 @@ pub(super) fn materials_panel(
                 && ui.button(species.label()).clicked()
             {
                 apply_material(tree, Material::wood_preset(species));
+                ui.close();
+            }
+        }
+        for preset_kind in crate::model::FabricPreset::ALL {
+            if (filter.is_empty()
+                || preset_kind
+                    .label()
+                    .to_lowercase()
+                    .contains(&filter.to_lowercase()))
+                && ui.button(preset_kind.label()).clicked()
+            {
+                apply_material(tree, Material::fabric_preset(preset_kind));
                 ui.close();
             }
         }
@@ -296,6 +315,9 @@ pub(super) fn materials_panel(
         }
     }
     color_response.on_hover_text("Press I to keyframe all four color channels");
+    if material.kind == MaterialKind::Fabric {
+        changed |= fabric::fabric_controls(ui, &mut material);
+    }
     if material.kind == MaterialKind::Brick {
         ui.separator();
         ui.label(RichText::new("Brick bond").strong());

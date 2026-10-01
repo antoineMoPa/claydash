@@ -505,6 +505,29 @@ mod tests {
     }
 
     #[test]
+    fn scene_round_trip_keeps_fabric_settings_and_link() {
+        let mut tree = DataTree::default();
+        let mut material = crate::model::Material::fabric_preset(
+            crate::model::FabricPreset::HeatherJersey,
+        );
+        material.fabric.pitch_x = 0.027;
+        material.fabric.light_yarn_fraction = 0.47;
+        let id = crate::model::ensure_material_asset(&mut tree, material);
+        let mut object = SdfObject::create(TYPE_SPHERE);
+        object.material = material;
+        object.material_id = Some(id);
+        object.color = material.color;
+        set_objects(&mut tree, vec![object]);
+        let bytes = serialize_scene(&tree).unwrap();
+        let scene = deserialize_scene(&bytes).unwrap();
+        let mut restored = DataTree::default();
+        restored.set_tree("scene", scene);
+        let restored_object = &objects(&restored)[0];
+        assert_eq!(restored_object.material, material);
+        assert_eq!(restored_object.material_id, Some(id));
+    }
+
+    #[test]
     fn scene_round_trip_keeps_custom_material_source() {
         let mut tree = DataTree::default();
         let asset = crate::model::MaterialAsset::custom("Ocean".into());

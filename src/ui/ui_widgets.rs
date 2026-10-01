@@ -166,7 +166,7 @@ pub(super) fn material_preview(
     kind: MaterialKind,
     material: Material,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(82.0, 70.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(82.0, 82.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
     let highlighted = response.hovered() || response.has_focus();
     ui.painter().rect(
@@ -186,7 +186,7 @@ pub(super) fn material_preview(
     );
     let preview = egui::Rect::from_min_max(
         rect.min + egui::vec2(7.0, 6.0),
-        egui::pos2(rect.max.x - 7.0, rect.max.y - 22.0),
+        egui::pos2(rect.max.x - 7.0, rect.max.y - 32.0),
     );
     if let Some(ids) = ui.ctx().data(|data| {
         data.get_temp::<crate::renderer::MaterialPreviewIds>(
@@ -283,12 +283,27 @@ pub(super) fn material_preview(
             );
         }
     }
-    ui.painter().text(
-        egui::pos2(rect.center().x, rect.max.y - 10.0),
-        egui::Align2::CENTER_CENTER,
-        label,
+    let label_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x + 4.0, rect.max.y - 29.0),
+        egui::pos2(rect.max.x - 4.0, rect.max.y - 3.0),
+    );
+    let mut job = egui::text::LayoutJob::simple(
+        label.to_owned(),
         egui::FontId::proportional(11.0),
         visuals.text_color(),
+        label_rect.width(),
     );
-    response
+    job.halign = egui::Align::Center;
+    job.wrap.max_rows = 2;
+    let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+    ui.painter().with_clip_rect(label_rect).galley(
+        egui::pos2(
+            // Center-aligned galleys already span both sides of their origin.
+            label_rect.center().x,
+            label_rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        visuals.text_color(),
+    );
+    response.on_hover_text(label)
 }

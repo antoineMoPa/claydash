@@ -23,8 +23,19 @@
     canvas { touch-action: none; cursor: grab; }
     canvas:active { cursor: grabbing; }
     img { object-fit: cover; }
+    .reference-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 9px 1px 0; color: #82796c; font-size: 12px; }
+    .reference-picker input { max-width: 100%; font: inherit; }
+    .analysis { margin-top: 20px; padding: 18px 20px; border: 1px solid #d6d0c6; border-radius: 12px; background: #faf8f4; }
+    .analysis-controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: end; margin: 12px 0; }
+    .analysis-controls label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; }
+    .analysis-controls select { border: 1px solid #c7c0b5; border-radius: 7px; background: white; color: #24231f; height: 36px; padding: 0 25px 0 10px; }
+    .analysis-controls input { accent-color: #505d67; }
+    .analysis-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+    .analysis-grid canvas { width: 100%; height: auto; aspect-ratio: 2 / 1; background: #eeeae3; border: 1px solid #d6d0c6; border-radius: 7px; cursor: default; }
+    .analysis-grid h3 { font-size: 12px; margin: 0 0 7px; }
+    .analysis p { font-size: 12px; color: #82796c; line-height: 1.45; margin: 9px 0 0; }
     #status { margin: 11px 0 0; color: #82796c; font-size: 12px; }
-    @media (max-width: 700px) { header { align-items: start; } .hint { display: none; } .panes { grid-template-columns: 1fr; gap: 24px; } }
+    @media (max-width: 700px) { header { align-items: start; } .hint { display: none; } .panes, .analysis-grid { grid-template-columns: 1fr; gap: 24px; } }
   </style>
 </head>
 <body>
@@ -39,17 +50,47 @@
       <div class="image-frame"><canvas id="render" aria-label="Raymarched cube material preview"></canvas></div>
     </section>
     <section aria-label="Target material reference">
-      <div class="pane-label"><h2>Target reference</h2><span>Red brick and mortar</span></div>
-      <div class="image-frame"><img src="brick-reference.webp" alt="Close view of a red brick wall corner with pale mortar joints"></div>
+      <div class="pane-label"><h2>Target reference</h2><span id="reference-name">Example: brick</span></div>
+      <div class="image-frame"><img id="reference" alt="Example material reference image"></div>
+      <label class="reference-picker">Compare a local image <input id="reference-file" type="file" accept="image/*"></label>
     </section>
   </div>
+  <section class="analysis" aria-label="Image comparison diagnostics">
+    <h2>Compare image structure</h2>
+    <div class="analysis-controls">
+      <label>Measure<select id="analysis-mode"><option value="creases">Local crevasses</option><option value="fft">Global FFT</option><option value="saturation">Saturation distribution</option><option value="intensity">Intensity distribution</option></select></label>
+      <label>Crop<select id="analysis-crop"><option value="center">Center 60%</option><option value="whole">Whole image</option></select></label>
+      <label>Crevasse radius <span id="analysis-radius-value">6 px</span><input id="analysis-radius" type="range" min="2" max="16" value="6"></label>
+    </div>
+    <div class="analysis-grid"><div><h3>Render</h3><canvas id="analysis-render" width="320" height="160"></canvas></div><div><h3>Reference</h3><canvas id="analysis-reference" width="320" height="160"></canvas></div></div>
+    <p id="analysis-summary">Waiting for images…</p>
+    <p>Both plots use the same crop and axes. Local crevasses measure dark pixels against their neighborhood; FFT shows relative spatial frequency. Uploading an image replaces only the reference pane.</p>
+  </section>
   <p id="status" role="status"></p>
 </main>
+<script src="brick-reference-data.js"></script>
+<script src="material-analysis.js"></script>
 <script>
 (() => {
   const canvas = document.getElementById('render');
   const status = document.getElementById('status');
-  const gl = canvas.getContext('webgl', { antialias: false, alpha: false });
+  const reference = document.getElementById('reference');
+  const analysis = window.MaterialAnalysis.create({render:canvas,reference});
+  reference.src=window.materialReferenceData;
+  let previousReferenceUrl = null;
+  document.getElementById('reference-file').addEventListener('change', event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const nextReferenceUrl = URL.createObjectURL(file);
+    reference.addEventListener('load', () => {
+      if (previousReferenceUrl) URL.revokeObjectURL(previousReferenceUrl);
+      previousReferenceUrl = nextReferenceUrl;
+    }, {once:true});
+    reference.alt = 'Local material reference: ' + file.name;
+    document.getElementById('reference-name').textContent = file.name;
+    reference.src = nextReferenceUrl;
+  });
+  const gl = canvas.getContext('webgl', { antialias: false, alpha: false, preserveDrawingBuffer: true });
   if (!gl) { status.textContent = 'WebGL is unavailable in this browser.'; return; }
 
   const vertexSource = `
@@ -175,6 +216,7 @@
       gl.uniform2f(resolution, width, height);
       gl.uniform1f(orbitUniform, orbit);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      analysis.queue();
     }
 
     canvas.addEventListener('pointerdown', event => {

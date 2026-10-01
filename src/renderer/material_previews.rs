@@ -108,6 +108,9 @@ impl Renderer {
             ] {
                 self.egui_renderer.free_texture(&id);
             }
+            for id in ids.fabric {
+                self.egui_renderer.free_texture(&id);
+            }
         }
         self.material_preview_textures.clear();
         let pipeline = create_scene_pipeline_for_materials(
@@ -122,7 +125,7 @@ impl Renderer {
             SceneShaderFeatures::for_material_previews(),
             false,
         );
-        let presets = [
+        let mut presets = vec![
             Material::preset(MaterialKind::Transparent),
             Material::preset(MaterialKind::Metallic),
             Material::preset(MaterialKind::Solid),
@@ -133,6 +136,7 @@ impl Renderer {
             Material::wood_preset(WoodSpecies::Pine),
             Material::wood_preset(WoodSpecies::Maple),
         ];
+        presets.extend(FabricPreset::ALL.map(Material::fabric_preset));
         let mut ids = Vec::with_capacity(presets.len());
         for (index, material) in presets.into_iter().enumerate() {
             let (id, texture) =
@@ -150,6 +154,7 @@ impl Renderer {
             walnut: ids[6],
             pine: ids[7],
             maple: ids[8],
+            fabric: std::array::from_fn(|index| ids[9 + index]),
             assets: Vec::new(),
         });
         self.material_preview_pipeline = Some(pipeline);

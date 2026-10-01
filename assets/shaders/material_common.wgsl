@@ -3,8 +3,10 @@ const MATERIAL_WOOD: u32 = 1u;
 const MATERIAL_DIAGNOSTIC: u32 = 4u;
 const MATERIAL_BRICK: u32 = 5u;
 const MATERIAL_CUSTOM: u32 = 6u;
+const MATERIAL_FABRIC: u32 = 7u;
 override HAS_WOOD_MATERIAL: bool = true;
 override HAS_BRICK_MATERIAL: bool = true;
+override HAS_FABRIC_MATERIAL: bool = true;
 override HAS_DIAGNOSTIC_MATERIAL: bool = true;
 struct MaterialHeader { kind: u32, offset: u32, length: u32, reserved: u32 }
 @group(0) @binding(3) var<storage, read> material_headers: array<MaterialHeader>;
@@ -50,6 +52,10 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
         }
         case MATERIAL_BRICK: {
             if HAS_BRICK_MATERIAL { return evaluate_brick(point, normal, view, material_object, base, header.offset); }
+            return base;
+        }
+        case MATERIAL_FABRIC: {
+            if HAS_FABRIC_MATERIAL { return evaluate_fabric(point, normal, material_object, base, header.offset); }
             return base;
         }
         case MATERIAL_CUSTOM: {
@@ -112,5 +118,6 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
     ambient *= camera.lighting_params.x;
     return color * (ambient + diffuse * direct_strength * mix(0.55, 1.0, ao)) * (1.0 - metallic)
         + specular_color * specular * (1.0 - roughness * 0.5) * (1.0 - 0.72 * coat)
-        + color * fiber_light + vec3(1.0, 0.98, 0.93) * coat_light;
+        + color * fiber_light + vec3(1.0, 0.98, 0.93) * coat_light
+        + select(vec3(0.0), fabric_extra_light(surface, light, view), HAS_FABRIC_MATERIAL && header.kind == MATERIAL_FABRIC);
 }

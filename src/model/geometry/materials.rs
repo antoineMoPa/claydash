@@ -1,5 +1,7 @@
 use glam::{Vec3, Vec4};
 use serde::{Deserialize, Serialize};
+mod fabric;
+pub use fabric::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MaterialKind {
@@ -11,6 +13,7 @@ pub enum MaterialKind {
     Brick,
     Diagnostic,
     Custom,
+    Fabric,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -167,13 +170,14 @@ impl WoodSettings {
 }
 
 impl MaterialKind {
-    pub const BUILTINS: [Self; 6] = [
+    pub const BUILTINS: [Self; 7] = [
         Self::Transparent,
         Self::Metallic,
         Self::Solid,
         Self::Wood,
         Self::Brick,
         Self::Diagnostic,
+        Self::Fabric,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -184,6 +188,7 @@ impl MaterialKind {
             Self::Brick => "Brick",
             Self::Diagnostic => "Diagnostic",
             Self::Custom => "Custom WGSL",
+            Self::Fabric => "Fabric",
         }
     }
 
@@ -196,6 +201,7 @@ impl MaterialKind {
             Self::Metallic => 3,
             Self::Diagnostic => 4,
             Self::Custom => 6,
+            Self::Fabric => 7,
         }
     }
 }
@@ -213,6 +219,8 @@ pub struct Material {
     pub wood: WoodSettings,
     #[serde(default)]
     pub brick: BrickSettings,
+    #[serde(default)]
+    pub fabric: FabricSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -259,6 +267,7 @@ impl Default for Material {
             opacity: 1.0,
             wood: WoodSettings::default(),
             brick: BrickSettings::default(),
+            fabric: FabricSettings::default(),
         }
     }
 }
@@ -267,6 +276,7 @@ impl Material {
     pub fn display_name(self) -> &'static str {
         match self.kind {
             MaterialKind::Wood => self.wood.species.label(),
+            MaterialKind::Fabric => self.fabric.preset.label(),
             kind => kind.label(),
         }
     }
@@ -315,6 +325,7 @@ impl Material {
                 kind,
                 ..Self::default()
             },
+            MaterialKind::Fabric => Self::fabric_preset(FabricPreset::Jersey),
         }
     }
 
@@ -329,6 +340,16 @@ impl Material {
             color,
             wood: WoodSettings::preset(species),
             ..Self::preset(MaterialKind::Wood)
+        }
+    }
+
+    pub fn fabric_preset(preset: FabricPreset) -> Self {
+        Self {
+            kind: MaterialKind::Fabric,
+            color: preset.color(),
+            roughness: 0.86,
+            fabric: FabricSettings::preset(preset),
+            ..Self::default()
         }
     }
 }

@@ -1008,6 +1008,13 @@ fn base_object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
             world_distance += max(relief.x, 0.0) * (1.0 - height);
         }
     }
+    if (object.state.y == 1 || object.state.y == 2) && fabric_geometry_visible(object) {
+        let header = material_headers[object.component.w];
+        let depth = material_params[header.offset + FABRIC_PITCH].z;
+        if world_distance < max(depth * 2.0, 0.04) {
+            world_distance += fabric_geometry_cut(local, object, header.offset);
+        }
+    }
     return world_distance;
 }
 
@@ -1433,7 +1440,8 @@ fn has_analytic_interval(object: Object) -> bool {
         && object.mirror_axes.w == 0u
         && all(object.mirror_axes.xyz == vec3<u32>(0u))
         && !(object.state.y == 2 && object.scale.w > 0.0)
-        && !(object.state.y == 2 && brick_geometry_visible(object));
+        && !(object.state.y == 2 && brick_geometry_visible(object))
+        && !fabric_geometry_visible(object);
 }
 
 fn analytic_subtraction(start: u32, root: u32) -> bool {

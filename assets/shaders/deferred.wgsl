@@ -114,6 +114,10 @@ fn lit(position: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, roughness: f32
         * (1.0 - surface.w * 0.7);
     var alpha = 1.0;
     let optical = textureLoad(optics, coordinates, 0);
+    let light = select(normalize(vec3(2.0, 3.0, 2.0) - position.xyz),
+        normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
+    shaded += color.xyz * optical.w * (0.05 + 0.22 * pow(1.0 - max(dot(surface.xyz, view), 0.0), 1.5))
+        * max(dot(surface.xyz, light), 0.0) * 0.65;
     if optical.x < 0.999 && color.w < 0.999 {
         let transmitted = transmission_color(position.xyz, surface.xyz, view, optical.y, optical.z);
         // Thin-surface tint; no exit/thickness ray is traced.

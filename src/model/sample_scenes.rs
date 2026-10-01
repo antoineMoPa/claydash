@@ -906,6 +906,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
             if kind == MaterialKind::Wood
                 || kind == MaterialKind::Brick
                 || kind == MaterialKind::Diagnostic
+                || kind == MaterialKind::Fabric
             {
                 object.color = object.material.color;
             }
@@ -917,6 +918,7 @@ pub fn renderer_benchmark_scenes() -> Vec<(String, Vec<SdfObject>)> {
             MaterialKind::Wood => "wood",
             MaterialKind::Brick => "brick",
             MaterialKind::Diagnostic => "diagnostic",
+            MaterialKind::Fabric => "fabric",
             MaterialKind::Custom => unreachable!(),
         };
         cases.push((name.into(), scene));

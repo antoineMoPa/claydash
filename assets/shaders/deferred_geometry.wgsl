@@ -44,8 +44,10 @@ fn gbuffer_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object:
     output.position_reflectivity = vec4(point, clamp(surface.reflectivity, 0.0, 1.0));
     output.normal_roughness = vec4(normalize(surface.normal), surface.roughness);
     output.albedo_metallic = vec4(surface.color, surface.metallic);
-    output.optics = vec4(surface.opacity, surface.ior, f32(object.component.y + 1u), 0.0);
+    // A compact sheen payload keeps fabric's broad grazing response in deferred lighting.
+    let fabric_sheen = select(0.0, surface.figure,
+        material_headers[object.component.w].kind == MATERIAL_FABRIC);
+    output.optics = vec4(surface.opacity, surface.ior, f32(object.component.y + 1u), fabric_sheen);
     output.depth = clamp(clip.z / clip.w, 0.0, 1.0);
     return output;
 }
-

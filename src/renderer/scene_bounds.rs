@@ -192,6 +192,7 @@ fn scene_feature_constants(
         constants.extend_from_slice(&[
             ("HAS_WOOD_MATERIAL", f64::from(features.materials.wood)),
             ("HAS_BRICK_MATERIAL", f64::from(features.materials.brick)),
+            ("HAS_FABRIC_MATERIAL", f64::from(features.materials.fabric)),
             (
                 "HAS_DIAGNOSTIC_MATERIAL",
                 f64::from(features.materials.diagnostic),

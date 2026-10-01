@@ -6,7 +6,10 @@ use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
     camera::{Camera, ProjectionMode},
-    model::{Material, MaterialAsset, MaterialKind, SdfObject, SdfParams, WoodSpecies, World},
+    model::{
+        FabricPreset, Material, MaterialAsset, MaterialKind, SdfObject, SdfParams, WoodSpecies,
+        World,
+    },
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,6 +32,7 @@ const FLAT_COMPONENT_ROOT: i32 = -3;
 struct BuiltinMaterialFeatures {
     wood: bool,
     brick: bool,
+    fabric: bool,
     diagnostic: bool,
 }
 
@@ -36,6 +40,7 @@ impl BuiltinMaterialFeatures {
     const ALL: Self = Self {
         wood: true,
         brick: true,
+        fabric: true,
         diagnostic: true,
     };
 
@@ -43,12 +48,14 @@ impl BuiltinMaterialFeatures {
         let mut features = Self {
             wood: false,
             brick: false,
+            fabric: false,
             diagnostic: false,
         };
         for material in materials {
             match material.kind {
                 MaterialKind::Wood => features.wood = true,
                 MaterialKind::Brick => features.brick = true,
+                MaterialKind::Fabric => features.fabric = true,
                 MaterialKind::Diagnostic => features.diagnostic = true,
                 _ => {}
             }
@@ -314,6 +321,7 @@ pub(crate) struct MaterialPreviewIds {
     pub walnut: egui::TextureId,
     pub pine: egui::TextureId,
     pub maple: egui::TextureId,
+    pub fabric: [egui::TextureId; 10],
     pub assets: Vec<(uuid::Uuid, egui::TextureId)>,
 }
 
@@ -335,6 +343,12 @@ impl MaterialPreviewIds {
                 WoodSpecies::Pine => self.pine,
                 WoodSpecies::Maple => self.maple,
             },
+            MaterialKind::Fabric => {
+                self.fabric[FabricPreset::ALL
+                    .iter()
+                    .position(|preset| *preset == material.fabric.preset)
+                    .unwrap_or(0)]
+            }
             MaterialKind::Custom => self.solid,
         }
     }

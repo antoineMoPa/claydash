@@ -1,5 +1,7 @@
 use super::*;
 use std::collections::HashSet;
+mod fabric;
+use fabric::pack_fabric;
 
 // One header per distinct material value. Vec4 slots have 16-byte alignment in WGSL.
 pub(super) const MAX_PARAM_SLOTS: usize = 8;
@@ -49,6 +51,7 @@ impl PackedMaterials {
         self.params.push([material.refractive_index, 0.0, 0.0, 0.0]);
         match material.kind {
             MaterialKind::Wood => pack_wood(material, &mut self.params),
+            MaterialKind::Fabric => pack_fabric(material, &mut self.params),
             MaterialKind::Brick => self.params.extend_from_slice(&[
                 [
                     material.brick.width,
@@ -156,6 +159,7 @@ pub(super) fn shader_source_for_assets(assets: &[MaterialAsset]) -> String {
             &[
                 &common,
                 include_str!("../../assets/shaders/material_wood.wgsl"),
+                include_str!("../../assets/shaders/material_fabric.wgsl"),
                 include_str!("../../assets/shaders/material_brick.wgsl"),
                 include_str!("../../assets/shaders/material_diagnostic.wgsl"),
                 include_str!("../../assets/shaders/ambient_occlusion.wgsl"),
@@ -262,6 +266,21 @@ mod tests {
         assert_eq!(packed.params.len(), 16);
         assert_eq!(std::mem::size_of::<GpuObject>(), 352);
         assert_eq!(std::mem::size_of::<GpuMaterialHeader>(), 16);
+    }
+
+    #[test]
+    fn fabric_presets_fit_packed_record_and_keep_distinct_settings() {
+        use crate::model::FabricPreset;
+        let mut packed = PackedMaterials::default();
+        for preset in FabricPreset::ALL {
+            let material = Material::fabric_preset(preset);
+            let index = packed.insert(material) as usize;
+            assert_eq!(packed.headers[index].kind, 7);
+            assert_eq!(packed.headers[index].length, 7);
+            assert!(packed.headers[index].length as usize <= MAX_PARAM_SLOTS);
+            assert_eq!(material.display_name(), preset.label());
+        }
+        assert_eq!(packed.materials.len(), 10);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Material playground
 
-Open `index.html` for the starter material study, ready for the next exploration. The completed brick study is in `brick.html`. Both pages use `brick-reference.webp` as their current reference image; replace it when starting a different material.
+Open `index.html` for the starter material study, ready for the next exploration. The completed brick study is in `brick.html`. The starter template has a brick example reference, but you can select any local image in its reference pane. Its shared diagnostics compare local crevasses, two-dimensional FFT frequency content, saturation, and intensity; the FFT downsamples with a 2x2 average to avoid adding sampling artifacts to the measurement. Replace the example shader and reference when starting another material.
 
 ## Brick study
 
