@@ -38,7 +38,10 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let device = self.device.clone();
-            let source = self.shader_source.clone();
+            let source = super::shader::preview_shader_source(
+                features.materials,
+                &self.custom_material_sources,
+            );
             let layout = self.pipeline_layout.clone();
             let use_bvh = self.use_bvh;
             std::thread::spawn(move || {
@@ -61,18 +64,11 @@ impl Renderer {
         #[cfg(target_arch = "wasm32")]
         {
             let device = self.device.as_webgpu().expect("WebGPU device").clone();
-            let source = specialized_neural_shader_source(
-                &specialized_shader_source(&self.shader_source, 1),
-                features.neural_width,
+            let source = super::shader::preview_shader_source(
+                features.materials,
+                &self.custom_material_sources,
             );
-            let mut constants = scene_feature_constants(&source, features);
-            constants.extend([
-                ("USE_BVH", f64::from(self.use_bvh)),
-                ("HAS_BOOLEANS", 0.0),
-                ("TRANSPARENT_BACKGROUND", 1.0),
-                ("FAST_PREVIEW", 0.0),
-                ("HYBRID_SPLATS", 0.0),
-            ]);
+            let constants = scene_feature_constants(&source, features);
             let constants = serde_json::to_string(
                 &constants
                     .into_iter()

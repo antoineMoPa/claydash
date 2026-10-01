@@ -1,5 +1,6 @@
 use super::*;
 pub(super) mod pipeline;
+mod shader;
 use crate::model::{PrimitiveKind, SphereParams};
 use pipeline::{PreviewPipeline, PreviewPipelineState};
 

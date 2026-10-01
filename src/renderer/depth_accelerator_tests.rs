@@ -13,7 +13,10 @@ fn depth_accelerator_texture_approach_refines_source_hits() {
             .await
             .unwrap();
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
-        let source = include_str!("../../assets/shaders/sdf.wgsl");
+        let source = include_str!("../../assets/shaders/sdf.wgsl").replace(
+            "// SCENE_ABI_MODULE",
+            include_str!("../../assets/shaders/scene_abi.wgsl"),
+        );
         let structs = &source[..source.find("@group").unwrap()];
         let start = source.find("fn empty_splat_exclusions(").unwrap();
         let end = source[start..].find("// A membership query").unwrap() + start;

@@ -150,6 +150,14 @@ pub(super) fn shader_source_for_assets(assets: &[MaterialAsset]) -> String {
         .replace("// CUSTOM_MATERIAL_CASES", &cases);
     super::modifier_gpu::shader_source()
         .replace(
+            "// SCENE_ABI_MODULE",
+            include_str!("../../assets/shaders/scene_abi.wgsl"),
+        )
+        .replace(
+            "// ENVIRONMENT_MODULE",
+            include_str!("../../assets/shaders/environment.wgsl"),
+        )
+        .replace(
             "// DEFERRED_GEOMETRY_MODULE",
             include_str!("../../assets/shaders/deferred_geometry.wgsl"),
         )
@@ -161,6 +169,7 @@ pub(super) fn shader_source_for_assets(assets: &[MaterialAsset]) -> String {
             "// MATERIAL_MODULES",
             &[
                 &common,
+                include_str!("../../assets/shaders/material_capture_scene.wgsl"),
                 include_str!("../../assets/shaders/material_wood.wgsl"),
                 include_str!("../../assets/shaders/material_fabric.wgsl"),
                 include_str!("../../assets/shaders/material_metal.wgsl"),

@@ -161,18 +161,16 @@ pub enum MetalStudy {
     GoldBullion,
     PolishedChrome,
     BrushedAluminum,
-    CopperWire,
     RustedIron,
     ChippedPaint,
     HammeredBronze,
 }
 impl MetalStudy {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::MachinedSteel,
         Self::GoldBullion,
         Self::PolishedChrome,
         Self::BrushedAluminum,
-        Self::CopperWire,
         Self::RustedIron,
         Self::ChippedPaint,
         Self::HammeredBronze,
@@ -183,7 +181,6 @@ impl MetalStudy {
             "Gold bullion",
             "Polished chrome",
             "Brushed aluminum",
-            "Copper wire",
             "Rusted cast iron",
             "Chipped red paint",
             "Hammered bronze",
@@ -222,14 +219,6 @@ impl MetalStudy {
                 0.0,
                 0.0,
                 0.08,
-            ),
-            (
-                MetalSpecies::Copper,
-                MetalFinish::Brushed,
-                MetalTangent::Wire,
-                0.05,
-                0.0,
-                0.15,
             ),
             (
                 MetalSpecies::Iron,

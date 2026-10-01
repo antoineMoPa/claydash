@@ -20,25 +20,10 @@ struct Surface {
     tangent: vec3<f32>, anisotropy: f32, metal_response: bool,
 }
 fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object) -> Surface {
+    let capture = material_capture(point, view, object);
     var material_object = object;
-    var captured_color = object.color.rgb;
-    if object.state.y == 12 {
-        let capture = neural_surface_sample(point, object);
-        captured_color = capture.capture.yzw;
-        material_object.component.w = capture.material_index;
-    } else if object.state.y == 8 {
-        let capture = box_depth_surface_sample(point, object);
-        captured_color = capture.capture.yzw;
-        material_object.component.w = capture.material_index;
-    } else if object.state.y == 9 {
-        let capture = sphere_depth_surface_sample(point, object);
-        captured_color = capture.capture.yzw;
-        material_object.component.w = capture.material_index;
-    } else if object.state.y == 10 && object.box_depth_max.w >= 0.0 {
-        let capture = gaussian_splat_surface_sample(point, -view, object);
-        captured_color = capture.capture.yzw;
-        material_object.component.w = capture.material_index;
-    }
+    material_object.component.w = capture.index;
+    let captured_color = capture.color;
     let header = material_headers[material_object.component.w];
     let common_values = material_params[header.offset];
     let optics = material_params[header.offset + 1u];
@@ -80,16 +65,7 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
         if use_ao { metal_ao = ambient_occlusion(point, normal); }
         return metal_light(point, view, surface, metal_ao);
     }
-    var material_index = object.component.w;
-    if object.state.y == 12 {
-        material_index = neural_surface_sample(point, object).material_index;
-    } else if object.state.y == 8 {
-        material_index = box_depth_surface_sample(point, object).material_index;
-    } else if object.state.y == 9 {
-        material_index = sphere_depth_surface_sample(point, object).material_index;
-    } else if object.state.y == 10 && object.box_depth_max.w >= 0.0 {
-        material_index = gaussian_splat_surface_sample(point, -view, object).material_index;
-    }
+    let material_index = material_capture(point, view, object).index;
     let header = material_headers[material_index];
     let color = surface.color;
     let shade_normal = surface.normal;

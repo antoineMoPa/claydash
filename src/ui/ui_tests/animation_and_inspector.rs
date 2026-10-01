@@ -647,6 +647,7 @@ fn material_library_keeps_the_visual_preset_cards() {
         assert!(labels.iter().any(|label| label == preset.label()));
     }
     assert!(!labels.iter().any(|label| label == "Metal studies"));
+    assert!(!labels.iter().any(|label| label == "Copper wire"));
     for index in 0..crate::model::MetalStudy::ALL.len() {
         let texture = egui::TextureId::User(29 + index as u64);
         assert!(output.shapes.iter().any(|shape| matches!(
@@ -1096,7 +1097,7 @@ fn material_previews_request_only_visible_matching_cards() {
     assert!(basic.iter().all(|material| matches!(material.kind,
         MaterialKind::Transparent | MaterialKind::Metallic | MaterialKind::Solid | MaterialKind::Brick)));
     let copper = requests("copper", 900.0);
-    assert_eq!(copper.len(), 2);
+    assert_eq!(copper.len(), 1);
     assert_eq!(requests("oak", 900.0).len(), 1);
     assert!(copper.iter().all(|material| material.kind == MaterialKind::Metal));
     assert!(requests("no such material", 900.0).is_empty());
