@@ -58,6 +58,12 @@ pub(in crate::ui) fn draw_bezier_paths(
         let SdfParams::BezierCurveParams(curve) = &object.params else {
             continue;
         };
+        let is_selected = selected.contains(&object.uuid);
+        // An unextruded path needs its line to remain visible and selectable.
+        // Extruded paths are selected through their rendered surface instead.
+        if !is_selected && object.path_extrusion.is_some() {
+            continue;
+        }
         let matrix = crate::model::object_world_matrix(scene, object.uuid);
         let stroke = Stroke::new(
             if selected.contains(&object.uuid) {
@@ -105,16 +111,7 @@ pub(in crate::ui) fn draw_bezier_paths(
                 previous = next;
             }
         }
-        if !selected.contains(&object.uuid) {
-            for &point in &curve.points {
-                if let Some(center) =
-                    camera.project(matrix.transform_point3(point), pixels_per_point)
-                {
-                    ui.painter()
-                        .circle_filled(center, 3.0, Color32::from_rgb(95, 160, 190));
-                }
-            }
-        } else if extending || moving_point {
+        if is_selected && (extending || moving_point) {
             if let Some(point) =
                 crate::model::selected_curve_point(tree).filter(|point| point.object == object.uuid)
             {
@@ -303,6 +300,52 @@ pub(super) fn draw_bezier_gizmo(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_controls_only_appear_for_selected_objects() {
+        for extruded in [false, true] {
+            for is_selected in [false, true] {
+                let ctx = egui::Context::default();
+                let mut tree = DataTree::default();
+                let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+                let id = object.uuid;
+                if extruded {
+                    object.path_extrusion = Some(crate::model::PathExtrusion::default());
+                }
+                set_objects(&mut tree, vec![object]);
+                if is_selected {
+                    set_selected(&mut tree, vec![id]);
+                }
+                let mut camera = Camera::new();
+                camera.viewport = Vec2::new(800.0, 600.0);
+                let mut state = UiState::default();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        draw_bezier_paths(ui, &tree, &camera);
+                        state.draw_object_gizmos(ui, &mut tree, &camera);
+                    },
+                );
+                let has_controls = output
+                    .shapes
+                    .iter()
+                    .any(|shape| matches!(shape.shape, egui::Shape::Circle(_)));
+                let has_path = output
+                    .shapes
+                    .iter()
+                    .any(|shape| matches!(shape.shape, egui::Shape::LineSegment { .. }));
+                output.textures_delta.clear();
+                assert_eq!(has_controls, is_selected);
+                assert_eq!(has_path, is_selected || !extruded);
+            }
+        }
+    }
 
     #[test]
     fn clicking_an_anchor_then_backspace_keeps_the_curve_object() {

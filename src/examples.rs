@@ -15,6 +15,10 @@ pub const EXAMPLES: &[Example] = &[
         file: "concrete_tower.claydash",
     },
     Example {
+        title: "Medieval sword",
+        file: "sword.claydash",
+    },
+    Example {
         title: "O’Neill cylinder",
         file: "oneil_cylinder.claydash",
     },

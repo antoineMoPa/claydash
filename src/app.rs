@@ -233,6 +233,44 @@ impl App {
         }
     }
 
+    fn clear_scene(&mut self) {
+        self.cancel_render();
+        self.tree.make_undo_redo_snapshot();
+        crate::model::set_objects(&mut self.tree, Vec::new());
+        crate::model::set_scene_cameras(&mut self.tree, Vec::new());
+        self.tree
+            .set_path("scene.active_camera", ClaydashValue::None);
+        self.tree.set_path("scene.animation", ClaydashValue::None);
+        self.tree.set_path(
+            "scene.cursor_position",
+            ClaydashValue::Vec3(glam::Vec3::ZERO),
+        );
+        self.tree.set_path(
+            "scene.world",
+            ClaydashValue::World(crate::model::World {
+                background: crate::model::BackgroundMode::Studio,
+                ambient_light: 0.0,
+                ..Default::default()
+            }),
+        );
+        crate::model::set_selected(&mut self.tree, Vec::new());
+        self.tree.set_transient_path(
+            "editor.state",
+            ClaydashValue::EditorState(EditorState::Start),
+        );
+        self.tree
+            .set_transient_path("editor.place_cursor", ClaydashValue::Bool(false));
+        self.tree.make_undo_redo_snapshot();
+        self.interactions = InteractionState::default();
+        self.ui.reset_document_gestures();
+        self.ui.reset_animation(&self.tree);
+        if let Some(renderer) = &mut self.renderer {
+            renderer.reset_optimized_fields();
+            renderer.invalidate_scene();
+        }
+        self.document.clear_error();
+    }
+
     fn new_document(&mut self) {
         let mut scene = DataTree::default();
         scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(Vec::new()));
@@ -263,6 +301,7 @@ impl App {
     fn handle_file_action(&mut self, action: FileMenuAction) {
         match action {
             FileMenuAction::New => self.new_document(),
+            FileMenuAction::Clear => self.clear_scene(),
             FileMenuAction::Open => {
                 if let Some(path) = document::open_dialog() {
                     self.open_path(path);
@@ -345,7 +384,10 @@ impl App {
     fn handle_file_action(&mut self, action: FileMenuAction) {
         if matches!(
             action,
-            FileMenuAction::New | FileMenuAction::Open | FileMenuAction::OpenExample(_)
+            FileMenuAction::New
+                | FileMenuAction::Clear
+                | FileMenuAction::Open
+                | FileMenuAction::OpenExample(_)
         ) {
             self.document_request = self.document_request.wrapping_add(1);
         }
@@ -372,6 +414,7 @@ impl App {
                 });
             }
             FileMenuAction::New => self.new_document(),
+            FileMenuAction::Clear => self.clear_scene(),
             FileMenuAction::Open => {
                 let tx = self.document_tx.clone();
                 wasm_bindgen_futures::spawn_local(async move {
@@ -526,8 +569,58 @@ impl App {
 }
 
 #[cfg(test)]
-mod new_document_tests {
+mod file_action_tests {
     use super::*;
+
+    #[test]
+    fn clear_resets_scene_and_lighting_and_is_undoable() {
+        let mut app = App::new();
+        let objects = objects_ref(&app.tree).to_vec();
+        assert!(!objects.is_empty());
+        let previous_world = crate::model::World {
+            background: crate::model::BackgroundMode::Sky,
+            ambient_light: 1.7,
+            ..Default::default()
+        };
+        app.tree
+            .set_path("scene.world", ClaydashValue::World(previous_world));
+        crate::model::set_selected(&mut app.tree, vec![objects[0].uuid]);
+        let path = app
+            .document
+            .current_path()
+            .map(std::path::Path::to_path_buf);
+
+        app.handle_file_action(FileMenuAction::Clear);
+
+        assert!(objects_ref(&app.tree).is_empty());
+        assert!(crate::model::selected_ref(&app.tree).is_empty());
+        assert!(crate::model::scene_cameras(&app.tree).is_empty());
+        assert_eq!(app.document.current_path(), path.as_deref());
+        let cleared_world = crate::model::world(&app.tree);
+        assert_eq!(
+            cleared_world.background,
+            crate::model::BackgroundMode::Studio
+        );
+        assert_eq!(cleared_world.ambient_light, 0.0);
+        let bytes = crate::document::serialize_scene(&app.tree).unwrap();
+        let scene = crate::document::deserialize_scene(&bytes).unwrap();
+        assert!(
+            matches!(scene.get_path("world"), ClaydashValue::World(world) if world == cleared_world)
+        );
+        assert!(
+            matches!(scene.get_path("sdf_objects"), ClaydashValue::VecSDFObject(objects) if objects.is_empty())
+        );
+
+        app.tree.undo();
+        assert_eq!(
+            serde_json::to_value(objects_ref(&app.tree)).unwrap(),
+            serde_json::to_value(&objects).unwrap()
+        );
+        assert_eq!(crate::model::world(&app.tree), previous_world);
+        app.tree.redo();
+        assert!(objects_ref(&app.tree).is_empty());
+        assert_eq!(crate::model::world(&app.tree), cleared_world);
+    }
 
     #[test]
     fn new_creates_empty_saveable_scene() {

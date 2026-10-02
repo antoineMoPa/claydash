@@ -1,5 +1,14 @@
 use super::*;
 
+const MODEL_ORGANIZATION: &str = concat!(
+    "Try grouping related objects into named Boolean unions for better organization and to move, rotate, or scale the whole model at once. ",
+    "For example, keep a sword's blade, guard, grip, pommel, and decorations in one union named Sword. ",
+    "Use an existing component as the root, rename it with SetObjectName, and attach the other components with SetBoolean (parent: root UUID, operation: Union). ",
+    "Set softness to 0 for a hard union that preserves the parts' sharp edges. ",
+    "To transform the complete union through MCP, update the root's group_transform with PutObject. ",
+    "Keep each component's material and shape editable; nested unions can organize larger assemblies. "
+);
+
 pub(super) fn schema() -> Value {
     json!({
         "version": 8,
@@ -7,7 +16,7 @@ pub(super) fn schema() -> Value {
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| json!({"kind": kind, "example": SdfObject::create_kind(*kind)})).collect::<Vec<_>>(),
         "render_representations": GroupRenderRepresentation::ALL.iter().map(|mode| json!({"value": mode, "label": mode.label(), "description": mode.description(), "limitation": mode.limitation()})).collect::<Vec<_>>(),
-        "notes": concat!(
+        "notes": format!("{}{}", MODEL_ORGANIZATION, concat!(
             "GetState returns complete typed objects and the raw .claydash scene document. ",
             "CreateCustomMaterial takes name and wgsl, returning its UUID in created_material_ids. ",
             "The WGSL is a function body returning Surface, with point, normal, view, and base inputs. ",
@@ -28,7 +37,7 @@ pub(super) fn schema() -> Value {
             "Apply actions run as one undoable edit. ",
             "Send expected_revision from GetState to reject stale edits. ",
             "ReplaceScene accepts the raw document value and must be the sole action.",
-        )
+        ))
     })
 }
 
@@ -46,7 +55,7 @@ pub(super) fn run_mcp() {
         let method = request.get("method").and_then(Value::as_str).unwrap_or("");
         let result = match method {
             "initialize" => Ok(
-                json!({"protocolVersion": "2025-11-25", "capabilities": {"tools": {}}, "serverInfo": {"name": "claydash", "version": env!("CARGO_PKG_VERSION")}}),
+                json!({"protocolVersion": "2025-11-25", "capabilities": {"tools": {}}, "serverInfo": {"name": "claydash", "version": env!("CARGO_PKG_VERSION")}, "instructions": MODEL_ORGANIZATION}),
             ),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": mcp_tools()})),

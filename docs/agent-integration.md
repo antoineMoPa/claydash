@@ -57,6 +57,14 @@ The configuration follows each client's current local MCP documentation:
 3. Call `apply` with one or more typed actions. Pass `expected_revision` from `get_state` so an
    intervening scene edit causes a clear error. Actions in one call form one undo step. A failed
    call leaves the live scene untouched.
+   Try grouping related objects into named Boolean unions for better organization and to move,
+   rotate, or scale the whole model at once. For example, keep a sword's blade, guard, grip,
+   pommel, and decorations in one union named `Sword`. Use an existing component as the root,
+   rename it with `SetObjectName`, and attach the other components with `SetBoolean`, setting
+   `parent` to the root UUID, `operation` to `Union`, and `softness` to `0` to preserve sharp
+   edges. Components retain their materials and remain individually editable. Nested unions
+   can organize larger assemblies. To transform the complete union through MCP, update the
+   root's `group_transform` with `PutObject`.
 4. Call `set_view` if the camera needs to move, then `capture_viewport` to get a PNG image.
    The capture renders offscreen even when the native window is unfocused or on another macOS
    desktop. Pass `object_ids` to show only specific objects or Boolean groups and their surface

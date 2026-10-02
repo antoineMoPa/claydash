@@ -27,6 +27,14 @@ pub(super) fn draw_file_menu(
                     ui.close();
                 }
                 if ui
+                    .button("Clear")
+                    .on_hover_text("Remove scene objects and reset to Studio with no ambient light")
+                    .clicked()
+                {
+                    action = Some(FileMenuAction::Clear);
+                    ui.close();
+                }
+                if ui
                     .add(egui::Button::new("Open…").shortcut_text("Cmd/Ctrl+O"))
                     .clicked()
                 {

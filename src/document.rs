@@ -12,6 +12,7 @@ const RECENT_PROJECT_LIMIT: usize = 10;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileMenuAction {
     New,
+    Clear,
     Open,
     OpenRecent(PathBuf),
     OpenExample(crate::examples::Example),
