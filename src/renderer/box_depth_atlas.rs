@@ -64,7 +64,7 @@ pub(super) fn bake_box_depth_atlas(
     resolution: u32,
     start: BoxCaptureStart,
 ) -> Option<BoxDepthAtlas> {
-    bake_box_depth_atlas_with_progress(scene, root, resolution, start, |_| {})
+    bake_box_depth_atlas_with_progress(scene, root, resolution, start, |_| true)
 }
 
 pub(super) fn bake_box_depth_atlas_with_progress(
@@ -72,8 +72,11 @@ pub(super) fn bake_box_depth_atlas_with_progress(
     root: uuid::Uuid,
     resolution: u32,
     start: BoxCaptureStart,
-    mut report_progress: impl FnMut(u32),
+    mut report_progress: impl FnMut(u32) -> bool,
 ) -> Option<BoxDepthAtlas> {
+    if !report_progress(0) {
+        return None;
+    }
     let layers = if matches!(start, BoxCaptureStart::OutsideBounds) {
         8
     } else {
@@ -194,7 +197,9 @@ pub(super) fn bake_box_depth_atlas_with_progress(
                     }
                 }
                 completed_rays += 1;
-                report_progress((completed_rays * 90 / total_rays.max(1)) as u32);
+                if !report_progress((completed_rays * 90 / total_rays.max(1)) as u32) {
+                    return None;
+                }
             }
         }
         if layers > 1 {
@@ -228,13 +233,17 @@ pub(super) fn bake_box_depth_atlas_with_progress(
             }
             let completed = face_index * resolution as usize + y as usize + 1;
             let total = BoxFace::ALL.len() * resolution as usize;
-            report_progress(90 + (completed * 10 / total.max(1)) as u32);
+            if !report_progress(90 + (completed * 10 / total.max(1)) as u32) {
+                return None;
+            }
         }
     }
     if !owners.iter().any(Option::is_some) {
         return None;
     }
-    report_progress(100);
+    if !report_progress(100) {
+        return None;
+    }
     Some(BoxDepthAtlas {
         local_min,
         local_max,

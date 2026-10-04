@@ -120,6 +120,19 @@ struct SceneShaderFeatures {
     neural_width: u32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScenePipelineKind {
+    Shaded { capacity: u32, fast: bool, hybrid: bool },
+    Deferred { capacity: u32, hybrid: bool },
+    HybridDepth { capacity: u32 },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ScenePipelineKey {
+    kind: ScenePipelineKind,
+    features: SceneShaderFeatures,
+}
+
 impl SceneShaderFeatures {
     // Material thumbnails only draw an unmodified sphere. Enabling unrelated
     // geometry or material families can stall Chrome compiling unused code.
@@ -260,8 +273,7 @@ pub struct Renderer {
     node_count: u32,
     uploaded_object_count: u32,
     has_booleans: bool,
-    scene_shader_features: SceneShaderFeatures,
-    scene_pipelines_dirty: bool,
+    scene_pipeline_cache: std::collections::VecDeque<(ScenePipelineKey, wgpu::RenderPipeline)>,
     bind_group: wgpu::BindGroup,
     bind_group_layout: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
@@ -290,9 +302,11 @@ pub struct Renderer {
     initial_pixel_budget: u32,
     material_previews: Vec<MaterialPreview>,
     material_preview_pipelines: Vec<(BuiltinMaterialFeatures, material_previews::pipeline::PreviewPipelineState)>,
+    material_preview_compiling: Arc<std::sync::atomic::AtomicBool>,
     material_preview_in_flight: Arc<std::sync::atomic::AtomicBool>,
     capture_result: Arc<std::sync::Mutex<Option<Result<CapturedFrame, String>>>>,
     capture_pending: bool,
+    capture_cancel: Arc<std::sync::atomic::AtomicBool>,
     outline_capture: Option<outline_capture::OutlineCaptureRenderer>,
 }
 

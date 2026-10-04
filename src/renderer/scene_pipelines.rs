@@ -1,157 +1,151 @@
 use super::*;
 
+const MAX_CACHED_SCENE_PIPELINES: usize = 24;
+
 impl Renderer {
+    fn cached_scene_pipeline(
+        &mut self,
+        kind: ScenePipelineKind,
+        features: SceneShaderFeatures,
+    ) -> wgpu::RenderPipeline {
+        let key = ScenePipelineKey { kind, features };
+        if let Some(index) = self
+            .scene_pipeline_cache
+            .iter()
+            .position(|(cached, _)| *cached == key)
+        {
+            let entry = self.scene_pipeline_cache.remove(index).unwrap();
+            let pipeline = entry.1.clone();
+            self.scene_pipeline_cache.push_back(entry);
+            return pipeline;
+        }
+        let pipeline = match kind {
+            ScenePipelineKind::Shaded {
+                capacity,
+                fast,
+                hybrid,
+            } => create_scene_pipeline_for_materials(
+                &self.device,
+                &self.shader_source,
+                &self.pipeline_layout,
+                self.render_format,
+                self.use_bvh,
+                capacity,
+                false,
+                fast,
+                features,
+                hybrid,
+            ),
+            ScenePipelineKind::Deferred { capacity, hybrid } => create_deferred_geometry_pipeline(
+                &self.device,
+                &self.shader_source,
+                &self.pipeline_layout,
+                capacity,
+                hybrid,
+                features,
+            ),
+            ScenePipelineKind::HybridDepth { capacity } => create_hybrid_depth_pipeline(
+                &self.device,
+                &self.shader_source,
+                &self.pipeline_layout,
+                capacity,
+                features,
+            ),
+        };
+        if self.scene_pipeline_cache.len() == MAX_CACHED_SCENE_PIPELINES {
+            self.scene_pipeline_cache.pop_front();
+        }
+        self.scene_pipeline_cache.push_back((key, pipeline.clone()));
+        pipeline
+    }
+
     pub(super) fn prepare_scene_pipelines(
         &mut self,
         world: World,
         capacity: u32,
-        was_boolean: bool,
-        shader_features: SceneShaderFeatures,
+        features: SceneShaderFeatures,
     ) {
-        let shader_features_changed = shader_features != self.scene_shader_features;
-        let previous_capacity = if was_boolean {
-            self.boolean_pipeline.as_ref().map_or(0, |(size, _)| *size)
-        } else {
-            1
-        };
-        let rebuild_hybrid = self.hybrid_pipeline.is_none()
-            || shader_features_changed
-            || self.scene_pipelines_dirty
-            || previous_capacity != capacity;
-        let rebuild_deferred = self
-            .deferred_geometry_pipeline
-            .as_ref()
-            .is_none_or(|(size, hybrid, _)| *size != capacity || *hybrid != self.hybrid_enabled)
-            || self.scene_pipelines_dirty
-            || shader_features_changed;
         if world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported
-            && rebuild_deferred
         {
             self.deferred_geometry_pipeline = Some((
                 capacity,
                 self.hybrid_enabled,
-                create_deferred_geometry_pipeline(
-                    &self.device,
-                    &self.shader_source,
-                    &self.pipeline_layout,
-                    capacity,
-                    self.hybrid_enabled,
-                    shader_features,
+                self.cached_scene_pipeline(
+                    ScenePipelineKind::Deferred {
+                        capacity,
+                        hybrid: self.hybrid_enabled,
+                    },
+                    features,
                 ),
             ));
+        } else {
+            self.deferred_geometry_pipeline = None;
         }
-        if shader_features_changed || self.scene_pipelines_dirty {
-            self.boolean_pipeline = None;
-            self.fast_boolean_pipeline = None;
-        }
-        if !self.has_booleans
-            && (shader_features_changed || self.scene_pipelines_dirty || was_boolean)
-        {
-            self.pipeline = create_scene_pipeline_for_materials(
-                &self.device,
-                &self.shader_source,
-                &self.pipeline_layout,
-                self.render_format,
-                self.use_bvh,
-                1,
-                false,
-                false,
-                shader_features,
-                false,
-            );
-            self.fast_pipeline = create_scene_pipeline_for_materials(
-                &self.device,
-                &self.shader_source,
-                &self.pipeline_layout,
-                self.render_format,
-                self.use_bvh,
-                1,
-                false,
-                true,
-                shader_features,
-                false,
-            );
-        }
-        self.scene_shader_features = shader_features;
-        self.scene_pipelines_dirty = false;
-        if self.has_booleans
-            && self
-                .boolean_pipeline
-                .as_ref()
-                .is_none_or(|(size, _)| *size != capacity)
-        {
+        if self.has_booleans {
             self.boolean_pipeline = Some((
                 capacity,
-                create_scene_pipeline_for_materials(
-                    &self.device,
-                    &self.shader_source,
-                    &self.pipeline_layout,
-                    self.render_format,
-                    self.use_bvh,
-                    capacity,
-                    false,
-                    false,
-                    shader_features,
-                    false,
+                self.cached_scene_pipeline(
+                    ScenePipelineKind::Shaded {
+                        capacity,
+                        fast: false,
+                        hybrid: false,
+                    },
+                    features,
                 ),
             ));
-        }
-        if self.has_booleans
-            && self
-                .fast_boolean_pipeline
-                .as_ref()
-                .is_none_or(|(size, _)| *size != capacity)
-        {
             self.fast_boolean_pipeline = Some((
                 capacity,
-                create_scene_pipeline_for_materials(
-                    &self.device,
-                    &self.shader_source,
-                    &self.pipeline_layout,
-                    self.render_format,
-                    self.use_bvh,
-                    capacity,
-                    false,
-                    true,
-                    shader_features,
-                    false,
+                self.cached_scene_pipeline(
+                    ScenePipelineKind::Shaded {
+                        capacity,
+                        fast: true,
+                        hybrid: false,
+                    },
+                    features,
                 ),
             ));
+        } else {
+            self.boolean_pipeline = None;
+            self.fast_boolean_pipeline = None;
+            self.pipeline = self.cached_scene_pipeline(
+                ScenePipelineKind::Shaded {
+                    capacity: 1,
+                    fast: false,
+                    hybrid: false,
+                },
+                features,
+            );
+            self.fast_pipeline = self.cached_scene_pipeline(
+                ScenePipelineKind::Shaded {
+                    capacity: 1,
+                    fast: true,
+                    hybrid: false,
+                },
+                features,
+            );
         }
-        if self.hybrid_enabled && rebuild_hybrid {
-            self.hybrid_pipeline = Some(create_scene_pipeline_for_materials(
-                &self.device,
-                &self.shader_source,
-                &self.pipeline_layout,
-                self.render_format,
-                self.use_bvh,
-                capacity,
-                false,
-                false,
-                shader_features,
-                true,
+        if self.hybrid_enabled {
+            self.hybrid_pipeline = Some(self.cached_scene_pipeline(
+                ScenePipelineKind::Shaded {
+                    capacity,
+                    fast: false,
+                    hybrid: true,
+                },
+                features,
             ));
-            self.hybrid_fast_pipeline = Some(create_scene_pipeline_for_materials(
-                &self.device,
-                &self.shader_source,
-                &self.pipeline_layout,
-                self.render_format,
-                self.use_bvh,
-                capacity,
-                false,
-                true,
-                shader_features,
-                true,
+            self.hybrid_fast_pipeline = Some(self.cached_scene_pipeline(
+                ScenePipelineKind::Shaded {
+                    capacity,
+                    fast: true,
+                    hybrid: true,
+                },
+                features,
             ));
-            self.hybrid_depth_pipeline = Some(create_hybrid_depth_pipeline(
-                &self.device,
-                &self.shader_source,
-                &self.pipeline_layout,
-                capacity,
-                shader_features,
-            ));
-        } else if !self.hybrid_enabled {
+            self.hybrid_depth_pipeline = Some(
+                self.cached_scene_pipeline(ScenePipelineKind::HybridDepth { capacity }, features),
+            );
+        } else {
             self.hybrid_pipeline = None;
             self.hybrid_fast_pipeline = None;
             self.hybrid_depth_pipeline = None;

@@ -364,6 +364,30 @@ impl Renderer {
         );
         let viewport = crate::viewport::Viewport::new(&device, render_format, timestamps, &layout);
         let post_processing = post_processing::PostProcessor::new(&device, render_format);
+        let scene_pipeline_cache = std::collections::VecDeque::from([
+            (
+                ScenePipelineKey {
+                    kind: ScenePipelineKind::Shaded {
+                        capacity: 1,
+                        fast: false,
+                        hybrid: false,
+                    },
+                    features: shader_features,
+                },
+                pipeline.clone(),
+            ),
+            (
+                ScenePipelineKey {
+                    kind: ScenePipelineKind::Shaded {
+                        capacity: 1,
+                        fast: true,
+                        hybrid: false,
+                    },
+                    features: shader_features,
+                },
+                fast_pipeline.clone(),
+            ),
+        ]);
         let renderer = Self {
             viewport,
             post_processing,
@@ -396,8 +420,7 @@ impl Renderer {
             node_count: 0,
             uploaded_object_count: 0,
             has_booleans: false,
-            scene_shader_features: shader_features,
-            scene_pipelines_dirty: false,
+            scene_pipeline_cache,
             bind_group,
             bind_group_layout: layout,
             camera_buffer,
@@ -423,9 +446,11 @@ impl Renderer {
             egui_renderer,
             material_previews: Vec::new(),
             material_preview_pipelines: Vec::new(),
+            material_preview_compiling: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             material_preview_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             capture_result: Arc::new(std::sync::Mutex::new(None)),
             capture_pending: false,
+            capture_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             outline_capture: None,
         };
         renderer

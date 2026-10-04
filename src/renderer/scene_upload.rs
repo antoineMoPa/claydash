@@ -166,6 +166,32 @@ impl Renderer {
         let manage_scene_jobs = pipeline_preparation == ScenePipelinePreparation::Viewport;
         #[cfg(not(target_arch = "wasm32"))]
         if manage_scene_jobs {
+            let stale_bake = self.group_capture_bake.as_mut().is_some_and(|job| {
+                if job.source_revision == scene_versions[0] {
+                    return false;
+                }
+                let stale = source_objects
+                    .iter()
+                    .find(|object| object.uuid == job.root)
+                    .is_none_or(|object| {
+                        super::group_capture::capture_key(source_objects, object) != job.key
+                    });
+                if !stale {
+                    job.source_revision = scene_versions[0];
+                }
+                stale
+            });
+            if stale_bake {
+                if let Some(job) = self.group_capture_bake.take() {
+                    if source_objects.iter().any(|object| {
+                        object.uuid == job.root
+                            && object.render_representation
+                                == crate::model::GroupRenderRepresentation::GaussianSplats
+                    }) {
+                        self.group_compute_requests.insert(job.root);
+                    }
+                }
+            }
             let completed = self.group_capture_bake.as_ref().and_then(|job| {
                 match job.receiver.try_recv() {
                     Ok(capture) => Some((job.root, job.key, job.source_revision, capture)),
@@ -1059,7 +1085,6 @@ impl Renderer {
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_camera));
         // Size fragment scratch for the largest nested component. Direct
         // components stream through one accumulator.
-        let was_boolean = self.has_booleans;
         self.has_booleans = capacity > 1;
         let transmitted_instances: u64 = gpu_objects
             .iter()
@@ -1171,7 +1196,7 @@ impl Renderer {
         // Thumbnail draws use their dedicated sphere pipeline. Uploading their
         // temporary objects must not compile viewport variants for every preset.
         if pipeline_preparation == ScenePipelinePreparation::Viewport {
-            self.prepare_scene_pipelines(world, capacity, was_boolean, shader_features);
+            self.prepare_scene_pipelines(world, capacity, shader_features);
         }
         if !gpu_objects.is_empty() {
             self.queue.write_buffer(

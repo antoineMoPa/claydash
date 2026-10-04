@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn abandoned_depth_captures_stop_during_baking() {
+    let object = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+    let root = object.uuid;
+    let scene = [object];
+    let mut box_steps = 0;
+    let box_capture = box_depth_atlas::bake_box_depth_atlas_with_progress(
+        &scene,
+        root,
+        16,
+        BoxCaptureStart::AtBounds,
+        |_| {
+            box_steps += 1;
+            box_steps < 3
+        },
+    );
+    assert!(box_capture.is_none());
+    assert_eq!(box_steps, 3);
+
+    let mut sphere_steps = 0;
+    let sphere_capture = sphere_depth_atlas::bake_sphere_depth_atlas_with_progress(
+        &scene,
+        root,
+        32,
+        16,
+        |_| {
+            sphere_steps += 1;
+            sphere_steps < 3
+        },
+    );
+    assert!(sphere_capture.is_none());
+    assert_eq!(sphere_steps, 3);
+}
+
+#[test]
 fn postorder_gpu_contract_matches_recursive_boolean_evaluation() {
     use crate::model::{scene_sample, ui_preview_scene, BooleanOperation, PrimitiveKind};
     let mut scene = ui_preview_scene();

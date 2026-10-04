@@ -36,6 +36,15 @@ pub(super) struct CaptureBakeJob {
     pub source_revision: i32,
     pub progress: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub receiver: std::sync::mpsc::Receiver<Option<CachedCapture>>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for CaptureBakeJob {
+    fn drop(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -45,7 +54,7 @@ pub(super) fn start_capture_bake(
     key: u64,
     source_revision: i32,
 ) -> Option<CaptureBakeJob> {
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     let object = source.iter().find(|object| object.uuid == root)?;
     let representation = object.render_representation;
@@ -53,24 +62,35 @@ pub(super) fn start_capture_bake(
     let (sender, receiver) = std::sync::mpsc::channel();
     let progress = std::sync::Arc::new(AtomicU32::new(0));
     let worker_progress = progress.clone();
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    let worker_cancel = cancel.clone();
     let source = source.to_vec();
     std::thread::spawn(move || {
-        let report = |percent: u32| worker_progress.store(percent.min(99), Ordering::Relaxed);
+        let report = |percent: u32| {
+            worker_progress.store(percent.min(99), Ordering::Relaxed);
+            !worker_cancel.load(Ordering::Relaxed)
+        };
         let capture = match representation {
             GroupRenderRepresentation::SphereDepthAtlas
-            | GroupRenderRepresentation::SphereAccelerator => bake_sphere_depth_atlas_with_progress(
-                &source,
-                root,
-                SPHERE_DEPTH_WIDTH,
-                SPHERE_DEPTH_HEIGHT,
-                report,
-            )
-            .map(|atlas| CachedCapture::Sphere(std::sync::Arc::new(atlas))),
+            | GroupRenderRepresentation::SphereAccelerator => {
+                bake_sphere_depth_atlas_with_progress(
+                    &source,
+                    root,
+                    SPHERE_DEPTH_WIDTH,
+                    SPHERE_DEPTH_HEIGHT,
+                    report,
+                )
+                .map(|atlas| CachedCapture::Sphere(std::sync::Arc::new(atlas)))
+            }
             GroupRenderRepresentation::BoxDepthAtlas
             | GroupRenderRepresentation::BoxAccelerator
             | GroupRenderRepresentation::GaussianSplats => {
                 let gaussian = representation == GroupRenderRepresentation::GaussianSplats;
-                let resolution = if gaussian { resolution } else { BOX_DEPTH_RESOLUTION };
+                let resolution = if gaussian {
+                    resolution
+                } else {
+                    BOX_DEPTH_RESOLUTION
+                };
                 let start = if gaussian {
                     BoxCaptureStart::OutsideBounds
                 } else {
@@ -89,6 +109,7 @@ pub(super) fn start_capture_bake(
         source_revision,
         progress,
         receiver,
+        cancel,
     })
 }
 
@@ -775,7 +796,7 @@ mod saved_capture_tests {
         assert!(cache.is_empty());
         let computed = compute_group_scene(&[root.clone()], &mut cache);
         let atlas = computed.box_depth_atlases[&id].clone();
-        publish_depth_accelerator_status(&context, &[root.clone()], &cache);
+        publish_depth_accelerator_status(&context, &[root.clone()], &cache, None);
         assert_eq!(
             depth_accelerator_status(&context, &[root.clone()], id, 0),
             DepthAcceleratorStatus::Ready
@@ -793,7 +814,7 @@ mod saved_capture_tests {
             }
             let edited = prepare_group_scene(&[root.clone()], &mut cache);
             assert!(edited.gaussian_splats.is_empty());
-            publish_depth_accelerator_status(&context, &[root.clone()], &cache);
+            publish_depth_accelerator_status(&context, &[root.clone()], &cache, None);
             assert_eq!(
                 depth_accelerator_status(
                     &context,
@@ -1108,13 +1129,13 @@ mod depth_accelerator_status_tests {
             let mut source = vec![root];
             let mut cache = HashMap::new();
             let mut revision = 0;
-            publish_depth_accelerator_status(&context, &source, &cache);
+            publish_depth_accelerator_status(&context, &source, &cache, None);
             assert_eq!(
                 depth_accelerator_status(&context, &source, id, revision),
                 DepthAcceleratorStatus::NotComputedYet
             );
             prepare_group_scene_with_neural(&source, &mut cache, &HashMap::new(), &HashSet::new());
-            publish_depth_accelerator_status(&context, &source, &cache);
+            publish_depth_accelerator_status(&context, &source, &cache, None);
             assert_eq!(
                 depth_accelerator_status(&context, &source, id, revision),
                 DepthAcceleratorStatus::Ready
@@ -1141,7 +1162,7 @@ mod depth_accelerator_status_tests {
                 "an edit must invalidate readiness before the next render"
             );
             prepare_group_scene_with_neural(&source, &mut cache, &HashMap::new(), &HashSet::new());
-            publish_depth_accelerator_status(&context, &source, &cache);
+            publish_depth_accelerator_status(&context, &source, &cache, None);
             assert_eq!(
                 depth_accelerator_status(&context, &source, id, revision),
                 DepthAcceleratorStatus::Ready
@@ -1155,7 +1176,7 @@ mod depth_accelerator_status_tests {
                 &HashMap::new(),
                 &HashSet::new(),
             );
-            publish_depth_accelerator_status(&context, &saved, &restored);
+            publish_depth_accelerator_status(&context, &saved, &restored, None);
             assert_eq!(
                 depth_accelerator_status(&context, &saved, id, revision + 1),
                 DepthAcceleratorStatus::Ready

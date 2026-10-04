@@ -22,6 +22,7 @@ impl Renderer {
         refine: bool,
         animation_playback: bool,
         outline_capture: bool,
+        outline_viewport: bool,
     ) -> bool {
         let requests = egui
             .data_mut(|data| {
@@ -55,7 +56,9 @@ impl Renderer {
         if cancelled {
             self.invalidate_scene();
         }
-        self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
+        if !outline_viewport {
+            self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
+        }
         self.neural_jobs.publish(egui);
         #[cfg(not(target_arch = "wasm32"))]
         let capture_progress = self.group_capture_bake.as_ref().map(|job| {
@@ -140,6 +143,42 @@ impl Renderer {
             format: Some(self.render_format),
             ..Default::default()
         });
+        if outline_viewport {
+            // The editor has already painted the viewport background and its
+            // wireframes into egui. Shading this scene would be fully hidden.
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            {
+                let mut pass = encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("outline editor"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(match egui.theme() {
+                                    egui::Theme::Dark => wgpu::Color::BLACK,
+                                    egui::Theme::Light => wgpu::Color::WHITE,
+                                }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    })
+                    .forget_lifetime();
+                self.egui_renderer.render(&mut pass, &clipped, &screen);
+            }
+            self.queue
+                .submit(callback_commands.into_iter().chain([encoder.finish()]));
+            self.free_textures(output);
+            if let Some(frame) = frame {
+                self.queue.present(frame);
+            }
+            return true;
+        }
         let display_view = offscreen
             .as_ref()
             .and_then(|_| frame.as_ref())
@@ -438,6 +477,9 @@ impl Renderer {
         }
         if let Some((buffer, padded)) = capture_buffer {
             self.capture_pending = true;
+            self.capture_cancel
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            let cancelled = self.capture_cancel.clone();
             let result_slot = self.capture_result.clone();
             let mapped_buffer = buffer.clone();
             let width = self.config.width;
@@ -450,6 +492,9 @@ impl Renderer {
                 .slice(..)
                 .map_async(wgpu::MapMode::Read, move |result| {
                     let frame = result.map_err(|error| error.to_string()).and_then(|_| {
+                        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                            return Err("Capture cancelled".to_owned());
+                        }
                         let mapped = mapped_buffer
                             .slice(..)
                             .get_mapped_range()
@@ -479,6 +524,11 @@ impl Renderer {
 
     pub fn capture_pending(&self) -> bool {
         self.capture_pending
+    }
+
+    pub fn cancel_pending_capture(&mut self) {
+        self.capture_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn take_capture(&mut self) -> Option<Result<CapturedFrame, String>> {

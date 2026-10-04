@@ -35,6 +35,9 @@ impl Renderer {
     ) -> PreviewPipelineState {
         let (sender, receiver) = mpsc::channel();
         let context = context.clone();
+        self.material_preview_compiling
+            .store(true, std::sync::atomic::Ordering::Release);
+        let compiling = self.material_preview_compiling.clone();
         #[cfg(not(target_arch = "wasm32"))]
         {
             let device = self.device.clone();
@@ -58,6 +61,7 @@ impl Renderer {
                     false,
                 );
                 let _ = sender.send(Ok(pipeline));
+                compiling.store(false, std::sync::atomic::Ordering::Release);
                 context.request_repaint();
             });
         }
@@ -80,6 +84,7 @@ impl Renderer {
                     .await
                     .map_err(|error| format!("Preview compilation failed: {error:?}"));
                 let _ = sender.send(result);
+                compiling.store(false, std::sync::atomic::Ordering::Release);
                 context.request_repaint();
             });
         }

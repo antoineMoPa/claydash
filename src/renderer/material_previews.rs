@@ -26,7 +26,7 @@ impl Renderer {
         let shader_source = material_gpu::shader_source_for_assets(assets);
         self.boolean_pipeline = None;
         self.fast_boolean_pipeline = None;
-        self.scene_pipelines_dirty = true;
+        self.scene_pipeline_cache.clear();
         self.shader_source = shader_source;
         self.custom_material_sources = sources;
         self.uploaded_scene_versions = [i32::MIN; 2];
@@ -112,11 +112,7 @@ impl Renderer {
             Some(PreviewPipelineState::Compiling(_) | PreviewPipelineState::Failed(_)) => return,
             None => {
                 // Only one compiler job at a time, even while scrolling/filtering.
-                if self
-                    .material_preview_pipelines
-                    .iter()
-                    .any(|(_, state)| matches!(state, PreviewPipelineState::Compiling(_)))
-                {
+                if self.material_preview_compiling.load(Ordering::Acquire) {
                     return;
                 }
                 let state = self.compile_preview_pipeline(features, context);

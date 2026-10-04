@@ -85,6 +85,12 @@ impl App {
                 crate::model::set_objects(&mut tree, scene);
             }
             crate::model::set_selected(&mut tree, Vec::new());
+            if std::env::args().any(|arg| arg == "--benchmark-outline") {
+                tree.set_transient_path(
+                    "editor.viewport_mode",
+                    ClaydashValue::ViewportMode(crate::model::ViewportMode::Outline),
+                );
+            }
         }
         let mut camera = Camera::new();
         // Open the default duck at the front-facing view chosen for its scene.

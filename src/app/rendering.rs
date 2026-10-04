@@ -80,8 +80,13 @@ impl App {
     }
 
     pub(super) fn cancel_render(&mut self) {
-        if let Some(renderer) = &self.renderer {
+        if let Some(renderer) = &mut self.renderer {
             self.discard_capture |= renderer.capture_pending();
+            renderer.cancel_pending_capture();
+        }
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        if let Some(capture) = self.agent_capture.take() {
+            let _ = capture.reply.send(Err("Capture cancelled".into()));
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -339,6 +344,7 @@ impl App {
                 refine,
                 animation_playback,
                 outline_capture,
+                commands::outline_mode(&self.tree) && !capture_render,
             );
             #[cfg(target_arch = "wasm32")]
             if presented && !self.web_loading_complete {
