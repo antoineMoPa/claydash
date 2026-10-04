@@ -22,6 +22,63 @@ fn selected_object() -> (DataTree, uuid::Uuid) {
 }
 
 #[test]
+fn outline_mode_toggles_once_per_press_and_respects_keyboard_focus_and_modifiers() {
+    let (mut tree, _) = selected_object();
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState::default();
+    assert!(!commands::outline_mode(&tree));
+
+    interaction.key_pressed(KeyCode::KeyZ, false, &commands, &mut tree);
+    assert!(commands::outline_mode(&tree));
+    interaction.key_pressed(KeyCode::KeyZ, false, &commands, &mut tree);
+    assert!(commands::outline_mode(&tree));
+    interaction.key_released(KeyCode::KeyZ);
+    interaction.key_pressed(KeyCode::KeyZ, false, &commands, &mut tree);
+    assert!(!commands::outline_mode(&tree));
+    interaction.key_released(KeyCode::KeyZ);
+
+    interaction.key_pressed(KeyCode::KeyZ, true, &commands, &mut tree);
+    assert!(!commands::outline_mode(&tree));
+    interaction.key_released(KeyCode::KeyZ);
+    for modifier in [KeyCode::ControlLeft, KeyCode::SuperLeft, KeyCode::AltLeft] {
+        interaction.key_pressed(modifier, false, &commands, &mut tree);
+        interaction.key_pressed(KeyCode::KeyZ, false, &commands, &mut tree);
+        assert!(!commands::outline_mode(&tree), "{modifier:?}");
+        interaction.key_released(KeyCode::KeyZ);
+        interaction.key_released(modifier);
+    }
+}
+
+#[test]
+fn outline_mode_preserves_transform_axis_and_shift_z_undo() {
+    let (mut tree, _) = selected_object();
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState::default();
+    commands::start_grab(&mut tree);
+    interaction.key_pressed(KeyCode::KeyZ, false, &commands, &mut tree);
+    assert!(!commands::outline_mode(&tree));
+    assert!(matches!(
+        tree.get_path("editor.constrain_z"),
+        ClaydashValue::Bool(true)
+    ));
+    interaction.key_released(KeyCode::KeyZ);
+    interaction.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
+
+    tree.make_undo_redo_snapshot();
+    tree.set_path("scene.cursor_position", ClaydashValue::Vec3(Vec3::X));
+    tree.make_undo_redo_snapshot();
+    commands::toggle_outline(&mut tree);
+    interaction.key_pressed(KeyCode::ShiftLeft, false, &commands, &mut tree);
+    interaction.key_pressed(KeyCode::KeyZ, false, &commands, &mut tree);
+    assert!(commands::outline_mode(&tree));
+    assert!(
+        !matches!(tree.get_path("scene.cursor_position"), ClaydashValue::Vec3(p) if p == Vec3::X)
+    );
+}
+
+#[test]
 fn empty_scene_click_places_cursor_on_its_current_view_plane() {
     let (mut tree, _) = selected_object();
     let mut camera = Camera::new();

@@ -21,6 +21,7 @@ impl Renderer {
         offscreen_capture: bool,
         refine: bool,
         animation_playback: bool,
+        outline_capture: bool,
     ) -> bool {
         let requests = egui
             .data_mut(|data| {
@@ -293,6 +294,23 @@ impl Renderer {
                 ],
                 &view,
                 display_view.as_ref(),
+            );
+        }
+        if outline_capture {
+            let renderer = self.outline_capture.get_or_insert_with(|| {
+                super::outline_capture::OutlineCaptureRenderer::new(
+                    &self.device,
+                    self.render_format,
+                )
+            });
+            renderer.encode(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &view,
+                [self.config.width, self.config.height],
+                camera,
+                objects,
             );
         }
         // Copy the scene before egui is composited so exports never contain

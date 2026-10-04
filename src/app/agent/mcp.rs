@@ -11,7 +11,7 @@ const MODEL_ORGANIZATION: &str = concat!(
 
 pub(super) fn schema() -> Value {
     json!({
-        "version": 8,
+        "version": 9,
         "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| json!({"kind": kind, "example": SdfObject::create_kind(*kind)})).collect::<Vec<_>>(),
@@ -33,7 +33,9 @@ pub(super) fn schema() -> Value {
             "BoxParams includes corner_radius; LoftParams contains ordered sections, each with an optional closed profile of 3–32 [Y,Z] points in unit ellipse coordinates. ",
             "Custom profiles in one loft must have matching point counts. ",
             "A PutObject can set surface_inlay to a host object id, offset, and thickness. ",
-            "CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays; refine:true requests a full-resolution pass. ",
+            "CaptureViewport and CaptureOrthographic accept optional object_ids to render Boolean groups and attached inlays. ",
+            "Their mode is simple_shading (default), full_material, or outline. Outline captures show all primitive wires, including hidden Boolean operands, without editor UI. ",
+            "Legacy refine:true requests full_material; an explicit mode takes precedence over refine. Capture mode does not change the live editor view. ",
             "Apply actions run as one undoable edit. ",
             "Send expected_revision from GetState to reject stale edits. ",
             "ReplaceScene accepts the raw document value and must be the sole action.",
@@ -151,8 +153,8 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         ("apply", "Apply typed scene actions as one undoable transaction. Read get_schema first; include expected_revision from get_state.", json!({"type": "object", "properties": {"expected_revision": {"type": "integer"}, "actions": {"type": "array", "items": action, "minItems": 1}}, "required": ["actions"]})),
         ("execute_command", "Run an existing Claydash command by name. Some commands start an interactive gesture.", json!({"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]})),
         ("set_view", "Set the live viewport camera. position and target are [x,y,z]; projection_mode is Perspective or Orthographic.", json!({"type": "object", "properties": {"position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "target": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "up": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "projection_mode": {"enum": ["Perspective", "Orthographic"]}}, "required": ["position", "target"]})),
-        ("capture_viewport", "Render and return a PNG of the viewport. Pass object_ids to isolate groups; set refine true for full-resolution material inspection (default false).", json!({"type": "object", "properties": {"object_ids": {"type": "array", "items": uuid, "minItems": 1}, "refine": {"type": "boolean"}}, "additionalProperties": false})),
-        ("capture_orthographic", "Return one compact PNG with X, Y, Z orthographic views toward the origin. Optional object_ids isolate groups. Set refine true for full-resolution material inspection (default false).", json!({"type": "object", "properties": {"object_ids": {"type": "array", "items": uuid, "minItems": 1}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 512}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000}, "refine": {"type": "boolean"}}, "additionalProperties": false})),
+        ("capture_viewport", "Render and return a PNG of the viewport. Pass object_ids to isolate groups. mode: simple_shading (default), full_material for material inspection, or outline for all primitive wires including hidden Boolean operands. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"object_ids": {"type": "array", "items": uuid, "minItems": 1}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
+        ("capture_orthographic", "Return one compact PNG with X, Y, Z orthographic views toward the origin. Optional object_ids isolate groups. mode: simple_shading (default), full_material, or outline for all primitive wires including hidden Boolean operands. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"object_ids": {"type": "array", "items": uuid, "minItems": 1}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 512}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("undo", "Undo the last scene edit.", empty.clone()),
         ("redo", "Redo the last undone scene edit.", empty.clone()),
         ("save", "Save the live scene to the current path or a specified .claydash path.", json!({"type": "object", "properties": {"path": {"type": "string"}}})),

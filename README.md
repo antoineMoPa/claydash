@@ -107,6 +107,17 @@ During G/R/S transforms (including the move started by Duplicate), X/Y/Z selects
 world axis, replacing the previous axis. Press the same axis again to unlock it. Held-key
 repeat is ignored; axis keys take priority over Shift/⌘ undo/redo while transforming.
 
+Outside transforms, press `Z` or use the scan button in the top-right viewport toolbar to
+toggle outline mode. It shows primitive wire guides for all objects, including hidden Boolean
+operands; click a wire to select its object. Selected outlines are white and subtractive operands
+are amber. Press `Z` again to return to shading. `Shift+Z` still undoes, and typing in editor
+fields does not toggle the view. Outline mode and full material rendering are mutually exclusive:
+enabling either turns the other off. Turning either off returns to simple shading. Outline mode
+affects the editor viewport only, not render exports.
+MCP `capture_viewport` and `capture_orthographic` can independently request `mode: "outline"`
+for wire-guide PNGs, `mode: "simple_shading"` (default), or `mode: "full_material"`. Capture mode
+does not change the editor view. See [agent integration](docs/agent-integration.md).
+
 Moving objects, resizing box faces, and extruding box faces snap to infinite guides through the
 face centers of other boxes. Each face contributes its normal and two tangent directions; the
 active guide is drawn in the viewport. Snapping preserves view-plane, world-axis, and face-normal

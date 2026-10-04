@@ -68,16 +68,27 @@ The configuration follows each client's current local MCP documentation:
 4. Call `set_view` if the camera needs to move, then `capture_viewport` to get a PNG image.
    The capture renders offscreen even when the native window is unfocused or on another macOS
    desktop. Pass `object_ids` to show only specific objects or Boolean groups and their surface
-   inlays in that PNG. Captures use the fast preview by default; pass `refine: true` to render the
-   full-resolution pass for close material inspection. The scene and selection stay unchanged.
+   inlays in that PNG. Captures use `mode: "simple_shading"` by default; use
+   `mode: "full_material"` for close material inspection or `mode: "outline"` to see primitive
+   wire guides for every captured object, including hidden Boolean operands. Outline PNGs contain
+   the guides on a dark background, without editor controls or gizmos. The scene, selection, and
+   live viewport mode stay unchanged. Legacy `refine: true` selects full material rendering and
+   `refine: false` selects simple shading; an explicit `mode` takes precedence over `refine`.
    Repeat the edit and capture steps until the design looks right.
 5. Call `capture_orthographic` for one PNG with X (side), Y (top), and Z (front) orthographic views
    aimed at the origin. Each panel is 256 px square by default. It accepts the same `object_ids`
-   and `refine` options, plus optional `panel_size` and camera `distance`.
+   and `mode`/`refine` options, plus optional `panel_size` and camera `distance`.
 6. Call `save` with a `.claydash` path, or use the current document path.
 
-The viewport's top-right scan button toggles the full-resolution refinement pass for the live
-editor. Export renders always use full resolution.
+The viewport's top-right aperture button toggles full material rendering; the scan button or `Z`
+toggles outlines. These live editor modes are mutually exclusive. Export renders always use
+full resolution.
+
+For an outline sheet of a Boolean group, call `capture_orthographic` with:
+
+```json
+{"mode":"outline","object_ids":["<group-root-id>"],"panel_size":256}
+```
 
 For example, the `apply` arguments below create two shapes and make the sphere subtract from the
 box after a subsequent call supplies their generated IDs:

@@ -420,6 +420,7 @@ impl Renderer {
             material_preview_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             capture_result: Arc::new(std::sync::Mutex::new(None)),
             capture_pending: false,
+            outline_capture: None,
         };
         renderer
     }

@@ -174,7 +174,7 @@ impl InteractionState {
             KeyCode::KeyZ if shift => "undo",
             KeyCode::KeyY if shift => "redo",
             KeyCode::KeyY => "constrain_y",
-            KeyCode::KeyZ => "constrain_z",
+            KeyCode::KeyZ if !has_command_modifier => "toggle_outline",
             KeyCode::KeyA if shift => "select_all_or_none",
             KeyCode::KeyD if shift => "duplicate",
             KeyCode::KeyI if primary_modifier => "invert_selection",

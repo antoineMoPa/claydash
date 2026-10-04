@@ -6,8 +6,8 @@ use sdf_consts::{
 use crate::{
     animation,
     model::{
-        objects, selected, set_objects, set_selected, ClaydashValue, DataTree, EditorState,
-        SdfObject,
+        objects, selected, set_objects, set_selected, viewport_mode, ClaydashValue, DataTree,
+        EditorState, SdfObject, ViewportMode,
     },
     undo_redo,
 };
@@ -106,6 +106,14 @@ pub fn register_all(commands: &mut Commands) {
         "Constrain editing to Z axis.",
         "Z",
         |tree| toggle_constraint(tree, "editor.constrain_z"),
+    );
+    register(
+        commands,
+        "toggle_outline",
+        "Toggle outline mode",
+        "Show all object outlines, including hidden Boolean operands, instead of shaded surfaces.",
+        "Z",
+        toggle_outline,
     );
     register(
         commands,
@@ -237,6 +245,30 @@ pub fn register_all(commands: &mut Commands) {
         undo_redo::REDO_SHORTCUT,
         undo_redo::redo,
     );
+}
+
+pub(crate) fn outline_mode(tree: &DataTree) -> bool {
+    viewport_mode(tree) == ViewportMode::Outline
+}
+
+pub(crate) fn full_material_rendering(tree: &DataTree) -> bool {
+    viewport_mode(tree) == ViewportMode::FullMaterial
+}
+
+pub(crate) fn toggle_outline(tree: &mut DataTree) {
+    let mode = match viewport_mode(tree) {
+        ViewportMode::Outline => ViewportMode::SimpleShading,
+        ViewportMode::SimpleShading | ViewportMode::FullMaterial => ViewportMode::Outline,
+    };
+    tree.set_transient_path("editor.viewport_mode", ClaydashValue::ViewportMode(mode));
+}
+
+pub(crate) fn toggle_full_material_rendering(tree: &mut DataTree) {
+    let mode = match viewport_mode(tree) {
+        ViewportMode::FullMaterial => ViewportMode::SimpleShading,
+        ViewportMode::SimpleShading | ViewportMode::Outline => ViewportMode::FullMaterial,
+    };
+    tree.set_transient_path("editor.viewport_mode", ClaydashValue::ViewportMode(mode));
 }
 
 pub fn execute(commands: &Commands, name: &str, tree: &mut DataTree) {

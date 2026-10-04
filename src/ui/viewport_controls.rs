@@ -293,7 +293,7 @@ impl UiState {
         self.regions.push(left.response.rect);
 
         // Move the right-hand group below the tools when space is tight.
-        let projection_y = if viewport.width() < left.response.rect.width() + 166.0 {
+        let projection_y = if viewport.width() < left.response.rect.width() + 198.0 {
             left.response.rect.height() + 10.0
         } else {
             6.0
@@ -325,17 +325,29 @@ impl UiState {
                     }
                     if selectable_view_button(
                         ui,
-                        egui::include_image!("../../assets/icons/lucide/aperture.svg"),
-                        if self.refine_viewport {
-                            "Full material rendering on — click for native resolution with simple shading"
-                        } else {
-                            "Native resolution with simple shading — click for full material rendering"
-                        },
-                        self.refine_viewport,
+                        egui::include_image!("../../assets/icons/lucide/scan.svg"),
+                        "Toggle outline mode (Z)",
+                        commands::outline_mode(tree),
                     )
                     .clicked()
                     {
-                        self.refine_viewport = !self.refine_viewport;
+                        commands::toggle_outline(tree);
+                    }
+                    if selectable_view_button(
+                        ui,
+                        egui::include_image!("../../assets/icons/lucide/aperture.svg"),
+                        if commands::full_material_rendering(tree) {
+                            "Full material rendering on — click for native resolution with simple shading"
+                        } else if commands::outline_mode(tree) {
+                            "Outline mode on — click for full material rendering"
+                        } else {
+                            "Native resolution with simple shading — click for full material rendering"
+                        },
+                        commands::full_material_rendering(tree),
+                    )
+                    .clicked()
+                    {
+                        commands::toggle_full_material_rendering(tree);
                     }
                     if view_button(
                         ui,

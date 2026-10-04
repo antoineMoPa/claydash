@@ -40,17 +40,45 @@ impl Ghosts {
 }
 
 pub(super) fn draw(ui: &egui::Ui, tree: &DataTree, camera: &Camera) -> Ghosts {
-    let mut ghosts = Ghosts::default();
     let selected = selected_ref(tree);
-    if selected.is_empty() {
+    let outline_mode = crate::commands::outline_mode(tree);
+    draw_guides(
+        ui,
+        objects_ref(tree),
+        selected,
+        camera,
+        outline_mode,
+        selection_scope(tree) == SelectionScope::Group,
+    )
+}
+
+pub(crate) fn draw_capture(ui: &egui::Ui, scene: &[SdfObject], camera: &Camera) {
+    draw_guides(ui, scene, &[], camera, true, false);
+}
+
+fn draw_guides(
+    ui: &egui::Ui,
+    scene: &[SdfObject],
+    selected: &[uuid::Uuid],
+    camera: &Camera,
+    outline_mode: bool,
+    include_descendants: bool,
+) -> Ghosts {
+    let mut ghosts = Ghosts::default();
+    if selected.is_empty() && !outline_mode {
         return ghosts;
     }
-    let scene = objects_ref(tree);
-    let operands = editing_operands(
-        scene,
-        selected,
-        selection_scope(tree) == SelectionScope::Group,
-    );
+    let operands = if outline_mode {
+        let mut outlines: Vec<_> = scene
+            .iter()
+            .enumerate()
+            .map(|(index, object)| (index, selected.contains(&object.uuid)))
+            .collect();
+        outlines.sort_by_key(|(_, active)| !active);
+        outlines
+    } else {
+        editing_operands(scene, selected, include_descendants)
+    };
     if operands.is_empty() {
         return ghosts;
     }
@@ -60,8 +88,12 @@ pub(super) fn draw(ui: &egui::Ui, tree: &DataTree, camera: &Camera) -> Ghosts {
     let mut simplified = false;
     for (index, active) in operands {
         let object = &scene[index];
-        let color = if object.operation == BooleanOperation::Subtract {
+        let color = if outline_mode && active {
+            Color32::WHITE
+        } else if object.operation == BooleanOperation::Subtract {
             Color32::from_rgba_unmultiplied(255, 192, 115, if active { 195 } else { 85 })
+        } else if outline_mode {
+            ui.visuals().text_color().gamma_multiply(0.65)
         } else {
             Color32::from_rgba_unmultiplied(159, 219, 255, if active { 195 } else { 85 })
         };
@@ -118,7 +150,11 @@ pub(super) fn draw(ui: &egui::Ui, tree: &DataTree, camera: &Camera) -> Ghosts {
         ui.painter().text(
             ui.clip_rect().right_bottom() - egui::vec2(10.0, 10.0),
             egui::Align2::RIGHT_BOTTOM,
-            "Additional operand guides hidden",
+            if outline_mode {
+                "Additional object outlines hidden"
+            } else {
+                "Additional operand guides hidden"
+            },
             egui::FontId::proportional(11.0),
             Color32::LIGHT_GRAY,
         );
@@ -500,6 +536,39 @@ mod tests {
         }
         assert_eq!(lines, 3 * CURVE_STEPS);
         assert_eq!(ghosts.pick(viewport.left_top()), None);
+    }
+
+    #[test]
+    fn outline_mode_draws_and_picks_unselected_roots_and_hidden_operands() {
+        let ctx = egui::Context::default();
+        let mut tree = DataTree::default();
+        let target = SdfObject::create_kind(PrimitiveKind::Box);
+        let mut cutter = SdfObject::create_kind(PrimitiveKind::Sphere);
+        cutter.params = SdfParams::SphereParams(crate::model::SphereParams { radius: 0.1 });
+        cutter.boolean_parent = Some(target.uuid);
+        cutter.operation = BooleanOperation::Subtract;
+        let target_id = target.uuid;
+        let cutter_id = cutter.uuid;
+        crate::model::set_objects(&mut tree, vec![target, cutter]);
+        crate::commands::toggle_outline(&mut tree);
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(400.0, 300.0);
+        let mut ghosts = Ghosts::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ghosts = draw(ui, &tree, &camera);
+        });
+        output.textures_delta.clear();
+        assert!(ghosts.0.iter().any(|(id, _)| *id == target_id));
+        let points = ghosts.0.iter().find(|(id, _)| *id == cutter_id).unwrap().1;
+        assert_eq!(ghosts.pick(points[0].lerp(points[1], 0.5)), Some(cutter_id));
+        assert_eq!(ghosts.0.len(), 12 + 3 * CURVE_STEPS);
+
+        crate::commands::toggle_outline(&mut tree);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ghosts = draw(ui, &tree, &camera);
+        });
+        output.textures_delta.clear();
+        assert!(ghosts.0.is_empty());
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub enum Request {
 pub struct CaptureViewportArgs {
     pub object_ids: Option<Vec<uuid::Uuid>>,
     pub refine: Option<bool>,
+    pub mode: Option<CaptureMode>,
 }
 
 #[derive(Default, Deserialize)]
@@ -64,6 +65,26 @@ pub struct CaptureOrthographicArgs {
     pub panel_size: Option<u32>,
     pub distance: Option<f32>,
     pub refine: Option<bool>,
+    pub mode: Option<CaptureMode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureMode {
+    #[default]
+    SimpleShading,
+    FullMaterial,
+    Outline,
+}
+
+impl CaptureMode {
+    fn from_options(mode: Option<Self>, refine: Option<bool>) -> Self {
+        match (mode, refine) {
+            (Some(mode), _) => mode,
+            (None, Some(true)) => Self::FullMaterial,
+            (None, _) => Self::SimpleShading,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -396,7 +417,7 @@ impl App {
                     match args.object_ids.map(|ids| capture_objects(model::objects_ref(&self.tree), &ids)).transpose() {
                         Ok(objects) => {
                             self.agent_capture = Some(AgentCapture {
-                                reply, objects, refine: args.refine.unwrap_or(false),
+                                reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
                                 view: CaptureView::Viewport,
                             });
                             if let Some(renderer) = &mut self.renderer {
@@ -424,7 +445,7 @@ impl App {
                         match args.object_ids.map(|ids| capture_objects(model::objects_ref(&self.tree), &ids)).transpose() {
                             Ok(objects) => {
                                 self.agent_capture = Some(AgentCapture {
-                                    reply, objects, refine: args.refine.unwrap_or(false),
+                                    reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
                                     view: CaptureView::Orthographic { panel_size, distance, frames: Vec::with_capacity(3) },
                                 });
                                 if let Some(renderer) = &mut self.renderer {

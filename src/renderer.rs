@@ -11,6 +11,7 @@ use crate::{
 
 #[cfg(not(target_arch = "wasm32"))]
 mod benchmark;
+mod outline_capture;
 pub(crate) mod post_processing;
 
 const MAX_OBJECTS: usize = 1024;
@@ -290,6 +291,7 @@ pub struct Renderer {
     material_preview_in_flight: Arc<std::sync::atomic::AtomicBool>,
     capture_result: Arc<std::sync::Mutex<Option<Result<CapturedFrame, String>>>>,
     capture_pending: bool,
+    outline_capture: Option<outline_capture::OutlineCaptureRenderer>,
 }
 
 struct MaterialPreview {

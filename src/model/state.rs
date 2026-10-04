@@ -30,11 +30,27 @@ pub enum ClaydashValue {
     VecSDFObject(Vec<SdfObject>),
     EditorState(EditorState),
     SelectionScope(SelectionScope),
+    ViewportMode(ViewportMode),
     Bool(bool),
     World(super::World),
     #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
     None,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViewportMode {
+    #[default]
+    FullMaterial,
+    SimpleShading,
+    Outline,
+}
+
+pub fn viewport_mode(tree: &DataTree) -> ViewportMode {
+    match tree.get_path("editor.viewport_mode") {
+        ClaydashValue::ViewportMode(mode) => mode,
+        _ => ViewportMode::default(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

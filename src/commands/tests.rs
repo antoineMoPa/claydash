@@ -2,6 +2,39 @@ use super::*;
 use crate::model::BooleanOperation;
 
 #[test]
+fn viewport_modes_keep_outline_and_full_material_rendering_mutually_exclusive() {
+    let mut tree = DataTree::default();
+    assert_eq!(viewport_mode(&tree), ViewportMode::FullMaterial);
+    for (initial, outline_result, material_result) in [
+        (
+            ViewportMode::FullMaterial,
+            ViewportMode::Outline,
+            ViewportMode::SimpleShading,
+        ),
+        (
+            ViewportMode::SimpleShading,
+            ViewportMode::Outline,
+            ViewportMode::FullMaterial,
+        ),
+        (
+            ViewportMode::Outline,
+            ViewportMode::SimpleShading,
+            ViewportMode::FullMaterial,
+        ),
+    ] {
+        tree.set_transient_path("editor.viewport_mode", ClaydashValue::ViewportMode(initial));
+        toggle_outline(&mut tree);
+        assert_eq!(viewport_mode(&tree), outline_result);
+        assert!(!(outline_mode(&tree) && full_material_rendering(&tree)));
+
+        tree.set_transient_path("editor.viewport_mode", ClaydashValue::ViewportMode(initial));
+        toggle_full_material_rendering(&mut tree);
+        assert_eq!(viewport_mode(&tree), material_result);
+        assert!(!(outline_mode(&tree) && full_material_rendering(&tree)));
+    }
+}
+
+#[test]
 fn all_new_primitives_inherit_the_complete_picked_material() {
     let mut tree = DataTree::default();
     let mut material = crate::model::Material::preset(crate::model::MaterialKind::Wood);

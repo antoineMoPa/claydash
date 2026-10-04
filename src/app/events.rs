@@ -484,7 +484,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw();
                 #[cfg(all(not(target_arch = "wasm32"), unix))]
                 if self.agent_redraw_pending && !offscreen_agent_capture {
-                    self.agent_redraw_pending = self.ui.refine_viewport()
+                    self.agent_redraw_pending = commands::full_material_rendering(&self.tree)
                         && self
                             .renderer
                             .as_ref()

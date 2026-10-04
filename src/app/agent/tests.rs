@@ -3,6 +3,57 @@ use super::mcp::mcp_tools;
 use super::*;
 
 #[test]
+fn capture_modes_are_typed_and_override_legacy_refinement() {
+    for op in ["CaptureViewport", "CaptureOrthographic"] {
+        for (mode, expected) in [
+            ("outline", CaptureMode::Outline),
+            ("simple_shading", CaptureMode::SimpleShading),
+            ("full_material", CaptureMode::FullMaterial),
+        ] {
+            let request = serde_json::from_value::<Request>(request_payload(
+                op,
+                json!({"mode": mode, "refine": true}),
+            ))
+            .unwrap();
+            let actual = match request {
+                Request::CaptureViewport(args) => CaptureMode::from_options(args.mode, args.refine),
+                Request::CaptureOrthographic(args) => {
+                    CaptureMode::from_options(args.mode, args.refine)
+                }
+                _ => panic!("unexpected request"),
+            };
+            assert_eq!(actual, expected);
+        }
+        assert!(
+            serde_json::from_value::<Request>(request_payload(op, json!({"mode": "unknown"})))
+                .is_err()
+        );
+    }
+    assert_eq!(
+        CaptureMode::from_options(None, None),
+        CaptureMode::SimpleShading
+    );
+    assert_eq!(
+        CaptureMode::from_options(None, Some(false)),
+        CaptureMode::SimpleShading
+    );
+    assert_eq!(
+        CaptureMode::from_options(None, Some(true)),
+        CaptureMode::FullMaterial
+    );
+    for name in ["capture_viewport", "capture_orthographic"] {
+        let tool = mcp_tools()
+            .into_iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap();
+        assert_eq!(
+            tool["inputSchema"]["properties"]["mode"]["enum"],
+            json!(["simple_shading", "full_material", "outline"])
+        );
+    }
+}
+
+#[test]
 fn wire_requests_accept_mcp_empty_arguments_and_typed_actions() {
     let read = serde_json::from_value::<Request>(request_payload("GetState", json!({})));
     assert!(read.is_ok(), "{}", read.err().unwrap());
@@ -52,7 +103,7 @@ fn orthographic_capture_uses_three_axes_and_combines_panels() {
     let mut capture = AgentCapture {
         reply,
         objects: None,
-        refine: false,
+        mode: CaptureMode::SimpleShading,
         view: CaptureView::Orthographic {
             panel_size: 96,
             distance: 8.0,

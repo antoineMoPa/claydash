@@ -286,15 +286,17 @@ impl App {
             {
                 self.agent_capture
                     .as_ref()
-                    .map_or(self.ui.refine_viewport(), |capture| capture.refine)
+                    .map_or(commands::full_material_rendering(&self.tree), |capture| {
+                        capture.mode == agent::CaptureMode::FullMaterial
+                    })
             }
             #[cfg(not(unix))]
             {
-                self.ui.refine_viewport()
+                commands::full_material_rendering(&self.tree)
             }
         };
         #[cfg(target_arch = "wasm32")]
-        let refine = self.pending_render.is_some() || self.ui.refine_viewport();
+        let refine = self.pending_render.is_some() || commands::full_material_rendering(&self.tree);
         #[cfg(not(target_arch = "wasm32"))]
         let animation_playback = self.ui.animation_playing()
             || self
@@ -303,6 +305,13 @@ impl App {
                 .is_some_and(|benchmark| benchmark.animation);
         #[cfg(target_arch = "wasm32")]
         let animation_playback = self.ui.animation_playing();
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        let outline_capture = self
+            .agent_capture
+            .as_ref()
+            .is_some_and(|capture| capture.mode == agent::CaptureMode::Outline);
+        #[cfg(any(target_arch = "wasm32", not(unix)))]
+        let outline_capture = false;
         if let Some(renderer) = &mut self.renderer {
             // Selection is drawn by the editor gizmos. Keep the cached scene
             // image when only selection changes, avoiding a full refinement.
@@ -329,6 +338,7 @@ impl App {
                 offscreen_capture,
                 refine,
                 animation_playback,
+                outline_capture,
             );
             #[cfg(target_arch = "wasm32")]
             if presented && !self.web_loading_complete {

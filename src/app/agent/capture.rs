@@ -12,7 +12,7 @@ pub enum CaptureView {
 pub struct AgentCapture {
     pub reply: Sender<AgentResult>,
     pub objects: Option<Vec<SdfObject>>,
-    pub refine: bool,
+    pub mode: CaptureMode,
     pub view: CaptureView,
 }
 

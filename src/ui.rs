@@ -1,6 +1,6 @@
 mod animation_panel;
 mod animation_widgets;
-mod boolean_overlay;
+pub(crate) mod boolean_overlay;
 mod camera_overlay;
 mod camera_panel;
 mod edit_menu;
@@ -98,7 +98,6 @@ pub struct UiState {
     palette: CommandPalette,
     regions: Vec<egui::Rect>,
     viewport_rect: Option<egui::Rect>,
-    refine_viewport: bool,
     ghosts: boolean_overlay::Ghosts,
     selection_tools: selection_tools::SelectionTools,
     active_guide: Option<crate::guides::ActiveGuideSet>,
@@ -134,7 +133,6 @@ impl Default for UiState {
             palette: CommandPalette::default(),
             regions: Vec::new(),
             viewport_rect: None,
-            refine_viewport: true,
             ghosts: boolean_overlay::Ghosts::default(),
             selection_tools: selection_tools::SelectionTools::default(),
             active_guide: None,
@@ -156,10 +154,6 @@ impl UiState {
         }
         polygon_editor::remove_point(ctx, tree);
         true
-    }
-
-    pub fn refine_viewport(&self) -> bool {
-        self.refine_viewport
     }
 
     pub fn animation_playing(&self) -> bool {
@@ -358,6 +352,12 @@ impl UiState {
             self.draw_view_gizmo(viewport_ui.ctx(), tree, camera);
             viewport_ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
+                if commands::outline_mode(tree) {
+                    // Cover only the editor viewport; the renderer's scene cache and
+                    // scene-only exports keep their normal shaded image.
+                    ui.painter()
+                        .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+                }
                 self.regions.extend(camera_overlay::draw(ui, tree, camera));
                 if polygon_editor::active(tree).is_none() {
                     if let Some((curve, hit)) = object_gizmos::draw_bezier_paths(ui, tree, camera) {
