@@ -22,6 +22,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     let saved_settings = scene[index].neural_sdf;
     let saved_accelerator = scene[index].sphere_accelerator;
     let saved_box_accelerator = scene[index].box_accelerator;
+    let saved_splats = scene[index].gaussian_splats;
     let saved_mode = scene[index].render_representation;
     let mut selected_mode = saved_mode;
     egui::ComboBox::from_id_salt(ui.auto_id_with("group-render-representation"))
@@ -32,6 +33,19 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                     .on_hover_text(mode.description());
             }
         });
+    if selected_mode == crate::model::GroupRenderRepresentation::GaussianSplats {
+        let settings = &mut scene[index].gaussian_splats;
+        ui.horizontal(|ui| {
+            ui.label("Splat resolution").on_hover_text("Grid of rays from each of the six bounding-box sides. Higher resolution preserves more detail and uses more memory. Click Recompute to apply. Limited by available GPU storage.");
+            ui.add(egui::DragValue::new(&mut settings.resolution).update_while_editing(false)
+                .range(1..=u32::MAX).speed(1.0));
+        });
+        let status = if selected_mode == saved_mode {
+            crate::renderer::depth_accelerator_status(ui.ctx(), &scene, target, tree.path_version("scene.sdf_objects"))
+        } else { crate::renderer::DepthAcceleratorStatus::NotComputedYet };
+        recompute_button(ui, target, false);
+        ui.weak(if status == crate::renderer::DepthAcceleratorStatus::Ready { "100%" } else { "0%" });
+    }
     if selected_mode.is_depth_accelerator() {
         let settings = match selected_mode {
             crate::model::GroupRenderRepresentation::SphereAccelerator => &mut scene[index].sphere_accelerator,
@@ -98,15 +112,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             status,
             Some(NeuralStatus::Pending | NeuralStatus::Training { .. })
         );
-        if ui.add_enabled(!computing, egui::Button::new("Recompute")).on_hover_text("Restart this group's bake using the current settings. Exact SDF is shown until the result is ready.").clicked() {
-            ui.ctx().data_mut(|data| {
-                let id = egui::Id::new("group-optimization-recompute");
-                let mut requests = data.get_temp::<std::collections::HashSet<uuid::Uuid>>(id).unwrap_or_default();
-                requests.insert(target);
-                data.insert_temp(id, requests);
-            });
-            ui.ctx().request_repaint();
-        }
+        recompute_button(ui, target, computing);
         match status {
             Some(NeuralStatus::Ready { .. }) => {
                 ui.weak("100%");
@@ -129,6 +135,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
         ui.weak(status.label());
     }
     if selected_mode != scene[index].render_representation
+        || saved_splats != scene[index].gaussian_splats
         || saved_settings != scene[index].neural_sdf
         || saved_accelerator != scene[index].sphere_accelerator
         || saved_box_accelerator != scene[index].box_accelerator
@@ -136,6 +143,18 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
         scene[index].render_representation = selected_mode;
         set_objects(tree, scene);
         tree.make_undo_redo_snapshot();
+    }
+}
+
+fn recompute_button(ui: &mut egui::Ui, target: uuid::Uuid, computing: bool) {
+    if ui.add_enabled(!computing, egui::Button::new("Recompute")).on_hover_text("Restart this group's bake using the current settings. Exact SDF is shown until the result is ready.").clicked() {
+        ui.ctx().data_mut(|data| {
+            let id = egui::Id::new("group-optimization-recompute");
+            let mut requests = data.get_temp::<std::collections::HashSet<uuid::Uuid>>(id).unwrap_or_default();
+            requests.insert(target);
+            data.insert_temp(id, requests);
+        });
+        ui.ctx().request_repaint();
     }
 }
 
@@ -154,6 +173,38 @@ fn learning_rate_input(ui: &mut egui::Ui, value: &mut f32) -> egui::Response {
 #[cfg(test)]
 mod progress_tests {
     use super::*;
+
+    #[test]
+    fn splat_panel_uses_the_shared_recompute_button_and_only_requests_on_click() {
+        let context = egui::Context::default();
+        let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        object.render_representation = crate::model::GroupRenderRepresentation::GaussianSplats;
+        let id = object.uuid;
+        let mut tree = DataTree::default();
+        crate::model::set_objects(&mut tree, vec![object]);
+        crate::model::set_selected_exact(&mut tree, vec![id]);
+        let input = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 1000.0))),
+            events, ..Default::default()
+        };
+        let mut output = context.run_ui(input(vec![]), |ui| group_optimizations_panel(ui, &mut tree));
+        output.textures_delta.clear();
+        let button = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Recompute" => Some(text.pos + text.galley.size() * 0.5),
+            _ => None,
+        }).expect("same Recompute button as neural optimization");
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "0%")));
+        let request_id = egui::Id::new("group-optimization-recompute");
+        assert!(context.data(|data| data.get_temp::<std::collections::HashSet<uuid::Uuid>>(request_id)).is_none());
+        for pressed in [true, false] {
+            let mut output = context.run_ui(input(vec![egui::Event::PointerMoved(button), egui::Event::PointerButton {
+                pos: button, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+            }]), |ui| group_optimizations_panel(ui, &mut tree));
+            output.textures_delta.clear();
+        }
+        assert_eq!(context.data(|data| data.get_temp::<std::collections::HashSet<uuid::Uuid>>(request_id)),
+            Some(std::collections::HashSet::from([id])));
+    }
 
     #[test]
     fn learning_rate_keeps_partial_text_until_committed() {

@@ -5,6 +5,55 @@ use std::collections::HashMap;
 type DepthMetadata = (u32, u32, u32, Vec3, Vec3, i32);
 type SplatSample = (uuid::Uuid, Vec3, f32, [f32; 3], Vec3, u32);
 
+/// Estimate local footprint from adjacent rays in the same face and depth layer.
+/// Never enlarge beyond the grid footprint, keeping proxy/BVH bounds conservative.
+struct SplatFootprint<'a> {
+    texels: &'a [[f32; 4]],
+    owners: &'a [Option<uuid::Uuid>],
+    normals: &'a [Vec3],
+    width: u32,
+    height: u32,
+    axis: usize,
+    u_axis: usize,
+    v_axis: usize,
+    sign: f32,
+    spacing: glam::Vec2,
+}
+impl SplatFootprint<'_> {
+    fn sigma(&self, index: usize) -> f32 {
+        let face_size = (self.width * self.height) as usize;
+        let pixel = index % face_size;
+        let x = (pixel % self.width as usize) as i32;
+        let y = (pixel / self.width as usize) as i32;
+        let base = 0.6 * self.spacing.max_element();
+        let mut scale = 1.0_f32;
+        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nx = x + dx;
+            let ny = y + dy;
+            // A capture face border is not itself a surface edge.
+            if nx < 0 || ny < 0 || nx >= self.width as i32 || ny >= self.height as i32 {
+                continue;
+            }
+            let neighbor = index - pixel + (ny as u32 * self.width + nx as u32) as usize;
+            if self.owners[neighbor].is_none() || self.owners[neighbor] != self.owners[index] {
+                scale = scale.min(0.5);
+                continue;
+            }
+            let mut delta = Vec3::ZERO;
+            delta[self.axis] = -self.sign * (self.texels[neighbor][0] - self.texels[index][0]);
+            delta[self.u_axis] = dx as f32 * self.spacing.x;
+            delta[self.v_axis] = dy as f32 * self.spacing.y;
+            let normal = self.normals[index];
+            let agreement = normal.dot(self.normals[neighbor]).clamp(0.0, 1.0);
+            let plane_error = delta.dot(normal).abs() / self.spacing.max_element();
+            // Curvature and depth discontinuities tighten the Gaussian, while
+            // sloped planes retain their footprint (zero tangent-plane error).
+            scale = scale.min((1.0 / (1.0 + 2.0 * (1.0 - agreement) + plane_error)).max(0.35));
+        }
+        base * scale
+    }
+}
+
 pub(super) struct UploadedAtlases {
     pub box_depth_metadata: HashMap<uuid::Uuid, DepthMetadata>,
     pub depth_accelerator_transforms: HashMap<uuid::Uuid, u32>,
@@ -16,7 +65,7 @@ pub(super) struct UploadedAtlases {
 
 impl Renderer {
     pub(super) fn upload_scene_atlases(
-        &self,
+        &mut self,
         objects: &[&SdfObject],
         source_objects: &[SdfObject],
         prepared_scene: Option<&PreparedGroupScene>,
@@ -80,7 +129,10 @@ impl Renderer {
                         ]);
                         if field.raymarch_last_segment {
                             box_depth_texels.push([
-                                source_indices.get(owner).copied().map_or(0, |index| index + 1)
+                                source_indices
+                                    .get(owner)
+                                    .copied()
+                                    .map_or(0, |index| index + 1)
                                     as f32,
                                 0.0,
                                 0.0,
@@ -183,9 +235,22 @@ impl Renderer {
                             center[v_axis] = minimum[v_axis]
                                 + (y as f32 + 0.5) / height as f32
                                     * (maximum[v_axis] - minimum[v_axis]);
-                            let support = 0.6
-                                * ((maximum[u_axis] - minimum[u_axis]) / width as f32)
-                                    .max((maximum[v_axis] - minimum[v_axis]) / height as f32);
+                            let support = SplatFootprint {
+                                texels,
+                                owners,
+                                normals,
+                                width,
+                                height,
+                                axis,
+                                u_axis,
+                                v_axis,
+                                sign,
+                                spacing: glam::Vec2::new(
+                                    (maximum[u_axis] - minimum[u_axis]) / width as f32,
+                                    (maximum[v_axis] - minimum[v_axis]) / height as f32,
+                                ),
+                            }
+                            .sigma(sample_index);
                             if owner.is_some() {
                                 splat_bounds
                                     .entry(object.uuid)
@@ -242,10 +307,15 @@ impl Renderer {
             }
         }
         for (id, mut bounds) in splat_bounds {
-            if let Some(range) = splat_bvh::append_splat_bvh(&mut box_depth_texels, &mut bounds) {
+            if let Some(range) = splat_bvh::append_splat_bvh_with_budget(
+                &mut box_depth_texels,
+                &mut bounds,
+                self.capture_record_budget(),
+            ) {
                 splat_bvh_metadata.insert(id, range);
             }
         }
+        self.resize_capture_buffer_for(box_depth_texels.len());
         if !box_depth_texels.is_empty() {
             self.queue.write_buffer(
                 &self.box_depth_buffer,
@@ -360,5 +430,78 @@ mod sphere_accelerator_tests {
             assert!((captured - local).length() < 0.00001);
         }
         assert!((rows[3][0] - 1.7).abs() < 0.00001);
+    }
+}
+
+#[cfg(test)]
+mod splat_footprint_tests {
+    use super::*;
+
+    #[test]
+    fn footprints_tighten_at_curvature_gaps_and_depth_edges() {
+        let id = uuid::Uuid::new_v4();
+        let mut texels = vec![[1.0, 0.0, 0.0, 0.0]; 18];
+        let mut owners = vec![Some(id); 18];
+        let mut normals = vec![Vec3::X; 18];
+        let sigma = |texels: &[[f32; 4]], owners: &[Option<uuid::Uuid>], normals: &[Vec3]| {
+            SplatFootprint {
+                texels,
+                owners,
+                normals,
+                width: 3,
+                height: 3,
+                axis: 0,
+                u_axis: 1,
+                v_axis: 2,
+                sign: 1.0,
+                spacing: glam::Vec2::ONE,
+            }
+            .sigma(4)
+        };
+        let flat = sigma(&texels, &owners, &normals);
+        assert!((flat - 0.6).abs() < 0.00001);
+        // A different depth layer must not contaminate this footprint.
+        texels[13][0] = 100.0;
+        normals[13] = Vec3::Y;
+        assert_eq!(sigma(&texels, &owners, &normals), flat);
+        normals[5] = Vec3::Y;
+        assert!(sigma(&texels, &owners, &normals) < flat);
+        normals[5] = Vec3::X;
+        texels[5][0] = 5.0;
+        assert!(sigma(&texels, &owners, &normals) < flat);
+        texels[5][0] = 1.0;
+        owners[5] = None;
+        assert!(sigma(&texels, &owners, &normals) < flat);
+        owners[5] = Some(uuid::Uuid::new_v4());
+        assert!(sigma(&texels, &owners, &normals) < flat);
+    }
+
+    #[test]
+    fn tilted_planes_keep_their_footprint() {
+        let texels: Vec<_> = (0..9)
+            .map(|i| [1.0 + (i % 3) as f32, 0.0, 0.0, 0.0])
+            .collect();
+        let owners = vec![Some(uuid::Uuid::new_v4()); 9];
+        let normals = vec![
+            Vec3::new(
+                std::f32::consts::FRAC_1_SQRT_2,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0
+            );
+            9
+        ];
+        let footprint = SplatFootprint {
+            texels: &texels,
+            owners: &owners,
+            normals: &normals,
+            width: 3,
+            height: 3,
+            axis: 0,
+            u_axis: 1,
+            v_axis: 2,
+            sign: 1.0,
+            spacing: glam::Vec2::ONE,
+        };
+        assert!((footprint.sigma(4) - 0.6).abs() < 0.00001);
     }
 }

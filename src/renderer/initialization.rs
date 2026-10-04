@@ -92,6 +92,13 @@ impl Renderer {
         let timestamps = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
+                required_limits: wgpu::Limits {
+                    max_storage_buffer_binding_size: adapter
+                        .limits()
+                        .max_storage_buffer_binding_size,
+                    max_buffer_size: adapter.limits().max_buffer_size,
+                    ..Default::default()
+                },
                 required_features: if timestamps {
                     wgpu::Features::TIMESTAMP_QUERY
                 } else {
@@ -427,6 +434,10 @@ impl Renderer {
         }
         self.lattice_atlas = create_lattice_atlas(&self.device, rows);
         self.lattice_atlas_rows = rows;
+        self.rebuild_scene_bind_group();
+    }
+
+    fn rebuild_scene_bind_group(&mut self) {
         self.bind_group = create_scene_bind_group(
             &self.device,
             &self.bind_group_layout,
@@ -446,6 +457,27 @@ impl Renderer {
             &self.image_sampler,
             &self.box_depth_buffer,
         );
+    }
+
+    pub(super) fn capture_record_budget(&self) -> usize {
+        let limits = self.device.limits();
+        // BVH offsets are f32; keep record addresses exactly representable.
+        (u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size) / 16)
+            .min(1 << 24) as usize
+    }
+
+    pub(super) fn resize_capture_buffer_for(&mut self, records: usize) {
+        let bytes = (records * 16) as u64;
+        if bytes <= self.box_depth_buffer.size() {
+            return;
+        }
+        self.box_depth_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("resized depth and splat capture buffer"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.rebuild_scene_bind_group();
     }
 
     pub fn size(&self) -> Vec2 {

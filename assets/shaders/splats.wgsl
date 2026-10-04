@@ -23,8 +23,18 @@ struct VertexOutput {
         vec2(-2.5, -2.5), vec2(2.5, -2.5), vec2(-2.5, 2.5),
         vec2(-2.5, 2.5), vec2(2.5, -2.5), vec2(2.5, 2.5));
     let offset = corners[vertex];
+    // Project a surface-aligned Gaussian with sigma along the tangent plane
+    // and 0.25 * sigma along its normal, matching the ray compositor.
+    let screen_normal = vec2(dot(instance.normal.xyz, camera.right.xyz),
+        dot(instance.normal.xyz, camera.up.xyz));
+    let normal_length = length(screen_normal);
+    var minor_axis = vec2(1.0, 0.0);
+    if normal_length > 0.000001 { minor_axis = screen_normal / normal_length; }
+    let major_axis = vec2(-minor_axis.y, minor_axis.x);
+    let minor_scale = sqrt(max(1.0 - 0.9375 * dot(screen_normal, screen_normal), 0.0625));
+    let projected = major_axis * offset.x + minor_axis * offset.y * minor_scale;
     let world = instance.center_radius.xyz
-        + (camera.right.xyz * offset.x + camera.up.xyz * offset.y) * instance.center_radius.w;
+        + (camera.right.xyz * projected.x + camera.up.xyz * projected.y) * instance.center_radius.w;
     var out: VertexOutput;
     out.position = camera.view_projection * vec4(world, 1.0);
     out.offset = offset;

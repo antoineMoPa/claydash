@@ -6,7 +6,6 @@ use super::*;
 use crate::model::{lattice_bounds, lattice_world_matrix, PreparedSubtreeSampler};
 
 pub(super) const BOX_DEPTH_RESOLUTION: u32 = 40;
-pub(super) const GAUSSIAN_BOX_RESOLUTION: u32 = 64;
 pub(super) const MAX_BOX_DEPTH_TEXELS: usize = 32 * 1024 * 1024 / 16;
 
 #[derive(Clone, Copy)]
@@ -49,13 +48,30 @@ impl BoxFace {
     }
 }
 
+pub(super) fn box_capture_sample_count(resolution: u32, layers: usize) -> Option<usize> {
+    if resolution == 0 {
+        return None;
+    }
+    (resolution as usize)
+        .checked_mul(resolution as usize)?
+        .checked_mul(6)?
+        .checked_mul(layers)
+}
+
 pub(super) fn bake_box_depth_atlas(
     scene: &[SdfObject],
     root: uuid::Uuid,
     resolution: u32,
     start: BoxCaptureStart,
 ) -> Option<BoxDepthAtlas> {
-    if !(8..=128).contains(&resolution) {
+    let layers = if matches!(start, BoxCaptureStart::OutsideBounds) {
+        8
+    } else {
+        1
+    };
+    let texel_count = box_capture_sample_count(resolution, layers)?;
+    // Shader offsets are stored as f32, which represents integers exactly up to 2^24.
+    if texel_count > (1 << 24) {
         return None;
     }
     let lookup: HashMap<_, _> = scene.iter().map(|object| (object.uuid, object)).collect();
@@ -87,13 +103,7 @@ pub(super) fn bake_box_depth_atlas(
     };
     let local_min = -half_extent - Vec3::splat(clearance);
     let local_max = half_extent + Vec3::splat(clearance);
-    let layers = if matches!(start, BoxCaptureStart::OutsideBounds) {
-        8
-    } else {
-        1
-    };
     let face_size = resolution as usize * resolution as usize;
-    let texel_count = 6 * face_size * layers;
     let mut texels = vec![[-1.0, 0.0, 0.0, 0.0]; texel_count];
     let mut owners = vec![None; texel_count];
     let mut normals = vec![Vec3::ZERO; texel_count];

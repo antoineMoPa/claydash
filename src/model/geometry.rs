@@ -209,6 +209,8 @@ pub struct SdfObject {
     pub render_representation: GroupRenderRepresentation,
     #[serde(default, skip_serializing_if = "NeuralSdfSettings::is_default")]
     pub neural_sdf: NeuralSdfSettings,
+    #[serde(default, skip_serializing_if = "GaussianSplatSettings::is_default")]
+    pub gaussian_splats: GaussianSplatSettings,
     #[serde(default, skip_serializing_if = "SphereAcceleratorSettings::is_default")]
     pub sphere_accelerator: SphereAcceleratorSettings,
     #[serde(default, skip_serializing_if = "BoxAcceleratorSettings::is_default")]
@@ -282,6 +284,7 @@ impl SdfObject {
             group_transform: Transform::default(),
             render_representation: GroupRenderRepresentation::default(),
             neural_sdf: NeuralSdfSettings::default(),
+            gaussian_splats: GaussianSplatSettings::default(),
             sphere_accelerator: SphereAcceleratorSettings::default(),
             box_accelerator: BoxAcceleratorSettings::default(),
             saved_neural_field: None,

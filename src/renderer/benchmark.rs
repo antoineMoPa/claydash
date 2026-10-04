@@ -16,6 +16,20 @@ impl Renderer {
 
         let upload_started = Instant::now();
         self.uploaded_scene_versions = [i32::MIN; 2];
+        // Explicitly simulate clicking Recompute for splat benchmark fixtures.
+        for object in objects.iter().filter(|object| {
+            object.render_representation == crate::model::GroupRenderRepresentation::GaussianSplats
+        }) {
+            if !self
+                .group_capture_cache
+                .get(&object.uuid)
+                .is_some_and(|entry| {
+                    entry.key == super::group_capture::capture_key(objects, object)
+                })
+            {
+                self.group_compute_requests.insert(object.uuid);
+            }
+        }
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         // Benchmarks must measure ready neural proxies, not the temporary exact fallback.
         while self.neural_jobs.is_busy() {

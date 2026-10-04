@@ -154,6 +154,7 @@ impl Renderer {
             self.viewport.invalidate();
         }
         let scene_changed = document_changed || neural_changed;
+        let capture_budget = self.capture_record_budget();
         let prepared_scene = (scene_changed
             && source_objects.iter().any(|object| {
                 matches!(
@@ -167,11 +168,12 @@ impl Renderer {
                 )
             }))
         .then(|| {
-            prepare_group_scene_with_neural(
+            prepare_group_scene_with_budget(
                 source_objects,
                 &mut self.group_capture_cache,
                 &self.neural_jobs.ready(),
                 &self.group_compute_requests,
+                capture_budget,
             )
         });
         if manage_scene_jobs {

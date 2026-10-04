@@ -162,7 +162,7 @@ fn gaussian_splat_mode_replaces_group_and_preserves_capture_owners() {
     child.transform.translation = Vec3::new(0.75, 0.0, 0.0);
     let child_id = child.uuid;
     let source = [root, child];
-    let prepared = scene_upload::prepare_group_scene(&source, &mut Default::default());
+    let prepared = scene_upload::compute_group_scene(&source, &mut Default::default());
     assert_eq!(prepared.objects.len(), 1);
     assert!(prepared.gaussian_splats.contains(&source[0].uuid));
     let atlas = &prepared.box_depth_atlases[&source[0].uuid];
@@ -206,7 +206,7 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
         GroupRenderRepresentation::SphereDepthAtlas,
     ] {
         source[7].render_representation = mode;
-        let prepared = scene_upload::prepare_group_scene(&source, &mut Default::default());
+        let prepared = scene_upload::compute_group_scene(&source, &mut Default::default());
         assert!(prepared.gaussian_splats.contains(&duck_id));
         assert!(prepared.box_depth_atlases.contains_key(&duck_id));
         assert!(prepared.objects.iter().any(|object| object.uuid == duck_id));

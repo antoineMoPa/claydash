@@ -25,7 +25,7 @@ pub(super) struct PreparedGroupScene {
 pub(super) use crate::model::SavedDepthAtlas as CachedCapture;
 
 pub(super) struct CachedGroupCapture {
-    key: u64,
+    pub(super) key: u64,
     capture: CachedCapture,
 }
 
@@ -50,10 +50,11 @@ pub(crate) fn depth_accelerator_status(
     source_revision: i32,
 ) -> DepthAcceleratorStatus {
     let source = &source[..source.len().min(MAX_OBJECTS)];
-    let Some(object) = source
-        .iter()
-        .find(|object| object.uuid == root && object.render_representation.is_depth_accelerator())
-    else {
+    let Some(object) = source.iter().find(|object| {
+        object.uuid == root
+            && (object.render_representation.is_depth_accelerator()
+                || object.render_representation == GroupRenderRepresentation::GaussianSplats)
+    }) else {
         return DepthAcceleratorStatus::NotComputedYet;
     };
     let key = context
@@ -89,7 +90,10 @@ pub(super) fn publish_depth_accelerator_status(
 ) {
     let keys: HashMap<_, _> = source
         .iter()
-        .filter(|object| object.render_representation.is_depth_accelerator())
+        .filter(|object| {
+            object.render_representation.is_depth_accelerator()
+                || object.render_representation == GroupRenderRepresentation::GaussianSplats
+        })
         .filter_map(|object| {
             cache
                 .get(&object.uuid)
@@ -102,6 +106,7 @@ pub(super) fn publish_depth_accelerator_status(
                         ) | (
                             CachedCapture::Box(_),
                             GroupRenderRepresentation::BoxAccelerator
+                                | GroupRenderRepresentation::GaussianSplats
                         )
                     )
                 })
@@ -133,12 +138,12 @@ fn restored_capture(source: &[SdfObject], root: &SdfObject, key: u64) -> Option<
         ) => {
             let gaussian = root.render_representation == GroupRenderRepresentation::GaussianSplats;
             let resolution = if gaussian {
-                GAUSSIAN_BOX_RESOLUTION
+                root.gaussian_splats.resolution
             } else {
                 BOX_DEPTH_RESOLUTION
             };
             let layers = if gaussian { 8 } else { 1 };
-            let expected = 6 * resolution as usize * resolution as usize * layers;
+            let expected = box_capture_sample_count(resolution, layers)?;
             if atlas.resolution != resolution
                 || atlas.layers != layers
                 || atlas.texels.len() != expected
@@ -271,8 +276,16 @@ pub(super) fn capture_key(source: &[SdfObject], root: &SdfObject) -> u64 {
             image_stencil: &object.image_stencil,
         })
         .collect();
-    let bytes = serde_json::to_vec(&(root.uuid, root.render_representation, objects))
+    // Preserve legacy fingerprints at the default resolution.
+    let splat_resolution = (root.render_representation
+        == GroupRenderRepresentation::GaussianSplats
+        && root.gaussian_splats.resolution != 64)
+        .then_some(root.gaussian_splats.resolution);
+    let mut bytes = serde_json::to_vec(&(root.uuid, root.render_representation, objects))
         .expect("capture source is serializable");
+    if let Some(resolution) = splat_resolution {
+        bytes.extend_from_slice(&resolution.to_le_bytes());
+    }
     // FNV-1a has a fixed definition, so saved fingerprints survive restarts
     // and Rust toolchain changes. Bump the saved field version if inputs change.
     bytes.iter().fold(0xcbf29ce484222325u64, |hash, byte| {
@@ -288,11 +301,41 @@ pub(super) fn prepare_group_scene(
     prepare_group_scene_with_neural(source, cache, &HashMap::new(), &HashSet::new())
 }
 
+#[cfg(test)]
+pub(super) fn compute_group_scene(
+    source: &[SdfObject],
+    cache: &mut HashMap<uuid::Uuid, CachedGroupCapture>,
+) -> PreparedGroupScene {
+    let requests = source
+        .iter()
+        .filter(|object| object.render_representation == GroupRenderRepresentation::GaussianSplats)
+        .map(|object| object.uuid)
+        .collect();
+    prepare_group_scene_with_neural(source, cache, &HashMap::new(), &requests)
+}
+
+#[cfg(test)]
 pub(super) fn prepare_group_scene_with_neural(
     source: &[SdfObject],
     cache: &mut HashMap<uuid::Uuid, CachedGroupCapture>,
     ready_neural: &HashMap<uuid::Uuid, std::sync::Arc<super::neural_sdf::NeuralField>>,
     compute_requests: &HashSet<uuid::Uuid>,
+) -> PreparedGroupScene {
+    prepare_group_scene_with_budget(
+        source,
+        cache,
+        ready_neural,
+        compute_requests,
+        MAX_BOX_DEPTH_TEXELS,
+    )
+}
+
+pub(super) fn prepare_group_scene_with_budget(
+    source: &[SdfObject],
+    cache: &mut HashMap<uuid::Uuid, CachedGroupCapture>,
+    ready_neural: &HashMap<uuid::Uuid, std::sync::Arc<super::neural_sdf::NeuralField>>,
+    compute_requests: &HashSet<uuid::Uuid>,
+    atlas_budget: usize,
 ) -> PreparedGroupScene {
     let mut neural_fields = HashMap::new();
     cache.retain(|id, _| source.iter().any(|object| object.uuid == *id));
@@ -356,8 +399,11 @@ pub(super) fn prepare_group_scene_with_neural(
             | GroupRenderRepresentation::GaussianSplats => {
                 let gaussian =
                     root.render_representation == GroupRenderRepresentation::GaussianSplats;
+                if gaussian && !root.gaussian_splats.is_valid() {
+                    continue;
+                }
                 let resolution = if gaussian {
-                    GAUSSIAN_BOX_RESOLUTION
+                    root.gaussian_splats.resolution
                 } else {
                     BOX_DEPTH_RESOLUTION
                 };
@@ -366,7 +412,22 @@ pub(super) fn prepare_group_scene_with_neural(
                 } else {
                     BoxCaptureStart::AtBounds
                 };
-                let cached = cache.get(&root.uuid).filter(|entry| entry.key == key);
+                // Reject impossible uploads before allocating or marching any rays.
+                let layers = if gaussian { 8 } else { 1 };
+                let Some(samples) = box_capture_sample_count(resolution, layers) else {
+                    continue;
+                };
+                let records_per_sample = if gaussian { 3 } else { 2 };
+                if samples > atlas_budget.saturating_sub(atlas_texels) / records_per_sample {
+                    continue;
+                }
+                let requested = compute_requests.contains(&root.uuid);
+                let cached = cache
+                    .get(&root.uuid)
+                    .filter(|entry| entry.key == key && !requested);
+                if gaussian && !requested && cached.is_none() {
+                    continue;
+                }
                 let atlas =
                     if let Some(CachedCapture::Box(atlas)) = cached.map(|entry| &entry.capture) {
                         atlas.clone()
@@ -393,7 +454,7 @@ pub(super) fn prepare_group_scene_with_neural(
                             0
                         }
                 };
-                if atlas_texels + required_texels > MAX_BOX_DEPTH_TEXELS {
+                if atlas_texels + required_texels > atlas_budget {
                     continue;
                 }
                 atlas_texels += required_texels;
@@ -446,7 +507,7 @@ pub(super) fn prepare_group_scene_with_neural(
                     } else {
                         0
                     };
-                if atlas_texels + required_texels > MAX_BOX_DEPTH_TEXELS {
+                if atlas_texels + required_texels > atlas_budget {
                     continue;
                 }
                 atlas_texels += required_texels;
@@ -477,7 +538,7 @@ pub(super) fn prepare_group_scene_with_neural(
                     } else {
                         0
                     };
-                if atlas_texels + records > MAX_BOX_DEPTH_TEXELS {
+                if atlas_texels + records > atlas_budget {
                     continue;
                 }
                 atlas_texels += records;
@@ -584,13 +645,124 @@ mod saved_capture_tests {
     use super::*;
 
     #[test]
-    fn depth_and_gaussian_captures_compute_on_selection_and_source_edit() {
+    fn splats_only_bake_on_request_and_edits_require_recompute() {
+        let context = egui::Context::default();
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        root.render_representation = GroupRenderRepresentation::GaussianSplats;
+        root.gaussian_splats.resolution = 16;
+        let id = root.uuid;
+        let mut cache = HashMap::new();
+        let idle = prepare_group_scene(&[root.clone()], &mut cache);
+        assert!(idle.gaussian_splats.is_empty());
+        assert!(cache.is_empty());
+        let computed = compute_group_scene(&[root.clone()], &mut cache);
+        let atlas = computed.box_depth_atlases[&id].clone();
+        publish_depth_accelerator_status(&context, &[root.clone()], &cache);
+        assert_eq!(
+            depth_accelerator_status(&context, &[root.clone()], id, 0),
+            DepthAcceleratorStatus::Ready
+        );
+        let recomputed = compute_group_scene(&[root.clone()], &mut cache);
+        assert!(!std::sync::Arc::ptr_eq(
+            &atlas,
+            &recomputed.box_depth_atlases[&id]
+        ));
+        for resolution_edit in [false, true] {
+            if resolution_edit {
+                root.gaussian_splats.resolution = 17;
+            } else {
+                root.transform.scale *= 1.5;
+            }
+            let edited = prepare_group_scene(&[root.clone()], &mut cache);
+            assert!(edited.gaussian_splats.is_empty());
+            publish_depth_accelerator_status(&context, &[root.clone()], &cache);
+            assert_eq!(
+                depth_accelerator_status(
+                    &context,
+                    &[root.clone()],
+                    id,
+                    if resolution_edit { 2 } else { 1 }
+                ),
+                DepthAcceleratorStatus::NotComputedYet
+            );
+            let computed = compute_group_scene(&[root.clone()], &mut cache);
+            assert!(computed.gaussian_splats.contains(&id));
+        }
+    }
+
+    #[test]
+    fn numeric_splat_resolution_exceeds_old_caps_and_rejects_impossible_uploads() {
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        root.render_representation = GroupRenderRepresentation::GaussianSplats;
+        root.gaussian_splats.resolution = 129;
+        let mut cache = HashMap::new();
+        let prepared = prepare_group_scene_with_budget(
+            &[root.clone()],
+            &mut cache,
+            &HashMap::new(),
+            &HashSet::from([root.uuid]),
+            1 << 24,
+        );
+        assert_eq!(prepared.box_depth_atlases[&root.uuid].resolution, 129);
+        root.gaussian_splats.resolution = u32::MAX;
+        let prepared = prepare_group_scene_with_budget(
+            &[root.clone()],
+            &mut cache,
+            &HashMap::new(),
+            &HashSet::from([root.uuid]),
+            1 << 24,
+        );
+        assert!(prepared.box_depth_atlases.is_empty());
+        assert!(!prepared.gaussian_splats.contains(&root.uuid));
+        assert_eq!(prepared.objects[0].object_type, root.object_type);
+    }
+
+    #[test]
+    fn splat_resolution_rebuilds_capture_and_unchanged_resolution_reuses_it() {
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        root.render_representation = GroupRenderRepresentation::GaussianSplats;
+        root.gaussian_splats.resolution = 16;
+        let mut cache = HashMap::new();
+        let first = compute_group_scene(&[root.clone()], &mut cache);
+        let atlas = first.box_depth_atlases[&root.uuid].clone();
+        assert_eq!(atlas.resolution, 16);
+        let reused = prepare_group_scene(&[root.clone()], &mut cache);
+        assert!(std::sync::Arc::ptr_eq(
+            &atlas,
+            &reused.box_depth_atlases[&root.uuid]
+        ));
+        root.gaussian_splats.resolution = 32;
+        let rebuilt = compute_group_scene(&[root.clone()], &mut cache);
+        assert_eq!(rebuilt.box_depth_atlases[&root.uuid].resolution, 32);
+        assert!(!std::sync::Arc::ptr_eq(
+            &atlas,
+            &rebuilt.box_depth_atlases[&root.uuid]
+        ));
+        let mut saved = [root.clone()];
+        objects_with_saved_captures(&[root], &mut saved, &cache);
+        let restored: Vec<SdfObject> =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(restored[0].gaussian_splats.resolution, 32);
+        let mut reopened_cache = HashMap::new();
+        prepare_group_scene(&restored, &mut reopened_cache);
+        match &restored[0].saved_group_capture.as_ref().unwrap().capture {
+            CachedCapture::Box(saved_atlas) => match &reopened_cache[&restored[0].uuid].capture {
+                CachedCapture::Box(reopened) => {
+                    assert!(std::sync::Arc::ptr_eq(saved_atlas, reopened))
+                }
+                _ => panic!("wrong capture type"),
+            },
+            _ => panic!("wrong saved capture type"),
+        }
+    }
+
+    #[test]
+    fn depth_captures_compute_on_selection_and_source_edit() {
         for mode in [
             GroupRenderRepresentation::BoxDepthAtlas,
             GroupRenderRepresentation::SphereDepthAtlas,
             GroupRenderRepresentation::SphereAccelerator,
             GroupRenderRepresentation::BoxAccelerator,
-            GroupRenderRepresentation::GaussianSplats,
         ] {
             let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
             root.render_representation = mode;
@@ -656,7 +828,7 @@ mod saved_capture_tests {
             let id = root.uuid;
             let source = vec![root, child];
             let mut cache = HashMap::new();
-            let original = prepare_group_scene(&source, &mut cache);
+            let original = compute_group_scene(&source, &mut cache);
             let mut objects = source.clone();
             objects_with_saved_captures(&source, &mut objects, &cache);
             assert!(objects[0].saved_group_capture.is_some());

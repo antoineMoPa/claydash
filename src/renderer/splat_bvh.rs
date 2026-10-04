@@ -1,5 +1,6 @@
 use glam::Vec3;
 
+#[cfg(test)]
 use super::MAX_BOX_DEPTH_TEXELS;
 
 #[derive(Clone, Copy)]
@@ -55,11 +56,20 @@ fn build_nodes(bounds: &mut [SplatBound], nodes: &mut Vec<SplatNode>) {
 
 /// Appends stackless nodes as two vec4 records per node. Offsets point into
 /// the shared capture buffer, including its preceding splat records.
+#[cfg(test)]
 pub(super) fn append_splat_bvh(
     texels: &mut Vec<[f32; 4]>,
     bounds: &mut [SplatBound],
 ) -> Option<(u32, u32)> {
-    if bounds.is_empty() || texels.len() + (bounds.len() * 2 - 1) * 2 > MAX_BOX_DEPTH_TEXELS {
+    append_splat_bvh_with_budget(texels, bounds, MAX_BOX_DEPTH_TEXELS)
+}
+
+pub(super) fn append_splat_bvh_with_budget(
+    texels: &mut Vec<[f32; 4]>,
+    bounds: &mut [SplatBound],
+    budget: usize,
+) -> Option<(u32, u32)> {
+    if bounds.is_empty() || texels.len() + (bounds.len() * 2 - 1) * 2 > budget {
         return None;
     }
     let start = texels.len() as u32;

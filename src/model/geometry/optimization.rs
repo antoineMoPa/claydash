@@ -436,3 +436,81 @@ impl TryFrom<StoredDepthAcceleratorSettings> for DepthAcceleratorSettings {
 
 pub type SphereAcceleratorSettings = DepthAcceleratorSettings;
 pub type BoxAcceleratorSettings = DepthAcceleratorSettings;
+
+// Read the initial preset-based representation as well as numeric resolutions.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredSplatResolution {
+    Samples(u32),
+    Preset(LegacySplatResolution),
+}
+#[derive(Deserialize)]
+enum LegacySplatResolution {
+    Low,
+    Medium,
+    High,
+    Ultra,
+}
+fn deserialize_splat_resolution<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    Ok(match StoredSplatResolution::deserialize(deserializer)? {
+        StoredSplatResolution::Samples(samples) => samples,
+        StoredSplatResolution::Preset(preset) => match preset {
+            LegacySplatResolution::Low => 16,
+            LegacySplatResolution::Medium => 32,
+            LegacySplatResolution::High => 64,
+            LegacySplatResolution::Ultra => 96,
+        },
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GaussianSplatSettings {
+    #[serde(deserialize_with = "deserialize_splat_resolution")]
+    pub resolution: u32,
+}
+impl Default for GaussianSplatSettings {
+    fn default() -> Self {
+        Self { resolution: 64 }
+    }
+}
+impl GaussianSplatSettings {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    pub fn is_valid(self) -> bool {
+        self.resolution > 0
+    }
+}
+
+#[cfg(test)]
+mod splat_settings_tests {
+    use super::*;
+    #[test]
+    fn numeric_resolution_and_legacy_presets_round_trip() {
+        for resolution in [1, 97, 129, 256, 1024, u32::MAX] {
+            let settings = GaussianSplatSettings { resolution };
+            let json = serde_json::to_string(&settings).unwrap();
+            assert!(json.contains(&format!("\"resolution\":{resolution}")));
+            assert_eq!(
+                serde_json::from_str::<GaussianSplatSettings>(&json).unwrap(),
+                settings
+            );
+        }
+        for (preset, resolution) in [("Low", 16), ("Medium", 32), ("High", 64), ("Ultra", 96)] {
+            let json = format!("{{\"resolution\":\"{preset}\"}}");
+            assert_eq!(
+                serde_json::from_str::<GaussianSplatSettings>(&json)
+                    .unwrap()
+                    .resolution,
+                resolution
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<GaussianSplatSettings>("{}").unwrap(),
+            GaussianSplatSettings::default()
+        );
+    }
+}
