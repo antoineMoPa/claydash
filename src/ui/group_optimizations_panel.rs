@@ -25,6 +25,10 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     let saved_splats = scene[index].gaussian_splats;
     let saved_mode = scene[index].render_representation;
     let mut selected_mode = saved_mode;
+    let capture_revision = tree
+        .path_version("scene.sdf_objects")
+        .wrapping_add(tree.path_version("scene.materials"))
+        .wrapping_add(tree.path_version("scene.selected_uuids"));
     egui::ComboBox::from_id_salt(ui.auto_id_with("group-render-representation"))
         .selected_text(saved_mode.label())
         .show_ui(ui, |ui| {
@@ -41,10 +45,14 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                 .range(1..=u32::MAX).speed(1.0));
         });
         let status = if selected_mode == saved_mode {
-            crate::renderer::depth_accelerator_status(ui.ctx(), &scene, target, tree.path_version("scene.sdf_objects"))
+            crate::renderer::depth_accelerator_status(ui.ctx(), &scene, target, capture_revision)
         } else { crate::renderer::DepthAcceleratorStatus::NotComputedYet };
         recompute_button(ui, target, false);
-        ui.weak(if status == crate::renderer::DepthAcceleratorStatus::Ready { "100%" } else { "0%" });
+        ui.weak(match status {
+            crate::renderer::DepthAcceleratorStatus::Ready => "100%".to_owned(),
+            crate::renderer::DepthAcceleratorStatus::Baking(percent) => format!("{percent}%"),
+            crate::renderer::DepthAcceleratorStatus::NotComputedYet => "0%".to_owned(),
+        });
     }
     if selected_mode.is_depth_accelerator() {
         let settings = match selected_mode {
@@ -76,7 +84,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                         settings.hit_distance_cells = crate::model::NeuralSdfSettings::default().hit_distance_cells;
                     }
                 }
-            }).response.on_hover_text("Model size presets tested on the default duck. Larger models trade training and rendering speed for fit quality. Click Recompute to apply; edit parameters below for Custom settings.");
+            }).response.on_hover_text("Model size presets. Larger models trade training and rendering speed for fit quality. Click Recompute to apply; edit parameters below for Custom settings.");
         egui::Grid::new(ui.auto_id_with("neural-settings")).num_columns(2).show(ui, |ui| {
             ui.label("Activation");
             egui::ComboBox::from_id_salt("neural-activation").selected_text(settings.training.activation.label()).show_ui(ui, |ui| {
@@ -112,14 +120,23 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             status,
             Some(NeuralStatus::Pending | NeuralStatus::Training { .. })
         );
-        recompute_button(ui, target, computing);
+        ui.horizontal(|ui| {
+            recompute_button(ui, target, computing);
+            if computing && ui.button("Cancel").on_hover_text("Stop this group's neural optimization bake. The exact SDF will be shown.").clicked() {
+                ui.ctx().data_mut(|data| {
+                    let id = egui::Id::new("group-optimization-cancel");
+                    let mut requests = data.get_temp::<std::collections::HashSet<uuid::Uuid>>(id).unwrap_or_default();
+                    requests.insert(target);
+                    data.insert_temp(id, requests);
+                });
+                ui.ctx().request_repaint();
+            }
+        });
         match status {
             Some(NeuralStatus::Ready { .. }) => {
                 ui.weak("100%");
             }
-            Some(NeuralStatus::Failed(reason)) => {
-                ui.weak(format!("Exact SDF fallback: {reason}"));
-            }
+            Some(NeuralStatus::Failed(_)) => {}
             Some(NeuralStatus::Training { percent }) => {
                 ui.weak(format!("{percent}%"));
             }
@@ -130,7 +147,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     }
     if selected_mode.is_depth_accelerator() {
         let status = if selected_mode == saved_mode {
-            crate::renderer::depth_accelerator_status(ui.ctx(), &scene, target, tree.path_version("scene.sdf_objects"))
+            crate::renderer::depth_accelerator_status(ui.ctx(), &scene, target, capture_revision)
         } else { crate::renderer::DepthAcceleratorStatus::NotComputedYet };
         ui.weak(status.label());
     }

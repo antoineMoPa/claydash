@@ -23,6 +23,7 @@ struct Entry {
     generation: u64,
     status: NeuralStatus,
     field: Option<Arc<NeuralField>>,
+    fallback_field: Option<Arc<NeuralField>>,
 }
 struct Active {
     root: uuid::Uuid,
@@ -141,6 +142,7 @@ impl NeuralJobs {
                     generation: self.generation,
                     status,
                     field,
+                    fallback_field: None,
                 },
             );
             changed = true;
@@ -181,13 +183,15 @@ impl NeuralJobs {
         Arc::new(source)
     }
     pub fn recompute(&mut self, root: uuid::Uuid) -> bool {
-        let Some(entry) = self.entries.get_mut(&root) else {
-            return false;
-        };
         let Some(object) = self.source.iter().find(|object| object.uuid == root) else {
             return false;
         };
-        entry.training = object.neural_sdf.training;
+        let training = object.neural_sdf.training;
+        let fallback_field = NeuralField::best_effort(self.source.clone(), root).map(Arc::new);
+        let Some(entry) = self.entries.get_mut(&root) else {
+            return false;
+        };
+        entry.training = training;
         self.generation = self.generation.wrapping_add(1);
         entry.generation = self.generation;
         entry.status = match payload_records(entry.training) {
@@ -197,7 +201,8 @@ impl NeuralJobs {
             }
             Some(_) => NeuralStatus::Pending,
         };
-        entry.field = None;
+        entry.field = fallback_field.clone();
+        entry.fallback_field = fallback_field;
         if let Some(active) = &self.active {
             if active.root == root {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -211,6 +216,31 @@ impl NeuralJobs {
             }
         }
         self.changed_at = Some(web_time::Instant::now() - Duration::from_millis(200));
+        true
+    }
+    pub fn cancel(&mut self, root: uuid::Uuid) -> bool {
+        let Some(entry) = self.entries.get_mut(&root) else {
+            return false;
+        };
+        if !matches!(entry.status, NeuralStatus::Pending | NeuralStatus::Training { .. }) {
+            return false;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        entry.generation = self.generation;
+        entry.status = NeuralStatus::Idle;
+        entry.field = entry.fallback_field.take();
+        if let Some(active) = &self.active {
+            if active.root == root {
+                #[cfg(not(target_arch = "wasm32"))]
+                active
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.active = None;
+                }
+            }
+        }
         true
     }
     /// Returns true only when a newly completed model requires a GPU upload.
@@ -269,9 +299,16 @@ impl NeuralJobs {
                                 milliseconds: field.bake_ms,
                             };
                             entry.field = Some(Arc::new(field));
+                            entry.fallback_field = None;
                             changed = true;
                         }
-                        Err(error) => entry.status = NeuralStatus::Failed(error.into()),
+                        Err(error) => {
+                            entry.status = NeuralStatus::Failed(error.into());
+                            if let Some(field) = entry.fallback_field.take() {
+                                entry.field = Some(field);
+                                changed = true;
+                            }
+                        }
                     }
                 }
                 self.active = None;
@@ -295,8 +332,12 @@ impl NeuralJobs {
                 let job = match factory(source, root) {
                     Ok(job) => job,
                     Err(error) => {
-                        self.entries.get_mut(&root).unwrap().status =
-                            NeuralStatus::Failed(error.into());
+                        let entry = self.entries.get_mut(&root).unwrap();
+                        entry.status = NeuralStatus::Failed(error.into());
+                        if let Some(field) = entry.fallback_field.take() {
+                            entry.field = Some(field);
+                            changed = true;
+                        }
                         return changed;
                     }
                 };
@@ -413,7 +454,7 @@ mod tests {
         let training = root.neural_sdf.training;
         let key = super::super::group_capture::capture_key(source, root);
         let saved = crate::model::SavedNeuralField {
-            version: 1,
+            version: 2,
             source_key: key,
             training,
             weights: vec![0.125; training.parameter_count().unwrap()],
@@ -516,7 +557,7 @@ mod tests {
         let id = source[0].uuid;
         let training = source[0].neural_sdf.training;
         let valid = crate::model::SavedNeuralField {
-            version: 1,
+            version: 2,
             source_key: super::super::group_capture::capture_key(&source, &source[0]),
             training,
             weights: vec![0.0; training.parameter_count().unwrap()],
@@ -526,10 +567,11 @@ mod tests {
             max_error: 0.03,
             bake_ms: 5.0,
         };
-        for case in 0..8 {
+        for case in 0..9 {
             let mut saved = valid.clone();
             match case {
                 0 => saved.version = 99,
+                8 => saved.version = 1,
                 1 => saved.source_key ^= 1,
                 2 => {
                     saved.weights.pop();
@@ -742,5 +784,9 @@ impl Renderer {
         self.neural_jobs = NeuralJobs::default();
         self.group_capture_cache.clear();
         self.group_compute_requests.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.group_capture_bake = None;
+        }
     }
 }

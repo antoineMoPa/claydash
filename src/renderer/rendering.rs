@@ -41,12 +41,38 @@ impl Renderer {
             }
             self.invalidate_scene();
         }
+        let cancellations = egui
+            .data_mut(|data| {
+                data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(
+                    "group-optimization-cancel",
+                ))
+            })
+            .unwrap_or_default();
+        let mut cancelled = false;
+        for id in cancellations {
+            cancelled |= self.neural_jobs.cancel(id);
+        }
+        if cancelled {
+            self.invalidate_scene();
+        }
         self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         self.neural_jobs.publish(egui);
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_progress = self.group_capture_bake.as_ref().map(|job| {
+            (
+                job.root,
+                job.source_revision,
+                job.progress
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            )
+        });
+        #[cfg(target_arch = "wasm32")]
+        let capture_progress = None;
         super::group_capture::publish_depth_accelerator_status(
             egui,
             objects,
             &self.group_capture_cache,
+            capture_progress,
         );
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
         let screen = egui_wgpu::ScreenDescriptor {

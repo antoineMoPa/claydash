@@ -16,6 +16,16 @@ pub(super) fn bake_sphere_depth_atlas(
     width: u32,
     height: u32,
 ) -> Option<SphereDepthAtlas> {
+    bake_sphere_depth_atlas_with_progress(scene, root, width, height, |_| {})
+}
+
+pub(super) fn bake_sphere_depth_atlas_with_progress(
+    scene: &[SdfObject],
+    root: uuid::Uuid,
+    width: u32,
+    height: u32,
+    mut report_progress: impl FnMut(u32),
+) -> Option<SphereDepthAtlas> {
     if !(16..=256).contains(&width) || !(8..=128).contains(&height) {
         return None;
     }
@@ -71,6 +81,7 @@ pub(super) fn bake_sphere_depth_atlas(
                 }
             }
         }
+        report_progress((y * 75 / height.max(1)) as u32);
     }
     if hits == 0 {
         return None;
@@ -102,6 +113,7 @@ pub(super) fn bake_sphere_depth_atlas(
                 .fold(f32::INFINITY, f32::min);
             sample[0] = -nearest.max(0.003);
         }
+        report_progress(75 + ((y + 1) * 25 / height.max(1)) as u32);
     }
     Some(SphereDepthAtlas {
         radius,

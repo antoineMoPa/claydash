@@ -26,19 +26,84 @@ pub(super) use crate::model::SavedDepthAtlas as CachedCapture;
 
 pub(super) struct CachedGroupCapture {
     pub(super) key: u64,
-    capture: CachedCapture,
+    pub(super) capture: CachedCapture,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct CaptureBakeJob {
+    pub root: uuid::Uuid,
+    pub key: u64,
+    pub source_revision: i32,
+    pub progress: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub receiver: std::sync::mpsc::Receiver<Option<CachedCapture>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn start_capture_bake(
+    source: &[SdfObject],
+    root: uuid::Uuid,
+    key: u64,
+    source_revision: i32,
+) -> Option<CaptureBakeJob> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let object = source.iter().find(|object| object.uuid == root)?;
+    let representation = object.render_representation;
+    let resolution = object.gaussian_splats.resolution;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let progress = std::sync::Arc::new(AtomicU32::new(0));
+    let worker_progress = progress.clone();
+    let source = source.to_vec();
+    std::thread::spawn(move || {
+        let report = |percent: u32| worker_progress.store(percent.min(99), Ordering::Relaxed);
+        let capture = match representation {
+            GroupRenderRepresentation::SphereDepthAtlas
+            | GroupRenderRepresentation::SphereAccelerator => bake_sphere_depth_atlas_with_progress(
+                &source,
+                root,
+                SPHERE_DEPTH_WIDTH,
+                SPHERE_DEPTH_HEIGHT,
+                report,
+            )
+            .map(|atlas| CachedCapture::Sphere(std::sync::Arc::new(atlas))),
+            GroupRenderRepresentation::BoxDepthAtlas
+            | GroupRenderRepresentation::BoxAccelerator
+            | GroupRenderRepresentation::GaussianSplats => {
+                let gaussian = representation == GroupRenderRepresentation::GaussianSplats;
+                let resolution = if gaussian { resolution } else { BOX_DEPTH_RESOLUTION };
+                let start = if gaussian {
+                    BoxCaptureStart::OutsideBounds
+                } else {
+                    BoxCaptureStart::AtBounds
+                };
+                bake_box_depth_atlas_with_progress(&source, root, resolution, start, report)
+                    .map(|atlas| CachedCapture::Box(std::sync::Arc::new(atlas)))
+            }
+            _ => None,
+        };
+        let _ = sender.send(capture);
+    });
+    Some(CaptureBakeJob {
+        root,
+        key,
+        source_revision,
+        progress,
+        receiver,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DepthAcceleratorStatus {
     NotComputedYet,
+    Baking(u32),
     Ready,
 }
 impl DepthAcceleratorStatus {
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> String {
         match self {
-            Self::NotComputedYet => "Not computed yet",
-            Self::Ready => "Ready",
+            Self::NotComputedYet => "Not computed yet".into(),
+            Self::Baking(percent) => format!("{percent}%"),
+            Self::Ready => "Ready".into(),
         }
     }
 }
@@ -57,6 +122,18 @@ pub(crate) fn depth_accelerator_status(
     }) else {
         return DepthAcceleratorStatus::NotComputedYet;
     };
+    let progress = context
+        .data(|data| {
+            data.get_temp::<HashMap<uuid::Uuid, (i32, u32)>>(egui::Id::new(
+                "depth-accelerator-progress",
+            ))
+        })
+        .and_then(|entries| entries.get(&root).copied());
+    if let Some((revision, percent)) = progress {
+        if revision == source_revision {
+            return DepthAcceleratorStatus::Baking(percent.min(99));
+        }
+    }
     let key = context
         .data(|data| {
             data.get_temp::<HashMap<uuid::Uuid, u64>>(egui::Id::new("depth-accelerator-ready"))
@@ -87,6 +164,7 @@ pub(super) fn publish_depth_accelerator_status(
     context: &egui::Context,
     source: &[SdfObject],
     cache: &HashMap<uuid::Uuid, CachedGroupCapture>,
+    progress: Option<(uuid::Uuid, i32, u32)>,
 ) {
     let keys: HashMap<_, _> = source
         .iter()
@@ -113,18 +191,35 @@ pub(super) fn publish_depth_accelerator_status(
                 .map(|entry| (object.uuid, entry.key))
         })
         .collect();
+    let progress_map: HashMap<_, _> = progress
+        .map(|(root, revision, percent)| (root, (revision, percent.min(99))))
+        .into_iter()
+        .collect();
     let changed = context.data_mut(|data| {
         let id = egui::Id::new("depth-accelerator-ready");
         let changed = data.get_temp::<HashMap<uuid::Uuid, u64>>(id).as_ref() != Some(&keys);
         data.insert_temp(id, keys);
-        changed
+        let progress_id = egui::Id::new("depth-accelerator-progress");
+        let progress_changed = data
+            .get_temp::<HashMap<uuid::Uuid, (i32, u32)>>(progress_id)
+            .as_ref()
+            != Some(&progress_map);
+        data.insert_temp(progress_id, progress_map);
+        changed || progress_changed
     });
     if changed {
         context.request_repaint();
     }
+    if progress.is_some() {
+        context.request_repaint_after(std::time::Duration::from_millis(16));
+    }
 }
 
-fn restored_capture(source: &[SdfObject], root: &SdfObject, key: u64) -> Option<CachedCapture> {
+pub(super) fn restored_capture(
+    source: &[SdfObject],
+    root: &SdfObject,
+    key: u64,
+) -> Option<CachedCapture> {
     let saved = root.saved_group_capture.as_deref()?;
     if saved.version != 1 || saved.source_key != key {
         return None;
@@ -330,12 +425,31 @@ pub(super) fn prepare_group_scene_with_neural(
     )
 }
 
+#[cfg(test)]
 pub(super) fn prepare_group_scene_with_budget(
     source: &[SdfObject],
     cache: &mut HashMap<uuid::Uuid, CachedGroupCapture>,
     ready_neural: &HashMap<uuid::Uuid, std::sync::Arc<super::neural_sdf::NeuralField>>,
     compute_requests: &HashSet<uuid::Uuid>,
     atlas_budget: usize,
+) -> PreparedGroupScene {
+    prepare_group_scene_with_pending(
+        source,
+        cache,
+        ready_neural,
+        compute_requests,
+        atlas_budget,
+        &HashSet::new(),
+    )
+}
+
+pub(super) fn prepare_group_scene_with_pending(
+    source: &[SdfObject],
+    cache: &mut HashMap<uuid::Uuid, CachedGroupCapture>,
+    ready_neural: &HashMap<uuid::Uuid, std::sync::Arc<super::neural_sdf::NeuralField>>,
+    compute_requests: &HashSet<uuid::Uuid>,
+    atlas_budget: usize,
+    pending_bakes: &HashSet<uuid::Uuid>,
 ) -> PreparedGroupScene {
     let mut neural_fields = HashMap::new();
     cache.retain(|id, _| source.iter().any(|object| object.uuid == *id));
@@ -431,6 +545,8 @@ pub(super) fn prepare_group_scene_with_budget(
                 let atlas =
                     if let Some(CachedCapture::Box(atlas)) = cached.map(|entry| &entry.capture) {
                         atlas.clone()
+                    } else if pending_bakes.contains(&root.uuid) {
+                        continue;
                     } else if let Some(atlas) =
                         bake_box_depth_atlas(source, root.uuid, resolution, start)
                     {
@@ -493,6 +609,8 @@ pub(super) fn prepare_group_scene_with_budget(
                     cached.map(|entry| &entry.capture)
                 {
                     atlas.clone()
+                } else if pending_bakes.contains(&root.uuid) {
+                    continue;
                 } else if let Some(atlas) =
                     bake_sphere_depth_atlas(source, root.uuid, width, height)
                 {

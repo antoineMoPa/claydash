@@ -18,19 +18,26 @@ fn train_slope(output: f32) -> f32 {
 }
 fn train_layer_offset(layer: u32) -> u32 {
     if layer == 0u { return 0u; }
-    return 4u * TRAIN_WIDTH + (layer - 1u) * TRAIN_WIDTH * (TRAIN_WIDTH + 1u);
+    return 7u * TRAIN_WIDTH + (layer - 1u) * TRAIN_WIDTH * (TRAIN_WIDTH + 1u);
 }
 fn train_output_offset() -> u32 { return train_layer_offset(TRAIN_LAYERS); }
 fn train_scratch_index(sample: u32, layer: u32, neuron: u32) -> u32 {
     return (sample * TRAIN_LAYERS + layer) * TRAIN_WIDTH + neuron;
 }
-fn train_prediction(sample: u32) -> f32 {
-    let offset = train_output_offset();
-    var value = training_weights[offset + TRAIN_WIDTH].x;
-    for (var i = 0u; i < TRAIN_WIDTH; i++) {
-        value += training_weights[offset + i].x * training_scratch[train_scratch_index(sample, TRAIN_LAYERS - 1u, i)].x;
+fn train_input(sample: u32, col: u32) -> f32 {
+    if col < 3u { return training_samples[sample].point[col]; }
+    return training_samples[sample].ray[col - 3u];
+}
+fn train_prediction(sample: u32) -> vec3<f32> {
+    var result = vec3(0.0);
+    for (var axis = 0u; axis < 3u; axis++) {
+        let offset = train_output_offset() + axis * (TRAIN_WIDTH + 1u);
+        result[axis] = training_weights[offset + TRAIN_WIDTH].x;
+        for (var i = 0u; i < TRAIN_WIDTH; i++) {
+            result[axis] += training_weights[offset + i].x * training_scratch[train_scratch_index(sample, TRAIN_LAYERS - 1u, i)].x;
+        }
     }
-    return value;
+    return result;
 }
 @compute @workgroup_size(64)
 fn train_forward(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -38,12 +45,12 @@ fn train_forward(@builtin(global_invocation_id) id: vec3<u32>) {
     let row = id.x % TRAIN_WIDTH;
     if sample >= training_params.control.x { return; }
     if training_samples[sample].owner.y != 0u { return; }
-    let inputs = select(TRAIN_WIDTH, 3u, TRAIN_LAYER == 0u);
+    let inputs = select(TRAIN_WIDTH, 6u, TRAIN_LAYER == 0u);
     let offset = train_layer_offset(TRAIN_LAYER) + row * (inputs + 1u);
     var value = training_weights[offset + inputs].x;
     for (var col = 0u; col < inputs; col++) {
         var input = 0.0;
-        if TRAIN_LAYER == 0u { input = training_samples[sample].point[col]; }
+        if TRAIN_LAYER == 0u { input = train_input(sample, col); }
         else { input = training_scratch[train_scratch_index(sample, TRAIN_LAYER - 1u, col)].x; }
         value += training_weights[offset + col].x * input;
     }
@@ -54,11 +61,15 @@ fn train_output_delta(@builtin(global_invocation_id) id: vec3<u32>) {
     let sample = id.x;
     if sample >= training_params.control.x { return; }
     if training_samples[sample].owner.y != 0u { return; }
-    let error = 2.0 * (train_prediction(sample) - training_samples[sample].point.w);
-    training_stats[3u + sample].x = error;
+    let error = 2.0 * (train_prediction(sample) - training_samples[sample].distance_vector.xyz);
+    training_stats[3u + sample] = vec4(error, 0.0);
     for (var row = 0u; row < TRAIN_WIDTH; row++) {
         let index = train_scratch_index(sample, TRAIN_LAYERS - 1u, row);
-        training_scratch[index].y = error * training_weights[train_output_offset() + row].x * train_slope(training_scratch[index].x);
+        var delta = 0.0;
+        for (var axis = 0u; axis < 3u; axis++) {
+            delta += error[axis] * training_weights[train_output_offset() + axis * (TRAIN_WIDTH + 1u) + row].x;
+        }
+        training_scratch[index].y = delta * train_slope(training_scratch[index].x);
     }
 }
 @compute @workgroup_size(64)
@@ -83,13 +94,13 @@ fn train_adam(@builtin(global_invocation_id) id: vec3<u32>) {
     var layer = 0u;
     var local = index;
     if output { local = index - train_output_offset(); }
-    else if index >= 4u * TRAIN_WIDTH {
-        layer = 1u + (index - 4u * TRAIN_WIDTH) / (TRAIN_WIDTH * (TRAIN_WIDTH + 1u));
+    else if index >= 7u * TRAIN_WIDTH {
+        layer = 1u + (index - 7u * TRAIN_WIDTH) / (TRAIN_WIDTH * (TRAIN_WIDTH + 1u));
         local = index - train_layer_offset(layer);
     }
-    let inputs = select(select(TRAIN_WIDTH, 3u, layer == 0u), TRAIN_WIDTH, output);
+    let inputs = select(select(TRAIN_WIDTH, 6u, layer == 0u), TRAIN_WIDTH, output);
     let row = local / (inputs + 1u);
-    let col = select(local % (inputs + 1u), local, output);
+    let col = local % (inputs + 1u);
     var gradient = 0.0;
     var kept = 0u;
     for (var sample = 0u; sample < training_params.control.x; sample++) {
@@ -98,10 +109,10 @@ fn train_adam(@builtin(global_invocation_id) id: vec3<u32>) {
         var input = 1.0;
         if col < inputs {
             if output { input = training_scratch[train_scratch_index(sample, TRAIN_LAYERS - 1u, col)].x; }
-            else if layer == 0u { input = training_samples[sample].point[col]; }
+            else if layer == 0u { input = train_input(sample, col); }
             else { input = training_scratch[train_scratch_index(sample, layer - 1u, col)].x; }
         }
-        var delta = training_stats[3u + sample].x;
+        var delta = training_stats[3u + sample][min(row, 2u)];
         if !output { delta = training_scratch[train_scratch_index(sample, layer, row)].y; }
         gradient += input * delta;
     }
@@ -120,10 +131,11 @@ fn train_validate(@builtin(global_invocation_id) id: vec3<u32>) {
     if sample >= training_params.control.x { return; }
     if training_samples[sample].owner.y != 0u { return; }
     let value = train_prediction(sample);
-    let expected_distance = training_samples[sample].point.w;
-    let error = value - expected_distance;
-    var stats = vec4(error * error, abs(error), value, value);
-    if !(abs(value) < 1e29 && abs(expected_distance) < 1e29) { stats = vec4(1e30, 1e30, 0.0, 0.0); }
+    let expected = training_samples[sample].distance_vector.xyz;
+    let error = value - expected;
+    let signed_distance = dot(value, training_samples[sample].ray.xyz);
+    var stats = vec4(dot(error, error), length(error), signed_distance, signed_distance);
+    if !(all(abs(value) < vec3(1e29)) && all(abs(expected) < vec3(1e29))) { stats = vec4(1e30, 1e30, 0.0, 0.0); }
     training_stats[3u + sample] = stats;
 }
 @compute @workgroup_size(1)

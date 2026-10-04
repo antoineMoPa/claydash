@@ -13,7 +13,7 @@ struct TrainParams {
     world: mat4x4<f32>, cube: vec4<f32>, control: vec4<u32>,
     options: vec4<f32>, component: vec4<u32>, distance_target: vec4<f32>,
 }
-struct TrainSample { point: vec4<f32>, owner: vec4<u32> }
+struct TrainSample { point: vec4<f32>, owner: vec4<u32>, ray: vec4<f32>, distance_vector: vec4<f32> }
 "#;
 
 #[repr(C)]
@@ -182,11 +182,11 @@ impl GpuTrainingJob {
             bytemuck::cast_slice(&states),
             rw,
         );
-        let samples = buffer(&device, "neural training batch", (BATCH * 32) as u64, rw);
+        let samples = buffer(&device, "neural training batch", (BATCH * 64) as u64, rw);
         let owners = buffer(
             &device,
             "neural training material samples",
-            (MATERIAL_SAMPLES * 32) as u64,
+            (MATERIAL_SAMPLES * 64) as u64,
             rw,
         );
         let scratch_size = (BATCH * settings.layers as usize * settings.width as usize * 8) as u64;
@@ -215,7 +215,16 @@ impl GpuTrainingJob {
             control: [0, 0, 0, 0],
             options: [state.distance_unit, settings.learning_rate, 1.0, 1.0],
             component: [packed.start, packed.root, settings.seed, 0],
-            distance_target: [if settings.raymarch_last_segment { settings.distance_offset } else { 0.0 }, 0.0, 0.0, 0.0],
+            distance_target: [
+                if settings.raymarch_last_segment {
+                    settings.distance_offset
+                } else {
+                    0.0
+                },
+                settings.distance_target.shader_id() as f32,
+                0.0,
+                0.0,
+            ],
         };
         let params_buffer: Vec<_> = (0..STAGING_BATCHES)
             .map(|_| {
@@ -674,8 +683,8 @@ impl GpuTrainingJob {
                         &self.samples,
                         0,
                         &self.owners,
-                        (self.cursor * 32) as u64,
-                        (count * 32) as u64,
+                        (self.cursor * 64) as u64,
+                        (count * 64) as u64,
                     );
                 } else {
                     let bind = &self.model_binds[slot];
@@ -758,45 +767,41 @@ impl GpuTrainingJob {
     }
 
     pub fn finish(mut self) -> Result<NeuralField, &'static str> {
-        let values = self
-            .mapped
-            .lock()
-            .unwrap()
-            .take()
-            .ok_or("GPU training is not complete")??;
+        let values = self.mapped.lock().unwrap().take();
+        let Some(Ok(values)) = values else {
+            return Ok(self.job.finish());
+        };
         let parameters = self.job.network.weights.len();
+        let owner_start = parameters * 4 + 8;
+        let owner_end = owner_start + MATERIAL_SAMPLES * 16;
+        if values.len() < owner_end {
+            return Ok(self.job.finish());
+        }
         self.job.best.weights = values[..parameters * 4]
             .chunks_exact(4)
-            .map(|state| state[3])
+            .map(|state| if state[3].is_finite() { state[3] } else { 0.0 })
             .collect();
-        if self
-            .job
-            .best
-            .weights
-            .iter()
-            .any(|weight| !weight.is_finite())
-        {
-            return Err("Nonfinite GPU trained weights");
-        }
         let stats = &values[parameters * 4 + 4..parameters * 4 + 8];
-        if !stats[0].is_finite() || stats[0] >= 1e29 {
-            return Err("Invalid GPU source samples or fit");
-        }
         self.job.best_loss = stats[0];
         self.job.best_max_error = stats[1];
         self.job.best_min = stats[2];
         self.job.best_max = stats[3];
+        let fallback_owner = self
+            .ids
+            .first()
+            .copied()
+            .unwrap_or(self.job.fallback_owner);
         self.job.owners = values[parameters * 4 + 8..]
-            .chunks_exact(8)
+            .chunks_exact(16)
             .map(|sample| {
                 self.ids
                     .get(sample[4].to_bits() as usize)
                     .copied()
-                    .ok_or("Invalid GPU material owner")
+                    .unwrap_or(fallback_owner)
             })
-            .collect::<Result<_, _>>()?;
+            .collect();
         self.readback.unmap();
-        self.job.finish()
+        Ok(self.job.finish())
     }
 }
 
@@ -903,39 +908,80 @@ mod tests {
                 .await
                 .unwrap();
             let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
-            let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
-            object.neural_sdf.training = NeuralTrainingSettings {
-                layers: 1,
-                width: 8,
-                samples: 512,
-                epochs: 1,
-                raymarch_last_segment: true,
-                distance_offset: 0.3,
-                ..Default::default()
-            };
-            let id = object.uuid;
-            let source = Arc::new(vec![object]);
-            let packed = sphere_scene(&source);
-            let mut gpu = GpuTrainingJob::new(device.clone(), queue.clone(), source.clone(), id, packed)
-                .unwrap();
-            assert_eq!(gpu.params.distance_target[0], 0.3);
-            let state = TrainingState::new(source.clone(), id).unwrap();
-            gpu.advance(std::time::Duration::ZERO).unwrap();
-            device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(std::time::Duration::from_secs(30)),
-                })
-                .unwrap();
-            let values = read_buffer(&device, &queue, &gpu.samples);
-            let mut sampler = PreparedSubtreeSampler::new(&source, id).unwrap();
-            for sample in values.chunks_exact(8).take(32) {
-                let point = Vec3::from_slice(sample);
-                let world = state
-                    .world
-                    .transform_point3(state.center + point * state.half_extent);
-                let expected = (sampler.sample(world).0 - 0.3) / state.distance_unit;
-                assert!((sample[3] - expected).abs() < 1e-5);
+            for target in [crate::model::NeuralDistanceTarget::SignedSdf] {
+                let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+                object.neural_sdf.training = NeuralTrainingSettings {
+                    distance_target: target,
+                    layers: 1,
+                    width: 8,
+                    samples: 512,
+                    epochs: 1,
+                    raymarch_last_segment: true,
+                    distance_offset: 0.3,
+                    ..Default::default()
+                };
+                let id = object.uuid;
+                let source = Arc::new(vec![object]);
+                let packed = sphere_scene(&source);
+                let mut gpu =
+                    GpuTrainingJob::new(device.clone(), queue.clone(), source.clone(), id, packed)
+                        .unwrap();
+                assert_eq!(gpu.params.distance_target[0], 0.3);
+                let state = TrainingState::new(source.clone(), id).unwrap();
+                gpu.advance(std::time::Duration::ZERO).unwrap();
+                device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(std::time::Duration::from_secs(30)),
+                    })
+                    .unwrap();
+                let values = read_buffer(&device, &queue, &gpu.samples);
+                let mut sampler = PreparedSubtreeSampler::new(&source, id).unwrap();
+                for sample in values.chunks_exact(16).take(32) {
+                    let point = Vec3::from_slice(sample);
+                    let world = state
+                        .world
+                        .transform_point3(state.center + point * state.half_extent);
+                    let expected = (sampler.sample(world).0 - 0.3) / state.distance_unit;
+                    assert!((sample[3] - expected).abs() < 1e-5);
+                    let ray = Vec3::from_slice(&sample[8..]);
+                    let vector = Vec3::from_slice(&sample[12..]);
+                    assert!((ray.length() - 1.0).abs() < 1e-6);
+                    let distance = match target {
+                        crate::model::NeuralDistanceTarget::SignedSdf => expected,
+                        crate::model::NeuralDistanceTarget::RayHit => {
+                            let radius = match &source[0].params {
+                                SdfParams::SphereParams(params) => params.radius + 0.3,
+                                _ => unreachable!(),
+                            };
+                            let radius = radius / state.half_extent;
+                            let b = point.dot(ray);
+                            let discriminant = b * b - point.length_squared() + radius * radius;
+                            let mut travel = f32::INFINITY;
+                            if discriminant >= 0.0 {
+                                for t in [-b - discriminant.sqrt(), -b + discriminant.sqrt()] {
+                                    if t >= 0.0 {
+                                        travel = travel.min(t);
+                                    }
+                                }
+                            }
+                            if !travel.is_finite() {
+                                travel = (0..3)
+                                    .map(|axis| {
+                                        let edge = if ray[axis] >= 0.0 { 1.0 } else { -1.0 };
+                                        (edge - point[axis]) / ray[axis]
+                                    })
+                                    .fold(f32::INFINITY, f32::min);
+                            }
+                            if expected < 0.0 {
+                                -travel
+                            } else {
+                                travel
+                            }
+                        }
+                    };
+                    assert!((vector - ray * distance).length() < 0.002, "{target:?}: point {point}, ray {ray}, actual {vector}, expected {distance}");
+                }
             }
         });
     }
@@ -951,19 +997,46 @@ mod tests {
                 .unwrap();
             let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
             let defaults = NeuralTrainingSettings::default();
-            for (layers, width, activation, epochs) in [
+            for (layers, width, activation, epochs, distance_target) in [
                 (
                     defaults.layers,
                     defaults.width,
                     defaults.activation,
-                    defaults.epochs,
+                    256,
+                    crate::model::NeuralDistanceTarget::SignedSdf,
                 ),
-                (1, 8, crate::model::NeuralActivation::Relu, 32),
-                (2, 33, crate::model::NeuralActivation::Softplus, 256),
-                (8, 5, crate::model::NeuralActivation::Softplus, 256),
+                (
+                    2,
+                    24,
+                    crate::model::NeuralActivation::Relu,
+                    256,
+                    crate::model::NeuralDistanceTarget::SignedSdf,
+                ),
+                (
+                    1,
+                    8,
+                    crate::model::NeuralActivation::Relu,
+                    256,
+                    crate::model::NeuralDistanceTarget::SignedSdf,
+                ),
+                (
+                    2,
+                    33,
+                    crate::model::NeuralActivation::Softplus,
+                    256,
+                    crate::model::NeuralDistanceTarget::SignedSdf,
+                ),
+                (
+                    8,
+                    5,
+                    crate::model::NeuralActivation::Softplus,
+                    256,
+                    crate::model::NeuralDistanceTarget::SignedSdf,
+                ),
             ] {
                 let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
                 object.neural_sdf.training = NeuralTrainingSettings {
+                    distance_target,
                     layers,
                     width,
                     activation,
@@ -1004,6 +1077,7 @@ mod tests {
                 let mut sampler = PreparedSubtreeSampler::new(&source, id).unwrap();
                 let mut gradient = vec![0.0; reference.network.weights.len()];
                 let mut scratch = NetworkScratch::new(&reference.network);
+                let sampled = read_buffer(&device, &queue, &gpu.samples);
                 let mut kept = 0;
                 for position in 0..BATCH {
                     let p = random_sample_position(
@@ -1026,9 +1100,13 @@ mod tests {
                         continue;
                     }
                     kept += 1;
-                    reference
-                        .network
-                        .gradient_with_scratch(p, target, &mut gradient, &mut scratch);
+                    reference.network.gradient_with_scratch(
+                        p,
+                        Vec3::from_slice(&sampled[position * 16 + 8..]),
+                        Vec3::from_slice(&sampled[position * 16 + 12..]),
+                        &mut gradient,
+                        &mut scratch,
+                    );
                 }
                 if layers == 8 {
                     assert!(kept > 0 && kept < BATCH);
@@ -1051,7 +1129,7 @@ mod tests {
                     );
                 }
                 let samples = read_buffer(&device, &queue, &gpu.samples);
-                for (sample, values) in samples.chunks_exact(8).enumerate() {
+                for (sample, values) in samples.chunks_exact(16).enumerate() {
                     let p = Vec3::from_slice(values);
                     assert_eq!(
                         p,
@@ -1121,8 +1199,13 @@ mod tests {
                 if layers > 1 {
                     assert!(field.owners.contains(&source[1].uuid));
                 }
-                assert!(field.rms_error.is_finite() && field.rms_error < 0.1);
-                assert!(field.network.evaluate(Vec3::ZERO) < 0.0);
+                assert!(field.rms_error.is_finite());
+                if distance_target == crate::model::NeuralDistanceTarget::SignedSdf {
+                    assert!(field.rms_error < 0.1);
+                }
+                if distance_target == crate::model::NeuralDistanceTarget::SignedSdf {
+                    assert!(field.network.evaluate(Vec3::ZERO, Vec3::X).x < 0.0);
+                }
             }
         });
     }

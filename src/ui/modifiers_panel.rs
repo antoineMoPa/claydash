@@ -198,6 +198,25 @@ pub(super) fn modifiers_panel(
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Lattice").strong().size(16.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let editing = object_gizmos::lattice_editing(tree, target);
+                    if ui
+                        .selectable_label(editing, if editing { "Finish editing" } else { "Edit" })
+                        .on_hover_text(if editing {
+                            "Hide the lattice cage and finish editing its control points"
+                        } else {
+                            "Show the lattice cage and edit its control points in the viewport"
+                        })
+                        .clicked()
+                    {
+                        tree.set_transient_path(
+                            "editor.lattice_edit",
+                            if editing {
+                                ClaydashValue::None
+                            } else {
+                                ClaydashValue::Uuid(target)
+                            },
+                        );
+                    }
                     if ui.small_button("Remove").clicked() {
                         remove_lattice = true;
                     }

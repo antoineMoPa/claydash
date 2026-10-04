@@ -659,6 +659,7 @@
         set_objects(&mut tree, vec![root.clone(), scene[1].clone()]);
         set_selected(&mut tree, vec![root.uuid]);
         assert_eq!(commands::effective_selected_ids(&tree).len(), 2);
+        tree.set_transient_path("editor.lattice_edit", ClaydashValue::Uuid(root.uuid));
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.set_clip_rect(viewport);
             state.draw_object_gizmos(ui, &mut tree, &camera);
@@ -701,6 +702,7 @@
         root.lattice = Some(lattice);
         set_objects(&mut tree, vec![root.clone(), child]);
         set_selected(&mut tree, vec![root.uuid]);
+        tree.set_transient_path("editor.lattice_edit", ClaydashValue::Uuid(root.uuid));
         let mut frame = |events| {
             primitive_gizmo_frame(
                 &ctx,

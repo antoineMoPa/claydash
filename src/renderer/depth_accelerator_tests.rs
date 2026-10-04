@@ -85,6 +85,8 @@ fn primitive_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -
 fn mirror_point(point: vec3<f32>, object: Object) -> vec3<f32> {{ return point; }}
 fn group_repeat_point(point: vec3<f32>, object: Object) -> vec3<f32> {{ return point; }}
 fn modifier_point(point: vec3<f32>, object: Object) -> vec3<f32> {{ return point; }}
+var<private> neural_ray_direction: vec3<f32>;
+fn neural_distance_vector(local: vec3<f32>, ray: vec3<f32>, object: Object) -> vec3<f32> {{ return ray * neural_shape(local, object); }}
 fn neural_shape(local: vec3<f32>, object: Object) -> f32 {{
     if variant == 8u {{ return length(local - vec3(0.0, 0.0, 1.2)) - 0.65; }}
     return 100.0;

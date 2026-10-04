@@ -129,6 +129,42 @@ impl Renderer {
         let source_objects = &objects[..objects.len().min(MAX_OBJECTS)];
         let training_only = pipeline_preparation == ScenePipelinePreparation::NeuralTraining;
         let manage_scene_jobs = pipeline_preparation == ScenePipelinePreparation::Viewport;
+        #[cfg(not(target_arch = "wasm32"))]
+        if manage_scene_jobs {
+            let completed = self.group_capture_bake.as_ref().and_then(|job| {
+                match job.receiver.try_recv() {
+                    Ok(capture) => Some((job.root, job.key, job.source_revision, capture)),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some((job.root, job.key, job.source_revision, None))
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                }
+            });
+            if let Some((root, key, source_revision, capture)) = completed {
+                self.group_capture_bake = None;
+                self.group_compute_requests.remove(&root);
+                if capture.is_some() || source_revision != scene_versions[0] {
+                    self.uploaded_scene_versions = [i32::MIN; 2];
+                }
+                if capture.is_some() {
+                    if let (Some(capture), Some(object)) = (
+                        capture,
+                        source_objects.iter().find(|object| object.uuid == root),
+                    ) {
+                        if super::group_capture::capture_key(source_objects, object) == key {
+                            self.group_capture_cache.insert(
+                                root,
+                                super::group_capture::CachedGroupCapture { key, capture },
+                            );
+                        } else if object.render_representation
+                            == crate::model::GroupRenderRepresentation::GaussianSplats
+                        {
+                            self.group_compute_requests.insert(root);
+                        }
+                    }
+                }
+            }
+        }
         let document_changed = training_only || self.uploaded_scene_versions != scene_versions;
         if document_changed && manage_scene_jobs {
             self.neural_jobs.reconcile(source_objects);
@@ -153,8 +189,90 @@ impl Renderer {
         if neural_changed {
             self.viewport.invalidate();
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if manage_scene_jobs
+            && (document_changed || neural_changed)
+            && self.group_capture_bake.is_none()
+        {
+            for root in source_objects.iter().filter(|object| {
+                matches!(
+                    object.render_representation,
+                    crate::model::GroupRenderRepresentation::BoxDepthAtlas
+                        | crate::model::GroupRenderRepresentation::SphereDepthAtlas
+                        | crate::model::GroupRenderRepresentation::SphereAccelerator
+                        | crate::model::GroupRenderRepresentation::BoxAccelerator
+                        | crate::model::GroupRenderRepresentation::GaussianSplats
+                )
+            }) {
+                let requested = self.group_compute_requests.contains(&root.uuid);
+                let gaussian = root.render_representation
+                    == crate::model::GroupRenderRepresentation::GaussianSplats;
+                if gaussian && !requested {
+                    continue;
+                }
+                let key = super::group_capture::capture_key(source_objects, root);
+                if !requested
+                    && self
+                        .group_capture_cache
+                        .get(&root.uuid)
+                        .is_some_and(|entry| entry.key == key)
+                {
+                    continue;
+                }
+                if !requested {
+                    if let Some(capture) = super::group_capture::restored_capture(
+                        source_objects,
+                        root,
+                        key,
+                    ) {
+                        self.group_capture_cache.insert(
+                            root.uuid,
+                            super::group_capture::CachedGroupCapture { key, capture },
+                        );
+                        continue;
+                    }
+                }
+                self.group_capture_bake = super::group_capture::start_capture_bake(
+                    source_objects,
+                    root.uuid,
+                    key,
+                    scene_versions[0],
+                );
+                if self.group_capture_bake.is_some() {
+                    self.group_compute_requests.remove(&root.uuid);
+                    break;
+                }
+            }
+        }
         let scene_changed = document_changed || neural_changed;
         let capture_budget = self.capture_record_budget();
+        #[cfg(not(target_arch = "wasm32"))]
+        let pending_bakes: std::collections::HashSet<_> = source_objects
+            .iter()
+            .filter(|object| {
+                matches!(
+                    object.render_representation,
+                    crate::model::GroupRenderRepresentation::BoxDepthAtlas
+                        | crate::model::GroupRenderRepresentation::SphereDepthAtlas
+                        | crate::model::GroupRenderRepresentation::SphereAccelerator
+                        | crate::model::GroupRenderRepresentation::BoxAccelerator
+                        | crate::model::GroupRenderRepresentation::GaussianSplats
+                )
+            })
+            .filter(|object| {
+                let requested = self.group_compute_requests.contains(&object.uuid);
+                (requested
+                    || object.render_representation
+                        != crate::model::GroupRenderRepresentation::GaussianSplats)
+                    && !self.group_capture_cache.get(&object.uuid).is_some_and(|entry| {
+                        entry.key == super::group_capture::capture_key(source_objects, object)
+                            && !requested
+                    })
+            })
+            .map(|object| object.uuid)
+            .collect();
+        #[cfg(target_arch = "wasm32")]
+        let pending_bakes = std::collections::HashSet::new();
         let prepared_scene = (scene_changed
             && source_objects.iter().any(|object| {
                 matches!(
@@ -168,14 +286,26 @@ impl Renderer {
                 )
             }))
         .then(|| {
-            prepare_group_scene_with_budget(
+            prepare_group_scene_with_pending(
                 source_objects,
                 &mut self.group_capture_cache,
                 &self.neural_jobs.ready(),
                 &self.group_compute_requests,
                 capture_budget,
+                &pending_bakes,
             )
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        if manage_scene_jobs {
+            self.group_compute_requests.retain(|id| {
+                source_objects.iter().any(|object| {
+                    object.uuid == *id
+                        && object.render_representation
+                            == crate::model::GroupRenderRepresentation::GaussianSplats
+                })
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
         if manage_scene_jobs {
             self.group_compute_requests.clear();
         }

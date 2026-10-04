@@ -43,7 +43,7 @@ impl UiState {
         if selection.len() == 1 && draw_bezier_gizmo(self, ui, tree, camera, blocker_count) {
             return;
         }
-        if selection.len() == 1 {
+        if selection.len() == 1 && lattice_editing(tree, selection[0]) {
             let mut scene = objects(tree);
             if scene
                 .iter()
@@ -416,4 +416,11 @@ impl UiState {
             tree.make_undo_redo_snapshot();
         }
     }
+}
+
+pub(super) fn lattice_editing(tree: &DataTree, object_id: uuid::Uuid) -> bool {
+    matches!(
+        tree.get_path("editor.lattice_edit"),
+        ClaydashValue::Uuid(editing_id) if editing_id == object_id
+    )
 }

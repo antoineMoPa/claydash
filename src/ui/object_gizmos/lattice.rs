@@ -31,6 +31,9 @@ impl UiState {
         if selection.len() != 1 {
             return;
         }
+        if !super::lattice_editing(tree, selection[0]) {
+            return;
+        }
         let mut scene = objects(tree);
         if scene
             .iter()

@@ -1,4 +1,4 @@
-//! Tiny, deterministic neural distance bake. Positions and distances are explicitly
+//! Deterministic ray-conditioned neural vector bake. Positions and distances are explicitly
 //! mapped to a cube; completed fields can be persisted in the document.
 use super::*;
 use crate::model::{lattice_bounds, lattice_world_matrix, PreparedSubtreeSampler};
@@ -19,11 +19,15 @@ use crate::model::NeuralTrainingSettings;
 pub(super) fn payload_records(settings: NeuralTrainingSettings) -> Option<usize> {
     settings.parameter_count().map(|_| {
         let width = settings.width as usize;
-        2 + width
+        2 + 2 * width
             + (settings.layers as usize - 1) * width * (width + 1).div_ceil(4)
-            + (width + 1).div_ceil(4)
+            + 3 * (width + 1).div_ceil(4)
             + MATERIAL_SAMPLES
-            + if settings.raymarch_last_segment { MATERIAL_SAMPLES + 4 } else { 0 }
+            + if settings.raymarch_last_segment {
+                MATERIAL_SAMPLES + 4
+            } else {
+                0
+            }
     })
 }
 
@@ -46,8 +50,8 @@ impl NetworkScratch {
     fn new(network: &Network) -> Self {
         Self {
             activations: vec![0.0; network.layers * network.width],
-            delta: vec![0.0; network.width],
-            previous: vec![0.0; network.width],
+            delta: vec![0.0; network.width.max(6)],
+            previous: vec![0.0; network.width.max(6)],
         }
     }
 }
@@ -75,7 +79,7 @@ impl Network {
         };
         let mut rng = settings.seed;
         for layer in 0..layers {
-            let inputs = if layer == 0 { 3 } else { width };
+            let inputs = if layer == 0 { 6 } else { width };
             let offset = network.layer_offset(layer);
             for row in 0..width {
                 for col in 0..inputs {
@@ -90,37 +94,44 @@ impl Network {
         // small perturbations and sample order, including on wider networks.
         for i in 0..width {
             for axis in 0..3 {
-                network.weights[i * 4 + axis] = if i & (1 << axis) == 0 { -0.5 } else { 0.5 }
-                    + network.weights[i * 4 + axis] * 0.05;
+                network.weights[i * 7 + axis] = if i & (1 << axis) == 0 { -0.5 } else { 0.5 }
+                    + network.weights[i * 7 + axis] * 0.05;
             }
         }
         let out = network.output_offset();
-        for i in 0..width {
-            network.weights[out + i] = 2.0 / width as f32;
+        for axis in 0..3 {
+            for i in 0..width {
+                let random = random_u32(&mut rng) as f64 / u32::MAX as f64;
+                network.weights[out + axis * (width + 1) + i] =
+                    (random as f32 * 2.0 - 1.0) * (2.0 / width as f32).sqrt();
+            }
         }
-        network.weights[out + width] = -0.5;
         network
     }
     fn layer_offset(&self, layer: usize) -> usize {
         if layer == 0 {
             0
         } else {
-            self.width * 4 + (layer - 1) * self.width * (self.width + 1)
+            self.width * 7 + (layer - 1) * self.width * (self.width + 1)
         }
     }
     fn output_offset(&self) -> usize {
-        self.width * 4 + (self.layers - 1) * self.width * (self.width + 1)
+        self.width * 7 + (self.layers - 1) * self.width * (self.width + 1)
     }
     #[cfg(test)]
-    fn forward(&self, p: Vec3, activations: &mut [f32]) -> f32 {
+    fn forward(&self, p: Vec3, ray: Vec3, activations: &mut [f32]) -> Vec3 {
         for layer in 0..self.layers {
-            let inputs = if layer == 0 { 3 } else { self.width };
+            let inputs = if layer == 0 { 6 } else { self.width };
             for row in 0..self.width {
                 let offset = self.layer_offset(layer) + row * (inputs + 1);
                 let mut sum = self.weights[offset + inputs];
                 for col in 0..inputs {
                     let value = if layer == 0 {
-                        p[col]
+                        if col < 3 {
+                            p[col]
+                        } else {
+                            ray[col - 3]
+                        }
                     } else {
                         activations[(layer - 1) * self.width + col]
                     };
@@ -129,38 +140,47 @@ impl Network {
                 activations[layer * self.width + row] = self.activation.evaluate(sum);
             }
         }
-        let offset = self.output_offset();
-        let mut sum = self.weights[offset + self.width];
-        for i in 0..self.width {
-            sum += self.weights[offset + i] * activations[(self.layers - 1) * self.width + i];
+        let mut result = Vec3::ZERO;
+        for axis in 0..3 {
+            let offset = self.output_offset() + axis * (self.width + 1);
+            result[axis] = self.weights[offset + self.width];
+            for i in 0..self.width {
+                result[axis] +=
+                    self.weights[offset + i] * activations[(self.layers - 1) * self.width + i];
+            }
         }
-        sum
+        result
     }
     #[cfg(test)]
-    pub fn evaluate(&self, p: Vec3) -> f32 {
-        self.forward(p, &mut vec![0.0; self.layers * self.width])
+    pub fn evaluate(&self, p: Vec3, ray: Vec3) -> Vec3 {
+        self.forward(p, ray, &mut vec![0.0; self.layers * self.width])
     }
     #[cfg(test)]
-    fn gradient(&self, p: Vec3, target: f32, gradient: &mut [f32]) {
-        self.gradient_with_scratch(p, target, gradient, &mut NetworkScratch::new(self));
+    fn gradient(&self, p: Vec3, ray: Vec3, target: Vec3, gradient: &mut [f32]) {
+        self.gradient_with_scratch(p, ray, target, gradient, &mut NetworkScratch::new(self));
     }
     #[cfg(test)]
     fn gradient_with_scratch(
         &self,
         p: Vec3,
-        target: f32,
+        ray: Vec3,
+        target: Vec3,
         gradient: &mut [f32],
         scratch: &mut NetworkScratch,
     ) {
-        let error = 2.0 * (self.forward(p, &mut scratch.activations) - target);
-        let out = self.output_offset();
-        gradient[out + self.width] += error;
-        for i in 0..self.width {
-            gradient[out + i] += error * scratch.activations[(self.layers - 1) * self.width + i];
-            scratch.delta[i] = error * self.weights[out + i];
+        let error = 2.0 * (self.forward(p, ray, &mut scratch.activations) - target);
+        scratch.delta.fill(0.0);
+        for axis in 0..3 {
+            let out = self.output_offset() + axis * (self.width + 1);
+            gradient[out + self.width] += error[axis];
+            for i in 0..self.width {
+                gradient[out + i] +=
+                    error[axis] * scratch.activations[(self.layers - 1) * self.width + i];
+                scratch.delta[i] += error[axis] * self.weights[out + i];
+            }
         }
         for layer in (0..self.layers).rev() {
-            let inputs = if layer == 0 { 3 } else { self.width };
+            let inputs = if layer == 0 { 6 } else { self.width };
             scratch.previous.fill(0.0);
             for row in 0..self.width {
                 let local_delta = scratch.delta[row]
@@ -171,7 +191,11 @@ impl Network {
                 gradient[offset + inputs] += local_delta;
                 for col in 0..inputs {
                     let value = if layer == 0 {
-                        p[col]
+                        if col < 3 {
+                            p[col]
+                        } else {
+                            ray[col - 3]
+                        }
                     } else {
                         scratch.activations[(layer - 1) * self.width + col]
                     };
@@ -197,7 +221,7 @@ impl Network {
         ];
         // Pad each affine row to vec4 alignment so hidden layers can use dot products.
         for layer in 0..self.layers {
-            let inputs = if layer == 0 { 3 } else { self.width };
+            let inputs = if layer == 0 { 6 } else { self.width };
             let offset = self.layer_offset(layer);
             for row in 0..self.width {
                 for chunk in self.weights
@@ -211,7 +235,10 @@ impl Network {
             }
         }
         let output_offset = (records.len() - 2) * 4;
-        for chunk in self.weights[self.output_offset()..].chunks(4) {
+        for chunk in self.weights[self.output_offset()..]
+            .chunks(self.width + 1)
+            .flat_map(|row| row.chunks(4))
+        {
             let mut packed = [0.0; 4];
             packed[..chunk.len()].copy_from_slice(chunk);
             records.push(packed);
@@ -225,33 +252,19 @@ impl Network {
         records
     }
     pub fn payload_records(&self) -> usize {
-        2 + self.width
+        2 + 2 * self.width
             + (self.layers - 1) * self.width * (self.width + 1).div_ceil(4)
-            + (self.width + 1).div_ceil(4)
+            + 3 * (self.width + 1).div_ceil(4)
             + MATERIAL_SAMPLES
     }
     pub fn lipschitz(&self) -> f32 {
         let out = self.output_offset();
-        if self.layers == 1 && self.width <= 8 {
-            let mut bound = 1.0_f32;
-            for mask in 0..(1 << self.width) {
-                let mut gradient = Vec3::ZERO;
-                for i in 0..self.width {
-                    if mask & (1 << i) != 0 {
-                        gradient += Vec3::from_slice(&self.weights[i * 4..i * 4 + 3])
-                            * self.weights[out + i];
-                    }
-                }
-                bound = bound.max(gradient.length());
-            }
-            return bound * 1.00001;
-        }
         // Propagate component-wise absolute derivative bounds. ReLU slopes
         // are at most one, so this remains safe for deeper/wider networks.
         let mut bounds = vec![Vec3::ZERO; self.width];
         let mut next = vec![Vec3::ZERO; self.width];
         for layer in 0..self.layers {
-            let inputs = if layer == 0 { 3 } else { self.width };
+            let inputs = if layer == 0 { 6 } else { self.width };
             next.fill(Vec3::ZERO);
             for row in 0..self.width {
                 let offset = self.layer_offset(layer) + row * (inputs + 1);
@@ -265,11 +278,15 @@ impl Network {
             }
             std::mem::swap(&mut bounds, &mut next);
         }
-        let mut gradient = Vec3::ZERO;
-        for i in 0..self.width {
-            gradient += bounds[i] * self.weights[out + i].abs();
+        let mut squared_bound = 0.0;
+        for axis in 0..3 {
+            let mut gradient = Vec3::ZERO;
+            for i in 0..self.width {
+                gradient += bounds[i] * self.weights[out + axis * (self.width + 1) + i].abs();
+            }
+            squared_bound += gradient.length_squared();
         }
-        gradient.length().max(1.0) * 1.00001
+        squared_bound.sqrt().max(1.0) * 1.00001
     }
 }
 
@@ -322,13 +339,17 @@ pub(super) struct NeuralField {
 }
 
 impl NeuralField {
+    pub(super) fn best_effort(source: Arc<Vec<SdfObject>>, root: uuid::Uuid) -> Option<Self> {
+        TrainingState::new(source, root).map(TrainingState::finish)
+    }
+
     pub fn saved(
         &self,
         source_key: u64,
         training: NeuralTrainingSettings,
     ) -> crate::model::SavedNeuralField {
         crate::model::SavedNeuralField {
-            version: 1,
+            version: 2,
             source_key,
             training,
             weights: self.network.weights.clone(),
@@ -347,7 +368,7 @@ impl NeuralField {
     ) -> Option<Self> {
         let settings = saved.training;
         let ids: std::collections::HashSet<_> = source.iter().map(|object| object.uuid).collect();
-        if saved.version != 1
+        if saved.version != 2
             || saved.source_key != key
             || settings.parameter_count()? != saved.weights.len()
             || saved.weights.iter().any(|weight| !weight.is_finite())
@@ -462,15 +483,17 @@ struct TrainingState {
     best_max_error: f32,
     best_min: f32,
     best_max: f32,
+    fallback_owner: uuid::Uuid,
     started: web_time::Instant,
 }
 impl TrainingState {
     pub fn new(source: Arc<Vec<SdfObject>>, root: uuid::Uuid) -> Option<Self> {
-        let settings = source
+        let mut settings = source
             .iter()
             .find(|object| object.uuid == root)?
             .neural_sdf
             .training;
+        settings.distance_target = crate::model::NeuralDistanceTarget::SignedSdf;
         if !settings.is_valid()
             || payload_records(settings)? > super::box_depth_atlas::MAX_BOX_DEPTH_TEXELS
         {
@@ -524,24 +547,40 @@ impl TrainingState {
             best_max_error: 0.0,
             best_min: f32::INFINITY,
             best_max: f32::NEG_INFINITY,
+            fallback_owner: root,
             started: web_time::Instant::now(),
         })
     }
-    pub fn finish(self) -> Result<NeuralField, &'static str> {
+    pub fn finish(mut self) -> NeuralField {
         let samples = self.settings.samples as usize;
-        if self.best_min >= 0.0 || self.best_max <= 0.0 || !self.best_loss.is_finite() {
-            return Err("Fit contains no surface crossing");
+        for weight in &mut self.best.weights {
+            if !weight.is_finite() {
+                *weight = 0.0;
+            }
         }
-        Ok(NeuralField {
+        self.owners
+            .resize(MATERIAL_SAMPLES, self.fallback_owner);
+        self.owners.truncate(MATERIAL_SAMPLES);
+        let rms_error = if self.best_loss.is_finite() && self.best_loss >= 0.0 {
+            (self.best_loss / samples as f32).sqrt() * self.distance_unit
+        } else {
+            0.0
+        };
+        let max_error = if self.best_max_error.is_finite() && self.best_max_error >= 0.0 {
+            self.best_max_error * self.distance_unit
+        } else {
+            0.0
+        };
+        NeuralField {
             network: self.best,
             half_extent: self.half_extent,
             owners: self.owners,
-            rms_error: (self.best_loss / samples as f32).sqrt() * self.distance_unit,
-            max_error: self.best_max_error * self.distance_unit,
+            rms_error: if rms_error.is_finite() { rms_error } else { 0.0 },
+            max_error: if max_error.is_finite() { max_error } else { 0.0 },
             bake_ms: self.started.elapsed().as_secs_f64() * 1000.0,
             raymarch_last_segment: self.settings.raymarch_last_segment,
             distance_offset: self.settings.distance_offset,
-        })
+        }
     }
 }
 
@@ -577,13 +616,14 @@ mod tests {
             };
             let network = Network::new(settings);
             let p = Vec3::new(0.37, -0.21, 0.63);
-            let target = 0.25;
+            let target = Vec3::new(0.25, -0.1, 0.4);
+            let ray = Vec3::new(0.6, 0.0, 0.8);
             let mut gradient = vec![0.0; network.weights.len()];
-            network.gradient(p, target, &mut gradient);
+            network.gradient(p, ray, target, &mut gradient);
             for index in [
                 0,
                 3,
-                width as usize * 4,
+                width as usize * 7,
                 network.output_offset(),
                 network.weights.len() - 1,
             ] {
@@ -591,8 +631,8 @@ mod tests {
                 let mut low = network.clone();
                 high.weights[index] += 0.001;
                 low.weights[index] -= 0.001;
-                let numerical = ((high.evaluate(p) - target).powi(2)
-                    - (low.evaluate(p) - target).powi(2))
+                let numerical = ((high.evaluate(p, ray) - target).length_squared()
+                    - (low.evaluate(p, ray) - target).length_squared())
                     / 0.002;
                 assert!(
                     (gradient[index] - numerical).abs() < 0.005,
@@ -676,18 +716,19 @@ mod tests {
             });
 
             let p = Vec3::new(0.37, -0.21, 0.63);
-            let target = 0.25;
+            let target = Vec3::new(0.25, -0.1, 0.4);
+            let ray = Vec3::new(0.6, 0.0, 0.8);
             let mut gradient = vec![0.0; network.weights.len()];
-            network.gradient(p, target, &mut gradient);
+            network.gradient(p, ray, target, &mut gradient);
             for i in 0..network.weights.len() {
                 let mut low = network.clone();
                 let mut high = network.clone();
-                low.weights[i] -= 0.0001;
-                high.weights[i] += 0.0001;
-                let numerical = ((high.evaluate(p) - target).powi(2)
-                    - (low.evaluate(p) - target).powi(2))
-                    / 0.0002;
-                assert!((numerical - gradient[i]).abs() < 0.001, "parameter {i}");
+                low.weights[i] -= 0.001;
+                high.weights[i] += 0.001;
+                let numerical = ((high.evaluate(p, ray) - target).length_squared()
+                    - (low.evaluate(p, ray) - target).length_squared())
+                    / 0.002;
+                assert!((numerical - gradient[i]).abs() < 0.001, "layers {layers}, width {width}, parameter {i}: numerical {numerical}, analytic {}", gradient[i]);
             }
         }
     }
@@ -715,7 +756,7 @@ mod tests {
         state.owners = (0..MATERIAL_SAMPLES)
             .map(|i| source[i % source.len()].uuid)
             .collect();
-        let field = state.finish().unwrap();
+        let field = state.finish();
         assert!(field.owners.contains(&source[0].uuid));
         assert!(field.owners.contains(&child_id));
         let ready = [(source[0].uuid, Arc::new(field))].into_iter().collect();
@@ -744,7 +785,7 @@ mod tests {
         state.owners = (0..MATERIAL_SAMPLES)
             .map(|index| source[index % source.len()].uuid)
             .collect();
-        let field = state.finish().unwrap();
+        let field = state.finish();
         assert!(field.raymarch_last_segment);
         assert_eq!(field.distance_offset, 0.3);
         assert_eq!(
@@ -806,12 +847,13 @@ mod tests {
     }
 
     #[test]
-    fn neural_invalid_fit_falls_back() {
+    fn neural_invalid_fit_still_produces_a_field() {
         let object = SdfObject::create_kind(PrimitiveKind::Sphere);
         let mut job = TrainingState::new(Arc::new(vec![object.clone()]), object.uuid).unwrap();
         job.best_min = 0.0;
         job.best_max = 0.0;
-        assert!(job.finish().is_err());
+        let field = job.finish();
+        assert!(field.rms_error.is_finite());
     }
 
     #[test]
@@ -824,7 +866,8 @@ mod tests {
             let a = grid_position(i - 1);
             let b = grid_position(i);
             assert!(
-                (network.evaluate(a) - network.evaluate(b)).abs() <= bound * a.distance(b) + 1e-6
+                (network.evaluate(a, Vec3::X) - network.evaluate(b, Vec3::X)).length()
+                    <= bound * a.distance(b) + 1e-6
             );
         }
     }
@@ -894,7 +937,7 @@ mod gpu_tests {
                 });
                 let output = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("neural values"),
-                    size: (sample_count * 16) as u64,
+                    size: (sample_count * 32) as u64,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 });
@@ -911,15 +954,20 @@ mod gpu_tests {
                 let source = format!(
                     r#"
                 const NEURAL_WIDTH: u32 = {width}u;
-                struct Object {{ box_depth_max: vec4<f32>, box_depth_meta: vec4<u32> }}
+                struct Object {{ box_depth_max: vec4<f32>, box_depth_meta: vec4<u32>, inverse_rows: array<vec4<f32>, 3> }}
                 @group(0) @binding(0) var<storage, read> box_depth_texels: array<vec4<f32>>;
                 @group(0) @binding(1) var<storage, read_write> result: array<vec4<f32>>;
                 {}
                 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
                     let i = id.x;
                     let p = vec3(f32(i % 32u), f32((i / 32u) % 32u), f32(i / 1024u)) * (2.0 / 31.0) - vec3(1.0);
-                    let object = Object(vec4(2.0), vec4<u32>(0u));
-                    result[i] = vec4(neural_gradient(p * 2.0, object), neural_value(p * 2.0, object));
+                    let object = Object(vec4(2.0), vec4<u32>(0u), array<vec4<f32>, 3>(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0)));
+                    var ray = vec3(1.0, 0.0, 0.0);
+                    if i % 3u == 1u {{ ray = vec3(0.0, 1.0, 0.0); }}
+                    if i % 3u == 2u {{ ray = vec3(0.6, 0.0, 0.8); }}
+                    neural_ray_direction = ray;
+                    result[i] = vec4(neural_distance_vector(p * 2.0, ray, object), neural_value(p * 2.0, object));
+                    result[i + {sample_count}u] = vec4(neural_gradient(p * 2.0, object), 0.0);
                 }}
             "#,
                     &renderer[start..end]
@@ -973,26 +1021,33 @@ mod gpu_tests {
                     .unwrap();
                 receiver.recv().unwrap().unwrap();
                 let bytes = readback.slice(..).get_mapped_range().unwrap();
-                for (i, value) in bytemuck::cast_slice::<u8, [f32; 4]>(&bytes)
-                    .iter()
-                    .enumerate()
-                {
+                let results = bytemuck::cast_slice::<u8, [f32; 4]>(&bytes);
+                for (i, value) in results.iter().take(sample_count).enumerate() {
+                    let ray = match i % 3 {
+                        0 => Vec3::X,
+                        1 => Vec3::Y,
+                        _ => Vec3::new(0.6, 0.0, 0.8),
+                    };
                     assert!(
-                        (value[3] - network.evaluate(grid_position(i)) * 2.0).abs() < 1e-5,
+                        (value[3] - network.evaluate(grid_position(i), ray).dot(ray) * 2.0).abs()
+                            < 1e-5,
                         "grid sample {i}"
                     );
-                    if i % 257 == 0 {
-                        let p = grid_position(i);
-                        for axis in 0..3 {
+                    let expected = network.evaluate(grid_position(i), ray) * 2.0;
+                    for axis in 0..3 {
+                        assert!(
+                            (value[axis] - expected[axis]).abs() < 1e-5,
+                            "vector component {axis}, sample {i}"
+                        );
+                        if i % 257 == 0 {
+                            let p = grid_position(i);
                             let mut delta = Vec3::ZERO;
                             delta[axis] = 0.0001;
-                            let derivative = (network.evaluate(p + delta)
-                                - network.evaluate(p - delta))
+                            let derivative = (network.evaluate(p + delta, ray)
+                                - network.evaluate(p - delta, ray))
+                            .dot(ray)
                                 / 0.0002;
-                            assert!(
-                                (value[axis] - derivative).abs() < 0.02,
-                                "GPU gradient: layers {layers}, width {width}, sample {i}"
-                            );
+                            assert!((results[sample_count + i][axis] - derivative).abs() < 0.02, "spatial derivative: layers {layers}, width {width}, sample {i}, axis {axis}");
                         }
                     }
                 }

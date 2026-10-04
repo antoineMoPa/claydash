@@ -64,6 +64,16 @@ pub(super) fn bake_box_depth_atlas(
     resolution: u32,
     start: BoxCaptureStart,
 ) -> Option<BoxDepthAtlas> {
+    bake_box_depth_atlas_with_progress(scene, root, resolution, start, |_| {})
+}
+
+pub(super) fn bake_box_depth_atlas_with_progress(
+    scene: &[SdfObject],
+    root: uuid::Uuid,
+    resolution: u32,
+    start: BoxCaptureStart,
+    mut report_progress: impl FnMut(u32),
+) -> Option<BoxDepthAtlas> {
     let layers = if matches!(start, BoxCaptureStart::OutsideBounds) {
         8
     } else {
@@ -108,6 +118,8 @@ pub(super) fn bake_box_depth_atlas(
     let mut owners = vec![None; texel_count];
     let mut normals = vec![Vec3::ZERO; texel_count];
     let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+    let total_rays = resolution as usize * resolution as usize * BoxFace::ALL.len();
+    let mut completed_rays = 0usize;
     for (face_index, face) in BoxFace::ALL.into_iter().enumerate() {
         let (axis, u_axis, v_axis, sign) = face.axes();
         let inward = -axes[axis] * sign;
@@ -181,6 +193,8 @@ pub(super) fn bake_box_depth_atlas(
                         break;
                     }
                 }
+                completed_rays += 1;
+                report_progress((completed_rays * 90 / total_rays.max(1)) as u32);
             }
         }
         if layers > 1 {
@@ -212,11 +226,15 @@ pub(super) fn bake_box_depth_atlas(
                     .fold(f32::INFINITY, f32::min);
                 sample[0] = -nearest.max(0.003);
             }
+            let completed = face_index * resolution as usize + y as usize + 1;
+            let total = BoxFace::ALL.len() * resolution as usize;
+            report_progress(90 + (completed * 10 / total.max(1)) as u32);
         }
     }
     if !owners.iter().any(Option::is_some) {
         return None;
     }
+    report_progress(100);
     Some(BoxDepthAtlas {
         local_min,
         local_max,

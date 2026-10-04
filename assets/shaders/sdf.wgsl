@@ -338,26 +338,29 @@ fn neural_activation_slope(value: f32, offset: u32) -> f32 {
 fn neural_weight(offset: u32, index: u32) -> f32 {
     return box_depth_texels[offset + 2u + index / 4u][index % 4u];
 }
-fn neural_value(local: vec3<f32>, object: Object) -> f32 {
+// Per-invocation ray context also reaches generic CSG distance evaluators.
+var<private> neural_ray_direction: vec3<f32> = vec3(1.0, 0.0, 0.0);
+fn neural_local_ray(object: Object) -> vec3<f32> {
+    let ray = vec3(dot(object.inverse_rows[0].xyz, neural_ray_direction),
+        dot(object.inverse_rows[1].xyz, neural_ray_direction),
+        dot(object.inverse_rows[2].xyz, neural_ray_direction));
+    return ray / max(length(ray), 1e-20);
+}
+fn neural_distance_vector(local: vec3<f32>, ray: vec3<f32>, object: Object) -> vec3<f32> {
     let offset = object.box_depth_meta.x;
     let header = box_depth_texels[offset];
     let layers = u32(header.x);
     let width = u32(header.y);
     let p = local / object.box_depth_max.x;
-    if layers == 1u {
-        var result = neural_weight(offset, u32(header.z) + width);
-        for (var i = 0u; i < width; i++) {
-            result += neural_activation(dot(box_depth_texels[offset + 2u + i], vec4(p, 1.0)), offset)
-                * neural_weight(offset, u32(header.z) + i);
-        }
-        return result * object.box_depth_max.x;
-    }
     var values: array<vec4<f32>, (NEURAL_WIDTH + 3u) / 4u>;
     var next: array<vec4<f32>, (NEURAL_WIDTH + 3u) / 4u>;
     for (var row = 0u; row < width; row++) {
-        values[row / 4u][row % 4u] = neural_activation(dot(box_depth_texels[offset + 2u + row], vec4(p, 1.0)), offset);
+        let first = box_depth_texels[offset + 2u + row * 2u];
+        let second = box_depth_texels[offset + 3u + row * 2u];
+        let value = dot(first.xyz, p) + first.w * ray.x + dot(second.xy, ray.yz) + second.z;
+        values[row / 4u][row % 4u] = neural_activation(value, offset);
     }
-    var layer_offset = width; // vec4 records from the start of weights
+    var layer_offset = width * 2u;
     let row_records = (width + 4u) / 4u;
     let blocks = (width + 3u) / 4u;
     for (var layer = 1u; layer < layers; layer++) {
@@ -372,12 +375,19 @@ fn neural_value(local: vec3<f32>, object: Object) -> f32 {
         values = next;
         layer_offset += width * row_records;
     }
-    let output_offset = u32(header.z);
-    var result = neural_weight(offset, output_offset + width);
-    for (var block = 0u; block < blocks; block++) {
-        result += dot(box_depth_texels[offset + 2u + output_offset / 4u + block], values[block]);
+    var result = vec3(0.0);
+    for (var axis = 0u; axis < 3u; axis++) {
+        let output_offset = u32(header.z) + axis * row_records * 4u;
+        result[axis] = neural_weight(offset, output_offset + width);
+        for (var block = 0u; block < blocks; block++) {
+            result[axis] += dot(box_depth_texels[offset + 2u + output_offset / 4u + block], values[block]);
+        }
     }
     return result * object.box_depth_max.x;
+}
+fn neural_value(local: vec3<f32>, object: Object) -> f32 {
+    let ray = neural_local_ray(object);
+    return dot(neural_distance_vector(local, ray, object), ray);
 }
 fn neural_gradient(local: vec3<f32>, object: Object) -> vec3<f32> {
     let offset = object.box_depth_meta.x;
@@ -385,30 +395,23 @@ fn neural_gradient(local: vec3<f32>, object: Object) -> vec3<f32> {
     let layers = u32(header.x);
     let width = u32(header.y);
     let p = local / object.box_depth_max.x;
-    if layers == 1u {
-        var result = vec3(0.0);
-        for (var i = 0u; i < width; i++) {
-            let row = box_depth_texels[offset + 2u + i];
-            result += row.xyz * neural_weight(offset, u32(header.z) + i) * neural_activation_slope(dot(row, vec4(p, 1.0)), offset);
-        }
-        return result;
-    }
-    // xyz carries the spatial derivative; w carries the activation.
+    let ray = neural_local_ray(object);
+    // xyz carries spatial derivatives with the ray held fixed; w is activation.
     var values: array<vec4<f32>, NEURAL_WIDTH>;
     var next: array<vec4<f32>, NEURAL_WIDTH>;
     var layer_offset = 0u;
     for (var layer = 0u; layer < layers; layer++) {
-        let inputs = select(width, 3u, layer == 0u);
+        let inputs = select(width, 6u, layer == 0u);
         for (var row = 0u; row < width; row++) {
             let row_stride = ((inputs + 4u) / 4u) * 4u;
             let row_offset = layer_offset + row * row_stride;
             var value = vec4(0.0, 0.0, 0.0, neural_weight(offset, row_offset + inputs));
             for (var col = 0u; col < inputs; col++) {
-                var input = values[col];
+                var input = vec4(0.0);
                 if layer == 0u {
-                    input = vec4(0.0, 0.0, 0.0, p[col]);
-                    input[col] = 1.0;
-                }
+                    if col < 3u { input.w = p[col]; input[col] = 1.0; }
+                    else { input.w = ray[col - 3u]; }
+                } else { input = values[col]; }
                 value += neural_weight(offset, row_offset + col) * input;
             }
             next[row] = vec4(value.xyz * neural_activation_slope(value.w, offset), neural_activation(value.w, offset));
@@ -417,7 +420,12 @@ fn neural_gradient(local: vec3<f32>, object: Object) -> vec3<f32> {
         layer_offset += width * ((inputs + 4u) / 4u) * 4u;
     }
     var result = vec3(0.0);
-    for (var i = 0u; i < width; i++) { result += neural_weight(offset, u32(header.z) + i) * values[i].xyz; }
+    let row_stride = ((width + 4u) / 4u) * 4u;
+    for (var axis = 0u; axis < 3u; axis++) {
+        for (var i = 0u; i < width; i++) {
+            result += ray[axis] * neural_weight(offset, u32(header.z) + axis * row_stride + i) * values[i].xyz;
+        }
+    }
     return result;
 }
 fn neural_shape(local: vec3<f32>, object: Object) -> f32 {
@@ -453,6 +461,7 @@ fn component_has_neural(owner: f32) -> bool {
 // A learned distance can overstep a zero crossing. Recover a bracketed hit
 // without dividing every step by a very loose global network slope bound.
 fn refine_neural_crossing(origin: vec3<f32>, direction: vec3<f32>, low: f32, high: f32, owner: f32) -> vec3<f32> {
+    neural_ray_direction = direction;
     let component = objects[u32(owner)].component;
     var a = low;
     var b = high;
@@ -1444,7 +1453,13 @@ fn depth_accelerator_sample(point: vec3<f32>, direction: vec3<f32>, object: Obje
         let index = cell.x + 32u * (cell.y + 32u * cell.z);
         let owner_offset = object.box_depth_meta.x
             + u32(box_depth_texels[object.box_depth_meta.x].w) + 2u * index + 1u;
-        return vec2(neural_shape(local, object) * scale, box_depth_texels[owner_offset].x - 1.0);
+        let ray = vec3(dot(box_depth_texels[transform].xyz, direction),
+            dot(box_depth_texels[transform + 1u].xyz, direction), dot(box_depth_texels[transform + 2u].xyz, direction));
+        let unit_ray = ray / max(length(ray), 1e-20);
+        let q = abs(local) - object.box_depth_max.xyz;
+        let cube = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+        let value = dot(neural_distance_vector(local, unit_ray, object), unit_ray);
+        return vec2(max(cube, value) * scale, box_depth_texels[owner_offset].x - 1.0);
     }
     if box_depth_texels[transform + 3u].y == 8.0 {
         // Choose the box capture face facing this ray, including secondary rays.
@@ -1604,6 +1619,7 @@ fn depth_accelerator_component_distance(point: vec3<f32>, direction: vec3<f32>, 
 
 fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
     excluded_splats: array<u32, 12>, skip_splats: bool) -> vec3<f32> {
+    neural_ray_direction = direction;
     var closest = 100.0;
     var owner = -1.0;
     var splat_offset = -1.0;
@@ -1821,6 +1837,7 @@ fn containing_component(point: vec3<f32>) -> vec2<f32> {
 // Reflections stay on the incident side; transmission crosses the surface.
 // The caller already knows which side contains the ray, avoiding a scene query.
 fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u32) -> vec3<f32> {
+    neural_ray_direction = direction;
     if USE_BVH {
         if !inside { return trace_objects(origin, direction, 0.0015, empty_splat_exclusions(), false); }
         var owner = initial_owner;
@@ -1946,6 +1963,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
     let far_point = far.xyz / far.w;
     let near_point = near.xyz / near.w;
     let ray = select(normalize(far_point - camera.position.xyz), normalize(far_point - near_point), camera.count.w != 0u);
+    neural_ray_direction = ray;
     let ray_origin = select(camera.position.xyz, near_point, camera.count.w != 0u);
     var point = ray_origin;
     var hit = false;

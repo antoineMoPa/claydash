@@ -53,7 +53,7 @@ impl GroupRenderRepresentation {
                 "Bake sphere depth, then refine only the map-selected source surface."
             }
             Self::NeuralSdf => {
-                "Fit a configurable neural field to uniformly random distance samples."
+                "Fit a ray-conditioned neural field to random positions and unit ray directions."
             }
             Self::GaussianSplats => "Approximate the group with soft Gaussian surface samples.",
         }
@@ -129,11 +129,28 @@ impl NeuralActivation {
     }
 }
 
+/// Target for the three-component, ray-conditioned neural output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NeuralDistanceTarget {
+    RayHit,
+    #[default]
+    SignedSdf,
+}
+impl NeuralDistanceTarget {
+    pub fn shader_id(self) -> u32 {
+        match self {
+            Self::RayHit => 1,
+            Self::SignedSdf => 0,
+        }
+    }
+}
+
 /// Saved choices, never the fitted model itself.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "StoredNeuralTrainingSettings")]
 pub struct NeuralTrainingSettings {
     pub activation: NeuralActivation,
+    pub distance_target: NeuralDistanceTarget,
     pub samples: u32,
     pub layers: u32,
     pub width: u32,
@@ -148,6 +165,7 @@ impl Default for NeuralTrainingSettings {
     fn default() -> Self {
         Self {
             activation: NeuralActivation::default(),
+            distance_target: NeuralDistanceTarget::SignedSdf,
             samples: 32_768,
             layers: 2,
             width: 24,
@@ -164,6 +182,7 @@ impl Default for NeuralTrainingSettings {
 #[serde(default)]
 struct StoredNeuralTrainingSettings {
     activation: NeuralActivation,
+    distance_target: NeuralDistanceTarget,
     samples: Option<u32>,
     samples_per_side: Option<u32>,
     layers: u32,
@@ -179,6 +198,7 @@ impl Default for StoredNeuralTrainingSettings {
         let settings = NeuralTrainingSettings::default();
         Self {
             activation: settings.activation,
+            distance_target: settings.distance_target,
             samples: None,
             samples_per_side: None,
             layers: settings.layers,
@@ -202,6 +222,9 @@ impl TryFrom<StoredNeuralTrainingSettings> for NeuralTrainingSettings {
         };
         let settings = Self {
             activation: stored.activation,
+            // Older documents may request next-hit targets. Keep loading them, but
+            // train every current model with the signed-SDF vector target.
+            distance_target: NeuralDistanceTarget::SignedSdf,
             samples,
             layers: stored.layers,
             width: stored.width,
@@ -281,7 +304,7 @@ impl NeuralTrainingSettings {
     pub fn parameter_count(&self) -> Option<usize> {
         self.is_valid().then(|| {
             let w = self.width as usize;
-            4 * w + (self.layers as usize - 1) * w * (w + 1) + w + 1
+            7 * w + (self.layers as usize - 1) * w * (w + 1) + 3 * (w + 1)
         })
     }
 }

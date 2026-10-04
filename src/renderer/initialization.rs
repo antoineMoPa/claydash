@@ -414,6 +414,8 @@ impl Renderer {
             neural_jobs: Default::default(),
             group_compute_requests: Default::default(),
             group_capture_cache: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            group_capture_bake: None,
             egui_renderer,
             material_previews: Vec::new(),
             material_preview_pipelines: Vec::new(),

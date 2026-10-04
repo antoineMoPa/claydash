@@ -917,3 +917,15 @@ fn box_accelerator_settings_round_trip_with_independent_sphere_distance() {
         0.2
     );
 }
+
+#[test]
+fn neural_distance_target_migrates_legacy_documents_to_signed_sdf() {
+    let settings = NeuralTrainingSettings::default();
+    let encoded = serde_json::to_value(settings).unwrap();
+    assert_eq!(serde_json::from_value::<NeuralTrainingSettings>(encoded).unwrap(), settings);
+
+    let mut legacy = serde_json::to_value(settings).unwrap();
+    legacy["distance_target"] = serde_json::json!("RayHit");
+    let migrated = serde_json::from_value::<NeuralTrainingSettings>(legacy).unwrap();
+    assert_eq!(migrated.distance_target, NeuralDistanceTarget::SignedSdf);
+}

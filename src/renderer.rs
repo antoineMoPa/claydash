@@ -282,6 +282,8 @@ pub struct Renderer {
     neural_jobs: neural_jobs::NeuralJobs,
     group_compute_requests: std::collections::HashSet<uuid::Uuid>,
     group_capture_cache: std::collections::HashMap<uuid::Uuid, group_capture::CachedGroupCapture>,
+    #[cfg(not(target_arch = "wasm32"))]
+    group_capture_bake: Option<group_capture::CaptureBakeJob>,
     egui_renderer: egui_wgpu::Renderer,
     viewport: crate::viewport::Viewport,
     post_processing: post_processing::PostProcessor,
