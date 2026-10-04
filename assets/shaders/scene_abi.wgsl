@@ -1,5 +1,6 @@
 // position.w is display exposure: 1.0 in the viewport, brighter in material previews.
 // count: object count, BVH node count, viewport height, orthographic flag.
+// world_mode.w: viewport width for sparse native-pixel refinement.
 struct Camera {
     inverse_view_projection: mat4x4<f32>, position: vec4<f32>, count: vec4<u32>,
     world_mode: vec4<u32>, world_color: vec4<f32>, sun_direction: vec4<f32>, sky_params: vec4<f32>,

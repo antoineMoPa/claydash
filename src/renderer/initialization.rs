@@ -234,7 +234,11 @@ impl Renderer {
                 .chain(std::iter::once(8))
                 .map(|binding| wgpu::BindGroupLayoutEntry {
                     binding,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: if binding == 0 {
+                        wgpu::ShaderStages::VERTEX_FRAGMENT
+                    } else {
+                        wgpu::ShaderStages::FRAGMENT
+                    },
                     ty: wgpu::BindingType::Buffer {
                         ty: if binding == 0 {
                             wgpu::BufferBindingType::Uniform

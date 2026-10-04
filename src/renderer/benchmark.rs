@@ -281,7 +281,7 @@ impl Renderer {
                 size: [self.config.width, self.config.height],
                 refine: false,
             };
-            let work = self.viewport.prepare(&self.device, key, false, true);
+            let work = self.viewport.prepare(&self.device, key, false, true, false);
             assert_eq!(work, crate::viewport::Work::Preview);
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let pipeline = if self.hybrid_enabled {
@@ -527,14 +527,30 @@ impl Renderer {
                 },
                 true,
                 deferred,
+                !deferred && !self.hybrid_enabled,
             );
             let mut encoder = self.device.create_command_encoder(&Default::default());
+            let quick_preview = matches!(work, crate::viewport::Work::Preview);
             let pipeline = if self.hybrid_enabled {
-                self.hybrid_pipeline.as_ref().expect("hybrid pipeline")
+                if quick_preview {
+                    self.hybrid_fast_pipeline
+                        .as_ref()
+                        .expect("hybrid preview pipeline")
+                } else {
+                    self.hybrid_pipeline.as_ref().expect("hybrid pipeline")
+                }
             } else if self.has_booleans {
-                &self.boolean_pipeline.as_ref().unwrap().1
+                if quick_preview {
+                    &self.fast_boolean_pipeline.as_ref().unwrap().1
+                } else {
+                    &self.boolean_pipeline.as_ref().unwrap().1
+                }
             } else {
-                &self.pipeline
+                if quick_preview {
+                    &self.fast_pipeline
+                } else {
+                    &self.pipeline
+                }
             };
             let readback = self.viewport.encode(
                 &self.device,

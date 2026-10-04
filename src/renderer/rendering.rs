@@ -62,8 +62,7 @@ impl Renderer {
             (
                 job.root,
                 job.source_revision,
-                job.progress
-                    .load(std::sync::atomic::Ordering::Relaxed),
+                job.progress.load(std::sync::atomic::Ordering::Relaxed),
             )
         });
         #[cfg(target_arch = "wasm32")]
@@ -163,16 +162,23 @@ impl Renderer {
         };
         let deferred = world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported;
+        let interleaved = refine && !deferred && !self.hybrid_enabled;
         let viewport_refine = refine;
         self.viewport.set_playback_budget(animation_playback);
-        let work = self
-            .viewport
-            .prepare(&self.device, view_key.clone(), viewport_refine, deferred);
+        let work = self.viewport.prepare(
+            &self.device,
+            view_key.clone(),
+            viewport_refine,
+            deferred,
+            interleaved,
+        );
         if work != crate::viewport::Work::Cached {
             self.upload_splat_camera(camera, world);
         }
+        let quick_preview =
+            !interleaved && (matches!(work, crate::viewport::Work::Preview) || !refine);
         let scene_pipeline = if self.hybrid_enabled {
-            if refine {
+            if !quick_preview {
                 self.hybrid_pipeline
                     .as_ref()
                     .expect("hybrid scene pipeline")
@@ -182,7 +188,7 @@ impl Renderer {
                     .expect("hybrid preview pipeline")
             }
         } else {
-            match (refine, self.has_booleans) {
+            match (!quick_preview, self.has_booleans) {
                 (true, true) => &self.boolean_pipeline.as_ref().expect("boolean pipeline").1,
                 (true, false) => &self.pipeline,
                 (false, true) => {

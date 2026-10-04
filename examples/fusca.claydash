@@ -68,9 +68,9 @@
             "material": {
               "kind": "Custom",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.075,
+                0.32,
+                0.27,
                 1.0
               ],
               "roughness": 0.55,
@@ -209,9 +209,9 @@
               ]
             },
             "color": [
-              0.8,
-              0.0,
-              0.3,
+              0.075,
+              0.32,
+              0.27,
               1.0
             ],
             "object_type": 1,
@@ -227,9 +227,9 @@
             "material": {
               "kind": "Custom",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.075,
+                0.32,
+                0.27,
                 1.0
               ],
               "roughness": 0.55,
@@ -385,9 +385,9 @@
               ]
             },
             "color": [
-              0.8,
-              0.0,
-              0.3,
+              0.075,
+              0.32,
+              0.27,
               1.0
             ],
             "object_type": 1,
@@ -403,9 +403,9 @@
             "material": {
               "kind": "Custom",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.075,
+                0.32,
+                0.27,
                 1.0
               ],
               "roughness": 0.55,
@@ -555,9 +555,9 @@
               ]
             },
             "color": [
-              0.8,
-              0.0,
-              0.3,
+              0.075,
+              0.32,
+              0.27,
               1.0
             ],
             "object_type": 1,
@@ -573,9 +573,9 @@
             "material": {
               "kind": "Custom",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.075,
+                0.32,
+                0.27,
                 1.0
               ],
               "roughness": 0.55,
@@ -7982,9 +7982,9 @@
               ]
             },
             "color": [
-              0.8,
-              0.0,
-              0.3,
+              0.075,
+              0.32,
+              0.27,
               1.0
             ],
             "object_type": 1,
@@ -8000,9 +8000,9 @@
             "material": {
               "kind": "Custom",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.075,
+                0.32,
+                0.27,
                 1.0
               ],
               "roughness": 0.55,
@@ -8152,9 +8152,9 @@
               ]
             },
             "color": [
-              0.8,
-              0.0,
-              0.3,
+              0.075,
+              0.32,
+              0.27,
               1.0
             ],
             "object_type": 1,
@@ -8170,9 +8170,9 @@
             "material": {
               "kind": "Custom",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.075,
+                0.32,
+                0.27,
                 1.0
               ],
               "roughness": 0.55,
@@ -8322,9 +8322,9 @@
               ]
             },
             "color": [
-              0.8,
-              0.0,
-              0.3,
+              0.075,
+              0.32,
+              0.27,
               1.0
             ],
             "object_type": 1,
@@ -8340,9 +8340,9 @@
             "material": {
               "kind": "Custom",
               "color": [
-                0.8,
-                0.0,
-                0.3,
+                0.075,
+                0.32,
+                0.27,
                 1.0
               ],
               "roughness": 0.55,
@@ -14342,7 +14342,7 @@
       "subtree": {},
       "value": {
         "World": {
-          "render_pipeline": "deferred",
+          "render_pipeline": "exact",
           "screen_space_ambient_occlusion": true,
           "screen_space_reflections": false,
           "background": "Studio",

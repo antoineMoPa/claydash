@@ -8,6 +8,41 @@ enum ScenePipelinePreparation {
     NeuralTraining,
 }
 
+// The prism interval only applies when every edge is a supporting plane.
+// Zero means that the polygon needs the ordinary SDF traversal.
+fn convex_polygon_winding(vertices: &[Vec2]) -> u32 {
+    if vertices.len() < 3 || vertices.len() > crate::model::MAX_POLYGON_PRISM_VERTICES {
+        return 0;
+    }
+    let mut winding = 0;
+    for index in 0..vertices.len() {
+        let first = vertices[(index + 1) % vertices.len()] - vertices[index];
+        let second =
+            vertices[(index + 2) % vertices.len()] - vertices[(index + 1) % vertices.len()];
+        if first.length_squared() < 1e-12 || second.length_squared() < 1e-12 {
+            return 0;
+        }
+        let cross = first.perp_dot(second);
+        if cross.abs() < 1e-7 * first.length() * second.length() {
+            return 0;
+        }
+        let edge_winding = if cross > 0.0 { 1 } else { 2 };
+        if winding != 0 && winding != edge_winding {
+            return 0;
+        }
+        for point in vertices {
+            let side = first.perp_dot(*point - vertices[index]);
+            if (edge_winding == 1 && side < -1e-6 * first.length())
+                || (edge_winding == 2 && side > 1e-6 * first.length())
+            {
+                return 0;
+            }
+        }
+        winding = edge_winding;
+    }
+    winding
+}
+
 pub(super) struct PackedTrainingScene {
     pub objects: Vec<GpuObject>,
     pub bvh: Vec<GpuBvhNode>,
@@ -338,14 +373,14 @@ impl Renderer {
             count: [
                 object_count,
                 self.node_count,
-                camera.viewport.y.round().max(1.0) as u32,
+                camera.viewport.y.max(1.0) as u32,
                 u32::from(camera.projection_mode == ProjectionMode::Orthographic),
             ],
             world_mode: [
                 world.background.shader_id(),
                 u32::from(world.screen_space_ambient_occlusion),
                 u32::from(world.screen_space_reflections),
-                0,
+                camera.viewport.x.max(1.0) as u32,
             ],
             world_color: [
                 world.flat_color[0],
@@ -409,6 +444,7 @@ impl Renderer {
             .collect();
 
         let mut bounds = Vec::with_capacity(objects.len().min(MAX_OBJECTS));
+        let mut distance_bound_factors = Vec::with_capacity(objects.len().min(MAX_OBJECTS));
         let mut polygon_points = Vec::new();
         let mut text_points_used = 0usize;
         let mut lattice_points: Vec<[f32; 4]> = Vec::new();
@@ -629,6 +665,33 @@ impl Renderer {
                     object_index: index as u32,
                 };
                 bounds.push(bound);
+                // A nonuniform transform scales the local SDF by its shortest
+                // axis. Relative to a world-space box, its outside distance
+                // can therefore be smaller than the geometric distance.
+                let matrix_frobenius = (matrix.x_axis.truncate().length_squared()
+                    + matrix.y_axis.truncate().length_squared()
+                    + matrix.z_axis.truncate().length_squared())
+                .sqrt();
+                let simple_distance = matches!(
+                    object.params,
+                    SdfParams::SphereParams(_)
+                        | SdfParams::BoxParams(_)
+                        | SdfParams::CylinderParams { .. }
+                        | SdfParams::TorusParams { .. }
+                        | SdfParams::PolygonPrismParams(_)
+                        | SdfParams::TextParams(_)
+                ) && cage.is_none()
+                    && object.render_representation
+                        == crate::model::GroupRenderRepresentation::ExactSdf
+                    && !matches!(
+                        object.material.kind,
+                        crate::model::MaterialKind::Brick | crate::model::MaterialKind::Fabric
+                    );
+                distance_bound_factors.push(if simple_distance {
+                    (distance_scale / matrix_frobenius.max(0.000_001)).min(1.0)
+                } else {
+                    0.0
+                });
                 let uniform_scale = (abs_scale.max_element() - abs_scale.min_element())
                     <= abs_scale.max_element() * 0.00001;
                 let box_depth = box_depth_metadata.get(&object.uuid).copied();
@@ -693,17 +756,28 @@ impl Renderer {
                             0
                         },
                     ],
-                    box_depth_meta: box_depth.map_or([0; 4], |(offset, width, height, _, _, _)| {
-                        [
-                            offset,
-                            width,
-                            height,
-                            depth_accelerator_transforms
-                                .get(&object.uuid)
-                                .copied()
-                                .unwrap_or_else(|| splat_bvh.map_or(0, |(start, _)| start)),
-                        ]
-                    }),
+                    box_depth_meta: box_depth.map_or_else(
+                        || {
+                            let winding = match &object.params {
+                                SdfParams::PolygonPrismParams(polygon) => {
+                                    convex_polygon_winding(&polygon.vertices)
+                                }
+                                _ => 0,
+                            };
+                            [0, 0, 0, winding]
+                        },
+                        |(offset, width, height, _, _, _)| {
+                            [
+                                offset,
+                                width,
+                                height,
+                                depth_accelerator_transforms
+                                    .get(&object.uuid)
+                                    .copied()
+                                    .unwrap_or_else(|| splat_bvh.map_or(0, |(start, _)| start)),
+                            ]
+                        },
+                    ),
                     box_depth_min: box_depth.map_or([0.0; 4], |(_, _, _, minimum, _, _)| {
                         minimum
                             .extend(splat_bvh.map_or(0.0, |(_, end)| end as f32))
@@ -916,6 +990,45 @@ impl Renderer {
             }
         }
         let mut bvh = build_bvh(&mut group_bounds);
+        let mut component_factors = vec![0.0_f32; gpu_objects.len()];
+        let mut component_blend_allowance = vec![0.0_f32; gpu_objects.len()];
+        for bound in &group_bounds {
+            let root = bound.object_index as usize;
+            let start = starts[root] as usize;
+            if objects[start..=root].iter().all(|object| {
+                object.mirror.is_none()
+                    && object.path_extrusion.is_none()
+                    && object.lattice.is_none()
+                    && !object.repetition.enabled
+            }) {
+                component_factors[root] = distance_bound_factors[start..=root]
+                    .iter()
+                    .copied()
+                    .fold(1.0_f32, f32::min);
+                // A smooth union can lower the result by at most one quarter
+                // of its parent's blend width per operand combination.
+                let maximum_blend = objects[start..=root]
+                    .iter()
+                    .map(|object| object.softness.max(0.0))
+                    .fold(0.0_f32, f32::max);
+                component_blend_allowance[root] = maximum_blend * (root - start) as f32 * 0.25;
+            }
+        }
+        for index in (0..bvh.len()).rev() {
+            let (factor, blend_allowance) = if bvh[index].metadata[0] != BVH_LEAF {
+                let root = bvh[index].metadata[0] as usize;
+                (component_factors[root], component_blend_allowance[root])
+            } else {
+                let left = index + 1;
+                let right = bvh[left].metadata[1] as usize;
+                (
+                    bvh[left].aabb_min[3].min(bvh[right].aabb_min[3]),
+                    bvh[left].aabb_max[3].max(bvh[right].aabb_max[3]),
+                )
+            };
+            bvh[index].aabb_min[3] = factor;
+            bvh[index].aabb_max[3] = blend_allowance;
+        }
         for node in &mut bvh {
             if node.metadata[0] != BVH_LEAF {
                 node.metadata[2] = starts[node.metadata[0] as usize];

@@ -40,9 +40,35 @@ const FLAT_UNION_ROOT: i32 = -2;
 const FLAT_COMPONENT_ROOT: i32 = -3;
 
 struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) clip: vec2<f32> }
-@vertex fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
+@vertex fn vs_main(@builtin(vertex_index) index: u32,
+    @builtin(instance_index) instance: u32) -> VertexOutput {
     var positions = array<vec2<f32>, 3>(vec2(-1.0, -3.0), vec2(3.0, 1.0), vec2(-1.0, 1.0));
     var out: VertexOutput;
+    if (instance & 0x80000000u) != 0u {
+        let width = max(camera.world_mode.w, 1u);
+        let height = max(camera.count.z, 1u);
+        let blocks_per_row = (width + 15u) / 16u;
+        let sample = instance & 0x007fffffu;
+        let phase = (instance >> 23u) & 255u;
+        var offset = vec2<u32>(0u);
+        for (var bit = 0u; bit < 4u; bit++) {
+            let digit = (phase >> (6u - 2u * bit)) & 3u;
+            offset.x |= u32(digit == 1u || digit == 2u) << bit;
+            offset.y |= u32(digit == 1u || digit == 3u) << bit;
+        }
+        let pixel = vec2(sample % blocks_per_row, sample / blocks_per_row) * 16u + offset;
+        if pixel.x >= width || pixel.y >= height {
+            out.clip = vec2(2.0);
+        } else {
+            let corner = array<vec2<f32>, 6>(vec2(0.0, 0.0), vec2(1.0, 0.0),
+                vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
+            let screen = vec2<f32>(pixel) + corner[index];
+            out.clip = screen / vec2<f32>(f32(width), f32(height)) * vec2(2.0, -2.0)
+                + vec2(-1.0, 1.0);
+        }
+        out.position = vec4(out.clip, 0.0, 1.0);
+        return out;
+    }
     out.clip = positions[index];
     out.position = vec4(out.clip, 0.0, 1.0);
     return out;
@@ -1194,7 +1220,15 @@ fn scene_distance_limit(point: vec3<f32>, limit: f32, stop_on_inside: bool, skip
             node_index += 1u;
             continue;
         }
-        let lower_bound = distance(point, node.center_radius.xyz) - node.center_radius.w;
+        var lower_bound: f32;
+        if node.aabb_min.w > 0.0 {
+            let delta = max(node.aabb_min.xyz - point, point - node.aabb_max.xyz);
+            lower_bound = length(max(delta, vec3(0.0))) * node.aabb_min.w
+                + min(max(delta.x, max(delta.y, delta.z)), 0.0)
+                - node.aabb_max.w;
+        } else {
+            lower_bound = distance(point, node.center_radius.xyz) - node.center_radius.w;
+        }
         if !USE_BVH || lower_bound < closest.x {
             if node.metadata.x != 0xffffffffu {
                 var candidate: vec2<f32>;
@@ -1358,6 +1392,51 @@ fn primitive_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -
     }
     let caps = (vec2(-object.params.y, object.params.y) - o.y) / safe_d.y;
     return vec2(max(radial.x, min(caps.x, caps.y)), min(radial.y, max(caps.x, caps.y)));
+}
+
+// Clip a local ray against the convex polygon's supporting planes. Expanding
+// each plane by the edge radius encloses the rounded SDF without changing it.
+fn polygon_prism_interval(origin: vec3<f32>, direction: vec3<f32>, object: Object) -> vec2<f32> {
+    let p = vec4(origin, 1.0);
+    let v = vec4(direction, 0.0);
+    let o = vec3(dot(object.inverse_rows[0], p), dot(object.inverse_rows[1], p), dot(object.inverse_rows[2], p));
+    let d = vec3(dot(object.inverse_rows[0], v), dot(object.inverse_rows[1], v), dot(object.inverse_rows[2], v));
+    let offset = bitcast<u32>(object.params.y);
+    let count = bitcast<u32>(object.params.z);
+    let softness = clamp(object.scale.w, 0.0, object.params.x);
+    let winding = select(-1.0, 1.0, object.box_depth_meta.w == 1u);
+    var interval = vec2(-1e20, 1e20);
+    for (var index = 0u; index < 65u; index++) {
+        if index >= count { break; }
+        let a = polygon_points[offset + index];
+        let b = polygon_points[offset + select(index + 1u, 0u, index + 1u == count)];
+        let edge = b - a;
+        let outward = winding * vec2(edge.y, -edge.x);
+        let plane = dot(outward, o.xy - a) - softness * length(edge);
+        let slope = dot(outward, d.xy);
+        if abs(slope) < 1e-20 {
+            if plane > 0.0 { return vec2(1.0, -1.0); }
+            continue;
+        }
+        let crossing = -plane / slope;
+        if slope > 0.0 { interval.y = min(interval.y, crossing); }
+        else { interval.x = max(interval.x, crossing); }
+        if interval.x > interval.y { return vec2(1.0, -1.0); }
+    }
+    let safe_z = select(-1e-20, 1e-20, d.z >= 0.0);
+    let z_direction = select(safe_z, d.z, abs(d.z) >= 1e-20);
+    let first = (-object.params.x - o.z) / z_direction;
+    let second = (object.params.x - o.z) / z_direction;
+    return vec2(max(interval.x, min(first, second)), min(interval.y, max(first, second)));
+}
+
+fn has_polygon_prism_interval(object: Object) -> bool {
+    return object.state.y == 5 && object.box_depth_meta.y == 0u
+        && (object.box_depth_meta.w == 1u || object.box_depth_meta.w == 2u)
+        && object.repeat_count.w == 0 && object.modifier.x == 0u
+        && object.mirror_axes.w == 0u
+        && all(object.mirror_axes.xyz == vec3<u32>(0u))
+        && !brick_geometry_visible(object) && !fabric_geometry_visible(object);
 }
 
 fn has_analytic_interval(object: Object) -> bool {
@@ -1695,6 +1774,14 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
                 }
                 node_index += 1u;
                 continue;
+            }
+            if !accelerated && node.metadata.z == node.metadata.x && has_polygon_prism_interval(object) {
+                let interval = polygon_prism_interval(origin, direction, object);
+                if interval.y < 0.0 || interval.x > end || interval.x > interval.y {
+                    node_index += 1u;
+                    continue;
+                }
+                travel = max(travel, interval.x - max(epsilon, 0.001));
             }
             let smooth_pair = HAS_BOOLEANS && analytic_subtraction(node.metadata.z, node.metadata.x);
             var neural_component = false;

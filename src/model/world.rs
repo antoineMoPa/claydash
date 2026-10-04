@@ -5,12 +5,7 @@ use super::{
 };
 
 pub fn deferred_fallback_reason(objects: &[SdfObject]) -> Option<&'static str> {
-    if objects
-        .iter()
-        .any(|object| object.material.kind == MaterialKind::Custom)
-    {
-        Some("custom shader material")
-    } else if objects.iter().any(|object| object.material.kind == MaterialKind::Metal) {
+    if objects.iter().any(|object| object.material.kind == MaterialKind::Metal) {
         Some("anisotropic metal material")
     } else if objects.iter().any(|object| {
         object

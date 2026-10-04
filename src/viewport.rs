@@ -88,7 +88,7 @@ impl DeferredBuffers {
     fn for_work(&self, work: Work) -> &DeferredTargets {
         match work {
             Work::Preview => &self.preview,
-            Work::Refine { .. } | Work::Relight { native: true } => {
+            Work::Refine { .. } | Work::Interleave { .. } | Work::Relight { native: true } => {
                 self.native.as_ref().expect("native deferred targets")
             }
             Work::Relight { native: false } => &self.preview,
@@ -111,6 +111,7 @@ fn resolve_deferred(work: Work, size: [u32; 2]) -> bool {
     match work {
         Work::Preview | Work::Relight { .. } => true,
         Work::Refine { end, .. } => end == tile_count(size),
+        Work::Interleave { .. } => false,
         Work::Cached => false,
     }
 }
@@ -127,6 +128,7 @@ fn displayed_tiles(completed: u32, size: [u32; 2], deferred: bool) -> u32 {
 pub enum Work {
     Preview,
     Refine { first: u32, end: u32 },
+    Interleave { first: u32, end: u32 },
     Relight { native: bool },
     Cached,
 }
@@ -147,6 +149,7 @@ pub struct Viewport {
     key: Option<ViewKey>,
     targets: Option<Targets>,
     completed: u32,
+    interleaved: bool,
     pixel_budget: u32,
     target_ms: f64,
     initial_budget: u32,
@@ -294,6 +297,7 @@ impl Viewport {
             key: None,
             targets: None,
             completed: 0,
+            interleaved: false,
             pixel_budget: INITIAL_PIXELS,
             target_ms: EDIT_TARGET_MS,
             initial_budget: INITIAL_PIXELS,
@@ -368,8 +372,13 @@ impl Viewport {
         key: ViewKey,
         refine: bool,
         deferred: bool,
+        interleaved: bool,
     ) -> Work {
-        if !refine {
+        if self.interleaved != interleaved {
+            self.key = None;
+        }
+        self.interleaved = interleaved;
+        if !refine && !interleaved {
             self.completed = 0;
         }
         // Poll is nonblocking. WebGPU delivers map callbacks through its event loop.
@@ -416,7 +425,9 @@ impl Viewport {
             // Object transforms invalidate the image, not the GPU's measured throughput.
             // Keep the learned budget while editing. More expensive scene classes
             // still lower it through set_initial_budget, and GPU timings adapt per batch.
-            let mut preview_size = if refine {
+            let mut preview_size = if interleaved {
+                [1, 1]
+            } else if refine {
                 preview_size(key.size, self.pixel_budget)
             } else {
                 key.size
@@ -517,21 +528,28 @@ impl Viewport {
                     preview_size,
                 });
             }
-            self.key = Some(key);
+            self.key = Some(key.clone());
             self.completed = 0;
-            return Work::Preview;
+            if !interleaved {
+                return Work::Preview;
+            }
         }
-        if self
-            .targets
-            .as_ref()
-            .is_some_and(|targets| targets.preview_size == key.size)
+        if !interleaved
+            && self
+                .targets
+                .as_ref()
+                .is_some_and(|targets| targets.preview_size == key.size)
         {
             return Work::Cached;
         }
-        if !refine {
+        if !refine && !interleaved {
             return Work::Cached;
         }
-        let total = tile_count(key.size);
+        let total = if interleaved {
+            256
+        } else {
+            tile_count(key.size)
+        };
         if self.completed >= total {
             return Work::Cached;
         }
@@ -544,10 +562,19 @@ impl Viewport {
                 DeferredTargets::new(device, &self.deferred_layout, key.size)
             });
         }
-        let count = (self.pixel_budget.saturating_mul(2) / (TILE * TILE)).max(1);
-        Work::Refine {
-            first: self.completed,
-            end: (self.completed + count).min(total),
+        if interleaved {
+            let phase_pixels = key.size[0].div_ceil(16) * key.size[1].div_ceil(16);
+            let count = (self.pixel_budget.saturating_mul(2) / phase_pixels.max(1)).clamp(1, 16);
+            Work::Interleave {
+                first: self.completed,
+                end: (self.completed + count).min(total),
+            }
+        } else {
+            let count = (self.pixel_budget.saturating_mul(2) / (TILE * TILE)).max(1);
+            Work::Refine {
+                first: self.completed,
+                end: (self.completed + count).min(total),
+            }
         }
     }
 
@@ -756,8 +783,9 @@ impl Viewport {
                     draw_splat_work(&mut pass, shading_work, size, hybrid.splat_count);
                 }
             }
-            if let Work::Refine { end, .. } = work {
-                self.completed = end;
+            match work {
+                Work::Refine { end, .. } | Work::Interleave { end, .. } => self.completed = end,
+                _ => {}
             }
         }
         queue.write_buffer(
@@ -766,8 +794,12 @@ impl Viewport {
             bytemuck::cast_slice(&[
                 size[0],
                 size[1],
-                TILE,
-                displayed_tiles(self.completed, size, deferred.is_some()),
+                if self.interleaved { 0 } else { TILE },
+                if self.interleaved {
+                    self.completed
+                } else {
+                    displayed_tiles(self.completed, size, deferred.is_some())
+                },
             ]),
         );
         if work == Work::Cached {
@@ -781,10 +813,15 @@ impl Viewport {
                     rect[2] * rect[3]
                 })
                 .sum(),
+            Work::Interleave { first, end } => {
+                // Edge blocks have fewer than 256 native pixels; the
+                // padded estimate keeps the adaptive budget conservative.
+                (end - first) * size[0].div_ceil(16) * size[1].div_ceil(16)
+            }
             Work::Relight { .. } | Work::Cached => 0,
         };
         self.submitted_budget = match work {
-            Work::Refine { .. } => self.pixel_budget.saturating_mul(2),
+            Work::Refine { .. } | Work::Interleave { .. } => self.pixel_budget.saturating_mul(2),
             Work::Preview => self.pixel_budget,
             Work::Relight { .. } | Work::Cached => 0,
         };
@@ -830,6 +867,9 @@ impl Viewport {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn preview_pixels(&self) -> u32 {
+        if self.interleaved {
+            return 0;
+        }
         self.targets.as_ref().map_or(0, |targets| {
             targets.preview_size[0] * targets.preview_size[1]
         })
@@ -837,11 +877,17 @@ impl Viewport {
 
     pub fn is_refined(&self) -> bool {
         self.key.as_ref().is_some_and(|key| {
-            self.completed == tile_count(key.size)
-                || self
-                    .targets
-                    .as_ref()
-                    .is_some_and(|targets| targets.preview_size == key.size)
+            self.completed
+                == if self.interleaved {
+                    256
+                } else {
+                    tile_count(key.size)
+                }
+                || (!self.interleaved
+                    && self
+                        .targets
+                        .as_ref()
+                        .is_some_and(|targets| targets.preview_size == key.size))
         })
     }
 
@@ -875,6 +921,13 @@ fn draw_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2]) {
                 tile = row_end;
             }
         }
+        Work::Interleave { first, end } => {
+            let samples = size[0].div_ceil(16) * size[1].div_ceil(16);
+            for phase in first..end {
+                let start = 0x8000_0000 | (phase << 23);
+                pass.draw(0..6, start..start + samples);
+            }
+        }
         Work::Relight { .. } | Work::Cached => unreachable!(),
     }
 }
@@ -894,6 +947,7 @@ fn draw_splat_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], 
                 tile = row_end;
             }
         }
+        Work::Interleave { .. } => unreachable!("hybrid splats use tiled refinement"),
         Work::Relight { .. } | Work::Cached => unreachable!(),
     }
 }
