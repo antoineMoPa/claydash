@@ -396,7 +396,7 @@
                 "radius": 1.0
               }
             },
-            "name": "1965 Volkswagen Fusca — smooth cabin shell",
+            "name": "1965 Volkswagen Fusca - smooth cabin shell",
             "operation": "Union",
             "boolean_parent": null,
             "softness": 0.13,
@@ -8683,7 +8683,7 @@
                 "corner_radius": 0.0
               }
             },
-            "name": "Bonnet rear trim — concealed by cabin",
+            "name": "Bonnet rear trim - concealed by cabin",
             "operation": "Subtract",
             "boolean_parent": "2b19124c-83b4-443d-a434-2c58083cd2a9",
             "softness": 0.0,

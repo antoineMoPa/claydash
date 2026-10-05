@@ -81,10 +81,30 @@ impl UiState {
                 phase: FaceCutPhase::ChooseRegion { .. },
                 ..
             }) => Some("Choose a face to extrude · Backspace edits the path · Esc cancels".into()),
-            Some(FaceCutDraft { vertices, phase: FaceCutPhase::Outline, .. }) if vertices.len() >= 3 && !polygon_is_valid(vertices) && split_regions(&objects(tree), self.selection_tools.face_cut.as_ref()?.face, vertices, false).is_none() => {
+            Some(FaceCutDraft {
+                vertices,
+                phase: FaceCutPhase::Outline,
+                ..
+            }) if vertices.len() >= 3
+                && !polygon_is_valid(vertices)
+                && split_regions(
+                    &objects(tree),
+                    self.selection_tools.face_cut.as_ref()?.face,
+                    vertices,
+                    false,
+                )
+                .is_none() =>
+            {
                 Some("Outline cannot cross itself · Backspace removes a point · Esc cancels".into())
             }
-            _ => Some("Points snap to edges, corners, fractions, and earlier points · Alt bypasses guides · Enter shows faces · Esc cancels".into()),
+            _ => Some(format!(
+                "{} · Enter shows faces · Esc cancels",
+                if crate::model::snapping_enabled(tree, false, false) {
+                    "Snapping on · Alt bypasses"
+                } else {
+                    "Hold Ctrl to snap to guides"
+                }
+            )),
         }
     }
 
@@ -95,13 +115,14 @@ impl UiState {
         camera: &Camera,
     ) {
         let scale = ui.ctx().pixels_per_point();
-        let (pointer, pressed, enter, backspace, escape, bypass_guides) = ui.input(|input| {
+        let (pointer, pressed, enter, backspace, escape, ctrl_down, alt_down) = ui.input(|input| {
             (
                 input.pointer.interact_pos(),
                 input.pointer.primary_pressed(),
                 input.key_pressed(egui::Key::Enter),
                 input.key_pressed(egui::Key::Backspace),
                 input.key_pressed(egui::Key::Escape),
+                input.modifiers.ctrl,
                 input.modifiers.alt,
             )
         });
@@ -159,7 +180,7 @@ impl UiState {
                     )
                 })
                 .map(|raw| {
-                    if !bypass_guides {
+                    if crate::model::snapping_enabled(tree, ctrl_down, alt_down) {
                         let (point, active_guides, active_anchor) = guided_outline_point(
                             camera,
                             scale,

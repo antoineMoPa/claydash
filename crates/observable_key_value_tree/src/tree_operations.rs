@@ -21,6 +21,7 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     /// was_updated is still set, changes are still accumulated as part of snapshots.
     /// version numbers are still incremented.
     pub fn set_path_without_notifying(&mut self, path: &str, value: ValueType) {
+        self.authored_version = self.authored_version.wrapping_add(1);
         let parts = path.split(".");
         self.update_snapshot_accumulator(path, value.clone());
         self.set_path_with_parts(
@@ -50,6 +51,7 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     /// Set the whole subtree at given path
     /// This is useful to deserialize the tree.
     pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType>) {
+        self.authored_version = self.authored_version.wrapping_add(1);
         let parts = path.split(".");
         self.set_path_with_parts(parts.collect(), value, true);
         self.notify_change();

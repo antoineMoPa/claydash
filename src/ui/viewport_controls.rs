@@ -293,7 +293,7 @@ impl UiState {
         self.regions.push(left.response.rect);
 
         // Move the right-hand group below the tools when space is tight.
-        let projection_y = if viewport.width() < left.response.rect.width() + 198.0 {
+        let projection_y = if viewport.width() < left.response.rect.width() + 230.0 {
             left.response.rect.height() + 10.0
         } else {
             6.0
@@ -307,25 +307,30 @@ impl UiState {
                 ui.horizontal(|ui| {
                     ui.set_height(26.0);
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    let (projection_icon, next_mode) = match camera.projection_mode {
-                        crate::camera::ProjectionMode::Perspective => (
-                            egui::include_image!("../../assets/icons/lucide/box.svg"),
-                            "orthographic",
-                        ),
-                        crate::camera::ProjectionMode::Orthographic => (
-                            egui::include_image!("../../assets/icons/lucide/square.svg"),
-                            "perspective",
-                        ),
-                    };
-                    let tooltip =
-                        format!("{} — click for {next_mode}", camera.projection_mode.label());
-                    if view_button(ui, projection_icon, &tooltip).clicked() {
-                        exit_camera_view(tree);
-                        camera.toggle_projection();
+                    let persistent_snapping = matches!(
+                        tree.get_path("editor.persistent_snapping"),
+                        ClaydashValue::Bool(true)
+                    );
+                    if selectable_view_button(
+                        ui,
+                        egui::include_image!("../../assets/icons/lucide/grid-2x2-plus.svg"),
+                        if persistent_snapping {
+                            "Always snap on. Click for on-demand snapping"
+                        } else {
+                            "On-demand snapping. Hold Ctrl, or click to always snap (Alt bypasses)"
+                        },
+                        persistent_snapping,
+                    )
+                    .clicked()
+                    {
+                        tree.set_transient_path(
+                            "editor.persistent_snapping",
+                            ClaydashValue::Bool(!persistent_snapping),
+                        );
                     }
                     if selectable_view_button(
                         ui,
-                        egui::include_image!("../../assets/icons/lucide/scan.svg"),
+                        egui::include_image!("../../assets/icons/lucide/ghost.svg"),
                         "Toggle outline mode (Z)",
                         commands::outline_mode(tree),
                     )
@@ -337,11 +342,11 @@ impl UiState {
                         ui,
                         egui::include_image!("../../assets/icons/lucide/aperture.svg"),
                         if commands::full_material_rendering(tree) {
-                            "Full material rendering on — click for native resolution with simple shading"
+                            "Full material rendering on. Click for native resolution with simple shading"
                         } else if commands::outline_mode(tree) {
-                            "Outline mode on — click for full material rendering"
+                            "Outline mode on. Click for full material rendering"
                         } else {
-                            "Native resolution with simple shading — click for full material rendering"
+                            "Native resolution with simple shading. Click for full material rendering"
                         },
                         commands::full_material_rendering(tree),
                     )
@@ -377,7 +382,7 @@ impl UiState {
             });
         self.regions.push(right.response.rect);
         if polygon_editor::active(tree).is_none() {
-            self.draw_selection_toolbar(ctx, viewport, tree);
+            self.draw_selection_toolbar(ctx, viewport, tree, camera);
         }
     }
 

@@ -220,6 +220,7 @@ impl UiState {
         render_progress: Option<RenderProgress>,
     ) -> (Option<FileMenuAction>, bool) {
         self.regions.clear();
+        document.refresh_dirty(tree);
         apply_pending_image(viewport_ui.ctx(), tree);
         self.active_guide = None;
         self.ghosts = boolean_overlay::Ghosts::default();

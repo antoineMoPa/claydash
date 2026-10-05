@@ -51,6 +51,9 @@ impl RenderFormat {
 
 pub struct DocumentState {
     current_path: Option<PathBuf>,
+    saved_scene: Option<Vec<u8>>,
+    observed_authored_version: u64,
+    dirty: bool,
     recent_paths: Vec<PathBuf>,
     ui_preferences: UiPreferences,
     error: Option<String>,
@@ -91,6 +94,9 @@ impl Default for DocumentState {
     fn default() -> Self {
         Self {
             current_path: None,
+            saved_scene: None,
+            observed_authored_version: 0,
+            dirty: false,
             recent_paths: load_recent_paths(),
             ui_preferences: load_ui_preferences(),
             error: None,
@@ -102,6 +108,33 @@ impl DocumentState {
     pub fn start_new(&mut self) {
         self.current_path = None;
         self.error = None;
+        self.saved_scene = None;
+        self.observed_authored_version = 0;
+        self.dirty = false;
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn mark_scene_clean(&mut self, tree: &DataTree) {
+        self.saved_scene = serialize_scene(tree).ok();
+        self.observed_authored_version = tree.authored_version();
+        self.dirty = false;
+    }
+
+    pub fn refresh_dirty(&mut self, tree: &DataTree) {
+        let version = tree.authored_version();
+        if version == self.observed_authored_version {
+            return;
+        }
+        self.observed_authored_version = version;
+        let current = serialize_scene(tree).ok();
+        if self.saved_scene.is_none() {
+            self.saved_scene = current;
+            return;
+        }
+        self.dirty = current != self.saved_scene;
     }
 
     pub fn current_path(&self) -> Option<&Path> {
@@ -188,6 +221,30 @@ mod new_document_tests {
         assert!(document.current_path().is_none());
         assert_eq!(document.recent_paths(), &[previous]);
         assert!(document.error().is_none());
+    }
+
+    #[test]
+    fn dirty_state_follows_scene_edits_and_undo_to_saved_content() {
+        let mut tree = DataTree::default();
+        tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(Vec::new()));
+        tree.set_path(
+            "scene.cursor_position",
+            ClaydashValue::Vec3(glam::Vec3::ZERO),
+        );
+        let mut document = DocumentState::default();
+        document.mark_scene_clean(&tree);
+        tree.set_transient_path("scene.cursor_position", ClaydashValue::Vec3(glam::Vec3::Y));
+        document.refresh_dirty(&tree);
+        assert!(!document.is_dirty());
+        tree.set_path("scene.cursor_position", ClaydashValue::Vec3(glam::Vec3::X));
+        document.refresh_dirty(&tree);
+        assert!(document.is_dirty());
+        tree.set_path(
+            "scene.cursor_position",
+            ClaydashValue::Vec3(glam::Vec3::ZERO),
+        );
+        document.refresh_dirty(&tree);
+        assert!(!document.is_dirty());
     }
 }
 
@@ -508,9 +565,8 @@ mod tests {
     #[test]
     fn scene_round_trip_keeps_fabric_settings_and_link() {
         let mut tree = DataTree::default();
-        let mut material = crate::model::Material::fabric_preset(
-            crate::model::FabricPreset::HeatherJersey,
-        );
+        let mut material =
+            crate::model::Material::fabric_preset(crate::model::FabricPreset::HeatherJersey);
         material.fabric.pitch_x = 0.027;
         material.fabric.light_yarn_fraction = 0.47;
         let id = crate::model::ensure_material_asset(&mut tree, material);

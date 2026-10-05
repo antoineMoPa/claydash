@@ -43,76 +43,11 @@ fn convex_polygon_winding(vertices: &[Vec2]) -> u32 {
     winding
 }
 
-pub(super) struct PackedTrainingScene {
-    pub objects: Vec<GpuObject>,
-    pub bvh: Vec<GpuBvhNode>,
-    pub polygon_points: Vec<GpuPolygonPoint>,
-    pub material_headers: Vec<material_gpu::GpuMaterialHeader>,
-    pub material_params: Vec<[f32; 4]>,
-    pub lattice_points: Vec<[f32; 4]>,
-    pub modifier_params: Vec<[f32; 4]>,
-    pub lattice_tiles: Vec<(u32, u32, Vec<Vec3>)>,
-    pub ids: Vec<uuid::Uuid>,
-    pub start: u32,
-    pub root: u32,
-    pub capacity: u32,
-}
+mod camera;
+mod training;
+pub(super) use training::PackedTrainingScene;
 
 impl Renderer {
-    pub(super) fn pack_neural_training_scene(
-        &mut self,
-        camera: &Camera,
-        source: &[SdfObject],
-        root: uuid::Uuid,
-    ) -> Result<PackedTrainingScene, &'static str> {
-        let mut exact = source.to_vec();
-        for object in &mut exact {
-            object.render_representation = crate::model::GroupRenderRepresentation::ExactSdf;
-        }
-        let mut packed = self
-            .upload_scene_with_world_exposure(
-                camera,
-                &exact,
-                &[],
-                [i32::MIN; 2],
-                1.0,
-                World::default(),
-                ScenePipelinePreparation::NeuralTraining,
-            )
-            .ok_or("Could not prepare GPU training scene")?;
-        let root_index = packed
-            .ids
-            .iter()
-            .position(|id| *id == root)
-            .ok_or("Missing training root")?;
-        let descendants: std::collections::HashSet<_> = source
-            .iter()
-            .filter(|object| {
-                let mut id = Some(object.uuid);
-                for _ in 0..source.len() {
-                    if id == Some(root) {
-                        return true;
-                    }
-                    id = id
-                        .and_then(|id| source.iter().find(|object| object.uuid == id))
-                        .and_then(|object| object.boolean_parent);
-                }
-                false
-            })
-            .map(|object| object.uuid)
-            .collect();
-        let start = packed
-            .ids
-            .iter()
-            .position(|id| descendants.contains(id))
-            .ok_or("Missing training subtree")?;
-        let capacity = mark_component_evaluation(&mut packed.objects, start, root_index);
-        packed.start = start as u32;
-        packed.root = root_index as u32;
-        packed.capacity = packed.capacity.max(capacity);
-        Ok(packed)
-    }
-
     pub(super) fn upload_scene_with_world(
         &mut self,
         camera: &Camera,
@@ -192,15 +127,16 @@ impl Renderer {
                     }
                 }
             }
-            let completed = self.group_capture_bake.as_ref().and_then(|job| {
-                match job.receiver.try_recv() {
-                    Ok(capture) => Some((job.root, job.key, job.source_revision, capture)),
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        Some((job.root, job.key, job.source_revision, None))
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                }
-            });
+            let completed =
+                self.group_capture_bake
+                    .as_ref()
+                    .and_then(|job| match job.receiver.try_recv() {
+                        Ok(capture) => Some((job.root, job.key, job.source_revision, capture)),
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            Some((job.root, job.key, job.source_revision, None))
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    });
             if let Some((root, key, source_revision, capture)) = completed {
                 self.group_capture_bake = None;
                 self.group_compute_requests.remove(&root);
@@ -281,11 +217,9 @@ impl Renderer {
                     continue;
                 }
                 if !requested {
-                    if let Some(capture) = super::group_capture::restored_capture(
-                        source_objects,
-                        root,
-                        key,
-                    ) {
+                    if let Some(capture) =
+                        super::group_capture::restored_capture(source_objects, root, key)
+                    {
                         self.group_capture_cache.insert(
                             root.uuid,
                             super::group_capture::CachedGroupCapture { key, capture },
@@ -325,10 +259,13 @@ impl Renderer {
                 (requested
                     || object.render_representation
                         != crate::model::GroupRenderRepresentation::GaussianSplats)
-                    && !self.group_capture_cache.get(&object.uuid).is_some_and(|entry| {
-                        entry.key == super::group_capture::capture_key(source_objects, object)
-                            && !requested
-                    })
+                    && !self
+                        .group_capture_cache
+                        .get(&object.uuid)
+                        .is_some_and(|entry| {
+                            entry.key == super::group_capture::capture_key(source_objects, object)
+                                && !requested
+                        })
             })
             .map(|object| object.uuid)
             .collect();
@@ -390,54 +327,8 @@ impl Renderer {
         } else {
             self.uploaded_object_count
         };
-        let mut gpu_camera = GpuCamera {
-            inverse_view_projection: (camera.projection() * camera.view())
-                .inverse()
-                .to_cols_array_2d(),
-            view_projection: (camera.projection() * camera.view()).to_cols_array_2d(),
-            position: camera.position.extend(exposure).to_array(),
-            count: [
-                object_count,
-                self.node_count,
-                camera.viewport.y.max(1.0) as u32,
-                u32::from(camera.projection_mode == ProjectionMode::Orthographic),
-            ],
-            world_mode: [
-                world.background.shader_id(),
-                u32::from(world.screen_space_ambient_occlusion),
-                u32::from(world.screen_space_reflections),
-                camera.viewport.x.max(1.0) as u32,
-            ],
-            world_color: [
-                world.flat_color[0],
-                world.flat_color[1],
-                world.flat_color[2],
-                1.0,
-            ],
-            sun_direction: {
-                let direction = world.sun_direction();
-                [
-                    direction[0],
-                    direction[1],
-                    direction[2],
-                    world.sun_intensity,
-                ]
-            },
-            sky_params: [world.turbidity, world.sun_temperature, 0.0, 0.0],
-            night_params: [
-                world.night_star_density,
-                world.night_star_brightness,
-                world.night_star_size,
-                world.night_horizon_glow,
-            ],
-            night_color: [
-                world.night_star_color[0],
-                world.night_star_color[1],
-                world.night_star_color[2],
-                1.0,
-            ],
-            lighting_params: [world.ambient_light, 0.0, 0.0, 0.0],
-        };
+        let mut gpu_camera =
+            camera::packed_camera(camera, exposure, object_count, self.node_count, world);
         if !training_only {
             self.queue
                 .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_camera));
@@ -721,17 +612,16 @@ impl Renderer {
                 let uniform_scale = (abs_scale.max_element() - abs_scale.min_element())
                     <= abs_scale.max_element() * 0.00001;
                 let box_depth = box_depth_metadata.get(&object.uuid).copied();
-                let neural_accelerator_offset = if !training_only
-                    && depth_accelerator_transforms.contains_key(&object.uuid)
-                {
-                    prepared_scene
-                        .as_ref()
-                        .and_then(|prepared| prepared.neural_fields.get(&object.uuid))
-                        .filter(|field| field.raymarch_last_segment)
-                        .map(|field| field.distance_offset)
-                } else {
-                    None
-                };
+                let neural_accelerator_offset =
+                    if !training_only && depth_accelerator_transforms.contains_key(&object.uuid) {
+                        prepared_scene
+                            .as_ref()
+                            .and_then(|prepared| prepared.neural_fields.get(&object.uuid))
+                            .filter(|field| field.raymarch_last_segment)
+                            .map(|field| field.distance_offset)
+                    } else {
+                        None
+                    };
                 let splat_bvh = splat_bvh_metadata.get(&object.uuid).copied();
                 let safe_distance_bound = box_depth.is_none()
                     && uniform_scale

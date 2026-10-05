@@ -298,8 +298,14 @@ impl UiState {
                             };
                             let raw_face_center = session.initial_face_center
                                 + session.world_direction_per_unit * face_movement;
-                            let bypass_guides = ui.input(|input| input.modifiers.alt);
-                            let snap = if bypass_guides {
+                            let snap_guides = ui.input(|input| {
+                                crate::model::snapping_enabled(
+                                    tree,
+                                    input.modifiers.ctrl,
+                                    input.modifiers.alt,
+                                )
+                            });
+                            let snap = if !snap_guides {
                                 None
                             } else {
                                 crate::guides::snap_along_line(

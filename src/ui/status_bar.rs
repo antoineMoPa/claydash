@@ -22,6 +22,21 @@ pub(crate) enum RenderProgress {
 
 impl UiState {
     fn status_line(&self, tree: &DataTree) -> Option<(String, String)> {
+        let snap_hint = if crate::model::snapping_enabled(tree, false, false) {
+            "snapping on · Alt bypasses"
+        } else {
+            "hold Ctrl to snap"
+        };
+        if matches!(
+            tree.get_path("editor.view_rotation"),
+            ClaydashValue::Bool(true)
+        ) {
+            return Some((
+                "Rotate view".into(),
+                "Move around the view center to roll · click or Enter confirms · Esc cancels"
+                    .into(),
+            ));
+        }
         if matches!(
             tree.get_path("editor.curve_grab_initial"),
             ClaydashValue::VecSDFObject(_)
@@ -46,7 +61,7 @@ impl UiState {
         ) {
             return Some((
                 "Extrude face".into(),
-                "Move mouse · Alt bypasses guides · click or Enter confirms · Esc cancels".into(),
+                format!("Move mouse · {snap_hint} · click or Enter confirms · Esc cancels"),
             ));
         }
         if matches!(
@@ -55,7 +70,7 @@ impl UiState {
         ) {
             return Some((
                 "Drag face".into(),
-                "Move mouse · Alt bypasses guides · click or Enter confirms · Esc cancels".into(),
+                format!("Move mouse · {snap_hint} · click or Enter confirms · Esc cancels"),
             ));
         }
         if let Some(pick) = scene_actions::pending_boolean(tree) {

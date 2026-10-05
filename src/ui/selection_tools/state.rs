@@ -60,6 +60,7 @@ impl UiState {
         ctx: &egui::Context,
         viewport: egui::Rect,
         tree: &mut DataTree,
+        camera: &mut Camera,
     ) {
         let area = egui::Area::new("selection-tools".into())
             .order(egui::Order::Foreground)
@@ -71,6 +72,23 @@ impl UiState {
                     ui.horizontal(|ui| {
                         ui.set_height(26.0);
                         ui.spacing_mut().item_spacing.x = 4.0;
+                        let perspective =
+                            camera.projection_mode == crate::camera::ProjectionMode::Perspective;
+                        let next_mode = if perspective { "orthographic" } else { "perspective" };
+                        let tooltip =
+                            format!("{}. Click for {next_mode}", camera.projection_mode.label());
+                        if selectable_view_button(
+                            ui,
+                            egui::include_image!("../../../assets/icons/lucide/box.svg"),
+                            &tooltip,
+                            perspective,
+                        )
+                        .clicked()
+                        {
+                            exit_camera_view(tree);
+                            camera.toggle_projection();
+                        }
+                        ui.separator();
                         let mut tools = vec![
                             (
                                 SelectionTool::Select,
@@ -81,7 +99,9 @@ impl UiState {
                             ),
                             (
                                 SelectionTool::Box,
-                                egui::include_image!("../../../assets/icons/lucide/scan.svg"),
+                                egui::include_image!(
+                                    "../../../assets/icons/lucide/square-dashed.svg"
+                                ),
                                 "Box select (B) · drag a rectangle · Shift adds",
                             ),
                         ];
@@ -118,7 +138,7 @@ impl UiState {
                         let pivot = crate::model::rotation_pivot(tree);
                         if selectable_view_button(
                             ui,
-                            egui::include_image!("../../../assets/icons/lucide/box.svg"),
+                            egui::include_image!("../../../assets/icons/lucide/circle-dot.svg"),
                             "Rotate around object center",
                             pivot == crate::model::RotationPivot::ObjectCenter,
                         )

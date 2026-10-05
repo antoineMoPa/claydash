@@ -148,7 +148,7 @@ window.MaterialAnalysis = (() => {
         if (mode.value === 'creases') {
           const maps = pair.map(item => crevasses(item.light, Number(radius.value)));
           maps.forEach((item, index) => heatmap(output[index], item.values));
-          summary.textContent = 'Mean local dark deficit — render ' + maps[0].mean.toFixed(3) + ' · reference ' + maps[1].mean.toFixed(3) + '. Higher values indicate stronger small dark crevasses.';
+          summary.textContent = 'Mean local dark deficit: render ' + maps[0].mean.toFixed(3) + ' · reference ' + maps[1].mean.toFixed(3) + '. Higher values indicate stronger small dark crevasses.';
         } else {
           const values = pair.map(item => mode.value === 'fft' ? spectrum(item.light) : histogram(item[mode.value === 'saturation' ? 'saturation' : 'light']));
           const maximum = Math.max(...values[0], ...values[1]);

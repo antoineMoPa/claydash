@@ -180,7 +180,9 @@ impl App {
             self.camera.viewport = renderer.size();
         }
         if !self.ui.selection_gesture_active() {
-            if self.interactions.update(&mut self.camera, &mut self.tree) {
+            if self.interactions.update(&mut self.camera, &mut self.tree)
+                && !self.interactions.view_rotation_active()
+            {
                 crate::ui::exit_camera_view(&mut self.tree);
             }
         }
@@ -239,6 +241,18 @@ impl App {
         if let Some(action) = file_action {
             self.handle_file_action(action);
         }
+        self.document.refresh_dirty(&self.tree);
+        let project_name = self
+            .document
+            .current_path()
+            .and_then(std::path::Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled".into());
+        window.set_title(&format!(
+            "{}{} - Claydash",
+            project_name,
+            if self.document.is_dirty() { "*" } else { "" }
+        ));
         self.document
             .set_animation_timeline_open(self.ui.animation_timeline_open());
         // Toolbar/palette commands run inside the UI pass. Place their new

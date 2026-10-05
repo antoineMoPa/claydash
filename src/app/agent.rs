@@ -471,6 +471,7 @@ impl App {
                 match path {
                     Some(path) => document::write_scene(&path, &self.project_tree_for_save()).map(|_| {
                         self.document.mark_saved(path.clone());
+                        self.document.mark_scene_clean(&self.tree);
                         json!({"path": path})
                     }),
                     None => Err("provide a path for the first save".to_string()),
@@ -479,6 +480,7 @@ impl App {
             Request::Open { path } => document::read_scene(&path).map(|scene| {
                 self.replace_scene(scene);
                 self.document.mark_opened(path.clone());
+                self.document.mark_scene_clean(&self.tree);
                 self.agent_revision += 1;
                 json!({"path": path, "revision": self.scene_revision()})
             }),

@@ -277,6 +277,7 @@ impl UiState {
                 i.modifiers.alt,
             )
         });
+        let snap_guides = crate::model::snapping_enabled(tree, ctrl_snap_rotation, bypass_guides);
         let snap_rotation = match &mut self.selection_tools.gesture {
             Some(Gesture::Transform(session))
                 if matches!(
@@ -288,7 +289,7 @@ impl UiState {
                     pointer.is_some_and(|point| point.distance(session.last_pointer) > 0.001);
                 session.rotation_snap_active = crate::interactions::rotation_snap_active(
                     session.rotation_snap_active,
-                    ctrl_snap_rotation,
+                    snap_guides,
                     pointer_moved,
                 );
                 if let Some(point) = pointer {
@@ -296,7 +297,7 @@ impl UiState {
                 }
                 session.rotation_snap_active
             }
-            _ => ctrl_snap_rotation,
+            _ => snap_guides,
         };
         if cancel {
             if let Some(Gesture::Transform(session)) = self.selection_tools.gesture.take() {
@@ -502,7 +503,7 @@ impl UiState {
                         }
                     };
                     let move_snap = match session.action {
-                        GizmoAction::MoveFree if !bypass_guides => {
+                        GizmoAction::MoveFree if snap_guides => {
                             let raw_anchors: Vec<_> = session
                                 .anchors
                                 .iter()
@@ -516,7 +517,7 @@ impl UiState {
                                 session.active_guide,
                             )
                         }
-                        GizmoAction::MoveAxis(axis) if !bypass_guides => {
+                        GizmoAction::MoveAxis(axis) if snap_guides => {
                             let raw_anchors: Vec<_> = session
                                 .anchors
                                 .iter()

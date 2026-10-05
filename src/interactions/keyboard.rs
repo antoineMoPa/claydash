@@ -53,6 +53,38 @@ impl InteractionState {
         if (egui_wants_keyboard && !modal_confirm_key) || !first_press {
             return;
         }
+        if self.view_rotation.is_some() || self.view_rotation_requested {
+            match key {
+                KeyCode::Escape => {
+                    if let Some(session) = self.view_rotation.take() {
+                        self.restore_view_rotation(session, tree);
+                    }
+                    self.view_rotation_requested = false;
+                    tree.set_transient_path("editor.view_rotation", ClaydashValue::Bool(false));
+                }
+                KeyCode::Enter => self.finish_view_rotation(tree),
+                _ => {}
+            }
+            return;
+        }
+        if key == KeyCode::KeyR
+            && !self.command_modifier_down()
+            && matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::None | ClaydashValue::EditorState(EditorState::Start)
+            )
+        {
+            let selection = selected(tree);
+            let viewing_selected_camera = matches!(
+                tree.get_path("editor.camera_view"),
+                ClaydashValue::Bool(true)
+            ) && crate::model::active_camera_id(tree)
+                .is_some_and(|id| selection == [id]);
+            if selection.is_empty() || viewing_selected_camera {
+                self.view_rotation_requested = true;
+                return;
+            }
+        }
         if key == KeyCode::Enter && commands::close_curve_extension(tree) {
             return;
         }
@@ -247,6 +279,47 @@ impl InteractionState {
 
     pub fn update(&mut self, camera: &mut Camera, tree: &mut DataTree) -> bool {
         let mut camera_moved = false;
+        if let Some(initial) = self.pending_view_restore.take() {
+            *camera = initial;
+        }
+        if self.view_rotation_requested {
+            self.view_rotation_requested = false;
+            let initial_scene_camera = if matches!(
+                tree.get_path("editor.camera_view"),
+                ClaydashValue::Bool(true)
+            ) {
+                crate::model::active_camera_id(tree).and_then(|id| {
+                    crate::model::scene_cameras(tree)
+                        .into_iter()
+                        .find(|candidate| candidate.uuid == id)
+                })
+            } else {
+                None
+            };
+            self.view_rotation = Some(ViewRotationSession {
+                initial_view: camera.clone(),
+                initial_scene_camera,
+            });
+            tree.set_transient_path("editor.view_rotation", ClaydashValue::Bool(true));
+            self.mouse_delta = Vec2::ZERO;
+        }
+        if self.view_rotation.is_some() {
+            if self.mouse_delta != Vec2::ZERO {
+                let center = camera.viewport_origin + camera.viewport * 0.5;
+                let previous = self.mouse_position - self.mouse_delta - center;
+                let current = self.mouse_position - center;
+                let angle = if previous.length() >= 12.0 && current.length() >= 12.0 {
+                    previous.perp_dot(current).atan2(previous.dot(current))
+                } else {
+                    self.mouse_delta.x * 0.005
+                };
+                camera.rotate_in_place(-angle);
+                self.write_view_rotation_camera(camera, tree);
+                camera_moved = true;
+            }
+            self.mouse_delta = Vec2::ZERO;
+            return camera_moved;
+        }
         if let Some(session) = &mut self.shift_pan {
             if self.mouse_position.distance(session.start) >= PAN_DRAG_THRESHOLD {
                 if let Some(reference) = session.reference {
@@ -289,5 +362,68 @@ impl InteractionState {
         self.mouse_delta = Vec2::ZERO;
         self.update_transformation(camera, tree);
         camera_moved
+    }
+
+    fn write_view_rotation_camera(&self, camera: &Camera, tree: &mut DataTree) {
+        let Some(session) = &self.view_rotation else {
+            return;
+        };
+        let Some(initial) = &session.initial_scene_camera else {
+            return;
+        };
+        let mut cameras = crate::model::scene_cameras(tree);
+        if let Some(current) = cameras
+            .iter_mut()
+            .find(|candidate| candidate.uuid == initial.uuid)
+        {
+            let view = crate::camera::SceneCamera::from_view(&initial.name, camera);
+            current.transform = view.transform;
+            current.focal_distance = view.focal_distance;
+            tree.set_transient_path("scene.cameras", ClaydashValue::VecCamera(cameras));
+        }
+    }
+
+    fn restore_view_rotation(&mut self, session: ViewRotationSession, tree: &mut DataTree) {
+        if let Some(initial) = session.initial_scene_camera {
+            let mut cameras = crate::model::scene_cameras(tree);
+            if let Some(current) = cameras
+                .iter_mut()
+                .find(|candidate| candidate.uuid == initial.uuid)
+            {
+                *current = initial;
+                tree.set_transient_path("scene.cameras", ClaydashValue::VecCamera(cameras));
+            }
+        }
+        // The viewport camera is restored on the next update, before rendering.
+        self.pending_view_restore = Some(session.initial_view);
+    }
+
+    pub(super) fn finish_view_rotation(&mut self, tree: &mut DataTree) {
+        if let Some(session) = self.view_rotation.take() {
+            if let Some(initial) = session.initial_scene_camera {
+                let final_cameras = crate::model::scene_cameras(tree);
+                let mut initial_cameras = final_cameras.clone();
+                if let Some(current) = initial_cameras
+                    .iter_mut()
+                    .find(|candidate| candidate.uuid == initial.uuid)
+                {
+                    *current = initial;
+                    tree.set_transient_path(
+                        "scene.cameras",
+                        ClaydashValue::VecCamera(initial_cameras),
+                    );
+                    crate::model::set_scene_cameras(tree, final_cameras);
+                    tree.make_undo_redo_snapshot();
+                }
+            }
+        }
+        self.view_rotation_requested = false;
+        tree.set_transient_path("editor.view_rotation", ClaydashValue::Bool(false));
+    }
+
+    pub fn view_rotation_active(&self) -> bool {
+        self.view_rotation.is_some()
+            || self.view_rotation_requested
+            || self.pending_view_restore.is_some()
     }
 }

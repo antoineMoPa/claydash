@@ -7,6 +7,10 @@ impl InteractionState {
         tree: &mut DataTree,
         ghost: Option<uuid::Uuid>,
     ) {
+        if self.view_rotation.is_some() || self.view_rotation_requested {
+            self.finish_view_rotation(tree);
+            return;
+        }
         if matches!(
             tree.get_path("editor.state"),
             ClaydashValue::EditorState(EditorState::ExtendingCurve)
@@ -280,8 +284,13 @@ impl InteractionState {
             initial_angle: camera.cursor_angle(self.mouse_position, center),
             initial_radius: initial_cursor.distance(center).max(0.001),
             last_mouse_position: self.mouse_position,
-            rotation_snap_active: self.keys.contains(&KeyCode::ControlLeft)
-                || self.keys.contains(&KeyCode::ControlRight),
+            rotation_snap_active: crate::model::snapping_enabled(
+                tree,
+                self.keys.contains(&KeyCode::ControlLeft)
+                    || self.keys.contains(&KeyCode::ControlRight),
+                self.keys.contains(&KeyCode::AltLeft)
+                    || self.keys.contains(&KeyCode::AltRight),
+            ),
             targets,
             anchors,
             guides,

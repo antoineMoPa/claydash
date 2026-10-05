@@ -118,6 +118,19 @@ mod tests {
     }
 
     #[test]
+    fn in_place_rotation_rolls_around_the_look_direction() {
+        let mut camera = Camera::new();
+        let position = camera.position;
+        let target = camera.target;
+        let up = camera.up;
+        camera.rotate_in_place(std::f32::consts::FRAC_PI_2);
+        assert_eq!(camera.position, position);
+        assert_eq!(camera.target, target);
+        assert!(camera.up.distance(up) > 0.1);
+        assert!((camera.up.dot((target - position).normalize())).abs() < 0.0001);
+    }
+
+    #[test]
     fn zoom_amounts_match_scroll_and_trackpad_pinch_direction() {
         let mut camera = Camera::new();
         let initial = camera.position.distance(camera.target);
@@ -315,6 +328,19 @@ impl Camera {
         let orthogonal_right = rotated_forward.cross(rotated_up).normalize_or_zero();
         self.position = self.target + rotated_offset;
         self.up = orthogonal_right.cross(rotated_forward).normalize_or_zero();
+    }
+
+    /// Roll the view in its screen plane without moving the eye or its target.
+    pub fn rotate_in_place(&mut self, angle: f32) {
+        let forward = (self.target - self.position).normalize_or_zero();
+        if forward.length_squared() < 0.0001 {
+            return;
+        }
+        let rotated_up = Quat::from_axis_angle(forward, angle) * self.up;
+        let right = forward.cross(rotated_up).normalize_or_zero();
+        if right.length_squared() > 0.0001 {
+            self.up = right.cross(forward);
+        }
     }
 
     pub fn pan(&mut self, delta: Vec2) {

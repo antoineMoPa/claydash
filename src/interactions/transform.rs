@@ -47,8 +47,13 @@ impl InteractionState {
         }
         if let Some(session) = &mut self.transform_session {
             if mode == EditorState::Rotating {
-                let ctrl_snap = self.keys.contains(&KeyCode::ControlLeft)
-                    || self.keys.contains(&KeyCode::ControlRight);
+                let ctrl_snap = crate::model::snapping_enabled(
+                    tree,
+                    self.keys.contains(&KeyCode::ControlLeft)
+                        || self.keys.contains(&KeyCode::ControlRight),
+                    self.keys.contains(&KeyCode::AltLeft)
+                        || self.keys.contains(&KeyCode::AltRight),
+                );
                 let pointer_moved =
                     self.mouse_position.distance(session.last_mouse_position) > 0.001;
                 session.rotation_snap_active =
@@ -94,9 +99,13 @@ impl InteractionState {
                 .iter()
                 .map(|anchor| *anchor + raw_translation)
                 .collect();
-            let bypass_guides =
-                self.keys.contains(&KeyCode::AltLeft) || self.keys.contains(&KeyCode::AltRight);
-            let snap = if bypass_guides {
+            let snap_guides = crate::model::snapping_enabled(
+                tree,
+                self.keys.contains(&KeyCode::ControlLeft)
+                    || self.keys.contains(&KeyCode::ControlRight),
+                self.keys.contains(&KeyCode::AltLeft) || self.keys.contains(&KeyCode::AltRight),
+            );
+            let snap = if !snap_guides {
                 None
             } else if constrained {
                 crate::guides::snap_along_line(
@@ -405,11 +414,14 @@ impl InteractionState {
         let mut amount = (self.mouse_position - session.start_mouse_position)
             .dot(session.projected_axis)
             / session.projected_axis.length_squared();
-        let bypass_guides =
-            self.keys.contains(&KeyCode::AltLeft) || self.keys.contains(&KeyCode::AltRight);
+        let snap_guides = crate::model::snapping_enabled(
+            tree,
+            self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight),
+            self.keys.contains(&KeyCode::AltLeft) || self.keys.contains(&KeyCode::AltRight),
+        );
         let raw_face_center =
             session.initial_face_center + session.world_direction_per_unit * amount;
-        let snap = if bypass_guides {
+        let snap = if !snap_guides {
             None
         } else {
             crate::guides::snap_along_line(

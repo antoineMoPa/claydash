@@ -180,10 +180,15 @@ pub struct ObservableKVTree<ValueType: Default + Clone + CanBeNone<ValueType>> {
     pub versions: Vec<i32>,
     #[serde(skip)]
     pub current_version_index: Option<i32>,
+    #[serde(skip)]
+    authored_version: u64,
 }
 
 /// Shortcut to verify if a path was modified.
 impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueType> {
+    pub fn authored_version(&self) -> u64 {
+        self.authored_version
+    }
     pub fn was_updated(&self) -> bool {
         return self.update_tracker.was_updated();
     }

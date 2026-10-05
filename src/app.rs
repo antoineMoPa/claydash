@@ -276,6 +276,7 @@ impl App {
         scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(Vec::new()));
         self.replace_scene(scene);
         self.document.start_new();
+        self.document.mark_scene_clean(&self.tree);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -284,6 +285,7 @@ impl App {
             Ok(scene) => {
                 self.replace_scene(scene);
                 self.document.mark_opened(path);
+                self.document.mark_scene_clean(&self.tree);
             }
             Err(error) => self.document.set_error("open the project", error),
         }
@@ -292,7 +294,10 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn save_path(&mut self, path: std::path::PathBuf) {
         match document::write_scene(&path, &self.project_tree_for_save()) {
-            Ok(()) => self.document.mark_saved(path),
+            Ok(()) => {
+                self.document.mark_saved(path);
+                self.document.mark_scene_clean(&self.tree);
+            }
             Err(error) => self.document.set_error("save the project", error),
         }
     }
@@ -315,6 +320,7 @@ impl App {
                     Ok(scene) => {
                         self.replace_scene(scene);
                         self.document.start_new();
+                        self.document.mark_scene_clean(&self.tree);
                     }
                     Err(error) => self.document.set_error("open the example", error),
                 }
@@ -513,9 +519,11 @@ impl App {
             }
         };
         match crate::document::download_bytes(&file_name, &bytes) {
-            Ok(()) => self
-                .document
-                .mark_saved(std::path::PathBuf::from(file_name)),
+            Ok(()) => {
+                self.document
+                    .mark_saved(std::path::PathBuf::from(file_name));
+                self.document.mark_scene_clean(&self.tree);
+            }
             Err(error) => self.document.set_error("save the project", error),
         }
     }
@@ -536,6 +544,7 @@ impl App {
                         Ok(scene) => {
                             self.replace_scene(scene);
                             self.document.mark_opened(name);
+                            self.document.mark_scene_clean(&self.tree);
                         }
                         Err(error) => self.document.set_error("open the project", error),
                     }

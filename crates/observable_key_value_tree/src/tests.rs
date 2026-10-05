@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn authored_version_ignores_transient_updates() {
+    let mut tree = ObservableKVTree::<ExampleValueType>::default();
+    assert_eq!(tree.authored_version(), 0);
+    tree.set_transient_path("scene.value", ExampleValueType::from(1));
+    assert_eq!(tree.authored_version(), 0);
+    tree.set_path("scene.value", ExampleValueType::from(2));
+    assert_eq!(tree.authored_version(), 1);
+}
+
+#[test]
 fn it_gets_and_sets_values() {
     let mut data = ObservableKVTree::<ExampleValueType>::default();
     data.set_path("scene.some", ExampleValueType::I32(1234));

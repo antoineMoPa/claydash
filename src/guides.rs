@@ -172,7 +172,7 @@ pub fn snap_in_view_plane(
     let remaining_guides: Vec<_> = guides
         .iter()
         .copied()
-        .filter(|guide| guide.id.object != primary.active.guide.id.object)
+        .filter(|guide| guide.id != primary.active.guide.id)
         .collect();
     let secondary =
         guide_follow_direction(camera, primary.active, pixels_per_point).and_then(|direction| {
@@ -585,5 +585,27 @@ mod tests {
         assert!((raw_anchors[0] + snap.correction).x.abs() < 0.0001);
         assert!((raw_anchors[1] + snap.correction).y.abs() < 0.0001);
         assert!(snap.active.secondary.is_some());
+    }
+
+    #[test]
+    fn sphere_can_snap_to_vertical_and_horizontal_guides_from_the_same_cube() {
+        let mut camera = front_camera();
+        camera.position = Vec3::new(0.6768069, 0.548448, 3.6991022);
+        camera.target = Vec3::new(0.6768069, 0.548448, 0.0);
+        let mut cube = SdfObject::create(TYPE_BOX);
+        cube.transform.translation = Vec3::new(0.8036407, 0.37348104, 0.6785741);
+        let mut sphere = SdfObject::create(TYPE_SPHERE);
+        sphere.transform.translation = Vec3::new(0.80364037, 0.3789494, 0.7348976);
+        let scene = [cube.clone(), sphere.clone()];
+        let guides = face_center_guides(&scene, &[sphere.uuid]);
+        let raw_center = sphere.transform.translation;
+
+        let snap = snap_in_view_plane(&camera, &[raw_center], &guides, 1.0, None)
+            .expect("sphere center is within the cube's guide distance");
+        let center = raw_center + snap.correction;
+        assert!(snap.active.secondary.is_some());
+        assert!((center.x - cube.transform.translation.x).abs() < 0.0001);
+        assert!((center.y - cube.transform.translation.y).abs() < 0.0001);
+        assert!((center.z - raw_center.z).abs() < 0.0001);
     }
 }

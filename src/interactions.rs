@@ -49,6 +49,11 @@ struct ShiftPanSession {
     reference: Option<Vec3>,
 }
 
+struct ViewRotationSession {
+    initial_view: Camera,
+    initial_scene_camera: Option<crate::camera::SceneCamera>,
+}
+
 const PAN_DRAG_THRESHOLD: f32 = 3.0;
 const ROTATION_SNAP_DEGREES: f32 = 5.0;
 
@@ -108,6 +113,9 @@ pub struct InteractionState {
     extrusion_session: Option<ExtrusionSession>,
     active_guide: Option<crate::guides::ActiveGuideSet>,
     numeric_rotation: NumericRotationInput,
+    view_rotation_requested: bool,
+    view_rotation: Option<ViewRotationSession>,
+    pending_view_restore: Option<Camera>,
 }
 
 impl Default for InteractionState {
@@ -124,6 +132,9 @@ impl Default for InteractionState {
             extrusion_session: None,
             active_guide: None,
             numeric_rotation: NumericRotationInput::Idle,
+            view_rotation_requested: false,
+            view_rotation: None,
+            pending_view_restore: None,
         }
     }
 }

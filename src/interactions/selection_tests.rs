@@ -651,6 +651,75 @@ fn suspended_navigation_releases_buttons_and_modifiers() {
 }
 
 #[test]
+fn r_rotates_an_empty_view_in_place_and_escape_restores_it() {
+    let mut tree = DataTree::default();
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState::default();
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    interaction.mouse_position = Vec2::new(600.0, 300.0);
+    let initial = camera.clone();
+
+    interaction.key_pressed(KeyCode::KeyR, false, &commands, &mut tree);
+    interaction.update(&mut camera, &mut tree);
+    interaction.cursor_moved(Vec2::new(400.0, 500.0), false);
+    interaction.update(&mut camera, &mut tree);
+    assert_eq!(camera.position, initial.position);
+    assert_eq!(camera.target, initial.target);
+    let forward = (initial.target - initial.position).normalize();
+    let screen_up = (initial.up - forward * initial.up.dot(forward)).normalize();
+    let expected_up =
+        glam::Quat::from_axis_angle(forward, -std::f32::consts::FRAC_PI_2) * screen_up;
+    assert!(camera.up.distance(expected_up) < 0.0001);
+    let projected_top = camera.project(initial.target + screen_up, 1.0).unwrap();
+    assert!(projected_top.x > 400.0);
+
+    interaction.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
+    interaction.update(&mut camera, &mut tree);
+    assert_eq!(camera.up, initial.up);
+}
+
+#[test]
+fn r_rotates_the_selected_camera_while_viewing_it() {
+    let mut tree = DataTree::default();
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interaction = InteractionState::default();
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    interaction.mouse_position = Vec2::new(600.0, 300.0);
+    let scene_camera = crate::camera::SceneCamera::from_view("Camera", &camera);
+    crate::model::set_scene_cameras(&mut tree, vec![scene_camera.clone()]);
+    set_selected(&mut tree, vec![scene_camera.uuid]);
+    tree.set_path(
+        "scene.active_camera",
+        ClaydashValue::Uuid(scene_camera.uuid),
+    );
+    tree.set_transient_path("editor.camera_view", ClaydashValue::Bool(true));
+    tree.make_undo_redo_snapshot();
+
+    interaction.key_pressed(KeyCode::KeyR, false, &commands, &mut tree);
+    interaction.update(&mut camera, &mut tree);
+    interaction.cursor_moved(Vec2::new(400.0, 500.0), false);
+    interaction.update(&mut camera, &mut tree);
+    let rotated = &crate::model::scene_cameras(&tree)[0];
+    assert!(camera.target.distance(scene_camera.target()) < 0.0001);
+    assert!(rotated.target().distance(scene_camera.target()) < 0.0001);
+    assert_eq!(
+        rotated.transform.translation,
+        scene_camera.transform.translation
+    );
+    assert_ne!(rotated.transform.rotation, scene_camera.transform.rotation);
+    interaction.finish_view_rotation(&mut tree);
+    tree.undo();
+    assert_eq!(
+        crate::model::scene_cameras(&tree)[0].transform.rotation,
+        scene_camera.transform.rotation
+    );
+}
+
+#[test]
 fn repeated_click_on_group_root_switches_from_group_to_exact_primitive() {
     let mut tree = DataTree::default();
     let root = SdfObject::create(TYPE_BOX);

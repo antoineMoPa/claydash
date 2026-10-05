@@ -56,7 +56,7 @@ pub(super) fn primitive_icon_source(kind: PrimitiveKind) -> egui::ImageSource<'s
         PrimitiveKind::Cylinder => egui::include_image!("../../assets/icons/lucide/cylinder.svg"),
         PrimitiveKind::Torus => egui::include_image!("../../assets/icons/lucide/torus.svg"),
         PrimitiveKind::PolygonPrism => {
-            egui::include_image!("../../assets/icons/lucide/square.svg")
+            egui::include_image!("../../assets/icons/lucide/pentagon.svg")
         }
         PrimitiveKind::BezierCurve => egui::include_image!("../../assets/icons/lucide/tangent.svg"),
         PrimitiveKind::Loft => egui::include_image!("../../assets/icons/lucide/scan.svg"),
@@ -117,16 +117,12 @@ pub(super) fn view_icon_button(
     selected: bool,
 ) -> egui::Button<'static> {
     egui::Button::image(icon_image(source, Color32::WHITE))
-        .fill(if selected {
-            Color32::from_rgba_unmultiplied(151, 73, 235, 155)
-        } else {
-            Color32::from_black_alpha(165)
-        })
+        .fill(Color32::from_black_alpha(165))
         .selected(selected)
         .stroke(Stroke::new(
             1.5,
             if selected {
-                Color32::from_rgb(232, 183, 255)
+                Color32::WHITE
             } else {
                 Color32::TRANSPARENT
             },
@@ -163,7 +159,8 @@ pub(super) fn request_material_preview(
     let request = crate::renderer::MaterialPreviewRequest { material, asset_id };
     ui.ctx().data_mut(|data| {
         let requests = data.get_temp_mut_or_default::<crate::renderer::MaterialPreviewRequests>(
-            crate::renderer::MaterialPreviewRequests::egui_id());
+            crate::renderer::MaterialPreviewRequests::egui_id(),
+        );
         if !requests.0.contains(&request) {
             requests.0.push(request);
         }
@@ -175,17 +172,31 @@ pub(super) fn material_preview_loading(ui: &egui::Ui, rect: egui::Rect, material
         return;
     }
     let error = ui.ctx().data(|data| {
-        data.get_temp::<crate::renderer::MaterialPreviewIds>(crate::renderer::MaterialPreviewIds::egui_id())
-            .and_then(|ids| ids.error_for(material).map(str::to_owned))
+        data.get_temp::<crate::renderer::MaterialPreviewIds>(
+            crate::renderer::MaterialPreviewIds::egui_id(),
+        )
+        .and_then(|ids| ids.error_for(material).map(str::to_owned))
     });
     if let Some(error) = error {
-        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "!",
-            egui::FontId::proportional(16.0), ui.visuals().error_fg_color);
-        ui.interact(rect, ui.id().with(("preview-error", rect.min.x.to_bits(), rect.min.y.to_bits())),
-            egui::Sense::hover()).on_hover_text(error);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "!",
+            egui::FontId::proportional(16.0),
+            ui.visuals().error_fg_color,
+        );
+        ui.interact(
+            rect,
+            ui.id()
+                .with(("preview-error", rect.min.x.to_bits(), rect.min.y.to_bits())),
+            egui::Sense::hover(),
+        )
+        .on_hover_text(error);
     } else {
-        egui::Spinner::new().paint_at(ui,
-            egui::Rect::from_center_size(rect.center(), egui::vec2(16.0, 16.0)));
+        egui::Spinner::new().paint_at(
+            ui,
+            egui::Rect::from_center_size(rect.center(), egui::vec2(16.0, 16.0)),
+        );
     }
 }
 
@@ -220,7 +231,8 @@ pub(super) fn material_preview(
     if let Some(texture) = ui.ctx().data(|data| {
         data.get_temp::<crate::renderer::MaterialPreviewIds>(
             crate::renderer::MaterialPreviewIds::egui_id(),
-        ).and_then(|ids| ids.for_material(material))
+        )
+        .and_then(|ids| ids.for_material(material))
     }) {
         ui.painter().image(
             texture,

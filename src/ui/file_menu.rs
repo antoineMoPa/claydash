@@ -139,14 +139,18 @@ pub(super) fn draw_file_menu(
                     ui.close();
                 }
             });
-            if let Some(path) = document.current_path() {
-                ui.separator();
-                ui.weak(
-                    path.file_name()
-                        .map(|name| name.to_string_lossy())
-                        .unwrap_or_else(|| path.as_os_str().to_string_lossy()),
-                );
-            }
+            ui.separator();
+            let name = document
+                .current_path()
+                .and_then(std::path::Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Untitled".into());
+            let label = format!("{name}{}", if document.is_dirty() { "*" } else { "" });
+            let path = document
+                .current_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "Unsaved project".into());
+            ui.weak(label).on_hover_text(path);
         });
     });
 

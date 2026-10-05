@@ -81,6 +81,30 @@ pub fn cursor_position(tree: &DataTree) -> Vec3 {
     }
 }
 
+pub fn snapping_enabled(tree: &DataTree, ctrl_down: bool, alt_down: bool) -> bool {
+    !alt_down
+        && (ctrl_down
+            || matches!(
+                tree.get_path("editor.persistent_snapping"),
+                ClaydashValue::Bool(true)
+            ))
+}
+
+#[cfg(test)]
+mod snapping_tests {
+    use super::*;
+
+    #[test]
+    fn guides_snap_on_demand_or_when_toolbar_toggle_is_enabled() {
+        let mut tree = DataTree::default();
+        assert!(!snapping_enabled(&tree, false, false));
+        assert!(snapping_enabled(&tree, true, false));
+        tree.set_transient_path("editor.persistent_snapping", ClaydashValue::Bool(true));
+        assert!(snapping_enabled(&tree, false, false));
+        assert!(!snapping_enabled(&tree, true, true));
+    }
+}
+
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct BooleanPick {
     pub target: uuid::Uuid,
