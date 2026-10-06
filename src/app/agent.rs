@@ -500,6 +500,9 @@ impl App {
         };
         Ok(json!({
             "revision": self.scene_revision(),
+            "viewport": self.renderer.as_ref().map(|renderer| renderer.viewport_diagnostics()),
+            "full_material_rendering": commands::full_material_rendering(&self.tree),
+            "outline_mode": commands::outline_mode(&self.tree),
             "document_path": self.document.current_path(),
             "objects": model::objects_ref(&self.tree),
             "selection": model::selected_ref(&self.tree),

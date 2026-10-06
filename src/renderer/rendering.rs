@@ -2,6 +2,10 @@ use super::*;
 
 impl Renderer {
     #[cfg(all(not(target_arch = "wasm32"), unix))]
+    pub(crate) fn viewport_diagnostics(&self) -> serde_json::Value {
+        self.viewport.diagnostics()
+    }
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
     pub fn viewport_refined(&self) -> bool {
         self.viewport.is_refined()
     }
@@ -12,6 +16,7 @@ impl Renderer {
         objects: &[SdfObject],
         selected: &[uuid::Uuid],
         scene_versions: [i32; 2],
+        #[cfg(not(target_arch = "wasm32"))] mesh_source_revision: i32,
         world: World,
         post_processing: &[crate::model::PostProcessPass],
         egui: &egui::Context,
@@ -24,6 +29,30 @@ impl Renderer {
         outline_capture: bool,
         outline_viewport: bool,
     ) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut mesh_changed = false;
+            let actions = egui.data_mut(|data| data.remove_temp::<Vec<super::poisson_mesh::PoissonMeshAction>>(
+                egui::Id::new("poisson-mesh-actions"))).unwrap_or_default();
+            for action in actions {
+                mesh_changed |= self.poisson_mesh.handle(action);
+            }
+            mesh_changed |= self.poisson_mesh.invalidate_for_revision(mesh_source_revision);
+            mesh_changed |= self.poisson_mesh.poll(mesh_source_revision);
+            if mesh_changed {
+                self.poisson_mesh.rebuild_buffer(&self.device, objects, &mut self.mesh_buffer, &mut self.mesh_vertex_count);
+                self.invalidate_scene();
+            }
+            if let Some(requested) = self.poisson_mesh.next_request() {
+                if let Some(object) = objects.iter().find(|object| object.uuid == requested &&
+                    object.render_representation == crate::model::GroupRenderRepresentation::PoissonMesh) {
+                    let component = super::poisson_mesh::geometry::containing_root(objects, requested);
+                    self.poisson_mesh.start(requested, component, mesh_source_revision, objects.to_vec(), object.gaussian_splats.resolution, None);
+                } else {
+                    self.poisson_mesh.requests.pop_front();
+                }
+            }
+        }
         let requests = egui
             .data_mut(|data| {
                 data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(
@@ -35,6 +64,9 @@ impl Renderer {
             self.neural_jobs
                 .reconcile(&objects[..objects.len().min(MAX_OBJECTS)]);
             for id in requests {
+                self.cancelled_capture_keys.remove(&id);
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.poisson_mesh.clear_for_root(id) { self.mesh_vertex_count = 0; }
                 if !self.neural_jobs.recompute(id) {
                     self.group_capture_cache.remove(&id);
                     self.group_compute_requests.insert(id);
@@ -52,6 +84,16 @@ impl Renderer {
         let mut cancelled = false;
         for id in cancellations {
             cancelled |= self.neural_jobs.cancel(id);
+            self.group_compute_requests.remove(&id);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.poisson_mesh.handle(super::poisson_mesh::PoissonMeshAction::Cancel(id));
+                if self.group_capture_bake.as_ref().is_some_and(|job| job.root == id) {
+                    let job = self.group_capture_bake.as_ref().unwrap();
+                    self.cancelled_capture_keys.insert(id, job.key);
+                    self.group_capture_bake = None;
+                }
+            }
         }
         if cancelled {
             self.invalidate_scene();
@@ -59,13 +101,15 @@ impl Renderer {
         if !outline_viewport {
             self.upload_scene_with_world(camera, objects, selected, scene_versions, world);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poisson_mesh.publish(egui, self.mesh_vertex_count > 0);
         self.neural_jobs.publish(egui);
         #[cfg(not(target_arch = "wasm32"))]
         let capture_progress = self.group_capture_bake.as_ref().map(|job| {
             (
                 job.root,
                 job.source_revision,
-                job.progress.load(std::sync::atomic::Ordering::Relaxed),
+                job.work.percent(),
             )
         });
         #[cfg(target_arch = "wasm32")]
@@ -76,6 +120,20 @@ impl Renderer {
             &self.group_capture_cache,
             capture_progress,
         );
+        let mut computations = super::computation::Statuses::new();
+        if let Some((root, status)) = self.neural_jobs.computation_status() {
+            computations.insert(root, status);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some((root, status)) = self.poisson_mesh.computation_status() {
+                computations.insert(root, status);
+            }
+            if let Some(job) = &self.group_capture_bake {
+                computations.insert(job.root, job.work.snapshot(super::computation::Stage::Capture, Some(job.work.percent())));
+            }
+        }
+        egui.data_mut(|data| data.insert_temp(super::computation::status_id(), computations));
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],
@@ -188,6 +246,7 @@ impl Renderer {
                     ..Default::default()
                 })
             });
+        let mesh_only = self.mesh_vertex_count > 0 && self.uploaded_object_count == 0;
         let view_key = crate::viewport::ViewKey {
             matrix: (camera.projection() * camera.view()).to_cols_array_2d(),
             position: camera.position.to_array(),
@@ -197,12 +256,12 @@ impl Renderer {
                 camera.viewport.x.max(1.0) as u32,
                 camera.viewport.y.max(1.0) as u32,
             ],
-            refine,
+            refine: refine && !mesh_only,
         };
-        let deferred = world.render_pipeline == crate::model::RenderPipelineMode::Deferred
+        let deferred = !mesh_only && world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported;
-        let interleaved = refine && !deferred && !self.hybrid_enabled;
-        let viewport_refine = refine;
+        let interleaved = refine && !deferred && !self.hybrid_enabled && self.mesh_vertex_count == 0;
+        let viewport_refine = refine && !mesh_only;
         self.viewport.set_playback_budget(animation_playback);
         let work = self.viewport.prepare(
             &self.device,
@@ -216,7 +275,9 @@ impl Renderer {
         }
         let quick_preview =
             !interleaved && (matches!(work, crate::viewport::Work::Preview) || !refine);
-        let scene_pipeline = if self.hybrid_enabled {
+        let scene_pipeline = if mesh_only {
+            &self.mesh_background_pipeline
+        } else if self.hybrid_enabled {
             if !quick_preview {
                 self.hybrid_pipeline
                     .as_ref()
@@ -240,6 +301,7 @@ impl Renderer {
                 (false, false) => &self.fast_pipeline,
             }
         };
+        let mesh_vertex_count = if self.mesh_is_visible() { self.mesh_vertex_count } else { 0 };
         let readback = self.viewport.encode(
             &self.device,
             &self.queue,
@@ -247,15 +309,16 @@ impl Renderer {
             work,
             scene_pipeline,
             &self.bind_group,
-            self.hybrid_enabled.then(|| crate::viewport::HybridPass {
-                depth_pipeline: self
-                    .hybrid_depth_pipeline
-                    .as_ref()
-                    .expect("hybrid depth pipeline"),
+            (self.hybrid_depth_pipeline.is_some() || mesh_vertex_count > 0).then_some(crate::viewport::HybridPass {
+                depth_pipeline: if mesh_only { None } else { self.hybrid_depth_pipeline.as_ref() },
                 splat_pipeline: &self.splat_pipeline,
                 splat_bind_group: &self.splat_camera_bind_group,
                 splat_buffer: &self.splat_buffer,
-                splat_count: self.splat_instances.len() as u32,
+                splat_count: if self.hybrid_enabled { self.splat_instances.len() as u32 } else { 0 },
+                mesh_pipeline: &self.mesh_pipeline,
+                mesh_bind_group: &self.bind_group,
+                mesh_buffer: &self.mesh_buffer,
+                mesh_vertex_count,
             }),
             deferred.then(|| crate::viewport::DeferredPass {
                 geometry_pipeline: &self

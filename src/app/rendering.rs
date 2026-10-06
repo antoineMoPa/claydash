@@ -12,6 +12,48 @@ fn scene_render_versions(tree: &DataTree, capture_render: bool) -> [i32; 2] {
     ]
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn mesh_source_revision(objects: &[crate::model::SdfObject]) -> i32 {
+    use std::hash::{Hash, Hasher};
+    #[derive(serde::Serialize)]
+    struct Geometry<'a> {
+        id: uuid::Uuid,
+        transform: Option<&'a crate::model::Transform>,
+        group_transform: Option<&'a crate::model::Transform>,
+        object_type: i32,
+        params: &'a crate::model::SdfParams,
+        operation: crate::model::BooleanOperation,
+        boolean_parent: Option<uuid::Uuid>,
+        softness: f32,
+        repetition: &'a crate::model::Repetition,
+        mirror: &'a Option<crate::model::Mirror>,
+        lattice: &'a Option<crate::model::Lattice>,
+        path_extrusion: &'a Option<crate::model::PathExtrusion>,
+        surface_inlay: &'a Option<crate::model::SurfaceInlay>,
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let independent: std::collections::HashSet<_> = objects.iter()
+        .filter(|object| object.boolean_parent.is_none()
+            && crate::renderer::poisson_mesh::geometry::mesh_pose_is_independent(objects, object.uuid))
+        .map(|object| object.uuid).collect();
+    for object in objects {
+        let independent_pose = independent.contains(&object.uuid);
+        let geometry = Geometry {
+            id: object.uuid, transform: (!independent_pose
+                || !crate::renderer::poisson_mesh::geometry::mesh_uses_object_pose(objects, object.uuid)).then_some(&object.transform),
+            group_transform: (!independent_pose).then_some(&object.group_transform),
+            object_type: object.object_type, params: &object.params,
+            operation: object.operation, boolean_parent: object.boolean_parent,
+            softness: object.softness, repetition: &object.repetition,
+            mirror: &object.mirror, lattice: &object.lattice,
+            path_extrusion: &object.path_extrusion, surface_inlay: &object.surface_inlay,
+        };
+        serde_json::to_vec(&geometry).expect("serialize mesh geometry")
+            .hash(&mut hasher);
+    }
+    hasher.finish() as i32
+}
+
 #[cfg(test)]
 #[test]
 fn selection_change_invalidates_rendered_proxy_highlight() {
@@ -22,6 +64,66 @@ fn selection_change_invalidates_rendered_proxy_highlight() {
     let before = scene_render_versions(&tree, false);
     crate::model::set_selected_exact(&mut tree, vec![id]);
     assert_ne!(scene_render_versions(&tree, false), before);
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn selection_and_camera_changes_keep_mesh_source_revision() {
+    let mut tree = DataTree::default();
+    let object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    let id = object.uuid;
+    crate::model::set_objects(&mut tree, vec![object]);
+    let mesh_revision = mesh_source_revision(crate::model::objects_ref(&tree));
+    let viewport_revision = scene_render_versions(&tree, false)[0];
+    crate::model::set_selected_exact(&mut tree, vec![id]);
+    assert_eq!(mesh_source_revision(crate::model::objects_ref(&tree)), mesh_revision);
+    assert_ne!(scene_render_versions(&tree, false)[0], viewport_revision);
+    // Editor view state is outside the source object path.
+    tree.set_path("scene.cursor_position", ClaydashValue::Vec3(glam::Vec3::new(2.0, 3.0, 4.0)));
+    assert_eq!(mesh_source_revision(crate::model::objects_ref(&tree)), mesh_revision);
+    let mut appearance = crate::model::objects(&tree);
+    appearance[0].color = glam::Vec4::new(0.8, 0.2, 0.1, 1.0);
+    appearance[0].material.opacity = 0.5;
+    crate::model::set_objects(&mut tree, appearance);
+    assert_eq!(mesh_source_revision(crate::model::objects_ref(&tree)), mesh_revision);
+    crate::model::set_objects(&mut tree, vec![]);
+    assert_ne!(mesh_source_revision(crate::model::objects_ref(&tree)), mesh_revision);
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn fusca_global_pose_keeps_mesh_but_part_edits_invalidate_it() {
+    let scene = crate::document::deserialize_scene(include_bytes!("../../examples/fusca.claydash")).unwrap();
+    let mut objects = match scene.get_path("sdf_objects") {
+        ClaydashValue::VecSDFObject(objects) => objects,
+        _ => panic!("Fusca objects missing"),
+    };
+    let root = objects.iter().position(|object| object.boolean_parent.is_none()).unwrap();
+    let revision = mesh_source_revision(&objects);
+    objects[root].group_transform.translation = glam::Vec3::new(2.0, -3.0, 4.0);
+    objects[root].group_transform.rotation = glam::Quat::from_rotation_y(0.8);
+    objects[root].group_transform.scale = glam::Vec3::new(1.2, 0.7, 2.0);
+    assert_eq!(mesh_source_revision(&objects), revision, "global pose must reuse the mesh, including internal inlays");
+    let child = objects.iter().position(|object| object.boolean_parent.is_some()).unwrap();
+    objects[child].transform.translation.x += 0.1;
+    assert_ne!(mesh_source_revision(&objects), revision, "editing a part changes the shape");
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn standalone_mesh_pose_reuses_shape_but_external_references_do_not() {
+    let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+    let original = mesh_source_revision(&[object.clone()]);
+    object.transform.translation.x += 3.0;
+    object.transform.rotation = glam::Quat::from_rotation_z(0.7);
+    object.transform.scale = glam::Vec3::new(1.0, 2.0, 3.0);
+    assert_eq!(mesh_source_revision(&[object.clone()]), original);
+    let mut patch = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    patch.surface_inlay = Some(crate::model::SurfaceInlay { host: object.uuid, offset: 0.0, thickness: 0.01 });
+    let mut scene = vec![object, patch];
+    let original = mesh_source_revision(&scene);
+    scene[0].transform.translation.x += 1.0;
+    assert_ne!(mesh_source_revision(&scene), original, "external inlay geometry depends on the relative pose");
 }
 
 impl App {
@@ -165,6 +267,8 @@ impl App {
         self.process_web_document_messages();
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_native_encoding();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_mesh_export();
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -220,6 +324,8 @@ impl App {
                 interaction_guide,
                 render_progress,
             );
+            #[cfg(not(target_arch = "wasm32"))]
+            self.mesh_export_panel(ui);
         });
         let preview_requests = egui.data(|data| {
             data.get_temp::<crate::renderer::MaterialPreviewRequests>(
@@ -348,6 +454,8 @@ impl App {
                 scene_objects,
                 &effective_selection,
                 scene_versions,
+                #[cfg(not(target_arch = "wasm32"))]
+                mesh_source_revision(scene_objects),
                 crate::model::world(&self.tree),
                 crate::model::post_processing_ref(&self.tree),
                 &self.egui,

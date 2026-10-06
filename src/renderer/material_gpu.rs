@@ -168,7 +168,9 @@ pub(super) fn shader_source_for_assets(assets: &[MaterialAsset]) -> String {
         .replace(
             "// MATERIAL_MODULES",
             &[
+                "// POISSON_COMMON_BEGIN",
                 &common,
+                "// POISSON_COMMON_END",
                 include_str!("../../assets/shaders/material_capture_scene.wgsl"),
                 include_str!("../../assets/shaders/material_wood.wgsl"),
                 include_str!("../../assets/shaders/material_fabric.wgsl"),
@@ -177,7 +179,9 @@ pub(super) fn shader_source_for_assets(assets: &[MaterialAsset]) -> String {
                 include_str!("../../assets/shaders/material_brick.wgsl"),
                 include_str!("../../assets/shaders/material_diagnostic.wgsl"),
                 include_str!("../../assets/shaders/ambient_occlusion.wgsl"),
+                "// POISSON_CUSTOM_BEGIN",
                 &functions,
+                "// POISSON_CUSTOM_END",
             ]
             .join("\n"),
         )

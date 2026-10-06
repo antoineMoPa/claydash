@@ -301,6 +301,7 @@ pub(super) fn create_hybrid_depth_pipeline(
     pipeline_layout: &wgpu::PipelineLayout,
     capacity: u32,
     features: SceneShaderFeatures,
+    skip_splats: bool,
 ) -> wgpu::RenderPipeline {
     let source = specialized_neural_shader_source(
         &specialized_shader_source(shader_source, capacity),
@@ -327,7 +328,7 @@ pub(super) fn create_hybrid_depth_pipeline(
                 constants: &[
                     ("USE_BVH", 1.0),
                     ("HAS_BOOLEANS", f64::from(capacity > 1)),
-                    ("HYBRID_SPLATS", 1.0),
+                    ("HYBRID_SPLATS", f64::from(skip_splats)),
                 ],
                 ..Default::default()
             },

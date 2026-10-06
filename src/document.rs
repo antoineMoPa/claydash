@@ -22,6 +22,8 @@ pub enum FileMenuAction {
     #[cfg(target_arch = "wasm32")]
     SaveNamed(String),
     Render(RenderFormat),
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportGlb,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -10,6 +10,7 @@ pub enum GroupRenderRepresentation {
     SphereDepthAtlas,
     SphereAccelerator,
     GaussianSplats,
+    PoissonMesh,
     NeuralSdf,
     #[default]
     #[serde(other)]
@@ -17,13 +18,14 @@ pub enum GroupRenderRepresentation {
 }
 
 impl GroupRenderRepresentation {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::ExactSdf,
         Self::BoxDepthAtlas,
         Self::SphereDepthAtlas,
         Self::SphereAccelerator,
         Self::BoxAccelerator,
         Self::GaussianSplats,
+        Self::PoissonMesh,
         Self::NeuralSdf,
     ];
 
@@ -35,6 +37,7 @@ impl GroupRenderRepresentation {
             Self::SphereDepthAtlas => "Sphere depth + texture atlas",
             Self::SphereAccelerator => "Sphere accelerator",
             Self::GaussianSplats => "Gaussian splats",
+            Self::PoissonMesh => "Mesh (Poisson)",
             Self::NeuralSdf => "Neural SDF",
         }
     }
@@ -56,6 +59,7 @@ impl GroupRenderRepresentation {
                 "Fit a ray-conditioned neural field to random positions and unit ray directions."
             }
             Self::GaussianSplats => "Approximate the group with soft Gaussian surface samples.",
+            Self::PoissonMesh => "Reconstruct a triangle mesh from implicit oriented surface samples. Click Recompute to build it.",
         }
     }
 
@@ -74,6 +78,7 @@ impl GroupRenderRepresentation {
             Self::GaussianSplats => {
                 "Fast splats for opaque solid scenes; other materials use ray composition. Thin details may be lost."
             }
+            Self::PoissonMesh => "Thin features may be lost at the chosen sampling resolution.",
         }
     }
 

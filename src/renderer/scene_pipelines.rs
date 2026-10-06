@@ -44,12 +44,13 @@ impl Renderer {
                 hybrid,
                 features,
             ),
-            ScenePipelineKind::HybridDepth { capacity } => create_hybrid_depth_pipeline(
+            ScenePipelineKind::HybridDepth { capacity, skip_splats } => create_hybrid_depth_pipeline(
                 &self.device,
                 &self.shader_source,
                 &self.pipeline_layout,
                 capacity,
                 features,
+                skip_splats,
             ),
         };
         if self.scene_pipeline_cache.len() == MAX_CACHED_SCENE_PIPELINES {
@@ -65,6 +66,18 @@ impl Renderer {
         capacity: u32,
         features: SceneShaderFeatures,
     ) {
+        if self.mesh_vertex_count > 0 {
+            self.mesh_pipeline = poisson_material::create_pipeline(&self.device,
+                Some(&self.pipeline_layout), &self.shader_source, self.render_format,
+                capacity, features);
+        }
+        if self.node_count == 0 && self.mesh_vertex_count > 0 {
+            self.deferred_geometry_pipeline = None;
+            self.hybrid_depth_pipeline = None;
+            self.hybrid_pipeline = None;
+            self.hybrid_fast_pipeline = None;
+            return;
+        }
         if world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported
         {
@@ -142,13 +155,14 @@ impl Renderer {
                 },
                 features,
             ));
-            self.hybrid_depth_pipeline = Some(
-                self.cached_scene_pipeline(ScenePipelineKind::HybridDepth { capacity }, features),
-            );
         } else {
             self.hybrid_pipeline = None;
             self.hybrid_fast_pipeline = None;
-            self.hybrid_depth_pipeline = None;
         }
+        self.hybrid_depth_pipeline = if self.hybrid_enabled || self.mesh_vertex_count > 0 {
+            Some(self.cached_scene_pipeline(ScenePipelineKind::HybridDepth {
+                capacity, skip_splats: self.hybrid_enabled,
+            }, features))
+        } else { None };
     }
 }

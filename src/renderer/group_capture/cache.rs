@@ -26,7 +26,8 @@ pub(crate) fn depth_accelerator_status(
     let Some(object) = source.iter().find(|object| {
         object.uuid == root
             && (object.render_representation.is_depth_accelerator()
-                || object.render_representation == GroupRenderRepresentation::GaussianSplats)
+                || matches!(object.render_representation, GroupRenderRepresentation::GaussianSplats
+                    | GroupRenderRepresentation::BoxDepthAtlas | GroupRenderRepresentation::SphereDepthAtlas))
     }) else {
         return DepthAcceleratorStatus::NotComputedYet;
     };
@@ -78,7 +79,8 @@ pub(crate) fn publish_depth_accelerator_status(
         .iter()
         .filter(|object| {
             object.render_representation.is_depth_accelerator()
-                || object.render_representation == GroupRenderRepresentation::GaussianSplats
+                || matches!(object.render_representation, GroupRenderRepresentation::GaussianSplats
+                    | GroupRenderRepresentation::BoxDepthAtlas | GroupRenderRepresentation::SphereDepthAtlas)
         })
         .filter_map(|object| {
             cache
@@ -88,10 +90,11 @@ pub(crate) fn publish_depth_accelerator_status(
                         (&entry.capture, object.render_representation),
                         (
                             CachedCapture::Sphere(_),
-                            GroupRenderRepresentation::SphereAccelerator
+                            GroupRenderRepresentation::SphereAccelerator | GroupRenderRepresentation::SphereDepthAtlas
                         ) | (
                             CachedCapture::Box(_),
                             GroupRenderRepresentation::BoxAccelerator
+                                | GroupRenderRepresentation::BoxDepthAtlas
                                 | GroupRenderRepresentation::GaussianSplats
                         )
                     )

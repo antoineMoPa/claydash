@@ -12,6 +12,12 @@ use crate::{
 #[cfg(not(target_arch = "wasm32"))]
 mod benchmark;
 mod outline_capture;
+mod poisson_material;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod cooperative_work;
+pub(crate) mod computation;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod poisson_bake;
 pub(crate) mod post_processing;
 
 const MAX_OBJECTS: usize = 1024;
@@ -124,7 +130,7 @@ struct SceneShaderFeatures {
 enum ScenePipelineKind {
     Shaded { capacity: u32, fast: bool, hybrid: bool },
     Deferred { capacity: u32, hybrid: bool },
-    HybridDepth { capacity: u32 },
+    HybridDepth { capacity: u32, skip_splats: bool },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -258,6 +264,14 @@ pub struct Renderer {
     deferred_geometry_pipeline: Option<(u32, bool, wgpu::RenderPipeline)>,
     deferred_supported: bool,
     splat_pipeline: wgpu::RenderPipeline,
+    mesh_pipeline: wgpu::RenderPipeline,
+    mesh_background_pipeline: wgpu::RenderPipeline,
+    mesh_buffer: wgpu::Buffer,
+    mesh_vertex_count: u32,
+    #[cfg(not(target_arch = "wasm32"))]
+    poisson_bake_pipeline: Option<(u64, wgpu::RenderPipeline)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    poisson_mesh: poisson_mesh::PoissonMeshState,
     splat_camera_buffer: wgpu::Buffer,
     splat_camera_bind_group: wgpu::BindGroup,
     splat_instances: Vec<GpuSplat>,
@@ -293,6 +307,7 @@ pub struct Renderer {
     uploaded_scene_versions: [i32; 2],
     neural_jobs: neural_jobs::NeuralJobs,
     group_compute_requests: std::collections::HashSet<uuid::Uuid>,
+    cancelled_capture_keys: std::collections::HashMap<uuid::Uuid, u64>,
     group_capture_cache: std::collections::HashMap<uuid::Uuid, group_capture::CachedGroupCapture>,
     #[cfg(not(target_arch = "wasm32"))]
     group_capture_bake: Option<group_capture::CaptureBakeJob>,
@@ -308,6 +323,15 @@ pub struct Renderer {
     capture_pending: bool,
     capture_cancel: Arc<std::sync::atomic::AtomicBool>,
     outline_capture: Option<outline_capture::OutlineCaptureRenderer>,
+}
+
+impl Renderer {
+    fn mesh_is_visible(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.poisson_mesh.shown_root().is_some() }
+        #[cfg(target_arch = "wasm32")]
+        { false }
+    }
 }
 
 struct MaterialPreview {
@@ -371,6 +395,7 @@ pub struct CapturedFrame {
 
 mod box_depth_atlas;
 mod bvh;
+mod inlay_hosts;
 mod initialization;
 mod material_gpu;
 mod sphere_depth_atlas;
@@ -382,6 +407,8 @@ mod neural_jobs;
 mod neural_sdf;
 pub(crate) use neural_jobs::NeuralStatus;
 mod hybrid_splats;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod poisson_mesh;
 mod material_previews;
 mod modifier_gpu;
 mod primitive_upload;

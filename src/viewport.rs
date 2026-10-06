@@ -2,10 +2,13 @@
 //! UI rendering stays at native resolution throughout camera and object edits.
 use std::sync::{Arc, Mutex};
 
+mod encoding;
+
 const TILE: u32 = 32;
 const INITIAL_PIXELS: u32 = 48 * 1024;
 const EDIT_TARGET_MS: f64 = 6.0;
 const PLAYBACK_TARGET_MS: f64 = 12.0;
+const REFINEMENT_PAUSE: std::time::Duration = std::time::Duration::from_millis(4);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewKey {
@@ -106,21 +109,13 @@ fn same_geometry(a: &ViewKey, b: &ViewKey) -> bool {
         && a.refine == b.refine
 }
 
-// Screen-space effects resolve only against a complete geometry image.
-fn resolve_deferred(work: Work, size: [u32; 2]) -> bool {
+// Shade each newly completed region immediately. Once all geometry is ready,
+// refresh the whole image so screen-space effects see complete neighbors.
+fn deferred_shading_work(work: Work, size: [u32; 2]) -> Work {
     match work {
-        Work::Preview | Work::Relight { .. } => true,
-        Work::Refine { end, .. } => end == tile_count(size),
-        Work::Interleave { .. } => false,
-        Work::Cached => false,
-    }
-}
-
-fn displayed_tiles(completed: u32, size: [u32; 2], deferred: bool) -> u32 {
-    if deferred && completed < tile_count(size) {
-        0
-    } else {
-        completed
+        Work::Preview | Work::Relight { .. } => Work::Preview,
+        Work::Refine { end, .. } if end == tile_count(size) => Work::Preview,
+        _ => work,
     }
 }
 
@@ -134,11 +129,15 @@ pub enum Work {
 }
 
 pub struct HybridPass<'a> {
-    pub depth_pipeline: &'a wgpu::RenderPipeline,
+    pub depth_pipeline: Option<&'a wgpu::RenderPipeline>,
     pub splat_pipeline: &'a wgpu::RenderPipeline,
     pub splat_bind_group: &'a wgpu::BindGroup,
     pub splat_buffer: &'a wgpu::Buffer,
     pub splat_count: u32,
+    pub mesh_pipeline: &'a wgpu::RenderPipeline,
+    pub mesh_bind_group: &'a wgpu::BindGroup,
+    pub mesh_buffer: &'a wgpu::Buffer,
+    pub mesh_vertex_count: u32,
 }
 
 pub struct DeferredPass<'a> {
@@ -155,6 +154,7 @@ pub struct Viewport {
     initial_budget: u32,
     pending: bool,
     pending_frames: u32,
+    refinement_resume_at: Option<web_time::Instant>,
     timing: Arc<Mutex<Option<Option<f64>>>>,
     submitted_pixels: u32,
     submitted_budget: u32,
@@ -303,6 +303,7 @@ impl Viewport {
             initial_budget: INITIAL_PIXELS,
             pending: false,
             pending_frames: 0,
+            refinement_resume_at: None,
             submitted_pixels: INITIAL_PIXELS,
             submitted_budget: INITIAL_PIXELS,
             timing: Arc::new(Mutex::new(None)),
@@ -366,6 +367,40 @@ impl Viewport {
         self.completed = 0;
     }
 
+    pub(crate) fn reset_for_scene(&mut self) {
+        self.invalidate();
+        self.targets = None;
+        self.interleaved = false;
+        self.pixel_budget = INITIAL_PIXELS;
+        self.initial_budget = INITIAL_PIXELS;
+        self.target_ms = EDIT_TARGET_MS;
+        self.pending = false;
+        self.pending_frames = 0;
+        self.refinement_resume_at = None;
+        self.submitted_pixels = 0;
+        self.submitted_budget = 0;
+        // Already-submitted GPU callbacks may still run. Give the new scene
+        // its own mailbox so old timings cannot release or resize its batches.
+        self.timing = Arc::new(Mutex::new(None));
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    pub(crate) fn diagnostics(&self) -> serde_json::Value {
+        serde_json::json!({
+            "has_view": self.key.is_some(),
+            "size": self.key.as_ref().map(|key| key.size),
+            "completed": self.completed,
+            "total": self.key.as_ref().map(|key| if self.interleaved { 256 } else { tile_count(key.size) }),
+            "refined": self.is_refined(),
+            "pending_gpu": self.pending,
+            "completion_received": self.timing.lock().unwrap().is_some(),
+            "pixel_budget": self.pixel_budget,
+            "preview_size": self.targets.as_ref().map(|targets| targets.preview_size),
+            "interleaved": self.interleaved,
+            "deferred": self.targets.as_ref().is_some_and(|targets| targets.deferred.is_some()),
+        })
+    }
+
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -385,6 +420,10 @@ impl Viewport {
         let _ = device.poll(wgpu::PollType::Poll);
         if let Some(milliseconds) = self.timing.lock().unwrap().take() {
             self.pending = false;
+            // Leave a gap after completed GPU work for the compositor and
+            // other applications. Only refinement observes this deadline;
+            // camera/scene changes below can submit their preview immediately.
+            self.refinement_resume_at = Some(web_time::Instant::now() + REFINEMENT_PAUSE);
             if let Some(ms) = milliseconds.filter(|_| self.submitted_pixels > 0) {
                 self.pixel_budget = budget_after_sample(
                     self.pixel_budget,
@@ -406,6 +445,7 @@ impl Viewport {
         }
         self.pending_frames = 0;
         if self.key.as_ref() != Some(&key) {
+            self.refinement_resume_at = None;
             // World lighting/effect revisions leave the primary-hit geometry intact.
             // Refresh the visible complete target; unfinished native tiles remain valid.
             if deferred
@@ -553,6 +593,9 @@ impl Viewport {
         if self.completed >= total {
             return Work::Cached;
         }
+        if self.refinement_resume_at.is_some_and(|deadline| web_time::Instant::now() < deadline) {
+            return Work::Cached;
+        }
         if let Some(buffers) = self
             .targets
             .as_mut()
@@ -564,304 +607,17 @@ impl Viewport {
         }
         if interleaved {
             let phase_pixels = key.size[0].div_ceil(16) * key.size[1].div_ceil(16);
-            let count = (self.pixel_budget.saturating_mul(2) / phase_pixels.max(1)).clamp(1, 16);
+            let count = (self.pixel_budget / phase_pixels.max(1)).clamp(1, 16);
             Work::Interleave {
                 first: self.completed,
                 end: (self.completed + count).min(total),
             }
         } else {
-            let count = (self.pixel_budget.saturating_mul(2) / (TILE * TILE)).max(1);
+            let count = (self.pixel_budget / (TILE * TILE)).max(1);
             Work::Refine {
                 first: self.completed,
                 end: (self.completed + count).min(total),
             }
-        }
-    }
-
-    pub fn encode(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        work: Work,
-        scene: &wgpu::RenderPipeline,
-        scene_bind_group: &wgpu::BindGroup,
-        hybrid: Option<HybridPass<'_>>,
-        deferred: Option<DeferredPass<'_>>,
-    ) -> Option<wgpu::Buffer> {
-        // A material pipeline change can invalidate the view while a previous
-        // GPU timing query is still pending. prepare() then returns Cached
-        // before installing a new key; there is no frame to encode yet.
-        let Some(targets) = self.targets.as_ref() else {
-            return None;
-        };
-        let Some(size) = self.key.as_ref().map(|key| key.size) else {
-            return None;
-        };
-        if work != Work::Cached {
-            let view = if matches!(work, Work::Preview | Work::Relight { native: false }) {
-                &targets.preview
-            } else {
-                &targets.refined
-            };
-            let depth_view = if matches!(work, Work::Preview | Work::Relight { native: false }) {
-                &targets.preview_depth
-            } else {
-                &targets.refined_depth
-            };
-            if let Some(deferred) = deferred
-                .as_ref()
-                .filter(|_| !matches!(work, Work::Relight { .. }))
-            {
-                let deferred_targets = targets
-                    .deferred
-                    .as_ref()
-                    .expect("deferred targets")
-                    .for_work(work);
-                let clear = matches!(work, Work::Preview | Work::Refine { first: 0, .. });
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("deferred SDF geometry"),
-                    color_attachments: &deferred_targets
-                        .buffers
-                        .iter()
-                        .map(|buffer| {
-                            Some(wgpu::RenderPassColorAttachment {
-                                view: buffer,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: if clear {
-                                        wgpu::LoadOp::Clear(wgpu::Color {
-                                            r: 0.0,
-                                            g: 0.0,
-                                            b: 0.0,
-                                            a: -1.0,
-                                        })
-                                    } else {
-                                        wgpu::LoadOp::Load
-                                    },
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })
-                        })
-                        .collect::<Vec<_>>(),
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: if clear {
-                                wgpu::LoadOp::Clear(1.0)
-                            } else {
-                                wgpu::LoadOp::Load
-                            },
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: self.query_set.as_ref().map(|query_set| {
-                        wgpu::RenderPassTimestampWrites {
-                            query_set,
-                            beginning_of_pass_write_index: Some(0),
-                            end_of_pass_write_index: (!resolve_deferred(work, size)).then_some(1),
-                        }
-                    }),
-                    ..Default::default()
-                });
-                pass.set_pipeline(deferred.geometry_pipeline);
-                pass.set_bind_group(0, scene_bind_group, &[]);
-                draw_work(&mut pass, work, size);
-            }
-            if deferred.is_none() {
-                if let Some(hybrid) = &hybrid {
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("opaque SDF depth batch"),
-                        color_attachments: &[],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: depth_view,
-                            depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(1.0),
-                                store: wgpu::StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        timestamp_writes: self.query_set.as_ref().map(|query_set| {
-                            wgpu::RenderPassTimestampWrites {
-                                query_set,
-                                beginning_of_pass_write_index: Some(0),
-                                end_of_pass_write_index: None,
-                            }
-                        }),
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(hybrid.depth_pipeline);
-                    pass.set_bind_group(0, scene_bind_group, &[]);
-                    draw_work(&mut pass, work, size);
-                }
-            }
-            if deferred.is_none() || resolve_deferred(work, size) {
-                let shading_work = if deferred.is_some() {
-                    Work::Preview
-                } else {
-                    work
-                };
-                {
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("budgeted scene batch"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        timestamp_writes: self
-                            .query_set
-                            .as_ref()
-                            .filter(|_| hybrid.is_none() || matches!(work, Work::Relight { .. }))
-                            .map(|query_set| wgpu::RenderPassTimestampWrites {
-                                query_set,
-                                beginning_of_pass_write_index: (deferred.is_none()
-                                    || matches!(work, Work::Relight { .. }))
-                                .then_some(0),
-                                end_of_pass_write_index: hybrid.is_none().then_some(1),
-                            }),
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(if deferred.is_some() {
-                        &self.deferred_pipeline
-                    } else {
-                        scene
-                    });
-                    pass.set_bind_group(0, scene_bind_group, &[]);
-                    if deferred.is_some() {
-                        pass.set_bind_group(
-                            1,
-                            &targets
-                                .deferred
-                                .as_ref()
-                                .expect("deferred targets")
-                                .for_work(work)
-                                .bind_group,
-                            &[],
-                        );
-                    }
-                    draw_work(&mut pass, shading_work, size);
-                }
-                if let Some(hybrid) = &hybrid {
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Gaussian splat mesh batch"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: depth_view,
-                            depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        timestamp_writes: self.query_set.as_ref().map(|query_set| {
-                            wgpu::RenderPassTimestampWrites {
-                                query_set,
-                                beginning_of_pass_write_index: None,
-                                end_of_pass_write_index: Some(1),
-                            }
-                        }),
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(hybrid.splat_pipeline);
-                    pass.set_bind_group(0, hybrid.splat_bind_group, &[]);
-                    pass.set_vertex_buffer(0, hybrid.splat_buffer.slice(..));
-                    draw_splat_work(&mut pass, shading_work, size, hybrid.splat_count);
-                }
-            }
-            match work {
-                Work::Refine { end, .. } | Work::Interleave { end, .. } => self.completed = end,
-                _ => {}
-            }
-        }
-        queue.write_buffer(
-            &self.progress,
-            0,
-            bytemuck::cast_slice(&[
-                size[0],
-                size[1],
-                if self.interleaved { 0 } else { TILE },
-                if self.interleaved {
-                    self.completed
-                } else {
-                    displayed_tiles(self.completed, size, deferred.is_some())
-                },
-            ]),
-        );
-        if work == Work::Cached {
-            return None;
-        }
-        self.submitted_pixels = match work {
-            Work::Preview => targets.preview_size[0] * targets.preview_size[1],
-            Work::Refine { first, end } => (first..end)
-                .map(|tile| {
-                    let rect = tile_rect(size, tile);
-                    rect[2] * rect[3]
-                })
-                .sum(),
-            Work::Interleave { first, end } => {
-                // Edge blocks have fewer than 256 native pixels; the
-                // padded estimate keeps the adaptive budget conservative.
-                (end - first) * size[0].div_ceil(16) * size[1].div_ceil(16)
-            }
-            Work::Relight { .. } | Work::Cached => 0,
-        };
-        self.submitted_budget = match work {
-            Work::Refine { .. } | Work::Interleave { .. } => self.pixel_budget.saturating_mul(2),
-            Work::Preview => self.pixel_budget,
-            Work::Relight { .. } | Work::Cached => 0,
-        };
-        self.pending = true;
-        if let (Some(query_set), Some(resolve)) = (&self.query_set, &self.query_resolve) {
-            let readback = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("viewport timestamp readback"),
-                size: 16,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            encoder.resolve_query_set(query_set, 0..2, resolve, 0);
-            encoder.copy_buffer_to_buffer(resolve, 0, &readback, 0, 16);
-            Some(readback)
-        } else {
-            None
-        }
-    }
-
-    pub fn submitted(&self, queue: &wgpu::Queue, work: Work, readback: Option<wgpu::Buffer>) {
-        if work == Work::Cached {
-            return;
-        }
-        let timing = self.timing.clone();
-        if let Some(buffer) = readback {
-            let period = queue.get_timestamp_period() as f64;
-            let mapped = buffer.clone();
-            buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |result| {
-                    let milliseconds = result.ok().and_then(|_| {
-                        let view = mapped.slice(..).get_mapped_range().ok()?;
-                        let values: &[u64] = bytemuck::cast_slice(&view);
-                        Some(values[1].saturating_sub(values[0]) as f64 * period / 1_000_000.0)
-                    });
-                    mapped.unmap();
-                    *timing.lock().unwrap() = Some(milliseconds);
-                });
-        } else {
-            queue.on_submitted_work_done(move || *timing.lock().unwrap() = Some(None));
         }
     }
 
@@ -903,52 +659,6 @@ impl Viewport {
             &[],
         );
         pass.draw(0..3, 0..1);
-    }
-}
-
-fn draw_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2]) {
-    match work {
-        Work::Preview => pass.draw(0..3, 0..1),
-        Work::Refine { first, end } => {
-            let columns = size[0].div_ceil(TILE);
-            let mut tile = first;
-            while tile < end {
-                let row_end = ((tile / columns + 1) * columns).min(end);
-                let [x, y, _, height] = tile_rect(size, tile);
-                let last = tile_rect(size, row_end - 1);
-                pass.set_scissor_rect(x, y, last[0] + last[2] - x, height);
-                pass.draw(0..3, 0..1);
-                tile = row_end;
-            }
-        }
-        Work::Interleave { first, end } => {
-            let samples = size[0].div_ceil(16) * size[1].div_ceil(16);
-            for phase in first..end {
-                let start = 0x8000_0000 | (phase << 23);
-                pass.draw(0..6, start..start + samples);
-            }
-        }
-        Work::Relight { .. } | Work::Cached => unreachable!(),
-    }
-}
-
-fn draw_splat_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], count: u32) {
-    match work {
-        Work::Preview => pass.draw(0..6, 0..count),
-        Work::Refine { first, end } => {
-            let columns = size[0].div_ceil(TILE);
-            let mut tile = first;
-            while tile < end {
-                let row_end = ((tile / columns + 1) * columns).min(end);
-                let [x, y, _, height] = tile_rect(size, tile);
-                let last = tile_rect(size, row_end - 1);
-                pass.set_scissor_rect(x, y, last[0] + last[2] - x, height);
-                pass.draw(0..6, 0..count);
-                tile = row_end;
-            }
-        }
-        Work::Interleave { .. } => unreachable!("hybrid splats use tiled refinement"),
-        Work::Relight { .. } | Work::Cached => unreachable!(),
     }
 }
 
@@ -997,112 +707,11 @@ fn tile_rect(size: [u32; 2], index: u32) -> [u32; 4] {
     [x, y, (size[0] - x).min(TILE), (size[1] - y).min(TILE)]
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod deferred_tests;
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn deferred_lighting_revision_reuses_geometry_but_edits_do_not() {
-        let key = ViewKey {
-            matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
-            position: [0.0; 3],
-            projection: 0,
-            versions: [1, 1],
-            size: [333, 217],
-            refine: true,
-        };
-        let mut changed = key.clone();
-        changed.versions[1] += 1;
-        assert!(same_geometry(&key, &changed));
-        changed.versions[0] += 1;
-        assert!(!same_geometry(&key, &changed));
-        for change in 0..5 {
-            let mut changed = key.clone();
-            match change {
-                0 => changed.matrix[0][0] += 0.1,
-                1 => changed.position[0] += 0.1,
-                2 => changed.projection = 1,
-                3 => changed.size[0] += 1,
-                _ => changed.refine = false,
-            }
-            assert!(!same_geometry(&key, &changed));
-        }
-    }
-
-    #[test]
-    fn deferred_effects_wait_for_complete_native_geometry() {
-        let size = [333, 217];
-        let total = tile_count(size);
-        assert!(resolve_deferred(Work::Preview, size));
-        assert!(!resolve_deferred(Work::Cached, size));
-        for end in 1..=total {
-            let batch = Work::Refine {
-                first: end - 1,
-                end,
-            };
-            assert_eq!(resolve_deferred(batch, size), end == total);
-            assert_eq!(
-                displayed_tiles(end, size, true),
-                if end == total { total } else { 0 }
-            );
-            // Exact rendering can publish each independent completed tile.
-            assert_eq!(displayed_tiles(end, size, false), end);
-        }
-    }
-
-    #[test]
-    fn tiles_cover_odd_sized_viewports_exactly_once() {
-        for size in [[1, 1], [63, 65], [1280, 720], [333, 217]] {
-            let mut coverage = vec![0u8; (size[0] * size[1]) as usize];
-            for tile in 0..tile_count(size) {
-                let [x, y, w, h] = tile_rect(size, tile);
-                for row in y..y + h {
-                    for column in x..x + w {
-                        coverage[(row * size[0] + column) as usize] += 1;
-                    }
-                }
-            }
-            assert!(coverage.iter().all(|&count| count == 1));
-        }
-    }
-    #[test]
-    fn preview_respects_budget_and_never_exceeds_native_size() {
-        for size in [[1, 2000], [2000, 1], [1280, 720], [333, 217]] {
-            for budget in [4096, INITIAL_PIXELS, 4 * 1024 * 1024] {
-                let preview = preview_size(size, budget);
-                assert!(preview[0] > 0 && preview[1] > 0);
-                assert!(preview[0] <= size[0] && preview[1] <= size[1]);
-                assert!(preview[0] * preview[1] <= budget);
-            }
-        }
-    }
-    #[test]
-    fn gpu_budget_recovers_from_expensive_views_without_vsync_feedback() {
-        assert!(adjusted_budget(INITIAL_PIXELS, 35.0, EDIT_TARGET_MS) < INITIAL_PIXELS);
-        assert!(adjusted_budget(INITIAL_PIXELS, 2.0, EDIT_TARGET_MS) > INITIAL_PIXELS);
-        assert_eq!(
-            adjusted_budget(INITIAL_PIXELS, f64::NAN, EDIT_TARGET_MS),
-            INITIAL_PIXELS
-        );
-        assert_eq!(
-            adjusted_budget(TILE * TILE, 100.0, EDIT_TARGET_MS),
-            TILE * TILE
-        );
-        assert!(
-            adjusted_budget(INITIAL_PIXELS, 10.0, PLAYBACK_TARGET_MS)
-                > adjusted_budget(INITIAL_PIXELS, 10.0, EDIT_TARGET_MS)
-        );
-    }
-
-    #[test]
-    fn final_partial_tile_keeps_the_budget_for_the_next_view() {
-        let budget = 16 * 1024;
-        assert_eq!(
-            budget_after_sample(budget, budget * 2, 288, 1.0, EDIT_TARGET_MS),
-            budget
-        );
-        assert!(budget_after_sample(budget, budget * 2, budget * 2, 20.0, EDIT_TARGET_MS) < budget);
-    }
-}
+mod tests;
 
 fn deferred_shader_source() -> String {
     include_str!("../assets/shaders/deferred.wgsl")
@@ -1115,18 +724,4 @@ fn deferred_shader_source() -> String {
             "// TRANSMISSION_MODULE",
             include_str!("../assets/shaders/deferred_transmission.wgsl"),
         )
-}
-
-#[cfg(test)]
-#[test]
-fn deferred_shader_modules_validate() {
-    let source = deferred_shader_source();
-    let module = wgpu::naga::front::wgsl::parse_str(&source)
-        .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
-    wgpu::naga::valid::Validator::new(
-        wgpu::naga::valid::ValidationFlags::all(),
-        wgpu::naga::valid::Capabilities::all(),
-    )
-    .validate(&module)
-    .expect("validate deferred lighting and transmission");
 }

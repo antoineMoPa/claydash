@@ -34,17 +34,8 @@ pub(super) struct CaptureBakeJob {
     pub root: uuid::Uuid,
     pub key: u64,
     pub source_revision: i32,
-    pub progress: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub work: super::computation::Computation,
     pub receiver: std::sync::mpsc::Receiver<Option<CachedCapture>>,
-    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for CaptureBakeJob {
-    fn drop(&mut self) {
-        self.cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -54,16 +45,15 @@ pub(super) fn start_capture_bake(
     key: u64,
     source_revision: i32,
 ) -> Option<CaptureBakeJob> {
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::atomic::Ordering;
 
     let object = source.iter().find(|object| object.uuid == root)?;
     let representation = object.render_representation;
     let resolution = object.gaussian_splats.resolution;
     let (sender, receiver) = std::sync::mpsc::channel();
-    let progress = std::sync::Arc::new(AtomicU32::new(0));
-    let worker_progress = progress.clone();
-    let cancel = std::sync::Arc::new(AtomicBool::new(false));
-    let worker_cancel = cancel.clone();
+    let work = super::computation::Computation::new(super::computation::Stage::Capture);
+    let worker_progress = work.progress.clone();
+    let worker_cancel = work.cancel.clone();
     let source = source.to_vec();
     std::thread::spawn(move || {
         let report = |percent: u32| {
@@ -107,9 +97,8 @@ pub(super) fn start_capture_bake(
         root,
         key,
         source_revision,
-        progress,
+        work,
         receiver,
-        cancel,
     })
 }
 
@@ -405,7 +394,7 @@ pub(super) fn prepare_group_scene_with_pending(
                 proxy.path_extrusion = None;
                 proxy.surface_inlay = None;
             }
-            GroupRenderRepresentation::ExactSdf => continue,
+            GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::PoissonMesh => continue,
         }
         if group_ids.contains(&root.uuid) {
             proxy.transform = Transform {

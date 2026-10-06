@@ -101,7 +101,7 @@ fn subtree_sample_at(
     let has_children = scene
         .iter()
         .any(|child| child.boolean_parent == Some(object.uuid));
-    let point = if let Some(mirror) = object.mirror.filter(|_| object.boolean_parent.is_none()) {
+    let point = if let Some(mirror) = object.mirror {
         mirror.fold_point(point, super::group_world_matrix(scene, object.uuid))
     } else {
         point
@@ -352,6 +352,7 @@ impl<'a> PreparedSubtreeSampler<'a> {
             && scene[root].mirror.is_none()
             && children[root].iter().all(|&index| {
                 scene[index].operation == BooleanOperation::Union && children[index].is_empty()
+                    && scene[index].mirror.is_none()
             });
         let cage_points = vec![Vec3::ZERO; lattices.len()];
         Some(Self {
@@ -437,7 +438,7 @@ impl<'a> PreparedSubtreeSampler<'a> {
     fn sample_at(&self, point: Vec3, index: usize, depth: usize) -> (f32, uuid::Uuid) {
         let object = &self.scene[index];
         let node = &self.nodes[index];
-        let point = if let Some(mirror) = object.mirror.filter(|_| object.boolean_parent.is_none())
+        let point = if let Some(mirror) = object.mirror
         {
             mirror.fold_point(point, node.group)
         } else {

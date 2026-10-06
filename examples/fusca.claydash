@@ -222,7 +222,7 @@
             },
             "name": "Rear fenders • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Custom",
@@ -398,7 +398,7 @@
             },
             "name": "1965 Volkswagen Fusca - smooth cabin shell",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.13,
             "material": {
               "kind": "Custom",
@@ -568,7 +568,7 @@
             },
             "name": "Front fenders • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Custom",
@@ -1087,7 +1087,7 @@
             },
             "name": "Black rubber tire • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -1264,7 +1264,7 @@
             },
             "name": "Black rubber tire • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -1441,7 +1441,7 @@
             },
             "name": "Ivory painted steel wheel • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -1618,7 +1618,7 @@
             },
             "name": "Ivory painted steel wheel • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -1794,7 +1794,7 @@
             },
             "name": "Polished chrome domed hubcap • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -1970,7 +1970,7 @@
             },
             "name": "Polished chrome domed hubcap • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -2169,7 +2169,7 @@
             },
             "name": "Door window rubber surround",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -2370,7 +2370,7 @@
             },
             "name": "Rear quarter window rubber surround",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -2567,7 +2567,7 @@
             },
             "name": "Door window rubber surround",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -2768,7 +2768,7 @@
             },
             "name": "Rear quarter window rubber surround",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -2965,7 +2965,7 @@
             },
             "name": "Door window reflective glass",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -3166,7 +3166,7 @@
             },
             "name": "Rear quarter window reflective glass",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -3363,7 +3363,7 @@
             },
             "name": "Door window reflective glass",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -3564,7 +3564,7 @@
             },
             "name": "Rear quarter window reflective glass",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -3757,7 +3757,7 @@
             },
             "name": "Windshield seal",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -3950,7 +3950,7 @@
             },
             "name": "Windshield glass",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -4151,7 +4151,7 @@
             },
             "name": "Rear window seal",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -4352,7 +4352,7 @@
             },
             "name": "Rear window glass",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -4527,7 +4527,7 @@
             },
             "name": "Headlight chrome bezel • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -4703,7 +4703,7 @@
             },
             "name": "Headlight convex glass lens • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -4922,7 +4922,7 @@
             },
             "name": "Front curved chrome bumper",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -5135,7 +5135,7 @@
             },
             "name": "Rear curved chrome bumper",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -5310,7 +5310,7 @@
             },
             "name": "Chrome bumper upright guard • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -5491,7 +5491,7 @@
             },
             "name": "Chrome bumper upright guard • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -5672,7 +5672,7 @@
             },
             "name": "Side chrome beltline",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -5851,7 +5851,7 @@
             },
             "name": "Rubber running board • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -6032,7 +6032,7 @@
             },
             "name": "Running board chrome edge • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -6213,7 +6213,7 @@
             },
             "name": "Side chrome beltline",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -6392,7 +6392,7 @@
             },
             "name": "Door rear seam",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -6571,7 +6571,7 @@
             },
             "name": "Door front seam",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -6750,7 +6750,7 @@
             },
             "name": "Door bottom seam",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -6929,7 +6929,7 @@
             },
             "name": "Door rear seam",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -7108,7 +7108,7 @@
             },
             "name": "Door front seam",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -7287,7 +7287,7 @@
             },
             "name": "Door bottom seam",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -7466,7 +7466,7 @@
             },
             "name": "Chrome door handle • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -7643,7 +7643,7 @@
             },
             "name": "Driver mirror stalk • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -7819,7 +7819,7 @@
             },
             "name": "Driver mirror chrome housing • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -9030,7 +9030,7 @@
             },
             "name": "Rear lamp chrome surround • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -9206,7 +9206,7 @@
             },
             "name": "Ruby red tail lamp • Z mirror",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -9387,7 +9387,7 @@
             },
             "name": "Rear engine cooling vents",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -9564,7 +9564,7 @@
                 "corner_radius": 0.009
               }
             },
-            "name": "Front registration plate",
+            "name": "1965 Volkswagen Fusca",
             "operation": "Union",
             "boolean_parent": null,
             "softness": 0.0,
@@ -9741,7 +9741,7 @@
             },
             "name": "Rear registration plate",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -9916,7 +9916,7 @@
             },
             "name": "Engine vent slot 2",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -10095,7 +10095,7 @@
             },
             "name": "Engine vent slot 3",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -10274,7 +10274,7 @@
             },
             "name": "Engine vent slot 4",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -10453,7 +10453,7 @@
             },
             "name": "Engine vent slot 5",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -10632,7 +10632,7 @@
             },
             "name": "Engine vent slot 6",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -10811,7 +10811,7 @@
             },
             "name": "Engine vent slot 7",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -10990,7 +10990,7 @@
             },
             "name": "Engine vent slot 8",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -11169,7 +11169,7 @@
             },
             "name": "Engine vent slot 9",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -11348,7 +11348,7 @@
             },
             "name": "Engine vent slot 10",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -11527,7 +11527,7 @@
             },
             "name": "Engine vent slot 11",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -11706,7 +11706,7 @@
             },
             "name": "Engine vent slot 12",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -11885,7 +11885,7 @@
             },
             "name": "Engine vent slot 13",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -12064,7 +12064,7 @@
             },
             "name": "Engine vent slot 14",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -12243,7 +12243,7 @@
             },
             "name": "Engine vent slot 15",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -12422,7 +12422,7 @@
             },
             "name": "Engine vent slot 16",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -12601,7 +12601,7 @@
             },
             "name": "Engine vent slot 17",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -12780,7 +12780,7 @@
             },
             "name": "Bonnet chrome center strip",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -12958,7 +12958,7 @@
             },
             "name": "Front plate lettering",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -13132,7 +13132,7 @@
             },
             "name": "Rear plate lettering",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -13302,7 +13302,7 @@
             },
             "name": "Side mirror mounting bases",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -14022,7 +14022,7 @@
             },
             "name": "Front quarterlight chrome divider",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",
@@ -14201,7 +14201,7 @@
             },
             "name": "Front quarterlight chrome divider",
             "operation": "Union",
-            "boolean_parent": null,
+            "boolean_parent": "6c0ae608-067e-4d00-955b-fd016eef7d88",
             "softness": 0.0,
             "material": {
               "kind": "Solid",

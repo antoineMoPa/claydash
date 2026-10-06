@@ -91,12 +91,13 @@ pub(super) fn bake_box_depth_atlas_with_progress(
     lookup.get(&root)?;
     let mut sampler = PreparedSubtreeSampler::new(scene, root)?;
     let march_factor = sampler.march_factor(modifier_gpu::lattice_march_factor);
-    let (mut minimum, mut maximum) = lattice_bounds(scene, root)?;
+    let (frame_minimum, frame_maximum) = lattice_bounds(scene, root)?;
+    let center = (frame_minimum + frame_maximum) * 0.5;
+    let (mut minimum, mut maximum) = crate::model::capture_bounds(scene, root)?;
     let world = lattice_world_matrix(scene, root);
     let deformation_extent = sampler.deformation_extent(world.inverse());
     minimum -= deformation_extent;
     maximum += deformation_extent;
-    let center = (minimum + maximum) * 0.5;
     let half_extent = (maximum - minimum) * 0.5;
     if !center.is_finite() || !half_extent.is_finite() || half_extent.min_element() <= 0.0 {
         return None;
@@ -112,10 +113,17 @@ pub(super) fn bake_box_depth_atlas_with_progress(
     }
     let clearance = match start {
         BoxCaptureStart::AtBounds => 0.0,
-        BoxCaptureStart::OutsideBounds => 0.5 / world_scale,
+        // A fixed half-unit border can dwarf thin objects: every ray then
+        // misses between pixels, despite a perfectly valid closed surface.
+        // Bounds already include geometry padding and deformation extents.
+        BoxCaptureStart::OutsideBounds => (0.5 / world_scale)
+            .min(half_extent.min_element() * 0.25)
+            .max(0.001 / world_scale),
     };
-    let local_min = -half_extent - Vec3::splat(clearance);
-    let local_max = half_extent + Vec3::splat(clearance);
+    // Keep the existing lattice-centered frame used by atlas consumers; the
+    // capture range can be asymmetric when mirrors extend beyond that cage.
+    let local_min = minimum - center - Vec3::splat(clearance);
+    let local_max = maximum - center + Vec3::splat(clearance);
     let face_size = resolution as usize * resolution as usize;
     let mut texels = vec![[-1.0, 0.0, 0.0, 0.0]; texel_count];
     let mut owners = vec![None; texel_count];

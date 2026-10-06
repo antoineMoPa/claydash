@@ -75,6 +75,13 @@ pub(super) fn draw_file_menu(
                     action = Some(FileMenuAction::SaveAs);
                     ui.close();
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                ui.menu_button("Export", |ui| {
+                    if ui.button("Glb…").on_hover_text("Export the selected objects or Boolean subtrees; export the whole scene when nothing is selected.").clicked() {
+                        action = Some(FileMenuAction::ExportGlb);
+                        ui.close();
+                    }
+                });
             });
             draw_edit_menu(ui, tree, document.error().is_some());
             ui.menu_button("Panels", |ui| {

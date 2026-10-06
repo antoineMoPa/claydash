@@ -1,4 +1,5 @@
 use super::*;
+use crate::renderer::computation::{self, Stage};
 
 pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
     ui.separator();
@@ -25,6 +26,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     let saved_splats = scene[index].gaussian_splats;
     let saved_mode = scene[index].render_representation;
     let mut selected_mode = saved_mode;
+    let mut optimization_percent = None;
     let capture_revision = tree
         .path_version("scene.sdf_objects")
         .wrapping_add(tree.path_version("scene.materials"))
@@ -37,22 +39,31 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                     .on_hover_text(mode.description());
             }
         });
-    if selected_mode == crate::model::GroupRenderRepresentation::GaussianSplats {
+    if matches!(selected_mode, crate::model::GroupRenderRepresentation::GaussianSplats | crate::model::GroupRenderRepresentation::PoissonMesh) {
         let settings = &mut scene[index].gaussian_splats;
         ui.horizontal(|ui| {
-            ui.label("Splat resolution").on_hover_text("Grid of rays from each of the six bounding-box sides. Higher resolution preserves more detail and uses more memory. Click Recompute to apply. Limited by available GPU storage.");
+            ui.label(if selected_mode == crate::model::GroupRenderRepresentation::PoissonMesh { "Sample resolution" } else { "Splat resolution" }).on_hover_text("Grid of rays from each of the six bounding-box sides. Higher resolution preserves more detail and uses more memory. Click Recompute to apply.");
             ui.add(egui::DragValue::new(&mut settings.resolution).update_while_editing(false)
                 .range(1..=u32::MAX).speed(1.0));
         });
-        let status = if selected_mode == saved_mode {
+        let status = if selected_mode == saved_mode && selected_mode == crate::model::GroupRenderRepresentation::GaussianSplats {
             crate::renderer::depth_accelerator_status(ui.ctx(), &scene, target, capture_revision)
         } else { crate::renderer::DepthAcceleratorStatus::NotComputedYet };
-        recompute_button(ui, target, false);
-        ui.weak(match status {
+        if selected_mode == crate::model::GroupRenderRepresentation::GaussianSplats {
+            recompute_button(ui, target, matches!(status, crate::renderer::DepthAcceleratorStatus::Baking(_)));
+            if let crate::renderer::DepthAcceleratorStatus::Baking(percent) = status {
+                optimization_percent = Some(percent);
+            }
+        }
+        if selected_mode == crate::model::GroupRenderRepresentation::GaussianSplats { ui.weak(match status {
             crate::renderer::DepthAcceleratorStatus::Ready => "100%".to_owned(),
             crate::renderer::DepthAcceleratorStatus::Baking(percent) => format!("{percent}%"),
             crate::renderer::DepthAcceleratorStatus::NotComputedYet => "0%".to_owned(),
-        });
+        }); }
+        #[cfg(not(target_arch = "wasm32"))]
+        if selected_mode == crate::model::GroupRenderRepresentation::PoissonMesh {
+            poisson_mesh_controls(ui, target);
+        }
     }
     if selected_mode.is_depth_accelerator() {
         let settings = match selected_mode {
@@ -120,36 +131,39 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             status,
             Some(NeuralStatus::Pending | NeuralStatus::Training { .. })
         );
-        ui.horizontal(|ui| {
-            recompute_button(ui, target, computing);
-            if computing && ui.button("Cancel").on_hover_text("Stop this group's neural optimization bake. The exact SDF will be shown.").clicked() {
-                ui.ctx().data_mut(|data| {
-                    let id = egui::Id::new("group-optimization-cancel");
-                    let mut requests = data.get_temp::<std::collections::HashSet<uuid::Uuid>>(id).unwrap_or_default();
-                    requests.insert(target);
-                    data.insert_temp(id, requests);
-                });
-                ui.ctx().request_repaint();
-            }
-        });
+        recompute_button(ui, target, computing);
         match status {
             Some(NeuralStatus::Ready { .. }) => {
                 ui.weak("100%");
             }
             Some(NeuralStatus::Failed(_)) => {}
             Some(NeuralStatus::Training { percent }) => {
+                optimization_percent = Some(percent);
                 ui.weak(format!("{percent}%"));
+            }
+            Some(NeuralStatus::Pending) => {
+                optimization_percent = Some(0);
+                ui.weak("0%");
             }
             _ => {
                 ui.weak("0%");
             }
         }
     }
-    if selected_mode.is_depth_accelerator() {
+    if selected_mode.is_depth_accelerator() || matches!(selected_mode,
+        crate::model::GroupRenderRepresentation::BoxDepthAtlas | crate::model::GroupRenderRepresentation::SphereDepthAtlas) {
         let status = if selected_mode == saved_mode {
             crate::renderer::depth_accelerator_status(ui.ctx(), &scene, target, capture_revision)
         } else { crate::renderer::DepthAcceleratorStatus::NotComputedYet };
+        recompute_button(ui, target, matches!(status, crate::renderer::DepthAcceleratorStatus::Baking(_)));
         ui.weak(status.label());
+        if let crate::renderer::DepthAcceleratorStatus::Baking(percent) = status {
+            optimization_percent = Some(percent);
+        }
+    }
+    if selected_mode != crate::model::GroupRenderRepresentation::PoissonMesh {
+        optimization_remaining(ui, target, optimization_percent.is_some(),
+            if selected_mode == crate::model::GroupRenderRepresentation::NeuralSdf { Stage::Training } else { Stage::Capture });
     }
     if selected_mode != scene[index].render_representation
         || saved_splats != scene[index].gaussian_splats
@@ -163,10 +177,93 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     }
 }
 
-fn recompute_button(ui: &mut egui::Ui, target: uuid::Uuid, computing: bool) {
-    if ui.add_enabled(!computing, egui::Button::new("Recompute")).on_hover_text("Restart this group's bake using the current settings. Exact SDF is shown until the result is ready.").clicked() {
+#[cfg(not(target_arch = "wasm32"))]
+fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid) {
+    use crate::renderer::poisson_mesh::{PoissonMeshAction, PoissonMeshStatus};
+    let mut status = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, PoissonMeshStatus>>(
+        egui::Id::new("poisson-mesh-status")))
+        .and_then(|statuses| statuses.get(&target).cloned());
+    ui.label(RichText::new("Poisson mesh").strong());
+    let busy = matches!(status, Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing));
+    let mut action = None;
+    match computation_buttons(ui, busy) {
+        Some(ComputationAction::Recompute) => {
+            action = Some(PoissonMeshAction::Build(target));
+            status = Some(PoissonMeshStatus::Sampling { percent: 0 });
+        }
+        Some(ComputationAction::Cancel) => {
+            action = Some(PoissonMeshAction::Cancel(target));
+            status = None;
+        }
+        None => {}
+    }
+    let stage = if matches!(status, Some(PoissonMeshStatus::Reconstructing)) {
+        Stage::Reconstruction
+    } else { Stage::Sampling };
+    let active = matches!(status, Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing));
+    match status {
+        Some(PoissonMeshStatus::Sampling { percent, .. }) => { ui.weak(format!("Capturing surface samples · {percent}%")); }
+        Some(PoissonMeshStatus::Reconstructing) => {
+            ui.weak("Reconstructing mesh");
+        }
+        Some(PoissonMeshStatus::Ready { vertices, triangles, showing, available, .. }) => {
+            ui.weak(format!("{vertices} vertices · {triangles} triangles"));
+            if available {
+                let label = if showing { "Show exact source" } else { "Show mesh" };
+                if ui.button(label).clicked() {
+                    action = Some(if showing { PoissonMeshAction::Hide(target) } else { PoissonMeshAction::Show(target) });
+                }
+            } else {
+                ui.weak("The mesh is ready, but this renderer cannot currently display it in the viewport.");
+            }
+        }
+        Some(PoissonMeshStatus::Failed(error)) => { ui.colored_label(ui.visuals().error_fg_color, error); }
+        None => { ui.weak("Click Recompute to build a mesh from the source surface."); }
+    }
+    optimization_remaining(ui, target, active, stage);
+    if let Some(action) = action {
         ui.ctx().data_mut(|data| {
-            let id = egui::Id::new("group-optimization-recompute");
+            let id = egui::Id::new("poisson-mesh-actions");
+            let mut actions = data.get_temp::<Vec<PoissonMeshAction>>(id).unwrap_or_default();
+            actions.push(action);
+            data.insert_temp(id, actions);
+        });
+        ui.ctx().request_repaint();
+    }
+}
+
+fn optimization_remaining(ui: &mut egui::Ui, target: uuid::Uuid, active: bool, stage: Stage) {
+    if !active { return; }
+    let snapshot = ui.ctx().data(|data| data.get_temp::<computation::Statuses>(computation::status_id()))
+        .and_then(|statuses| statuses.get(&target).filter(|status| status.stage == stage).cloned());
+    ui.weak(snapshot.map_or_else(|| "Estimating time remaining…".into(), |status| status.remaining_label()));
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+}
+
+#[derive(Clone, Copy)]
+enum ComputationAction { Recompute, Cancel }
+
+fn computation_buttons(ui: &mut egui::Ui, computing: bool) -> Option<ComputationAction> {
+    let mut action = None;
+    ui.horizontal(|ui| {
+        if ui.add_enabled(!computing, egui::Button::new("Recompute"))
+            .on_hover_text("Compute using the current settings. Runs only when clicked.").clicked() {
+            action = Some(ComputationAction::Recompute);
+        }
+        if computing && ui.button("Cancel").on_hover_text("Cancel this computation.").clicked() {
+            action = Some(ComputationAction::Cancel);
+        }
+    });
+    action
+}
+
+fn recompute_button(ui: &mut egui::Ui, target: uuid::Uuid, computing: bool) {
+    if let Some(action) = computation_buttons(ui, computing) {
+        ui.ctx().data_mut(|data| {
+            let id = egui::Id::new(match action {
+                ComputationAction::Recompute => "group-optimization-recompute",
+                ComputationAction::Cancel => "group-optimization-cancel",
+            });
             let mut requests = data.get_temp::<std::collections::HashSet<uuid::Uuid>>(id).unwrap_or_default();
             requests.insert(target);
             data.insert_temp(id, requests);

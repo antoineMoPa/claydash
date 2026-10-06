@@ -291,6 +291,7 @@ impl Renderer {
             } else {
                 &self.pipeline
             };
+            let mesh_vertex_count = if self.mesh_is_visible() { self.mesh_vertex_count } else { 0 };
             let readback = self.viewport.encode(
                 &self.device,
                 &self.queue,
@@ -299,14 +300,18 @@ impl Renderer {
                 pipeline,
                 &self.bind_group,
                 self.hybrid_enabled.then(|| crate::viewport::HybridPass {
-                    depth_pipeline: self
+                    depth_pipeline: Some(self
                         .hybrid_depth_pipeline
                         .as_ref()
-                        .expect("hybrid depth pipeline"),
+                        .expect("hybrid depth pipeline")),
                     splat_pipeline: &self.splat_pipeline,
                     splat_bind_group: &self.splat_camera_bind_group,
                     splat_buffer: &self.splat_buffer,
                     splat_count: self.splat_instances.len() as u32,
+                    mesh_pipeline: &self.mesh_pipeline,
+                    mesh_bind_group: &self.bind_group,
+                    mesh_buffer: &self.mesh_buffer,
+                    mesh_vertex_count,
                 }),
                 Some(crate::viewport::DeferredPass {
                     geometry_pipeline: &self
@@ -552,6 +557,7 @@ impl Renderer {
                     &self.pipeline
                 }
             };
+            let mesh_vertex_count = if self.mesh_is_visible() { self.mesh_vertex_count } else { 0 };
             let readback = self.viewport.encode(
                 &self.device,
                 &self.queue,
@@ -560,14 +566,18 @@ impl Renderer {
                 pipeline,
                 &self.bind_group,
                 self.hybrid_enabled.then(|| crate::viewport::HybridPass {
-                    depth_pipeline: self
+                    depth_pipeline: Some(self
                         .hybrid_depth_pipeline
                         .as_ref()
-                        .expect("hybrid depth pipeline"),
+                        .expect("hybrid depth pipeline")),
                     splat_pipeline: &self.splat_pipeline,
                     splat_bind_group: &self.splat_camera_bind_group,
                     splat_buffer: &self.splat_buffer,
                     splat_count: self.splat_instances.len() as u32,
+                    mesh_pipeline: &self.mesh_pipeline,
+                    mesh_bind_group: &self.bind_group,
+                    mesh_buffer: &self.mesh_buffer,
+                    mesh_vertex_count,
                 }),
                 deferred.then(|| crate::viewport::DeferredPass {
                     geometry_pipeline: &self

@@ -272,6 +272,7 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
                     assert!(prepared.sphere_depth_atlases.contains_key(&box_id));
                 }
                 GroupRenderRepresentation::ExactSdf
+                | GroupRenderRepresentation::PoissonMesh
                 | GroupRenderRepresentation::NeuralSdf
                 | GroupRenderRepresentation::SphereAccelerator
                 | GroupRenderRepresentation::BoxAccelerator => {
@@ -290,7 +291,9 @@ fn gaussian_capture_starts_outside_planar_bounds_without_moving_the_surface() {
         bake_box_depth_atlas(&source, source[0].uuid, 32, BoxCaptureStart::AtBounds).unwrap();
     let splats =
         bake_box_depth_atlas(&source, source[0].uuid, 32, BoxCaptureStart::OutsideBounds).unwrap();
-    assert!((splats.local_max.x - ordinary.local_max.x - 0.5).abs() < 0.0001);
+    let clearance = splats.local_max.x - ordinary.local_max.x;
+    assert!(clearance > 0.0 && clearance <= 0.5,
+        "outside capture needs a positive border that fits the object");
     let center_pixel = 16 * 32 + 16;
     let before = ordinary.texels[center_pixel][0];
     let after = splats.texels[center_pixel][0];

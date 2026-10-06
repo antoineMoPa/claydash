@@ -367,6 +367,8 @@ impl App {
             pending_render: None,
             #[cfg(not(target_arch = "wasm32"))]
             encoding: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            mesh_export: None,
             #[cfg(target_arch = "wasm32")]
             pending_render: None,
             #[cfg(target_arch = "wasm32")]

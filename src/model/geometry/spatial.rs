@@ -359,6 +359,15 @@ pub fn lattice_world_matrix(scene: &[SdfObject], id: uuid::Uuid) -> Mat4 {
 }
 
 pub fn lattice_bounds(scene: &[SdfObject], root: uuid::Uuid) -> Option<(Vec3, Vec3)> {
+    subtree_bounds(scene, root, false)
+}
+
+/// Capture all reflected copies without changing the editable lattice frame.
+pub(crate) fn capture_bounds(scene: &[SdfObject], root: uuid::Uuid) -> Option<(Vec3, Vec3)> {
+    subtree_bounds(scene, root, true)
+}
+
+fn subtree_bounds(scene: &[SdfObject], root: uuid::Uuid, include_mirrors: bool) -> Option<(Vec3, Vec3)> {
     let root_inverse = lattice_world_matrix(scene, root).inverse();
     let mut minimum = Vec3::splat(f32::INFINITY);
     let mut maximum = Vec3::splat(f32::NEG_INFINITY);
@@ -429,8 +438,37 @@ pub fn lattice_bounds(scene: &[SdfObject], root: uuid::Uuid) -> Option<(Vec3, Ve
         let half = matrix.x_axis.truncate().abs() * extent.x
             + matrix.y_axis.truncate().abs() * extent.y
             + matrix.z_axis.truncate().abs() * extent.z;
-        minimum = minimum.min(center - half);
-        maximum = maximum.max(center + half);
+        let mut part_min = center - half;
+        let mut part_max = center + half;
+        if include_mirrors {
+            let mut ancestor = Some(object.uuid);
+            for _ in 0..scene.len() {
+                let Some(node) = ancestor.and_then(|id| scene.iter().find(|node| node.uuid == id)) else { break };
+                if let Some(mirror) = node.mirror {
+                    let frame = root_inverse * group_world_matrix(scene, node.uuid);
+                    let inverse = frame.inverse();
+                    let center = (part_min + part_max) * 0.5;
+                    let half = (part_max - part_min) * 0.5;
+                    for mask in 1..8 {
+                        if (0..3).any(|axis| mask & (1 << axis) != 0 && !mirror.axes[axis]) { continue; }
+                        let signs = Vec3::from_array(std::array::from_fn(|axis| {
+                            if mask & (1 << axis) != 0 { -1.0 } else { 1.0 }
+                        }));
+                        let reflected = frame * Mat4::from_scale(signs) * inverse;
+                        let reflected_center = reflected.transform_point3(center);
+                        let reflected_half = reflected.x_axis.truncate().abs() * half.x
+                            + reflected.y_axis.truncate().abs() * half.y
+                            + reflected.z_axis.truncate().abs() * half.z;
+                        part_min = part_min.min(reflected_center - reflected_half);
+                        part_max = part_max.max(reflected_center + reflected_half);
+                    }
+                }
+                if node.uuid == root { break; }
+                ancestor = node.boolean_parent;
+            }
+        }
+        minimum = minimum.min(part_min);
+        maximum = maximum.max(part_max);
     }
     if !minimum.is_finite() {
         return None;

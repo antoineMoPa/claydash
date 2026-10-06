@@ -355,8 +355,9 @@ impl Renderer {
             shader_features,
             false,
         );
-        let (splat_pipeline, splat_camera_buffer, splat_camera_bind_group, splat_buffer) =
+        let (splat_pipeline, mesh_pipeline, splat_camera_buffer, splat_camera_bind_group, splat_buffer, mesh_buffer) =
             hybrid_splats::create_splat_resources(&device, render_format);
+        let mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(&device, &pipeline_layout, render_format);
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
             render_format,
@@ -405,6 +406,14 @@ impl Renderer {
             deferred_geometry_pipeline: None,
             deferred_supported: true,
             splat_pipeline,
+            mesh_pipeline,
+            mesh_background_pipeline,
+            mesh_buffer,
+            mesh_vertex_count: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            poisson_bake_pipeline: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            poisson_mesh: Default::default(),
             splat_camera_buffer,
             splat_camera_bind_group,
             splat_instances: Vec::new(),
@@ -440,6 +449,7 @@ impl Renderer {
             uploaded_scene_versions: [i32::MIN; 2],
             neural_jobs: Default::default(),
             group_compute_requests: Default::default(),
+            cancelled_capture_keys: Default::default(),
             group_capture_cache: std::collections::HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             group_capture_bake: None,

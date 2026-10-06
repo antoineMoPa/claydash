@@ -462,6 +462,9 @@ impl UiState {
         self.ghosts = boolean_overlay::Ghosts::default();
         self.active_guide = None;
         self.resize_guide_drag = None;
+        self.lattice_drag = None;
+        self.bezier_drag = None;
+        self.polygon_cap_drag = None;
         self.insert_keyframe_menu_position = None;
     }
 

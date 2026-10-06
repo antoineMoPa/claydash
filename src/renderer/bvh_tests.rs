@@ -1,6 +1,117 @@
 use super::*;
 
 #[test]
+fn top_level_union_splits_nested_subtraction_into_independent_bvh_leaves() {
+    let mut objects = vec![GpuObject::zeroed(); 11];
+    objects[0].meta[3] = 2;
+    objects[1].meta[3] = 2;
+    objects[1].meta[2] = 1; // Subtraction stays inside its child component.
+    objects[2].meta[3] = 10;
+    for object in &mut objects[3..10] { object.meta[3] = 10; }
+    objects[10].meta[3] = -1;
+    let original_bounds: Vec<_> = (0..11).map(|index| ObjectBound {
+        center: Vec3::new(index as f32, 0.0, 0.0),
+        half_extent: Vec3::ONE, radius: Vec3::ONE.length(), object_index: index as u32,
+    }).collect();
+    let mut component_bounds = boolean_component_bounds(&objects, &original_bounds);
+    assert!(component_bounds[10].unwrap().half_extent.x > 1.0);
+    let eligible = [10].into_iter().collect();
+    assert_eq!(split_top_level_hard_unions(&mut objects, &eligible,
+        &original_bounds, &mut component_bounds), 1);
+    assert_eq!(objects[0].meta[3], 2);
+    assert_eq!(objects[1].meta[3], 2);
+    assert_eq!(objects[1].meta[2], 1);
+    assert!(objects[2..=10].iter().all(|object| object.meta[3] == -1));
+    assert_eq!(component_bounds[10].unwrap().half_extent, Vec3::ONE);
+    assert_eq!(mark_component_evaluation(&mut objects, 0, 2), 2);
+    assert_eq!(mark_component_evaluation(&mut objects, 10, 10), 1);
+}
+
+#[test]
+fn top_level_split_rejects_blend_modifiers_and_capture_subtrees() {
+    let base = {
+        let mut objects = vec![GpuObject::zeroed(); 9];
+        for child in &mut objects[..8] { child.meta[3] = 8; }
+        objects[8].meta[3] = -1;
+        objects
+    };
+    let bounds = vec![ObjectBound { center: Vec3::ZERO, half_extent: Vec3::ONE,
+        radius: Vec3::ONE.length(), object_index: 0 }; 9];
+    for obstruction in ["blend", "subtract", "repeat", "mirror", "capture"] {
+        let mut objects = base.clone();
+        match obstruction {
+            "blend" => objects[8].component[2] = 0.2_f32.to_bits(),
+            "subtract" => objects[3].meta[2] = 1,
+            "repeat" => objects[8].repeat_count[3] = 1,
+            "mirror" => objects[8].mirror_axes[0] = 1,
+            "capture" => objects[2].operand_tree[3] = 0.2_f32.to_bits(),
+            _ => unreachable!(),
+        }
+        let mut component_bounds = boolean_component_bounds(&objects, &bounds);
+        assert_eq!(split_top_level_hard_unions(&mut objects, &[8].into_iter().collect(),
+            &bounds, &mut component_bounds), 0, "{obstruction}");
+        assert_eq!(objects[3].meta[3], 8, "{obstruction}");
+    }
+}
+
+#[test]
+fn grouped_fusca_keeps_mirrored_child_components_bounded_on_both_sides() {
+    let scene = crate::document::deserialize_scene(include_bytes!("../../examples/fusca.claydash"))
+        .expect("Fusca scene");
+    let source = match scene.get_path("sdf_objects") {
+        crate::model::ClaydashValue::VecSDFObject(objects) => objects,
+        _ => panic!("Fusca objects missing"),
+    };
+    let ordered = boolean_postorder(&source);
+    let indices: std::collections::HashMap<_, _> = ordered.iter().enumerate()
+        .map(|(index, object)| (object.uuid, index)).collect();
+    let mut gpu = vec![GpuObject::zeroed(); ordered.len()];
+    for (index, object) in ordered.iter().enumerate() {
+        gpu[index].meta[3] = object.boolean_parent
+            .map_or(-1, |parent| indices[&parent] as i32);
+        gpu[index].meta[2] = object.operation.gpu_code();
+        gpu[index].component[2] = object.softness.to_bits();
+        if let Some(mirror) = object.mirror {
+            gpu[index].mirror_axes[..3].copy_from_slice(&mirror.axes.map(u32::from));
+        }
+    }
+    let root = gpu.len() - 1;
+    assert_eq!(ordered[root].boolean_parent, None);
+    let mirror_index = ordered.iter().position(|object| {
+        object.boolean_parent == Some(ordered[root].uuid)
+            && object.mirror.is_some_and(|mirror| mirror.axes[2])
+    }).expect("direct mirrored car part");
+    let group = crate::model::group_world_matrix(&source, ordered[mirror_index].uuid);
+    let mirror_center = group.transform_point3(Vec3::new(0.0, 0.0, 3.0));
+    let primitive_bounds: Vec<_> = (0..gpu.len()).map(|index| ObjectBound {
+        center: if index == mirror_index { mirror_center } else { Vec3::ZERO },
+        half_extent: Vec3::splat(0.2), radius: 0.4, object_index: index as u32,
+    }).collect();
+    let mut components = boolean_component_bounds(&gpu, &primitive_bounds);
+    for mode in [crate::model::GroupRenderRepresentation::ExactSdf,
+        crate::model::GroupRenderRepresentation::PoissonMesh] {
+        let mut fallback_gpu = gpu.clone();
+        let mut fallback_bounds = components.clone();
+        let eligible = if union_split_supports_source_mode(mode) {
+            [root].into_iter().collect()
+        } else { std::collections::HashSet::new() };
+        assert_eq!(split_top_level_hard_unions(&mut fallback_gpu, &eligible,
+            &primitive_bounds, &mut fallback_bounds), 1, "{mode:?} fallback lost BVH splitting");
+        assert_eq!(fallback_gpu.iter().filter(|object| object.meta[3] < 0).count(), 67);
+    }
+    assert_eq!(split_top_level_hard_unions(&mut gpu, &[root].into_iter().collect(),
+        &primitive_bounds, &mut components), 1);
+    assert_eq!(gpu.iter().filter(|object| object.meta[3] < 0).count(), 67);
+    let mirror = ordered[mirror_index].mirror.unwrap();
+    let expanded = mirrored_bound(components[mirror_index].unwrap(), group, mirror);
+    let inverse = group.inverse();
+    let local_min = inverse.transform_point3(expanded.center - expanded.half_extent);
+    let local_max = inverse.transform_point3(expanded.center + expanded.half_extent);
+    assert!(local_min.z <= -2.8 && local_max.z >= 2.8,
+        "detached mirrored component must cover both copies");
+}
+
+#[test]
 fn operand_bvh_indexes_safe_flat_union_children() {
     let mut objects = vec![GpuObject::zeroed(); 9];
     for (index, object) in objects.iter_mut().take(8).enumerate() {

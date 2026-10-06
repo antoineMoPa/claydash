@@ -1045,12 +1045,13 @@ fn combine_operand(value: vec2<f32>, child: vec2<f32>, operand: Object, group: O
 
 // Inlays evaluate a host Boolean component from its native SDF primitives.
 // Hosts with spatial modifiers are excluded by the editor and scene validator.
-fn inlay_host_distance(point: vec3<f32>, host_index: u32) -> f32 {
-    let host = objects[host_index];
-    let start = host.component.x;
-    let root = host.component.y;
+fn inlay_host_distance(point: vec3<f32>, host_index: u32, program: vec2<f32>) -> f32 {
+    let packed_start = bitcast<u32>(program.x);
+    let start = packed_start & 0x7fffffffu;
+    let root = host_index;
+    let parents_offset = bitcast<u32>(program.y);
     let parent = objects[root];
-    if parent.state.w == FLAT_UNION_ROOT || parent.state.w == FLAT_COMPONENT_ROOT {
+    if (packed_start & 0x80000000u) != 0u {
         var value = vec2(base_object_distance_at(point, parent), f32(root));
         for (var i = start; i < root; i++) {
             let child = objects[i];
@@ -1064,7 +1065,7 @@ fn inlay_host_distance(point: vec3<f32>, host_index: u32) -> f32 {
         values[i - start] = vec2(base_object_distance_at(point, objects[i]), f32(i));
     }
     for (var i = start; i < root; i++) {
-        let parent = u32(objects[i].state.w) - start;
+        let parent = bitcast<u32>(polygon_points[parents_offset + i].x) - start;
         let child = values[i - start];
         values[parent] = combine_operand(values[parent], child, objects[i], objects[parent + start]);
     }
@@ -1075,8 +1076,9 @@ fn object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
     let distance = base_object_distance_at(sample_point, object);
     if object.state.y == 6 || object.mirror_axes.w == 0u { return distance; }
     if object.mirror_axes.w == 0xffffffffu { return 100.0; }
-    let host_distance = inlay_host_distance(sample_point, object.mirror_axes.w - 1u);
-    let inlay = polygon_points[bitcast<u32>(object.repeat_spacing.w)];
+    let offset = bitcast<u32>(object.repeat_spacing.w);
+    let host_distance = inlay_host_distance(sample_point, object.mirror_axes.w - 1u, polygon_points[offset + 1u]);
+    let inlay = polygon_points[offset];
     return max(distance, abs(host_distance - inlay.x) - inlay.y);
 }
 
@@ -2036,7 +2038,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
     let ray = select(normalize(far_point - camera.position.xyz),
         normalize(far_point - near_point), camera.count.w != 0u);
     let origin = select(camera.position.xyz, near_point, camera.count.w != 0u);
-    let hit = trace_objects(origin, ray, 0.003, empty_splat_exclusions(), true);
+    let hit = trace_objects(origin, ray, 0.003, empty_splat_exclusions(), HYBRID_SPLATS);
     if hit.y < 0.0 { return 1.0; }
     let clip = camera.view_projection * vec4(origin + ray * hit.x, 1.0);
     return clamp(clip.z / clip.w, 0.0, 1.0);

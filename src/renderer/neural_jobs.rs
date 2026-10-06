@@ -1,5 +1,6 @@
 use super::neural_sdf::{payload_records, GpuTrainingJob, NeuralField};
 use super::*;
+use super::computation::{Computation, Stage};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 #[derive(Clone, PartialEq)]
@@ -31,19 +32,9 @@ struct Active {
     generation: u64,
     #[cfg(not(target_arch = "wasm32"))]
     receiver: std::sync::mpsc::Receiver<Result<NeuralField, &'static str>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    cancel: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(not(target_arch = "wasm32"))]
-    progress: Arc<std::sync::atomic::AtomicU32>,
+    work: Computation,
     #[cfg(target_arch = "wasm32")]
     job: Option<GpuTrainingJob>,
-}
-impl Drop for Active {
-    fn drop(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        self.cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
 }
 #[derive(Default)]
 pub(super) struct NeuralJobs {
@@ -71,6 +62,9 @@ impl NeuralJobs {
                 object.saved_neural_field = entry
                     .field
                     .as_ref()
+                    // A pending run may display a fallback field. It is not
+                    // a completed bake of the newly requested settings.
+                    .filter(|_| !matches!(entry.status, NeuralStatus::Pending | NeuralStatus::Training { .. }))
                     .map(|field| Arc::new(field.saved(key, entry.training)));
             } else if !object
                 .saved_neural_field
@@ -164,9 +158,7 @@ impl NeuralJobs {
                 .is_some_and(|e| e.key == active.key && e.generation == active.generation)
             {
                 #[cfg(not(target_arch = "wasm32"))]
-                active
-                    .cancel
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                active.work.cancel();
                 // Keep the worker slot until it acknowledges cancellation.
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -206,9 +198,7 @@ impl NeuralJobs {
         if let Some(active) = &self.active {
             if active.root == root {
                 #[cfg(not(target_arch = "wasm32"))]
-                active
-                    .cancel
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                active.work.cancel();
                 #[cfg(target_arch = "wasm32")]
                 {
                     self.active = None;
@@ -232,9 +222,7 @@ impl NeuralJobs {
         if let Some(active) = &self.active {
             if active.root == root {
                 #[cfg(not(target_arch = "wasm32"))]
-                active
-                    .cancel
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                active.work.cancel();
                 #[cfg(target_arch = "wasm32")]
                 {
                     self.active = None;
@@ -270,7 +258,7 @@ impl NeuralJobs {
                 Err(error) => Some(Err(error)),
             };
             #[cfg(not(target_arch = "wasm32"))]
-            let percent = active.progress.load(std::sync::atomic::Ordering::Relaxed);
+            let percent = active.work.percent();
             #[cfg(target_arch = "wasm32")]
             let percent = active
                 .job
@@ -344,10 +332,9 @@ impl NeuralJobs {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let (sender, receiver) = std::sync::mpsc::channel();
-                    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    let cancelled = cancel.clone();
-                    let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
-                    let worker_progress = progress.clone();
+                    let work = Computation::new(Stage::Training);
+                    let cancelled = work.cancel.clone();
+                    let worker_progress = work.progress.clone();
                     std::thread::spawn(move || {
                         let mut job = job;
                         let result = (|| loop {
@@ -370,8 +357,7 @@ impl NeuralJobs {
                         key,
                         generation,
                         receiver,
-                        cancel,
-                        progress,
+                        work,
                     });
                 }
                 #[cfg(target_arch = "wasm32")]
@@ -381,6 +367,7 @@ impl NeuralJobs {
                         key,
                         generation,
                         job: Some(job),
+                        work: Computation::new(Stage::Training),
                     });
                 }
             }
@@ -406,6 +393,14 @@ impl NeuralJobs {
             .filter_map(|(id, e)| e.field.clone().map(|f| (*id, f)))
             .collect()
     }
+    pub fn computation_status(&self) -> Option<(uuid::Uuid, super::computation::Snapshot)> {
+        let active = self.active.as_ref()?;
+        let entry = self.entries.get(&active.root)?;
+        if entry.generation != active.generation || active.work.is_cancelled() { return None; }
+        let NeuralStatus::Training { percent } = entry.status else { return None; };
+        Some((active.root, active.work.snapshot(Stage::Training, Some(percent))))
+    }
+
     pub fn publish(&self, context: &egui::Context) {
         let statuses: HashMap<uuid::Uuid, NeuralStatus> = self
             .entries
@@ -642,14 +637,14 @@ mod tests {
         jobs.reconcile(&source);
         let key = jobs.entries[&id].key;
         let (sender, receiver) = std::sync::mpsc::channel();
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let work = Computation::new(Stage::Training);
+        let cancel = work.cancel.clone();
         jobs.active = Some(Active {
             root: id,
             key,
             generation: jobs.entries[&id].generation,
             receiver,
-            cancel: cancel.clone(),
-            progress: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            work,
         });
         source[0].transform.scale *= 2.0;
         jobs.reconcile(&source);
@@ -710,14 +705,14 @@ mod tests {
         let key = jobs.entries[&id].key;
         let generation = jobs.entries[&id].generation;
         let (sender, receiver) = std::sync::mpsc::channel();
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let work = Computation::new(Stage::Training);
+        let cancel = work.cancel.clone();
         jobs.active = Some(Active {
             root: id,
             key,
             generation,
             receiver,
-            cancel: cancel.clone(),
-            progress: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            work,
         });
         let mut edited = source.clone();
         edited[0].neural_sdf.training.width = 16;
@@ -748,8 +743,7 @@ mod tests {
             key,
             generation: jobs.entries[&id].generation,
             receiver,
-            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            progress: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            work: Computation::new(Stage::Training),
         });
         sender.send(Ok(field)).unwrap();
         assert!(jobs.poll(|_, _| panic!("unexpected training request")));
@@ -781,9 +775,16 @@ impl Renderer {
     }
 
     pub(crate) fn reset_optimized_fields(&mut self) {
+        self.viewport.reset_for_scene();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.poisson_mesh = Default::default();
+            self.mesh_vertex_count = 0;
+        }
         self.neural_jobs = NeuralJobs::default();
         self.group_capture_cache.clear();
         self.group_compute_requests.clear();
+        self.cancelled_capture_keys.clear();
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.group_capture_bake = None;

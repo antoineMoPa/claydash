@@ -57,10 +57,11 @@ pub(super) fn append_operand_bvhs(
         if bounds.len() < 8 {
             continue;
         }
-        // For cheap undeformed primitives the extra exception scan costs more
-        // than it saves. Keep their existing linear path when the tree cannot
-        // cover every operand; shared cage evaluations justify a partial tree.
-        if parent.modifier[0] == 0 && bounds.len() != children.len() {
+        // For small undeformed groups the extra exception scan costs more
+        // than it saves. Large groups still benefit from a partial tree when
+        // a loft or another operand has no conservative sphere bound.
+        if parent.modifier[0] == 0 && bounds.len() != children.len()
+            && children.len() < 32 {
             continue;
         }
         let offset = nodes.len() as u32;
@@ -149,6 +150,51 @@ pub(super) fn flatten_nested_hard_unions(objects: &mut [GpuObject]) {
         }
         start = root + 1;
     }
+}
+
+pub(super) fn union_split_supports_source_mode(mode: crate::model::GroupRenderRepresentation) -> bool {
+    use crate::model::GroupRenderRepresentation;
+    // Poisson selection does not replace geometry until a mesh is shown.
+    // The caller separately excludes displayed mesh components. Keep the
+    // exact fallback accelerated while uncomputed, hidden, or rebuilding.
+    matches!(mode, GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::PoissonMesh)
+}
+
+// A hard union at the scene root is the minimum of its own primitive and each
+// direct child subtree. Detach those subtrees only in the GPU copy so the
+// scene BVH can cull them independently. Each child keeps its internal CSG.
+// The caller marks roots whose source transforms, capture state and inlay
+// references permit this rewrite.
+pub(super) fn split_top_level_hard_unions(
+    objects: &mut [GpuObject],
+    eligible_roots: &std::collections::HashSet<usize>,
+    primitive_bounds: &[ObjectBound],
+    component_bounds: &mut [Option<ObjectBound>],
+) -> usize {
+    let roots: Vec<usize> = (0..objects.len()).filter(|&index| objects[index].meta[3] < 0).collect();
+    let mut first = 0;
+    let mut split = 0;
+    for root in roots {
+        let direct: Vec<usize> = (first..root)
+            .filter(|&index| objects[index].meta[3] == root as i32)
+            .collect();
+        let safe = eligible_roots.contains(&root)
+            && direct.len() >= 8
+            && objects[root].component[2] == 0
+            && objects[root].repeat_count[3] == 0
+            && objects[root].mirror_axes[..3].iter().all(|&axis| axis == 0)
+            && objects[first..=root].iter().all(|object| object.operand_tree[3] == 0)
+            && direct.iter().all(|&index| objects[index].meta[2] == 0);
+        if safe {
+            for index in direct {
+                objects[index].meta[3] = -1;
+            }
+            component_bounds[root] = Some(primitive_bounds[root]);
+            split += 1;
+        }
+        first = root + 1;
+    }
+    split
 }
 
 pub(super) fn inverse_affine_rows(inverse: glam::Mat4) -> [[f32; 4]; 3] {
