@@ -619,6 +619,13 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.window_focused || self.window_occluded {
+            let working = self.advance_background_computations();
+            event_loop.set_control_flow(if working {
+                winit::event_loop::ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(50))
+            } else { winit::event_loop::ControlFlow::Wait });
+        }
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         if self.agent_headless {
             self.process_agent_requests();

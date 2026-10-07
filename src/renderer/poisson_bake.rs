@@ -1,9 +1,16 @@
 use super::*;
 use wgpu::util::DeviceExt;
 
-pub(crate) struct TextureReadback { receiver: std::sync::mpsc::Receiver<Result<Vec<u8>, String>> }
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct TexturePixels { pub bytes: Vec<u8>, pub size: u32 }
+#[cfg(target_arch = "wasm32")]
+type TextureOutput = TexturePixels;
+#[cfg(not(target_arch = "wasm32"))]
+type TextureOutput = Vec<u8>;
+
+pub(crate) struct TextureReadback { receiver: std::sync::mpsc::Receiver<Result<TextureOutput, String>> }
 impl TextureReadback {
-    pub fn poll(&self) -> Option<Result<Vec<u8>, String>> {
+    pub fn poll(&self) -> Option<Result<TextureOutput, String>> {
         match self.receiver.try_recv() {
             Ok(result) => Some(result),
             Err(std::sync::mpsc::TryRecvError::Empty) => None,
@@ -101,7 +108,10 @@ fn bake_texture(
                 Ok(pixels)
             });
             mapped.unmap();
-            std::thread::spawn(move || {
+            #[cfg(target_arch = "wasm32")]
+            { let _ = send.send(result.map(|bytes| TexturePixels { bytes, size })); }
+            #[cfg(not(target_arch = "wasm32"))]
+            let encode = move || {
                 let png = result.and_then(|pixels| {
                     let mut out = Vec::new();
                     {
@@ -114,7 +124,9 @@ fn bake_texture(
                     Ok(out)
                 });
                 let _ = send.send(png);
-            });
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            std::thread::spawn(encode);
         });
 
     TextureReadback { receiver }
@@ -218,7 +230,7 @@ fn texture_pipeline(device: &wgpu::Device, layout: Option<&wgpu::PipelineLayout>
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     #[test]
     #[ignore = "requires a GPU adapter"]
@@ -233,7 +245,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn gpu_poisson_texture_bakes_material_without_directional_lighting() {

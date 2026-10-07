@@ -288,7 +288,6 @@ impl Renderer {
         if scene_changed && prepared_scene.is_none() && manage_scene_jobs {
             self.group_capture_cache.clear();
         }
-        #[cfg(not(target_arch = "wasm32"))]
         let mesh_components = if manage_scene_jobs { self.poisson_mesh.shown_components() }
             else { std::collections::HashSet::new() };
         let mut scene_objects_storage: Vec<SdfObject> = prepared_scene.as_ref()
@@ -297,7 +296,6 @@ impl Renderer {
         // Mesh owners still need their original GPU material, transform and
         // stencil records. Exclude their components from the BVH below, not
         // from the object and material tables.
-        #[cfg(not(target_arch = "wasm32"))]
         for object in source_objects.iter().filter(|object| {
             super::poisson_mesh::geometry::belongs_to_component(source_objects, object.uuid, &mesh_components)
         }) {
@@ -313,10 +311,7 @@ impl Renderer {
         let scene_objects = scene_objects_storage.as_slice();
         let object_count = if scene_changed {
             scene_objects.iter().filter(|object| {
-                #[cfg(not(target_arch = "wasm32"))]
-                { !super::poisson_mesh::geometry::belongs_to_component(source_objects, object.uuid, &mesh_components) }
-                #[cfg(target_arch = "wasm32")]
-                { let _ = object; true }
+                !super::poisson_mesh::geometry::belongs_to_component(source_objects, object.uuid, &mesh_components)
             }).count() as u32
         } else {
             self.uploaded_object_count
@@ -335,7 +330,6 @@ impl Renderer {
         // boolean tree in one forward pass while preserving sibling order.
         let ordered = boolean_postorder(scene_objects);
         let objects = &ordered;
-        #[cfg(not(target_arch = "wasm32"))]
         if manage_scene_jobs && self.mesh_vertex_count > 0 {
             self.poisson_mesh.rebuild_buffer(&self.device, scene_objects,
                 &mut self.mesh_buffer, &mut self.mesh_vertex_count);
@@ -574,7 +568,6 @@ impl Renderer {
                 .map(|id| (id, crate::model::object_world_matrix(scene_objects, id)))
                 .collect();
             for (id, center, support, color, normal, material_index) in splat_samples {
-                #[cfg(not(target_arch = "wasm32"))]
                 if self.poisson_mesh.shown_root() == Some(id) { continue; }
                 let matrix = matrices[&id];
                 let scale = matrix

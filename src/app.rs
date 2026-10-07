@@ -7,6 +7,9 @@ mod initialization;
 mod rendering;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_export;
+#[cfg(target_arch = "wasm32")]
+#[path = "app/web_mesh_export.rs"]
+mod mesh_export;
 use initialization::data_tree_with_scene;
 
 #[cfg(target_arch = "wasm32")]
@@ -103,7 +106,6 @@ pub struct App {
     pending_render: Option<PendingRender>,
     #[cfg(not(target_arch = "wasm32"))]
     encoding: Option<NativeEncoding>,
-    #[cfg(not(target_arch = "wasm32"))]
     mesh_export: Option<mesh_export::MeshExportJob>,
     #[cfg(target_arch = "wasm32")]
     pending_render: Option<WebPendingRender>,
@@ -227,7 +229,6 @@ impl App {
 
     fn replace_scene(&mut self, scene: DataTree) {
         self.cancel_render();
-        #[cfg(not(target_arch = "wasm32"))]
         self.cancel_mesh_export_for_document_change();
         self.tree = data_tree_with_scene(scene);
         self.interactions = InteractionState::default();
@@ -242,7 +243,6 @@ impl App {
 
     fn clear_scene(&mut self) {
         self.cancel_render();
-        #[cfg(not(target_arch = "wasm32"))]
         self.cancel_mesh_export_for_document_change();
         self.tree.make_undo_redo_snapshot();
         crate::model::set_objects(&mut self.tree, Vec::new());
@@ -284,14 +284,12 @@ impl App {
     fn clear_document_egui_state(&self) {
         self.egui.data_mut(|data| {
             data.remove_temp::<crate::renderer::computation::Statuses>(crate::renderer::computation::status_id());
-            #[cfg(not(target_arch = "wasm32"))]
             data.remove_temp::<Vec<crate::renderer::poisson_mesh::PoissonMeshAction>>(
                 egui::Id::new("poisson-mesh-actions"));
             data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(
                 egui::Id::new("group-optimization-recompute"));
             data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(
                 egui::Id::new("group-optimization-cancel"));
-            #[cfg(not(target_arch = "wasm32"))]
             data.remove_temp::<std::collections::HashMap<uuid::Uuid,
                 crate::renderer::poisson_mesh::PoissonMeshStatus>>(
                 egui::Id::new("poisson-mesh-status"));
@@ -436,6 +434,7 @@ impl App {
         }
         let request = self.document_request;
         match action {
+            FileMenuAction::ExportGlb => self.start_mesh_export(),
             FileMenuAction::Guide => crate::examples::open_guide(),
             FileMenuAction::OpenExample(example) => {
                 let tx = self.document_tx.clone();
@@ -635,7 +634,6 @@ mod file_action_tests {
                 std::collections::HashMap::<uuid::Uuid, crate::renderer::NeuralStatus>::new());
             data.insert_temp(egui::Id::new("depth-accelerator-ready"),
                 std::collections::HashMap::from([(old, 1u64)]));
-            #[cfg(not(target_arch = "wasm32"))]
             data.insert_temp(egui::Id::new("poisson-mesh-status"),
                 std::collections::HashMap::from([(old,
                     crate::renderer::poisson_mesh::PoissonMeshStatus::Sampling {
@@ -661,7 +659,6 @@ mod file_action_tests {
                 crate::renderer::NeuralStatus>>(egui::Id::new("neural-sdf-status")).is_none());
             assert!(data.get_temp::<std::collections::HashMap<uuid::Uuid, u64>>(
                 egui::Id::new("depth-accelerator-ready")).is_none());
-            #[cfg(not(target_arch = "wasm32"))]
             assert!(data.get_temp::<std::collections::HashMap<uuid::Uuid,
                 crate::renderer::poisson_mesh::PoissonMeshStatus>>(
                 egui::Id::new("poisson-mesh-status")).is_none());

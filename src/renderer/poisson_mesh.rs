@@ -1,13 +1,41 @@
 use super::*;
 use super::computation::{Computation, Stage};
-use std::{collections::{HashMap, VecDeque}, sync::{mpsc, Arc}};
-#[cfg(test)]
+use std::{collections::{HashMap, VecDeque}, sync::Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
 use std::sync::atomic::Ordering;
 use wgpu::util::DeviceExt;
 
 pub(crate) mod geometry;
 pub(crate) mod glb;
 pub(crate) mod textured_glb;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod web_worker;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuildProgress {
+    Sampling(u32),
+    Reconstruction(u32),
+    Complete,
+}
+
+impl BuildProgress {
+    pub(crate) fn from_code(code: u32) -> Self {
+        match code {
+            0..=99 => Self::Sampling(code),
+            100..=199 => Self::Reconstruction(code - 100),
+            _ => Self::Complete,
+        }
+    }
+
+    pub(crate) fn snapshot(self, work: &Computation) -> super::computation::Snapshot {
+        match self {
+            Self::Sampling(percent) => work.snapshot(Stage::Sampling, Some(percent)),
+            Self::Reconstruction(percent) => work.snapshot(Stage::Reconstruction, Some(percent)),
+            Self::Complete => work.snapshot(Stage::Reconstruction, Some(100)),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum PoissonMeshAction {
@@ -20,7 +48,7 @@ pub(crate) enum PoissonMeshAction {
 #[derive(Clone)]
 pub(crate) enum PoissonMeshStatus {
     Sampling { percent: u32 },
-    Reconstructing,
+    Reconstructing { percent: u32 },
     Ready { vertices: usize, triangles: usize, showing: bool, available: bool },
     Failed(String),
 }
@@ -31,7 +59,10 @@ struct Job {
     revision: i32,
     baked_frame_inverse: glam::Mat4,
     work: Computation,
+    #[cfg(not(target_arch = "wasm32"))]
     receiver: mpsc::Receiver<Result<geometry::Mesh, String>>,
+    #[cfg(target_arch = "wasm32")]
+    worker: web_worker::WebJob,
     invalidated: bool,
 }
 
@@ -96,6 +127,9 @@ pub(super) struct PoissonMeshState {
 }
 
 impl PoissonMeshState {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn is_busy(&self) -> bool { self.job.is_some() || !self.requests.is_empty() }
+
     fn cached_for_export(&self, source: &[SdfObject], root: uuid::Uuid, revision: i32) -> Option<CachedExportMesh> {
         // A cached whole-component Boolean result cannot safely be sliced by
         // triangle owner to export an arbitrary selected child subtree.
@@ -126,7 +160,8 @@ impl PoissonMeshState {
             }
             PoissonMeshAction::Build(root) => {
                 if self.job.as_ref().is_some_and(|job| job.root == root) { return false; }
-                if !self.requests.contains(&root) { self.requests.push_back(root); }
+                self.requests.retain(|id| *id != root);
+                self.requests.push_back(root);
                 self.failure.remove(&root);
                 // Scheduling background work does not change the displayed
                 // scene. Keep a ready mesh until its replacement arrives, and
@@ -154,17 +189,24 @@ impl PoissonMeshState {
         let original = self.ready.len();
         self.ready.retain(|_, ready| ready.revision == revision);
         if self.job.as_ref().is_some_and(|job| job.revision != revision && !job.invalidated) {
+            #[cfg(target_arch = "wasm32")]
+            {
+                self.job.take();
+                return true;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(job) = self.job.as_mut() {
                 job.invalidated = true;
                 job.work.cancel();
             }
+            #[cfg(not(target_arch = "wasm32"))]
             return true;
         }
         self.ready.len() != original
     }
 
     pub fn clear_for_root(&mut self, root: uuid::Uuid) -> bool {
-        let active = self.requests.contains(&root)
+        let active = self.requests.iter().any(|id| *id == root)
             || self.job.as_ref().is_some_and(|job| job.root == root)
             || self.ready.contains_key(&root)
             || self.failure.contains_key(&root);
@@ -174,6 +216,8 @@ impl PoissonMeshState {
                 job.invalidated = true;
                 job.work.cancel();
             }
+            #[cfg(target_arch = "wasm32")]
+            if self.job.as_ref().is_some_and(|job| job.root == root) { self.job.take(); }
             self.ready.remove(&root);
             self.failure.remove(&root);
         }
@@ -183,24 +227,50 @@ impl PoissonMeshState {
     pub fn start(&mut self, root: uuid::Uuid, component: uuid::Uuid, revision: i32,
         source: Vec<SdfObject>, resolution: u32,
         cached: Option<Arc<super::box_depth_atlas::BoxDepthAtlas>>,
+        #[cfg(target_arch = "wasm32")] context: &egui::Context,
     ) {
         self.requests.retain(|id| *id != root);
+        #[cfg(not(target_arch = "wasm32"))]
         let (sender, receiver) = mpsc::channel();
         let work = Computation::new(Stage::Sampling);
         let baked_frame_inverse = geometry::mesh_world_frame(&source, component).inverse();
+        #[cfg(not(target_arch = "wasm32"))]
         let worker_progress = work.progress.clone();
+        #[cfg(not(target_arch = "wasm32"))]
         let worker_cancel = work.cancel.clone();
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
             super::cooperative_work::background_priority();
-            let result = std::panic::catch_unwind(|| geometry::build(&source, component, resolution, cached, &worker_progress, Some(&worker_cancel)))
+            let result = std::panic::catch_unwind(|| geometry::build(&source, component, resolution,
+                cached, &worker_progress, Some(&worker_cancel)))
                 .unwrap_or_else(|_| Err("Poisson reconstruction failed unexpectedly".into()));
             let _ = sender.send(result);
         });
-        self.job = Some(Job { root, component, revision, baked_frame_inverse, work, receiver, invalidated: false });
+        #[cfg(target_arch = "wasm32")]
+        let worker = match web_worker::WebJob::start(source, component, resolution, context) {
+            Ok(worker) => worker,
+            Err(error) => {
+                self.failure.insert(root, error);
+                return;
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let _ = cached;
+        self.job = Some(Job { root, component, revision, baked_frame_inverse, work,
+            #[cfg(not(target_arch = "wasm32"))]
+            receiver,
+            #[cfg(target_arch = "wasm32")]
+            worker,
+            invalidated: false });
     }
 
     pub fn poll(&mut self, revision: i32) -> bool {
         let Some(job) = self.job.as_ref() else { return false; };
+        #[cfg(target_arch = "wasm32")]
+        job.work.progress.store(job.worker.progress(), Ordering::Relaxed);
+        #[cfg(target_arch = "wasm32")]
+        let Some(result) = job.worker.take_result() else { return false };
+        #[cfg(not(target_arch = "wasm32"))]
         let result = match job.receiver.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return false,
@@ -255,9 +325,8 @@ impl PoissonMeshState {
 
     pub fn computation_status(&self) -> Option<(uuid::Uuid, super::computation::Snapshot)> {
         let job = self.job.as_ref().filter(|job| !job.invalidated)?;
-        let percent = job.work.percent();
-        Some((job.root, if percent < 100 { job.work.snapshot(Stage::Sampling, Some(percent)) }
-            else { job.work.snapshot(Stage::Reconstruction, None) }))
+        let progress = BuildProgress::from_code(job.work.progress.load(Ordering::Relaxed));
+        Some((job.root, progress.snapshot(&job.work)))
     }
 
     pub fn publish(&self, context: &egui::Context, available: bool) {
@@ -270,10 +339,12 @@ impl PoissonMeshState {
         }
         for root in &self.requests { statuses.insert(*root, PoissonMeshStatus::Sampling { percent: 0 }); }
         if let Some(job) = self.job.as_ref().filter(|job| !job.invalidated) {
-            let percent = job.work.percent();
-            statuses.insert(job.root, if percent < 100 {
-                PoissonMeshStatus::Sampling { percent }
-            } else { PoissonMeshStatus::Reconstructing });
+            let progress = BuildProgress::from_code(job.work.progress.load(Ordering::Relaxed));
+            statuses.insert(job.root, match progress {
+                BuildProgress::Sampling(percent) => PoissonMeshStatus::Sampling { percent },
+                BuildProgress::Reconstruction(percent) => PoissonMeshStatus::Reconstructing { percent },
+                BuildProgress::Complete => PoissonMeshStatus::Reconstructing { percent: 100 },
+            });
             context.request_repaint_after(std::time::Duration::from_millis(100));
         }
         for (root, error) in &self.failure {
@@ -286,6 +357,18 @@ impl PoissonMeshState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconstruction_progress_has_its_own_percentage_and_stage() {
+        let work = Computation::new(Stage::Sampling);
+        let sampling = BuildProgress::from_code(90).snapshot(&work);
+        assert_eq!(sampling.stage, Stage::Sampling);
+        assert_eq!(sampling.percent, Some(90));
+        let reconstruction = BuildProgress::from_code(130).snapshot(&work);
+        assert_eq!(reconstruction.stage, Stage::Reconstruction);
+        assert_eq!(reconstruction.percent, Some(30));
+        assert_eq!(BuildProgress::from_code(200).snapshot(&work).percent, Some(100));
+    }
 
     #[test]
     fn cached_mesh_selection_is_explicit() {

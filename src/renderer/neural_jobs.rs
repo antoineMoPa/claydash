@@ -776,7 +776,6 @@ impl Renderer {
 
     pub(crate) fn reset_optimized_fields(&mut self) {
         self.viewport.reset_for_scene();
-        #[cfg(not(target_arch = "wasm32"))]
         {
             self.poisson_mesh = Default::default();
             self.mesh_vertex_count = 0;

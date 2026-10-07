@@ -8,6 +8,19 @@ const PREVIEW_WIDTH: u32 = 112;
 const PREVIEW_HEIGHT: u32 = 72;
 
 impl Renderer {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn has_pending_material_previews(&self, requests: &[MaterialPreviewRequest]) -> bool {
+        use std::sync::atomic::Ordering;
+        self.material_preview_in_flight.load(Ordering::Acquire)
+            || self.material_preview_compiling.load(Ordering::Acquire)
+            || requests.iter().any(|request| {
+                !self.material_previews.iter().any(|preview| preview.request == *request)
+                    && !self.material_preview_pipelines.iter().any(|(family, state)|
+                        *family == BuiltinMaterialFeatures::for_materials(&[request.material])
+                            && matches!(state, PreviewPipelineState::Failed(_)))
+            })
+    }
+
     pub(crate) fn sync_custom_materials(&mut self, assets: &[MaterialAsset]) -> Result<(), String> {
         let sources: Vec<_> = assets
             .iter()

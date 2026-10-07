@@ -410,9 +410,7 @@ impl Renderer {
             mesh_background_pipeline,
             mesh_buffer,
             mesh_vertex_count: 0,
-            #[cfg(not(target_arch = "wasm32"))]
             poisson_bake_pipeline: None,
-            #[cfg(not(target_arch = "wasm32"))]
             poisson_mesh: Default::default(),
             splat_camera_buffer,
             splat_camera_bind_group,

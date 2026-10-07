@@ -1,6 +1,8 @@
 .log
 pkg
 target
+www/poisson-mesh-worker.js
+www/poisson-encode-worker.js
 claydash-ship
 # Keep only final guide WebP images in Git.
 tests/output/guide/*

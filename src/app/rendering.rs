@@ -12,7 +12,6 @@ fn scene_render_versions(tree: &DataTree, capture_render: bool) -> [i32; 2] {
     ]
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn mesh_source_revision(objects: &[crate::model::SdfObject]) -> i32 {
     use std::hash::{Hash, Hasher};
     #[derive(serde::Serialize)]
@@ -127,6 +126,38 @@ fn standalone_mesh_pose_reuses_shape_but_external_references_do_not() {
 }
 
 impl App {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn advance_background_computations(&mut self) -> bool {
+        // Explicit image/video exports keep rendering offscreen. Ordinary
+        // viewport refinement remains paused while the window is inactive.
+        if self.pending_render.is_some() {
+            self.redraw();
+            return true;
+        }
+        self.poll_native_encoding();
+        self.poll_mesh_export();
+        let mut busy = self.encoding.is_some() || self.mesh_export.is_some();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.poll_background_gpu();
+            if renderer.has_pending_computations(&self.egui) {
+                let source = crate::model::objects_ref(&self.tree);
+                renderer.advance_computations(&self.camera, source,
+                    &commands::effective_selected_ids(&self.tree),
+                    scene_render_versions(&self.tree, false), mesh_source_revision(source),
+                    crate::model::world(&self.tree), &self.egui, true);
+                busy |= renderer.has_pending_computations(&self.egui);
+            }
+            let previews = self.egui.data(|data|
+                data.get_temp::<crate::renderer::MaterialPreviewRequests>(
+                    crate::renderer::MaterialPreviewRequests::egui_id()).unwrap_or_default());
+            if renderer.has_pending_material_previews(&previews.0) {
+                renderer.sync_visible_material_previews(&previews.0, &self.egui);
+                busy |= renderer.has_pending_material_previews(&previews.0);
+            }
+        }
+        busy
+    }
+
     pub(super) fn render_progress(&self) -> Option<crate::ui::RenderProgress> {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -267,7 +298,6 @@ impl App {
         self.process_web_document_messages();
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_native_encoding();
-        #[cfg(not(target_arch = "wasm32"))]
         self.poll_mesh_export();
         let Some(window) = self.window.clone() else {
             return;
@@ -324,7 +354,6 @@ impl App {
                 interaction_guide,
                 render_progress,
             );
-            #[cfg(not(target_arch = "wasm32"))]
             self.mesh_export_panel(ui);
         });
         let preview_requests = egui.data(|data| {
@@ -393,8 +422,12 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let capture_ui = false;
         #[cfg(all(not(target_arch = "wasm32"), unix))]
-        let offscreen_capture = self.agent_capture.is_some();
-        #[cfg(any(target_arch = "wasm32", not(unix)))]
+        let offscreen_capture = self.agent_capture.is_some()
+            || (self.pending_render.is_some() && (!self.window_focused || self.window_occluded));
+        #[cfg(all(not(target_arch = "wasm32"), not(unix)))]
+        let offscreen_capture = self.pending_render.is_some()
+            && (!self.window_focused || self.window_occluded);
+        #[cfg(target_arch = "wasm32")]
         let offscreen_capture = false;
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         let render_camera = self.agent_capture.as_ref().map_or_else(
@@ -454,7 +487,6 @@ impl App {
                 scene_objects,
                 &effective_selection,
                 scene_versions,
-                #[cfg(not(target_arch = "wasm32"))]
                 mesh_source_revision(scene_objects),
                 crate::model::world(&self.tree),
                 crate::model::post_processing_ref(&self.tree),

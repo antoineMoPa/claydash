@@ -2,6 +2,7 @@ use super::*;
 use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
 use crate::renderer::computation::{Computation, Stage};
 use crate::renderer::poisson_mesh::textured_glb::{Page, PAGE_TRIANGLES};
+use crate::renderer::poisson_mesh::BuildProgress;
 
 enum ExportResult {
     Meshes(Vec<(uuid::Uuid, crate::renderer::poisson_mesh::glb::ObjectMesh)>),
@@ -49,7 +50,8 @@ impl App {
             .set_file_name("scene.glb").save_file() else { return };
         let revision = super::rendering::mesh_source_revision(&source);
         let cached: std::collections::HashMap<_, _> = roots.iter().filter_map(|root| {
-            self.renderer.as_ref()?.cached_mesh_for_export(&source, *root, revision).map(|mesh| (*root, mesh))
+            self.renderer.as_ref()?.cached_mesh_for_export(&source, *root, revision)
+                .map(|mesh| (*root, mesh))
         }).collect();
         let stage = Arc::new(Mutex::new(ExportStage::Capturing {
             name: "Preparing".into(), index: 0, total: roots.len(),
@@ -183,18 +185,19 @@ impl App {
         let status = if job.work.cancel.load(Ordering::Relaxed) { "Cancelling…".to_owned() } else { match &*job.stage.lock().unwrap() {
             ExportStage::PreparingMesh { name, index, total } => format!("Preparing {name} ({index}/{total})"),
             ExportStage::Capturing { name, index, total } => {
-                let percent = job.work.progress.load(Ordering::Relaxed);
-                if percent < 100 { format!("Capturing {name} ({index}/{total}) · {percent}%") }
-                else { format!("Reconstructing {name} ({index}/{total})…") }
+                match BuildProgress::from_code(job.work.progress.load(Ordering::Relaxed)) {
+                    BuildProgress::Sampling(percent) => format!("Capturing {name} ({index}/{total}) · {percent}%"),
+                    BuildProgress::Reconstruction(percent) => format!("Reconstructing {name} ({index}/{total}) · {percent}%"),
+                    BuildProgress::Complete => format!("Preparing {name} ({index}/{total})"),
+                }
             }
             ExportStage::Baking { index, total } => format!("Baking materials · texture {index}/{total}"),
             ExportStage::Writing => "Writing Glb…".into(),
         }};
         let estimate = match &*job.stage.lock().unwrap() {
             ExportStage::PreparingMesh { .. } => job.work.snapshot(Stage::Preparation, None),
-            ExportStage::Capturing { .. } if job.work.percent() < 100 =>
-                job.work.snapshot(Stage::Sampling, Some(job.work.percent())),
-            ExportStage::Capturing { .. } => job.work.snapshot(Stage::Reconstruction, None),
+            ExportStage::Capturing { .. } =>
+                BuildProgress::from_code(job.work.progress.load(Ordering::Relaxed)).snapshot(&job.work),
             ExportStage::Baking { index, total } => job.work.snapshot(Stage::TextureBake,
                 Some((index.saturating_sub(1) * 100 / (*total).max(1)) as u32)),
             ExportStage::Writing => job.work.snapshot(Stage::Writing, None),
@@ -245,5 +248,27 @@ fn changing_documents_cancels_an_export_before_it_can_reupload_the_old_scene() {
     });
     app.replace_scene(DataTree::default());
     assert!(cancel.load(Ordering::Relaxed));
+    assert!(app.mesh_export.is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn inactive_window_finishes_exports_without_a_viewport_redraw() {
+    let mut app = App::new();
+    app.window_focused = false;
+    app.window_occluded = true;
+    let (sender, receiver) = channel();
+    app.mesh_export = Some(MeshExportJob {
+        completed: Some(receiver),
+        stage: Arc::new(Mutex::new(ExportStage::Writing)),
+        work: Computation::new(Stage::Writing),
+        source: Vec::new(), assets: Vec::new(), camera: app.camera.clone(),
+        world: crate::model::World::default(), path: "unused.glb".into(),
+        pages: Vec::new(), texture: None, texture_index: 0,
+    });
+    // Waiting jobs keep the background timer alive even with no window or GPU.
+    assert!(app.advance_background_computations());
+    sender.send(Ok(ExportResult::Written)).unwrap();
+    assert!(!app.advance_background_computations());
     assert!(app.mesh_export.is_none());
 }

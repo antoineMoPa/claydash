@@ -13,10 +13,8 @@ use crate::{
 mod benchmark;
 mod outline_capture;
 mod poisson_material;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cooperative_work;
 pub(crate) mod computation;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod poisson_bake;
 pub(crate) mod post_processing;
 
@@ -268,9 +266,7 @@ pub struct Renderer {
     mesh_background_pipeline: wgpu::RenderPipeline,
     mesh_buffer: wgpu::Buffer,
     mesh_vertex_count: u32,
-    #[cfg(not(target_arch = "wasm32"))]
     poisson_bake_pipeline: Option<(u64, wgpu::RenderPipeline)>,
-    #[cfg(not(target_arch = "wasm32"))]
     poisson_mesh: poisson_mesh::PoissonMeshState,
     splat_camera_buffer: wgpu::Buffer,
     splat_camera_bind_group: wgpu::BindGroup,
@@ -327,10 +323,7 @@ pub struct Renderer {
 
 impl Renderer {
     fn mesh_is_visible(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        { self.poisson_mesh.shown_root().is_some() }
-        #[cfg(target_arch = "wasm32")]
-        { false }
+        self.poisson_mesh.shown_root().is_some()
     }
 }
 
@@ -407,12 +400,12 @@ mod neural_jobs;
 mod neural_sdf;
 pub(crate) use neural_jobs::NeuralStatus;
 mod hybrid_splats;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod poisson_mesh;
 mod material_previews;
 mod modifier_gpu;
 mod primitive_upload;
 mod rendering;
+mod computation_jobs;
 mod scene_bounds;
 mod scene_pipelines;
 mod scene_upload;

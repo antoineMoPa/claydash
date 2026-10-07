@@ -6,6 +6,8 @@ build:
 	  --out-dir www/target \
 	  --target web target/wasm32-unknown-unknown/release/claydash.wasm
 	cp assets/icons/lucide/loader-circle.svg www/target/loader-circle.svg
+	cp assets/poisson-mesh-worker.js www/poisson-mesh-worker.js
+	cp assets/poisson-encode-worker.js www/poisson-encode-worker.js
 
 deploy:
 	du -h target/wasm32-unknown-unknown/release/claydash.wasm

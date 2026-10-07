@@ -60,7 +60,6 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             crate::renderer::DepthAcceleratorStatus::Baking(percent) => format!("{percent}%"),
             crate::renderer::DepthAcceleratorStatus::NotComputedYet => "0%".to_owned(),
         }); }
-        #[cfg(not(target_arch = "wasm32"))]
         if selected_mode == crate::model::GroupRenderRepresentation::PoissonMesh {
             poisson_mesh_controls(ui, target);
         }
@@ -177,14 +176,13 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid) {
     use crate::renderer::poisson_mesh::{PoissonMeshAction, PoissonMeshStatus};
     let mut status = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, PoissonMeshStatus>>(
         egui::Id::new("poisson-mesh-status")))
         .and_then(|statuses| statuses.get(&target).cloned());
     ui.label(RichText::new("Poisson mesh").strong());
-    let busy = matches!(status, Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing));
+    let busy = matches!(status, Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing { .. }));
     let mut action = None;
     match computation_buttons(ui, busy) {
         Some(ComputationAction::Recompute) => {
@@ -197,14 +195,14 @@ fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid) {
         }
         None => {}
     }
-    let stage = if matches!(status, Some(PoissonMeshStatus::Reconstructing)) {
+    let stage = if matches!(status, Some(PoissonMeshStatus::Reconstructing { .. })) {
         Stage::Reconstruction
     } else { Stage::Sampling };
-    let active = matches!(status, Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing));
+    let active = matches!(status, Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing { .. }));
     match status {
         Some(PoissonMeshStatus::Sampling { percent, .. }) => { ui.weak(format!("Capturing surface samples · {percent}%")); }
-        Some(PoissonMeshStatus::Reconstructing) => {
-            ui.weak("Reconstructing mesh");
+        Some(PoissonMeshStatus::Reconstructing { percent }) => {
+            ui.weak(format!("Reconstructing mesh · {percent}%"));
         }
         Some(PoissonMeshStatus::Ready { vertices, triangles, showing, available, .. }) => {
             ui.weak(format!("{vertices} vertices · {triangles} triangles"));
