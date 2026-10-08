@@ -21,6 +21,7 @@ impl Mesh {
     }
 }
 
+#[derive(Clone)]
 struct Sample {
     point: Vec3,
     normal: Vec3,
@@ -170,6 +171,7 @@ pub(crate) fn build(
     source: &[SdfObject],
     root: uuid::Uuid,
     resolution: u32,
+    mesh_resolution: u32,
     cached: Option<Arc<super::super::box_depth_atlas::BoxDepthAtlas>>,
     progress: &AtomicU32,
     cancel: Option<&AtomicBool>,
@@ -219,7 +221,7 @@ pub(crate) fn build(
     super::web_worker::post_progress(100);
     if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) { return Err("Export cancelled".into()); }
     let samples = samples_from_atlas(source, root, &atlas);
-    let mesh = reconstruct(samples, cancel, |fraction| {
+    let mesh = reconstruct(samples, mesh_resolution, cancel, |fraction| {
         let value = 100 + (fraction.clamp(0.0, 1.0) * 99.0) as u32;
         progress.store(value, Ordering::Relaxed);
         #[cfg(target_arch = "wasm32")]
@@ -302,7 +304,7 @@ fn kd_nearest(point: Vec3, node: Option<usize>, nodes: &[KdNode], samples: &[Sam
     if axis_delta * axis_delta < best.1 { kd_nearest(point, far, nodes, samples, best); }
 }
 
-fn reconstruct(samples: Vec<Sample>,
+fn reconstruct(samples: Vec<Sample>, mesh_resolution: u32,
     cancel: Option<&AtomicBool>, mut progress: impl FnMut(f32)) -> Result<Mesh, String> {
     if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) { return Err("Mesh computation cancelled".into()); }
     if samples.len() < 3 { return Err("Too few valid oriented samples".into()); }
@@ -310,7 +312,9 @@ fn reconstruct(samples: Vec<Sample>,
         point: sample.point.to_array(), normal: sample.normal.to_array(),
     }).collect();
     let solved = screened_poisson::reconstruct(&oriented,
-        screened_poisson::Settings::default(), cancel, |fraction| progress(fraction * 0.9))?;
+        screened_poisson::Settings { cells: mesh_resolution as usize,
+            ..screened_poisson::Settings::default() },
+        cancel, |fraction| progress(fraction * 0.9))?;
     let positions: Vec<Vec3> = solved.positions.into_iter().map(Vec3::from_array).collect();
     let solved_triangles = solved.triangles;
     if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) { return Err("Mesh computation cancelled".into()); }
@@ -347,6 +351,23 @@ fn reconstruct(samples: Vec<Sample>,
 mod tests {
     use super::*;
 
+    #[test]
+    fn mesh_resolution_changes_output_with_identical_samples() {
+        let owner = uuid::Uuid::new_v4();
+        let samples: Vec<_> = (1..12).flat_map(|latitude| {
+            let theta = std::f32::consts::PI * latitude as f32 / 12.0;
+            (0..24).map(move |longitude| {
+                let phi = std::f32::consts::TAU * longitude as f32 / 24.0;
+                let point = Vec3::new(theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos());
+                Sample { point, normal: point, owner }
+            })
+        }).collect();
+        let coarse = reconstruct(samples.clone(), 16, None, |_| {}).unwrap();
+        let fine = reconstruct(samples, 32, None, |_| {}).unwrap();
+        assert!(fine.triangles.len() > coarse.triangles.len(),
+            "a finer output grid should produce more faces from the same samples");
+    }
+
 
 
     #[test]
@@ -361,7 +382,7 @@ mod tests {
                 samples.push(Sample { point, normal: point, owner });
             }
         }
-        let mesh = reconstruct(samples, None, |_| {}).unwrap();
+        let mesh = reconstruct(samples, 64, None, |_| {}).unwrap();
         assert!(mesh.triangles.len() > 100);
         assert!(mesh.positions.len() < mesh.triangles.len() * 3,
             "iso extraction should share vertices across neighboring triangles");
@@ -387,7 +408,7 @@ mod tests {
     fn rust_solver_builds_from_captured_sdf_sphere() {
         let sphere = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
         let progress = AtomicU32::new(0);
-        let mesh = build(&[sphere.clone()], sphere.uuid, 12,
+        let mesh = build(&[sphere.clone()], sphere.uuid, 12, 64,
             None, &progress, None).unwrap();
         assert_eq!(progress.load(Ordering::Relaxed), 200);
         assert!(mesh.triangles.len() > 100);
@@ -399,7 +420,7 @@ mod tests {
     fn rust_solver_default_sphere_quality() {
         let sphere = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
         let started = std::time::Instant::now();
-        let mesh = build(&[sphere.clone()], sphere.uuid, 64, None, &AtomicU32::new(0), None).unwrap();
+        let mesh = build(&[sphere.clone()], sphere.uuid, 64, 64, None, &AtomicU32::new(0), None).unwrap();
         let mut radii = Vec::with_capacity(mesh.triangles.len());
         let mut outward = 0;
         for triangle in &mesh.triangles {
@@ -482,6 +503,7 @@ mod tests {
             let object = source.iter().find(|object| object.uuid == root).unwrap();
             eprintln!("exporting {}", object.name);
             let mesh = build(&source, root, object.gaussian_splats.resolution,
+                object.poisson_mesh.resolution,
                 None, &AtomicU32::new(0), None)
                 .unwrap_or_else(|error| panic!("{}: {error}", object.name));
             assert!(!mesh.triangles.is_empty());
@@ -506,7 +528,7 @@ mod tests {
         assert!(samples.iter().any(|sample| sample.point.x < 1.2));
         let center = samples.iter().map(|sample| sample.point).sum::<Vec3>() / samples.len() as f32;
         assert!(center.x.abs() < 0.5, "mirrored capture was shifted: {center:?}");
-        let mesh = build(&scene, id, 12, Some(std::sync::Arc::new(atlas)),
+        let mesh = build(&scene, id, 12, 64, Some(std::sync::Arc::new(atlas)),
             &AtomicU32::new(0), None).expect("reconstruct modified sphere");
         let minimum = mesh.positions.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
         let maximum = mesh.positions.iter().map(|point| point.x).fold(f32::NEG_INFINITY, f32::max);

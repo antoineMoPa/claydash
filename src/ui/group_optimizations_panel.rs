@@ -24,6 +24,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     let saved_accelerator = scene[index].sphere_accelerator;
     let saved_box_accelerator = scene[index].box_accelerator;
     let saved_splats = scene[index].gaussian_splats;
+    let saved_poisson = scene[index].poisson_mesh;
     let saved_mode = scene[index].render_representation;
     let mut selected_mode = saved_mode;
     let mut optimization_percent = None;
@@ -42,7 +43,12 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     if matches!(selected_mode, crate::model::GroupRenderRepresentation::GaussianSplats | crate::model::GroupRenderRepresentation::PoissonMesh) {
         let settings = &mut scene[index].gaussian_splats;
         ui.horizontal(|ui| {
-            ui.label(if selected_mode == crate::model::GroupRenderRepresentation::PoissonMesh { "Sample resolution" } else { "Splat resolution" }).on_hover_text("Grid of rays from each of the six bounding-box sides. Higher resolution preserves more detail and uses more memory. Click Recompute to apply.");
+            let (label, tooltip) = if selected_mode == crate::model::GroupRenderRepresentation::PoissonMesh {
+                ("Sample resolution", "Grid of rays from each of the six bounding-box sides. Controls how many oriented surface samples are captured, independently of mesh resolution. Higher values use more memory. Click Recompute to apply.")
+            } else {
+                ("Splat resolution", "Grid of rays from each of the six bounding-box sides. Higher resolution preserves more detail and uses more memory. Click Recompute to apply.")
+            };
+            ui.label(label).on_hover_text(tooltip);
             ui.add(egui::DragValue::new(&mut settings.resolution).update_while_editing(false)
                 .range(1..=u32::MAX).speed(1.0));
         });
@@ -61,7 +67,15 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             crate::renderer::DepthAcceleratorStatus::NotComputedYet => "0%".to_owned(),
         }); }
         if selected_mode == crate::model::GroupRenderRepresentation::PoissonMesh {
-            poisson_mesh_controls(ui, target);
+            ui.horizontal(|ui| {
+                ui.label("Mesh resolution").on_hover_text("Cells along each side of the Poisson reconstruction grid. Higher values can produce finer detail and take much longer. At 256 cells, solver grid memory can exceed 400 MB, plus samples and mesh. Click Recompute to apply.");
+                ui.add(egui::DragValue::new(&mut scene[index].poisson_mesh.resolution)
+                    .update_while_editing(false)
+                    .range(screened_poisson::MIN_CELLS as u32..=screened_poisson::MAX_CELLS as u32)
+                    .speed(1.0));
+            });
+            poisson_mesh_controls(ui, target, scene[index].gaussian_splats.resolution,
+                scene[index].poisson_mesh.resolution);
         }
     }
     if selected_mode.is_depth_accelerator() {
@@ -166,6 +180,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     }
     if selected_mode != scene[index].render_representation
         || saved_splats != scene[index].gaussian_splats
+        || saved_poisson != scene[index].poisson_mesh
         || saved_settings != scene[index].neural_sdf
         || saved_accelerator != scene[index].sphere_accelerator
         || saved_box_accelerator != scene[index].box_accelerator
@@ -176,7 +191,8 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     }
 }
 
-fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid) {
+fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid,
+    sample_resolution: u32, mesh_resolution: u32) {
     use crate::renderer::poisson_mesh::{PoissonMeshAction, PoissonMeshStatus};
     let mut status = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, PoissonMeshStatus>>(
         egui::Id::new("poisson-mesh-status")))
@@ -204,8 +220,12 @@ fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid) {
         Some(PoissonMeshStatus::Reconstructing { percent }) => {
             ui.weak(format!("Reconstructing mesh · {percent}%"));
         }
-        Some(PoissonMeshStatus::Ready { vertices, triangles, showing, available, .. }) => {
+        Some(PoissonMeshStatus::Ready { vertices, triangles, showing, available,
+            sample_resolution: built_sample_resolution, mesh_resolution: built_mesh_resolution }) => {
             ui.weak(format!("{vertices} vertices · {triangles} triangles"));
+            if sample_resolution != built_sample_resolution || mesh_resolution != built_mesh_resolution {
+                ui.weak("Settings changed. Click Recompute to apply.");
+            }
             if available {
                 let label = if showing { "Show exact source" } else { "Show mesh" };
                 if ui.button(label).clicked() {

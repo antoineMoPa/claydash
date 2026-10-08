@@ -26,7 +26,7 @@ impl Renderer {
                     object.render_representation == crate::model::GroupRenderRepresentation::PoissonMesh) {
                     let component = super::poisson_mesh::geometry::containing_root(objects, requested);
                     self.poisson_mesh.start(requested, component, mesh_source_revision, objects.to_vec(),
-                        object.gaussian_splats.resolution, None,
+                        object.gaussian_splats.resolution, object.poisson_mesh.resolution, None,
                         #[cfg(target_arch = "wasm32")]
                         egui);
                 } else {

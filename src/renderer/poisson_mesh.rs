@@ -49,7 +49,8 @@ pub(crate) enum PoissonMeshAction {
 pub(crate) enum PoissonMeshStatus {
     Sampling { percent: u32 },
     Reconstructing { percent: u32 },
-    Ready { vertices: usize, triangles: usize, showing: bool, available: bool },
+    Ready { vertices: usize, triangles: usize, showing: bool, available: bool,
+        sample_resolution: u32, mesh_resolution: u32 },
     Failed(String),
 }
 
@@ -57,6 +58,8 @@ struct Job {
     root: uuid::Uuid,
     component: uuid::Uuid,
     revision: i32,
+    sample_resolution: u32,
+    mesh_resolution: u32,
     baked_frame_inverse: glam::Mat4,
     work: Computation,
     #[cfg(not(target_arch = "wasm32"))]
@@ -70,6 +73,8 @@ struct Ready {
     root: uuid::Uuid,
     component: uuid::Uuid,
     revision: i32,
+    sample_resolution: u32,
+    mesh_resolution: u32,
     baked_frame_inverse: glam::Mat4,
     vertices: usize,
     triangles: usize,
@@ -133,7 +138,10 @@ impl PoissonMeshState {
     fn cached_for_export(&self, source: &[SdfObject], root: uuid::Uuid, revision: i32) -> Option<CachedExportMesh> {
         // A cached whole-component Boolean result cannot safely be sliced by
         // triangle owner to export an arbitrary selected child subtree.
-        let ready = self.ready.values().find(|ready| ready.component == root && ready.revision == revision)?;
+        let object = source.iter().find(|object| object.uuid == root)?;
+        let ready = self.ready.values().find(|ready| ready.component == root && ready.revision == revision
+            && ready.sample_resolution == object.gaussian_splats.resolution
+            && ready.mesh_resolution == object.poisson_mesh.resolution)?;
         Some(CachedExportMesh { mesh: ready.mesh.clone(),
             pose: geometry::mesh_world_frame(source, root) * ready.baked_frame_inverse })
     }
@@ -225,7 +233,7 @@ impl PoissonMeshState {
     }
 
     pub fn start(&mut self, root: uuid::Uuid, component: uuid::Uuid, revision: i32,
-        source: Vec<SdfObject>, resolution: u32,
+        source: Vec<SdfObject>, resolution: u32, mesh_resolution: u32,
         cached: Option<Arc<super::box_depth_atlas::BoxDepthAtlas>>,
         #[cfg(target_arch = "wasm32")] context: &egui::Context,
     ) {
@@ -242,12 +250,13 @@ impl PoissonMeshState {
         std::thread::spawn(move || {
             super::cooperative_work::background_priority();
             let result = std::panic::catch_unwind(|| geometry::build(&source, component, resolution,
+                mesh_resolution,
                 cached, &worker_progress, Some(&worker_cancel)))
                 .unwrap_or_else(|_| Err("Poisson reconstruction failed unexpectedly".into()));
             let _ = sender.send(result);
         });
         #[cfg(target_arch = "wasm32")]
-        let worker = match web_worker::WebJob::start(source, component, resolution, context) {
+        let worker = match web_worker::WebJob::start(source, component, resolution, mesh_resolution, context) {
             Ok(worker) => worker,
             Err(error) => {
                 self.failure.insert(root, error);
@@ -256,7 +265,8 @@ impl PoissonMeshState {
         };
         #[cfg(target_arch = "wasm32")]
         let _ = cached;
-        self.job = Some(Job { root, component, revision, baked_frame_inverse, work,
+        self.job = Some(Job { root, component, revision, sample_resolution: resolution,
+            mesh_resolution, baked_frame_inverse, work,
             #[cfg(not(target_arch = "wasm32"))]
             receiver,
             #[cfg(target_arch = "wasm32")]
@@ -282,7 +292,9 @@ impl PoissonMeshState {
             Ok(mesh) if !mesh.triangles.is_empty() => {
                 self.ready.retain(|_, ready| ready.component != job.component);
                 self.ready.insert(job.root, Ready {
-                    root: job.root, component: job.component, revision, vertices: mesh.positions.len(),
+                    root: job.root, component: job.component, revision,
+                    sample_resolution: job.sample_resolution, mesh_resolution: job.mesh_resolution,
+                    vertices: mesh.positions.len(),
                     baked_frame_inverse: job.baked_frame_inverse,
                     triangles: mesh.triangles.len(),
                     showing: true, mesh: Arc::new(mesh),
@@ -335,6 +347,7 @@ impl PoissonMeshState {
             statuses.insert(ready.root, PoissonMeshStatus::Ready {
                 vertices: ready.vertices, triangles: ready.triangles,
                 showing: ready.showing, available,
+                sample_resolution: ready.sample_resolution, mesh_resolution: ready.mesh_resolution,
             });
         }
         for root in &self.requests { statuses.insert(*root, PoissonMeshStatus::Sampling { percent: 0 }); }
@@ -381,7 +394,7 @@ mod tests {
         let mut state = PoissonMeshState::default();
         let root = uuid::Uuid::new_v4();
         state.ready.insert(root, Ready {
-            root, component: root, revision: 7, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
             showing: true,
             mesh: Arc::new(geometry::Mesh::from_parts(
                 vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root])),
@@ -399,7 +412,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         state.requests.clear();
         state.job = Some(Job {
-            root, component: root, revision: 7, baked_frame_inverse: glam::Mat4::IDENTITY,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY,
             work: Computation::new(Stage::Sampling), receiver, invalidated: false,
         });
         state.job.as_ref().unwrap().work.progress.store(42, Ordering::Relaxed);
@@ -428,7 +441,7 @@ mod tests {
         let mut state = PoissonMeshState::default();
         let root = uuid::Uuid::new_v4();
         state.ready.insert(root, Ready {
-            root, component: root, revision: 7, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
             showing: true,
             mesh: Arc::new(geometry::Mesh::from_parts(
                 vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root])),
@@ -440,7 +453,7 @@ mod tests {
         let work = Computation::new(Stage::Sampling);
         let cancel = work.cancel.clone();
         state.job = Some(Job {
-            root, component: root, revision: 7, baked_frame_inverse: glam::Mat4::IDENTITY,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY,
             work, receiver, invalidated: false,
         });
         assert!(!state.handle(PoissonMeshAction::Cancel(root)));
@@ -459,7 +472,7 @@ mod tests {
         let mut state = PoissonMeshState::default();
         let root = uuid::Uuid::new_v4();
         state.ready.insert(root, Ready {
-            root, component: root, revision: 7, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
             showing: true,
             mesh: Arc::new(geometry::Mesh::from_parts(
                 vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root])),
@@ -505,7 +518,7 @@ mod tests {
         let mesh = Arc::new(geometry::Mesh::from_parts(
             vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![id]));
         state.ready.insert(id, Ready {
-            root: id, component: id, revision: 7, baked_frame_inverse: glam::Mat4::IDENTITY,
+            root: id, component: id, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY,
             vertices: 3, triangles: 1, showing: false, mesh: mesh.clone(),
         });
         root.group_transform.translation = Vec3::new(3.0, 2.0, 1.0);
@@ -524,5 +537,11 @@ mod tests {
         assert!(cached.world_mesh(&std::sync::atomic::AtomicBool::new(true)).is_err());
         assert!(state.cached_for_export(&source, id, 8).is_none());
         assert!(state.cached_for_export(&source, child_id, 7).is_none());
+        let mut changed = source.to_vec();
+        changed[0].poisson_mesh.resolution = 96;
+        assert!(state.cached_for_export(&changed, id, 7).is_none());
+        changed[0].poisson_mesh.resolution = 64;
+        changed[0].gaussian_splats.resolution = 96;
+        assert!(state.cached_for_export(&changed, id, 7).is_none());
     }
 }

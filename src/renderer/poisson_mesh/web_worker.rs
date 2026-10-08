@@ -9,6 +9,7 @@ struct Request {
     source: Vec<SdfObject>,
     root: uuid::Uuid,
     resolution: u32,
+    mesh_resolution: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -59,6 +60,7 @@ pub fn run_poisson_mesh_worker(request: &str) -> String {
         .map_err(|error| error.to_string())
         .and_then(|request| {
             super::geometry::build(&request.source, request.root, request.resolution,
+                request.mesh_resolution,
                 None, &AtomicU32::new(0), None)
         });
     serde_json::to_string(&Reply::Complete { result })
@@ -76,6 +78,7 @@ pub(crate) struct WebJob {
 
 impl WebJob {
     pub(crate) fn start(source: Vec<SdfObject>, root: uuid::Uuid, resolution: u32,
+        mesh_resolution: u32,
         context: &egui::Context) -> Result<Self, String> {
         let options = web_sys::WorkerOptions::new();
         options.set_type(web_sys::WorkerType::Module);
@@ -107,7 +110,7 @@ impl WebJob {
             error_context.request_repaint();
         }) as Box<dyn FnMut(_)>);
         worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-        let request = serde_json::to_string(&Request { source, root, resolution })
+        let request = serde_json::to_string(&Request { source, root, resolution, mesh_resolution })
             .map_err(|error| error.to_string())?;
         let job = Self { worker, result, progress, _onmessage: onmessage, _onerror: onerror };
         job.worker.post_message(&wasm_bindgen::JsValue::from_str(&request))

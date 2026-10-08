@@ -99,7 +99,9 @@ impl App {
                 } else {
                     let resolution = job.source.iter().find(|object| object.uuid == root)
                         .map_or(0, |object| object.gaussian_splats.resolution);
-                    match WebJob::start(job.source.clone(), root, resolution, &self.egui) {
+                    let mesh_resolution = job.source.iter().find(|object| object.uuid == root)
+                        .map_or(0, |object| object.poisson_mesh.resolution);
+                    match WebJob::start(job.source.clone(), root, resolution, mesh_resolution, &self.egui) {
                         Ok(worker) => job.worker = Some(worker),
                         Err(error) => finish = Some(Err(error)),
                     }

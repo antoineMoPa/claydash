@@ -125,6 +125,16 @@ fn standalone_mesh_pose_reuses_shape_but_external_references_do_not() {
     assert_ne!(mesh_source_revision(&scene), original, "external inlay geometry depends on the relative pose");
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn mesh_resolution_settings_do_not_invalidate_displayed_geometry() {
+    let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+    let revision = mesh_source_revision(&[object.clone()]);
+    object.gaussian_splats.resolution = 96;
+    object.poisson_mesh.resolution = 96;
+    assert_eq!(mesh_source_revision(&[object]), revision);
+}
+
 impl App {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn advance_background_computations(&mut self) -> bool {

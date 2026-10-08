@@ -82,6 +82,7 @@ impl App {
                         worker_progress.store(0, Ordering::Relaxed);
                         crate::renderer::poisson_mesh::geometry::build(
                             &worker_source, *root, object.gaussian_splats.resolution,
+                            object.poisson_mesh.resolution,
                             None, &worker_progress, Some(&worker_cancel))
                             .map_err(|error| if worker_cancel.load(Ordering::Relaxed) {
                                 "Export cancelled".to_owned()

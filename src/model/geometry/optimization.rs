@@ -513,6 +513,21 @@ impl GaussianSplatSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PoissonMeshSettings {
+    /// Cells along each side of the reconstruction grid.
+    pub resolution: u32,
+}
+
+impl Default for PoissonMeshSettings {
+    fn default() -> Self { Self { resolution: 64 } }
+}
+
+impl PoissonMeshSettings {
+    pub fn is_default(&self) -> bool { *self == Self::default() }
+}
+
 #[cfg(test)]
 mod splat_settings_tests {
     use super::*;
@@ -540,5 +555,19 @@ mod splat_settings_tests {
             serde_json::from_str::<GaussianSplatSettings>("{}").unwrap(),
             GaussianSplatSettings::default()
         );
+    }
+}
+
+#[cfg(test)]
+mod poisson_mesh_settings_tests {
+    use super::*;
+
+    #[test]
+    fn mesh_resolution_defaults_for_older_documents_and_round_trips() {
+        let default: PoissonMeshSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(default.resolution, 64);
+        let edited = PoissonMeshSettings { resolution: 96 };
+        assert_eq!(serde_json::from_str::<PoissonMeshSettings>(
+            &serde_json::to_string(&edited).unwrap()).unwrap(), edited);
     }
 }

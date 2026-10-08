@@ -17,6 +17,16 @@ pub struct Mesh { pub positions: Vec<[f32; 3]>, pub triangles: Vec<[u32; 3]> }
 #[derive(Clone, Copy, Debug)]
 pub struct Settings { pub cells: usize, pub point_weight: f32, pub max_iterations: usize }
 
+pub const MIN_CELLS: usize = 8;
+pub const MAX_CELLS: usize = 256;
+
+fn zeroed<T: Clone>(count: usize, value: T) -> Result<Vec<T>, String> {
+    let mut values = Vec::new();
+    values.try_reserve_exact(count).map_err(|_| "Poisson grid allocation failed")?;
+    values.resize(count, value);
+    Ok(values)
+}
+
 impl Default for Settings {
     fn default() -> Self { Self { cells: 64, point_weight: 2.0, max_iterations: 240 } }
 }
@@ -30,7 +40,6 @@ struct Grid {
     origin: [f32; 3],
     spacing: f32,
     interpolations: Vec<Interpolation>,
-    normal: Vec<[f32; 3]>,
     diagonal: Vec<f32>,
     right_hand: Vec<f32>,
 }
@@ -60,7 +69,9 @@ impl Grid {
     }
 
     fn new(samples: &[Sample], settings: Settings, cancel: Option<&AtomicBool>) -> Result<Self, String> {
-        if !(8..=128).contains(&settings.cells) { return Err("Poisson grid size must be 8..=128".into()); }
+        if !(MIN_CELLS..=MAX_CELLS).contains(&settings.cells) {
+            return Err(format!("Poisson grid size must be {MIN_CELLS}..={MAX_CELLS}"));
+        }
         if !settings.point_weight.is_finite() || settings.point_weight < 0.0 { return Err("Invalid Poisson point weight".into()); }
         if settings.max_iterations == 0 { return Err("Poisson solver needs at least one iteration".into()); }
         let mut minimum = [f32::INFINITY; 3];
@@ -80,12 +91,16 @@ impl Grid {
         if !cube.is_finite() { return Err("Poisson grid exceeds finite coordinate range".into()); }
         let origin = std::array::from_fn(|axis| (minimum[axis] + maximum[axis] - cube) * 0.5);
         if origin.iter().any(|value| !value.is_finite()) { return Err("Poisson grid origin is invalid".into()); }
-        let side = settings.cells + 1;
-        let count = side * side * side;
+        let side = settings.cells.checked_add(1).ok_or("Poisson grid size overflow")?;
+        let count = side.checked_pow(3).ok_or("Poisson grid size overflow")?;
+        let mut interpolations = Vec::new();
+        interpolations.try_reserve_exact(samples.len()).map_err(|_| "Poisson sample allocation failed")?;
+        let mut normal = zeroed(count, [0.0; 3])?;
+        let diagonal = zeroed(count, 0.0)?;
+        let right_hand = zeroed(count, 0.0)?;
+        let mut density = zeroed(count, 0.0)?;
         let mut grid = Self { side, cells: settings.cells, origin, spacing: cube / settings.cells as f32,
-            interpolations: Vec::with_capacity(samples.len()), normal: vec![[0.0; 3]; count],
-            diagonal: vec![0.0; count], right_hand: vec![0.0; count] };
-        let mut density = vec![0.0; count];
+            interpolations, diagonal, right_hand };
         for (sample_index, sample) in samples.iter().enumerate() {
             if sample_index % 1024 == 0 && cancel.is_some_and(|flag|flag.load(Ordering::Relaxed)) { return Err("Mesh computation cancelled".into()); }
             let interpolation = grid.interpolate(sample.point);
@@ -93,16 +108,17 @@ impl Grid {
                 let node = interpolation.nodes[corner];
                 let weight = interpolation.weights[corner];
                 density[node] += weight;
-                for axis in 0..3 { grid.normal[node][axis] += sample.normal[axis] * weight; }
+                for axis in 0..3 { normal[node][axis] += sample.normal[axis] * weight; }
                 grid.diagonal[node] += settings.point_weight * weight * weight;
             }
             grid.interpolations.push(interpolation);
         }
         for index in 0..count {
             if density[index] > 0.0 {
-                for axis in 0..3 { grid.normal[index][axis] /= density[index]; }
+                for axis in 0..3 { normal[index][axis] /= density[index]; }
             }
         }
+        drop(density);
         // Each undirected grid edge contributes (u_j-u_i-h*V_edge)^2.
         // Its weak-form right hand side is the splatted normal flux.
         for z in 0..side { for y in 0..side { for x in 0..side {
@@ -116,13 +132,14 @@ impl Grid {
                     _ => continue,
                 };
                 let j = grid.index(nx, ny, nz);
-                let flux = grid.spacing * (grid.normal[i][axis] + grid.normal[j][axis]) * 0.5;
+                let flux = grid.spacing * (normal[i][axis] + normal[j][axis]) * 0.5;
                 grid.right_hand[i] -= flux;
                 grid.right_hand[j] += flux;
                 grid.diagonal[i] += 1.0;
                 grid.diagonal[j] += 1.0;
             }
         } } }
+        drop(normal);
         Ok(grid)
     }
 
@@ -142,13 +159,14 @@ impl Grid {
 
     fn solve(&self, settings: Settings, cancel: Option<&AtomicBool>, mut progress: impl FnMut(f32)) -> Result<Vec<f32>, String> {
         let count = self.diagonal.len();
-        let mut solution = vec![0.0; count];
-        let mut residual = self.right_hand.clone();
-        let mut direction = vec![0.0; count];
-        let mut product = vec![0.0; count];
-        let mut preconditioned = vec![0.0; count];
-        for i in 0..count { preconditioned[i] = residual[i] / self.diagonal[i].max(1e-8); direction[i] = preconditioned[i]; }
-        let mut rz = dot(&residual, &preconditioned);
+        let mut solution = zeroed(count, 0.0)?;
+        let mut residual = Vec::new();
+        residual.try_reserve_exact(count).map_err(|_| "Poisson grid allocation failed")?;
+        residual.extend_from_slice(&self.right_hand);
+        let mut direction = zeroed(count, 0.0)?;
+        let mut product = zeroed(count, 0.0)?;
+        for i in 0..count { product[i] = residual[i] / self.diagonal[i].max(1e-8); direction[i] = product[i]; }
+        let mut rz = dot(&residual, &product);
         let initial = dot(&residual, &residual).sqrt().max(1e-20);
         for iteration in 0..settings.max_iterations {
             if iteration % 8 == 0 {
@@ -163,11 +181,11 @@ impl Grid {
             if !alpha.is_finite() { return Err("Poisson solve diverged".into()); }
             for i in 0..count { solution[i] += alpha * direction[i]; residual[i] -= alpha * product[i]; }
             if dot(&residual, &residual).sqrt() / initial < 2e-4 { break; }
-            for i in 0..count { preconditioned[i] = residual[i] / self.diagonal[i].max(1e-8); }
-            let next_rz = dot(&residual, &preconditioned);
+            for i in 0..count { product[i] = residual[i] / self.diagonal[i].max(1e-8); }
+            let next_rz = dot(&residual, &product);
             if rz.abs() < 1e-20 { break; }
             let beta = next_rz / rz;
-            for i in 0..count { direction[i] = preconditioned[i] + beta * direction[i]; }
+            for i in 0..count { direction[i] = product[i] + beta * direction[i]; }
             rz = next_rz;
         }
         progress(1.0);
@@ -268,6 +286,45 @@ mod tests {
             if fraction>=0.1 { cancelled.store(true,Ordering::Relaxed); }
         });
         assert_eq!(result.unwrap_err(),"Mesh computation cancelled");
+    }
+
+    #[test]
+    fn grid_accepts_resolution_above_previous_limit() {
+        let samples = box_samples([1.0, 0.8, 0.6], 8);
+        let settings = Settings { cells: 129, ..Settings::default() };
+        let grid = Grid::new(&samples, settings, None).unwrap();
+        assert_eq!(grid.diagonal.len(), 130usize.pow(3));
+        let solution = grid.solve(Settings { max_iterations: 4, ..settings }, None, |_| {}).unwrap();
+        assert_eq!(solution.len(), grid.diagonal.len());
+        assert!(solution.iter().all(|value| value.is_finite()));
+        assert!(Grid::new(&samples, Settings { cells: MAX_CELLS + 1, ..settings }, None).is_err());
+    }
+
+    #[test]
+    #[ignore = "runs a full maximum-grid reconstruction; run manually for memory validation"]
+    fn maximum_grid_reconstructs_sphere() {
+        let start = std::time::Instant::now();
+        let mut samples = Vec::new();
+        for latitude in 1..24 {
+            let theta = std::f32::consts::PI * latitude as f32 / 24.0;
+            for longitude in 0..48 {
+                let phi = std::f32::consts::TAU * longitude as f32 / 48.0;
+                let point = [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()];
+                samples.push(Sample { point, normal: point });
+            }
+        }
+        let mesh = reconstruct(&samples, Settings { cells: MAX_CELLS,
+            ..Settings::default() }, None, |_| {}).unwrap();
+        assert!(!mesh.triangles.is_empty());
+        assert!(mesh.positions.iter().flatten().all(|coordinate| coordinate.is_finite()));
+        let mut radii: Vec<_> = mesh.positions.iter().map(|point|
+            (point[0] * point[0] + point[1] * point[1] + point[2] * point[2]).sqrt()).collect();
+        radii.sort_unstable_by(f32::total_cmp);
+        let p05 = radii[radii.len() / 20];
+        let p95 = radii[radii.len() * 19 / 20];
+        eprintln!("256-cell sphere: {} vertices, {} triangles, radius p05={p05:.3}, p95={p95:.3}, time {:?}",
+            mesh.positions.len(), mesh.triangles.len(), start.elapsed());
+        assert!(p05 > 0.7 && p95 < 1.3, "most of the sphere should remain near unit radius");
     }
 
     #[test]
