@@ -47,7 +47,9 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
         }
         return textureLoad(refined, vec2<i32>(best), 0);
     }
-    let coarse_color = textureSample(preview, filtering, input.uv);
+    // Earlier per-pixel returns make implicit derivatives non-uniform. The
+    // preview has one mip level, so explicitly sampling level zero is equivalent.
+    let coarse_color = textureSampleLevel(preview, filtering, input.uv, 0.0);
     let tile = pixel / tile_size;
     let columns = (size.x + tile_size - 1u) / tile_size;
     let complete = tile.y * columns + tile.x < progress.size_and_tiles.w;
