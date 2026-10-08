@@ -127,6 +127,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn panels_can_be_opened_closed_and_reopened_without_duplicates() {
+        let mut layout = Layout::with_pane(EditorPane::Viewport);
+        for pane in EditorPane::PANELS {
+            pane.open(&mut layout);
+            let (first, _) = layout.find_pane(|candidate| *candidate == pane).unwrap();
+            pane.open(&mut layout);
+            assert_eq!(
+                layout.find_pane(|candidate| *candidate == pane).unwrap().0,
+                first
+            );
+            layout.close_pane(first);
+            assert!(layout.find_pane(|candidate| *candidate == pane).is_none());
+            pane.open(&mut layout);
+            assert!(layout.find_pane(|candidate| *candidate == pane).is_some());
+        }
+        assert!(layout
+            .find_pane(|pane| *pane == EditorPane::Viewport)
+            .is_some());
+    }
+
+    #[test]
     fn light_frame_header_has_its_own_fill() {
         let ctx = egui::Context::default();
         ctx.set_theme(egui::Theme::Light);

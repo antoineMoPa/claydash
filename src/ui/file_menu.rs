@@ -11,6 +11,7 @@ pub(super) fn draw_file_menu(
     document: &DocumentState,
     tree: &mut DataTree,
     layout: &mut Layout<EditorPane>,
+    panel_placements: &mut PanelPlacements,
     cursor_target_available: bool,
     placing_cursor: bool,
 ) -> (Option<FileMenuAction>, Option<CursorMenuAction>) {
@@ -84,18 +85,16 @@ pub(super) fn draw_file_menu(
             });
             draw_edit_menu(ui, tree, document.error().is_some());
             ui.menu_button("Panels", |ui| {
-                let animation_open = layout
-                    .find_pane(|pane| *pane == EditorPane::Animation)
-                    .is_some();
-                if ui
-                    .add_enabled(!animation_open, egui::Button::new("Animation Timeline"))
-                    .clicked()
-                {
-                    layout.add_pane_against_edge(DropSide::Bottom, 0.30, EditorPane::Animation);
-                    ui.close();
-                }
-                if animation_open {
-                    ui.weak("Animation Timeline is open");
+                for pane in EditorPane::PANELS {
+                    let open = layout.find_pane(|candidate| *candidate == pane).is_some();
+                    if ui
+                        .add_enabled(!open, egui::Button::new(pane.panel_label()))
+                        .on_disabled_hover_text("This panel is already open")
+                        .clicked()
+                    {
+                        panel_placements.open(layout, pane);
+                        ui.close();
+                    }
                 }
             });
             ui.menu_button("Tool", |ui| {

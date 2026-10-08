@@ -18,9 +18,11 @@ mod secondary_panels;
 mod selection_tools;
 mod status_bar;
 pub(crate) use status_bar::RenderProgress;
+mod panel_placement;
 mod ui_widgets;
 mod viewport_controls;
 mod workspace;
+use panel_placement::PanelPlacements;
 mod world_panel;
 
 use animation_panel::*;
@@ -78,6 +80,67 @@ enum EditorPane {
 }
 
 impl EditorPane {
+    const PANELS: [Self; 6] = [
+        Self::Scene,
+        Self::Object,
+        Self::Materials,
+        Self::Operand,
+        Self::World,
+        Self::Animation,
+    ];
+
+    fn panel_label(self) -> &'static str {
+        match self {
+            Self::Animation => "Animation Timeline",
+            _ => self.title(),
+        }
+    }
+
+    fn command_id(self) -> &'static str {
+        match self {
+            Self::Animation => "open-animation-panel",
+            Self::Scene => "open-scene-panel",
+            Self::Object => "open-object-panel",
+            Self::Materials => "open-materials-panel",
+            Self::Operand => "open-operand-panel",
+            Self::World => "open-world-panel",
+            Self::Viewport => "open-viewport-panel",
+        }
+    }
+
+    fn open(self, layout: &mut Layout<Self>) {
+        let id = if let Some((id, _)) = layout.find_pane(|pane| *pane == self) {
+            id
+        } else {
+            if matches!(
+                self,
+                Self::Object | Self::Materials | Self::Operand | Self::World
+            ) {
+                if let Some((other, _)) = layout.find_pane(|pane| {
+                    matches!(
+                        pane,
+                        Self::Object | Self::Materials | Self::Operand | Self::World
+                    )
+                }) {
+                    let frame = layout.frame_of(other).expect("inspector frame");
+                    layout.add_pane(frame, self, None);
+                    return;
+                }
+            }
+            let side = match self {
+                Self::Animation => DropSide::Bottom,
+                Self::Scene => DropSide::Left,
+                _ => DropSide::Right,
+            };
+            layout.add_pane_against_edge(
+                side,
+                if side == DropSide::Right { 0.34 } else { 0.30 },
+                self,
+            )
+        };
+        layout.focus_pane(id);
+    }
+
     fn title(self) -> &'static str {
         match self {
             Self::Animation => "Animation",
@@ -96,6 +159,7 @@ pub struct UiState {
     frames: Frames,
     layout: Layout<EditorPane>,
     palette: CommandPalette,
+    panel_placements: PanelPlacements,
     regions: Vec<egui::Rect>,
     viewport_rect: Option<egui::Rect>,
     ghosts: boolean_overlay::Ghosts,
@@ -131,6 +195,7 @@ impl Default for UiState {
             frames: Frames::new().with_style(style),
             layout,
             palette: CommandPalette::default(),
+            panel_placements: PanelPlacements::default(),
             regions: Vec::new(),
             viewport_rect: None,
             ghosts: boolean_overlay::Ghosts::default(),
@@ -185,11 +250,11 @@ impl UiState {
         let current = self.layout.find_pane(|pane| *pane == EditorPane::Animation);
         match (open, current) {
             (true, None) => {
-                self.layout
-                    .add_pane_against_edge(DropSide::Bottom, 0.30, EditorPane::Animation);
+                self.panel_placements
+                    .open(&mut self.layout, EditorPane::Animation);
             }
             (false, Some((pane, _))) => {
-                self.layout.close_pane(pane);
+                self.panel_placements.close(&mut self.layout, pane);
             }
             _ => {}
         }
@@ -236,6 +301,7 @@ impl UiState {
             document,
             tree,
             &mut self.layout,
+            &mut self.panel_placements,
             cursor_targets.len() == 1,
             matches!(
                 tree.get_path("editor.place_cursor"),
@@ -297,7 +363,7 @@ impl UiState {
             match event {
                 FramesEvent::PaneCloseRequested(pane) => {
                     if layout.pane(pane) != Some(&EditorPane::Viewport) {
-                        layout.close_pane(pane);
+                        self.panel_placements.close(&mut layout, pane);
                     }
                 }
                 FramesEvent::NewTabRequested(frame) => {
@@ -420,7 +486,7 @@ impl UiState {
         if open_palette {
             self.palette.open();
         }
-        let palette_commands = command_map
+        let mut palette_commands = command_map
             .commands
             .iter()
             .map(|(id, command)| PaletteCommand {
@@ -430,8 +496,21 @@ impl UiState {
                 shortcut: command.shortcut.clone(),
             })
             .collect::<Vec<_>>();
+        palette_commands.extend(EditorPane::PANELS.map(|pane| PaletteCommand {
+            id: pane.command_id().to_owned(),
+            title: format!("Open {} panel", pane.panel_label()),
+            description: "Open or focus this workspace panel.".to_owned(),
+            shortcut: String::new(),
+        }));
         if let Some(command) = self.palette.show(viewport_ui.ctx(), &palette_commands) {
-            commands::execute(command_map, &command, tree);
+            if let Some(pane) = EditorPane::PANELS
+                .into_iter()
+                .find(|pane| pane.command_id() == command)
+            {
+                self.panel_placements.open(&mut self.layout, pane);
+            } else {
+                commands::execute(command_map, &command, tree);
+            }
             if command == "add-image-plane" {
                 if let Some(id) = selected(tree).first().copied() {
                     if let Some((name, bytes)) = request_image(viewport_ui.ctx(), id) {
