@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AnimationData, BooleanOperation, BoxFaceSelection, CurvePointSelection, EditorState, Material,
-    MaterialAsset, ModelingFaceSelection, PostProcessPass, SdfObject, Transform,
+    MaterialAsset, ModelingFaceSelection, PostProcessPass, SdfObject, Transform, World,
 };
 use crate::camera::SceneCamera;
 
@@ -239,29 +239,6 @@ pub fn active_camera_id(tree: &DataTree) -> Option<uuid::Uuid> {
     }
 }
 
-pub fn boolean_distance(a: f32, b: f32, operation: BooleanOperation, softness: f32) -> f32 {
-    let b = if operation == BooleanOperation::Subtract {
-        -b
-    } else {
-        b
-    };
-    let hard = if operation == BooleanOperation::Union {
-        a.min(b)
-    } else {
-        a.max(b)
-    };
-    if softness <= 0.0 {
-        return hard;
-    }
-    let h = (softness - (a - b).abs()).max(0.0) / softness;
-    let blend = softness * h * h * 0.25;
-    if operation == BooleanOperation::Union {
-        hard - blend
-    } else {
-        hard + blend
-    }
-}
-
 pub fn objects(tree: &DataTree) -> Vec<SdfObject> {
     match tree.get_path("scene.sdf_objects") {
         ClaydashValue::VecSDFObject(value) => value,
@@ -372,5 +349,33 @@ pub fn set_selected_exact(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
     );
     if selected_ref(tree) != value {
         tree.set_transient_path("scene.selected_uuids", ClaydashValue::VecUuid(value));
+    }
+}
+
+pub fn post_processing(tree: &DataTree) -> Vec<PostProcessPass> {
+    match tree.get_path("scene.post_processing") {
+        ClaydashValue::VecPostProcessPass(passes) => passes,
+        _ => Vec::new(),
+    }
+}
+
+pub fn post_processing_ref(tree: &DataTree) -> &[PostProcessPass] {
+    match tree.get_path_ref("scene.post_processing") {
+        Some(ClaydashValue::VecPostProcessPass(passes)) => passes,
+        _ => &[],
+    }
+}
+
+pub fn set_post_processing(tree: &mut DataTree, passes: Vec<PostProcessPass>) {
+    tree.set_path(
+        "scene.post_processing",
+        ClaydashValue::VecPostProcessPass(passes),
+    );
+}
+
+pub fn world(tree: &DataTree) -> World {
+    match tree.get_path("scene.world") {
+        ClaydashValue::World(world) => world,
+        _ => World::default(),
     }
 }

@@ -8,7 +8,7 @@ use crate::{
     commands::{self, Commands},
     model::{
         objects, selected, set_objects, set_selected, set_selected_exact, ClaydashValue, DataTree,
-        EditorState, SdfObject,
+        EditorState,
     },
 };
 
@@ -149,49 +149,13 @@ mod keyboard;
 mod pointer;
 mod transform;
 
-#[derive(Clone, Copy, Debug)]
-pub struct RayHit {
-    pub object: uuid::Uuid,
-    pub position: Vec3,
-}
-
-pub fn raymarch_hit(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Option<RayHit> {
-    let mut point = origin;
-    let march_factor = objects.iter().fold(0.8_f32, |factor, object| {
-        if let crate::model::SdfParams::LoftParams(loft) = &object.params {
-            factor.min(loft.march_factor())
-        } else {
-            factor
-        }
-    });
-    let max_steps = if march_factor < 0.5 { 128 } else { 64 };
-    for _ in 0..max_steps {
-        let (distance, object) = scene_distance(point, objects)?;
-        if distance < 0.01 {
-            return Some(RayHit {
-                object,
-                position: point,
-            });
-        }
-        point += direction * distance.max(0.003) * march_factor;
-        if point.distance(origin) > 100.0 {
-            return None;
-        }
-    }
-    None
-}
-
-pub fn raymarch(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Option<uuid::Uuid> {
-    raymarch_hit(origin, direction, objects).map(|hit| hit.object)
-}
+#[cfg(test)]
+use claydash_engine::model::scene_sample as scene_distance;
+pub use claydash_engine::model::{raymarch, raymarch_hit};
 
 fn pan_reference(camera: &Camera, tree: &DataTree, cursor: Vec2) -> Option<Vec3> {
     let (origin, direction) = camera.ray(cursor);
     raymarch_hit(origin, direction, &objects(tree)).map(|hit| hit.position)
-}
-
-fn scene_distance(point: Vec3, objects: &[SdfObject]) -> Option<(f32, uuid::Uuid)> {
-    crate::model::scene_sample(point, objects)
 }
 
 #[cfg(test)]

@@ -1,16 +1,6 @@
-mod animation;
-mod geometry;
-mod post_processing;
-mod sample_scenes;
+//! Editor state layered over the reusable scene and geometry model.
+pub use claydash_engine::model::*;
 mod state;
-mod world;
-
-pub use animation::*;
-pub use geometry::*;
-pub use post_processing::*;
-pub use sample_scenes::*;
 pub use state::*;
-pub use world::*;
-
 #[cfg(test)]
 mod tests;

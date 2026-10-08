@@ -18,9 +18,9 @@ Custom materials use kind 6 and the header's reserved word as a scene-local shad
 
 ## Adding a material
 
-1. Add a `MaterialKind` variant and an explicit GPU code in `src/model/geometry.rs`.
-2. Add a typed packer in `src/renderer/material_gpu.rs` after the two common slots. If the material needs new scene properties, put them in `Material`, with serde defaults for old files.
-3. Add a WGSL source module under `assets/shaders/` with local slot constants and an evaluator returning `Surface`.
+1. Add a `MaterialKind` variant and an explicit GPU code in `crates/claydash_engine/src/model/geometry.rs`.
+2. Add a typed packer in `crates/claydash_engine/src/renderer/material_gpu.rs` after the two common slots. If the material needs new scene properties, put them in `Material`, with serde defaults for old files.
+3. Add a WGSL source module under `crates/claydash_engine/assets/shaders/` with local slot constants and an evaluator returning `Surface`.
 4. Include it in the local assembler in `material_gpu::shader_source`, and add one branch to the explicit `material_surface` switch in `material_common.wgsl`.
 5. Add a preview and a mixed-material validation case.
 

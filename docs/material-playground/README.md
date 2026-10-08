@@ -12,7 +12,7 @@ The material has three spatial layers:
 2. A separate fine field adds chipped edges, porous pits, mineral flecks, local firing variation, and pale deposits near joints. The pores also perturb the shading normal without making the SDF unstable. Fine detail fades with camera distance to avoid glittering at smaller scales.
 3. Clay and mortar have separate roughness and color. Non-box surfaces use parallax sampling, finite-difference bump normals, and short local cavity shadows. Box surfaces in Claydash use the structural height field in the SDF itself, so those joints affect hit positions and scene ambient occlusion.
 
-The **Inspect layer** menu shows height, normals, pores, and cavity shadow separately. The defaults match Claydash's Brick preset in `src/model/geometry.rs`. The GPU implementation is in `assets/shaders/material_brick.wgsl`, with the box SDF displacement in `assets/shaders/sdf.wgsl`.
+The **Inspect layer** menu shows height, normals, pores, and cavity shadow separately. The defaults match Claydash's Brick preset in `crates/claydash_engine/src/model/geometry.rs`. The GPU implementation is in `crates/claydash_engine/assets/shaders/material_brick.wgsl`, with the box SDF displacement in `crates/claydash_engine/assets/shaders/sdf.wgsl`.
 
 Claydash uses the full SDF relief while joints cover multiple screen pixels. At smaller sizes it switches to the primitive's analytic intersection and fades the fine shading work; this keeps dense scenes responsive. The `brick-corner` and `brick-window` benchmark cases inspect close and boolean geometry.
 

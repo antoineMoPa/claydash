@@ -1,6 +1,6 @@
 mod animation;
 mod app;
-mod camera;
+use claydash_engine::camera;
 mod commands;
 mod document;
 mod duck;
@@ -13,10 +13,9 @@ mod render_export;
 #[cfg(target_arch = "wasm32")]
 #[path = "web_render_export.rs"]
 mod render_export;
-mod renderer;
+use claydash_engine::renderer;
 mod ui;
 mod undo_redo;
-mod viewport;
 #[cfg(target_arch = "wasm32")]
 mod web_input;
 
@@ -36,5 +35,7 @@ fn main() {}
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
-    if web_sys::window().is_some() { app::run(); }
+    if web_sys::window().is_some() {
+        app::run();
+    }
 }

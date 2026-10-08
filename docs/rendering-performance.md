@@ -43,6 +43,36 @@ cargo check --target wasm32-unknown-unknown
 
 The `examples/fusca.claydash` scene uses Exact. Its lacquer asset and objects store the same teal base color as the custom WGSL output, avoiding a fuchsia fallback color. On an Apple M1 at 1280×800, repeated direct renders measured 149.4–167.8 ms/frame versus 186.9 ms/frame before the SDF bounds work. With the sparse progressive viewport starting directly with shaded samples, camera motion measured 13.4 ms p95, the native UI edit loop 15.2 ms p95, and refinement frames 14.2 ms p95. The native UI benchmark reported zero preview pixels. The fully refined image differs from the direct Exact image by at most one 8-bit channel value. A temporary copy set to Deferred with SSR enabled rendered at 77.3 ms/frame; its completed viewport matched its direct Deferred image byte for byte. Full-resolution direct rendering remains slower than the interactive viewport, so use the viewport timings when judging editing responsiveness.
 
+## Headless initialization regression check
+
+The headless constructor shares GPU resource initialization with the windowed
+constructor. The normal window render path adds an optional-surface check and
+retains the same allocations, passes, copies and GPU polling. Offscreen capture
+performs refinement and readback only when requested.
+
+On 2026-10-08, before/after optimized development builds were compared on Apple
+M1 / Metal at 640×360, alternating process order. Both the Brick and Preview
+benchmark output images were byte-identical.
+
+| Measurement | Before | After | Runs per build |
+| --- | ---: | ---: | ---: |
+| Brick deferred GPU median | 21.975 ms | 22.383 ms | 10 |
+| Preview deferred GPU median | 4.677 ms | 4.551 ms | 3 |
+| Brick editor edit loop, median p50 | 6.601 ms | 6.091 ms | 3 |
+| Brick editor edit loop, median p95 | 8.196 ms | 8.604 ms | 3 |
+
+Brick GPU samples ranged from 19.892–23.967 ms before and 21.621–23.958 ms
+after. The paired mean difference's approximate 95% confidence interval was
+−0.197 to +1.519 ms. These measurements did not establish a performance
+regression; they do not rule out small differences or replace testing on other
+hardware. The editor benchmark exercises the complete window render path;
+the direct GPU benchmark measures scene throughput.
+
+Reproduce with `--stress-benchmark-suite --benchmark-case=brick
+--benchmark-size=640x360 --benchmark-images=PATH`, repeat with
+`--benchmark-case=preview`, and use `--stress-ui-benchmark --benchmark-edit
+--benchmark-case=brick --benchmark-size=640x360` for the editor loop.
+
 ## Material library previews
 
 Material spheres are requested by visible UI rectangles, after filtering and section expansion. Startup and closed sections generate no thumbnails. Requests are refreshed each frame, so scrolling away discards pending demand. The renderer produces at most one new sphere per frame and waits for GPU completion before starting another. Cached textures are reused when reopening sections; edited or deleted shared materials invalidate their own entries. WGSL source changes invalidate preview pipelines and textures.

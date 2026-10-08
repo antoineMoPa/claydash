@@ -293,7 +293,7 @@ version = "0.0.0"
 dependencies = [
  "arboard",
  "base64",
- "bytemuck",
+ "claydash_engine",
  "command_central",
  "console_error_panic_hook",
  "egui",
@@ -303,7 +303,6 @@ dependencies = [
  "egui_extras",
  "egui_frames",
  "glam",
- "half",
  "image",
  "js-sys",
  "mp4",
@@ -312,6 +311,32 @@ dependencies = [
  "png 0.17.16",
  "pollster",
  "rfd",
+ "screened_poisson",
+ "sdf_consts",
+ "serde",
+ "serde_json",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "claydash_engine"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "egui-wgpu",
+ "glam",
+ "half",
+ "image",
+ "js-sys",
+ "png 0.17.16",
+ "pollster",
  "screened_poisson",
  "sdf_consts",
  "serde",

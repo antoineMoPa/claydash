@@ -2,6 +2,10 @@
 
 Claydash is an experimental 3D SDF modeler made in Rust with winit, wgpu, and egui.
 
+The reusable [claydash_engine](crates/claydash_engine/README.md) crate contains the
+scene model, SDF distance and ray queries, GPU rendering, Gaussian splats, meshes,
+and shaders. Editor state, commands, documents, and input live in the application.
+
 https://app.claydash.com/ - note: live version does not always point to main branch.
 
 [User guide](docs/guide/index.html)

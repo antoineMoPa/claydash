@@ -855,29 +855,6 @@ fn neural_legacy_sample_grid_maps_to_total_count() {
 }
 
 #[test]
-fn neural_presets_are_valid_and_manual_edits_become_custom() {
-    for preset in NeuralModelPreset::ALL {
-        let settings = preset.settings();
-        assert!(settings.is_valid());
-        assert_eq!(settings.activation, NeuralActivation::Softplus);
-        assert_eq!(NeuralModelPreset::matching(settings), Some(preset));
-        let mut custom = settings;
-        custom.epochs += 1;
-        assert_eq!(NeuralModelPreset::matching(custom), None);
-    }
-    for value in [-100.0, -1.0, 0.0, 1.0, 100.0] {
-        let output = NeuralActivation::Softplus.evaluate(value);
-        let slope = NeuralActivation::Softplus.slope_from_output(output);
-        assert!(output.is_finite() && output >= 0.0);
-        assert!(slope.is_finite() && (0.0..=1.0).contains(&slope));
-    }
-    assert_eq!(
-        NeuralActivation::Softplus.slope_from_output(NeuralActivation::Softplus.evaluate(0.0)),
-        0.5
-    );
-}
-
-#[test]
 fn sphere_accelerator_settings_default_round_trip_and_reject_invalid_values() {
     let mut object = SdfObject::create_kind(PrimitiveKind::Box);
     object.render_representation = GroupRenderRepresentation::SphereAccelerator;
