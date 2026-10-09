@@ -35,6 +35,7 @@ impl InteractionState {
         self.extrusion_session = None;
         if mode == EditorState::Start {
             self.transform_session = None;
+            self.pending_grab_pointer = None;
             self.curve_grab_mouse_start = None;
             self.active_guide = None;
             self.numeric_rotation = NumericRotationInput::Idle;
@@ -134,6 +135,8 @@ impl InteractionState {
         };
         let mut scene = objects(tree);
         let mut cameras = crate::model::scene_cameras(tree);
+        let mut variables = crate::model::scene_variables(tree);
+        let mut variables_changed = false;
         let mut objects_changed = false;
         let mut cameras_changed = false;
 
@@ -180,6 +183,7 @@ impl InteractionState {
             let changed = commands::set_transform_target(
                 &mut scene,
                 &mut cameras,
+                &mut variables,
                 target.kind,
                 target.id,
                 crate::model::Transform {
@@ -193,10 +197,14 @@ impl InteractionState {
                     objects_changed |= changed;
                 }
                 commands::TransformTargetKind::Camera => cameras_changed |= changed,
+                commands::TransformTargetKind::Variable => variables_changed |= changed,
             }
         }
         if objects_changed {
             set_objects(tree, scene);
+        }
+        if variables_changed {
+            crate::model::set_scene_variables(tree, variables);
         }
         if cameras_changed {
             crate::model::set_scene_cameras(tree, cameras);

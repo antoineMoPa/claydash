@@ -68,7 +68,7 @@ pub(super) fn create_pipeline(device: &wgpu::Device, layout: Option<&wgpu::Pipel
             buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<hybrid_splats::GpuMeshVertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4],
+                attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
             })], compilation_options: Default::default() },
         fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_poisson"),
             targets: &[Some(wgpu::ColorTargetState { format,

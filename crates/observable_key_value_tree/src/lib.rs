@@ -194,7 +194,7 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     }
 
     pub fn was_path_updated(&self, path: &str) -> bool {
-        match self.get_tree(&path) {
+        match self.get_tree_ref(path) {
             Some(value) => {
                 return value.update_tracker.was_updated();
             }
@@ -205,7 +205,7 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     }
 
     pub fn path_version(&self, path: &str) -> i32 {
-        match self.get_tree(&path) {
+        match self.get_tree_ref(path) {
             Some(value) => {
                 return value.update_tracker.version();
             }

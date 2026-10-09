@@ -4,6 +4,39 @@ use super::shape::*;
 use super::*;
 
 #[test]
+fn face_cut_keeps_each_radial_spoke_and_repeats_its_cut() {
+    use crate::model::{RepetitionAxis, RepetitionMode};
+    let mut source = SdfObject::create_kind(PrimitiveKind::Box);
+    source.params = SdfParams::BoxParams(crate::model::BoxParams {
+        box_q: Vec3::new(0.65, 0.15, 0.15),
+        corner_radius: 0.0,
+    });
+    let pivot = Vec3::new(-0.8, 0.0, 0.0);
+    source.repetition.enabled = true;
+    source.repetition.mode = RepetitionMode::Radial {
+        axis: RepetitionAxis::Z, count: 6, pivot,
+    };
+    let face = crate::model::ModelingFaceSelection::Box(crate::model::BoxFaceSelection {
+        object: source.uuid, axis: VectorAxis::Z, positive: true,
+    });
+    let outline = [
+        Vec2::new(-0.08, -0.08), Vec2::new(0.08, -0.08),
+        Vec2::new(0.08, 0.08), Vec2::new(-0.08, 0.08),
+    ];
+    let cut = create_face_shape(&[source.clone()], face, &outline, -0.2,
+        uuid::Uuid::new_v4()).unwrap();
+    let scene = [source, cut];
+    for copy in 0..6 {
+        let rotation = glam::Quat::from_rotation_z(std::f32::consts::TAU * copy as f32 / 6.0);
+        let point = |local: Vec3| pivot + rotation * (local - pivot);
+        let solid = crate::model::scene_sample(point(Vec3::new(0.4, 0.0, 0.0)), &scene).unwrap().0;
+        let hole = crate::model::scene_sample(point(Vec3::new(0.0, 0.0, 0.05)), &scene).unwrap().0;
+        assert!(solid < -0.02, "spoke {copy} disappeared: {solid}");
+        assert!(hole > 0.02, "face cut missing on spoke {copy}: {hole}");
+    }
+}
+
+#[test]
 fn polygon_validation_accepts_concave_shapes_and_rejects_crossings() {
     let concave = [
         Vec2::new(-1.0, -1.0),

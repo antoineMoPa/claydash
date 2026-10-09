@@ -853,3 +853,66 @@ fn g_grabs_a_multi_selection_without_creating_a_union() {
         .iter()
         .all(|object| object.boolean_parent.is_none()));
 }
+
+#[test]
+fn g_grabs_variable_before_object_selection_and_escape_restores_links() {
+    use crate::model::{scene_variables, set_scene_variables, set_selected_variable, SceneVariables, VectorVariable, VectorBinding, VectorBindingTarget, VariableSpace};
+    for (keep_object_selection, space) in [(false, VariableSpace::World), (true, VariableSpace::World), (false, VariableSpace::Local), (true, VariableSpace::Local)] {
+        let (mut tree, object_id) = selected_object();
+        let mut scene = objects(&tree);
+        scene[0].group_transform.rotation = glam::Quat::from_rotation_z(0.6);
+        scene[0].group_transform.scale = Vec3::new(2.0, 3.0, 1.0);
+        set_objects(&mut tree, scene);
+        if !keep_object_selection { set_selected(&mut tree, vec![]); }
+        let variable = VectorVariable { id: uuid::Uuid::new_v4(), name: "Anchor".into(), value: Vec3::ZERO, space };
+        set_scene_variables(&mut tree, SceneVariables { vectors: vec![variable.clone()], bindings: vec![VectorBinding { object: object_id, target: VectorBindingTarget::Position, variable: variable.id, offset: Vec3::ZERO }],
+            ..SceneVariables::default()
+        });
+        set_selected_variable(&mut tree, Some(variable.id));
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        let mut map = Commands::new();
+        commands::register_all(&mut map);
+        let mut interaction = InteractionState { mouse_position: Vec2::new(400.0, 300.0), ..Default::default() };
+        interaction.key_pressed(KeyCode::KeyG, false, &map, &mut tree);
+        interaction.key_pressed(KeyCode::KeyX, false, &map, &mut tree);
+        interaction.cursor_moved(Vec2::new(510.0, 250.0), false);
+        interaction.update(&mut camera, &mut tree);
+        let value = scene_variables(&tree).vectors[0].value;
+        let frame = crate::model::variable_viewport_frame(&tree, &scene_variables(&tree).vectors[0]);
+        let world_value = frame.transform_point3(value);
+        assert!(world_value.x.abs() > 0.1);
+        assert!(world_value.y.abs() < 1e-5);
+        assert!(world_value.z.abs() < 1e-5);
+        let expected_link = if space == VariableSpace::World { crate::model::group_world_matrix(&objects(&tree), object_id).inverse().transform_point3(value) } else { value };
+        assert!(objects(&tree)[0].transform.translation.distance(expected_link) < 1e-5);
+        interaction.key_pressed(KeyCode::Escape, false, &map, &mut tree);
+        assert_eq!(scene_variables(&tree).vectors[0].value, Vec3::ZERO);
+        assert_eq!(objects(&tree)[0].transform.translation, Vec3::ZERO);
+        interaction.key_released(KeyCode::KeyG);
+        interaction.key_released(KeyCode::KeyX);
+        interaction.key_pressed(KeyCode::KeyG, false, &map, &mut tree);
+        interaction.cursor_moved(Vec2::new(550.0, 230.0), false);
+        interaction.update(&mut camera, &mut tree);
+        let committed = scene_variables(&tree).vectors[0].value;
+        interaction.key_pressed(KeyCode::Enter, false, &map, &mut tree);
+        assert!(matches!(tree.get_path("editor.state"), ClaydashValue::EditorState(EditorState::Start)));
+        tree.undo();
+        assert_eq!(scene_variables(&tree).vectors[0].value, Vec3::ZERO);
+        tree.redo();
+        assert_eq!(scene_variables(&tree).vectors[0].value, committed);
+        // Clearing variable selection returns the same G command to object movement.
+        set_selected_variable(&mut tree, None);
+        set_selected(&mut tree, vec![object_id]);
+        let mut variables = scene_variables(&tree);
+        variables.bindings.clear();
+        set_scene_variables(&mut tree, variables);
+        let before = objects(&tree)[0].transform.translation;
+        interaction.key_released(KeyCode::KeyG);
+        interaction.key_pressed(KeyCode::KeyG, false, &map, &mut tree);
+        interaction.cursor_moved(Vec2::new(610.0, 190.0), false);
+        interaction.update(&mut camera, &mut tree);
+        assert_ne!(objects(&tree)[0].transform.translation, before);
+        assert_eq!(scene_variables(&tree).vectors[0].value, committed);
+    }
+}

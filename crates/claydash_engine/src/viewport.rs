@@ -144,11 +144,22 @@ pub struct DeferredPass<'a> {
     pub geometry_pipeline: &'a wgpu::RenderPipeline,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderingPath {
+    Mesh,
+    Deferred,
+    Hybrid,
+    Exact,
+}
+
 pub struct Viewport {
     key: Option<ViewKey>,
     targets: Option<Targets>,
     completed: u32,
     interleaved: bool,
+    interacting: bool,
+    refinement_paused: bool,
+    rendering_path: Option<RenderingPath>,
     pixel_budget: u32,
     target_ms: f64,
     initial_budget: u32,
@@ -298,6 +309,9 @@ impl Viewport {
             targets: None,
             completed: 0,
             interleaved: false,
+            interacting: false,
+            refinement_paused: false,
+            rendering_path: None,
             pixel_budget: INITIAL_PIXELS,
             target_ms: EDIT_TARGET_MS,
             initial_budget: INITIAL_PIXELS,
@@ -362,6 +376,31 @@ impl Viewport {
         }
     }
 
+    /// Keep previews responsive while a pointer or modal transform is active.
+    /// Native refinement resumes with the same view and measured GPU budget.
+    pub fn set_interacting(&mut self, interacting: bool) {
+        self.interacting = interacting;
+    }
+
+    /// Keep scene-change previews available while optimization workers run.
+    /// Completed tiles and timing estimates are retained until refinement resumes.
+    pub fn set_refinement_paused(&mut self, paused: bool) {
+        self.refinement_paused = paused;
+    }
+
+    pub fn set_rendering_path(&mut self, path: RenderingPath) {
+        if self.rendering_path != Some(path) {
+            // Raster mesh timings do not predict the cost of raymarching its
+            // edited source. Restart conservatively even if object counts
+            // selected the same initial budget for both representations.
+            self.pixel_budget = self.pixel_budget.min(self.initial_budget);
+            // Keep the pending GPU fence, but discard its old-path throughput
+            // sample when prepare observes completion after this transition.
+            self.submitted_pixels = 0;
+            self.rendering_path = Some(path);
+        }
+    }
+
     pub fn invalidate(&mut self) {
         self.key = None;
         self.completed = 0;
@@ -371,6 +410,9 @@ impl Viewport {
         self.invalidate();
         self.targets = None;
         self.interleaved = false;
+        self.interacting = false;
+        self.refinement_paused = false;
+        self.rendering_path = None;
         self.pixel_budget = INITIAL_PIXELS;
         self.initial_budget = INITIAL_PIXELS;
         self.target_ms = EDIT_TARGET_MS;
@@ -397,6 +439,8 @@ impl Viewport {
             "pixel_budget": self.pixel_budget,
             "preview_size": self.targets.as_ref().map(|targets| targets.preview_size),
             "interleaved": self.interleaved,
+            "interacting": self.interacting,
+            "refinement_paused": self.refinement_paused,
             "deferred": self.targets.as_ref().is_some_and(|targets| targets.deferred.is_some()),
         })
     }
@@ -582,7 +626,7 @@ impl Viewport {
         {
             return Work::Cached;
         }
-        if !refine && !interleaved {
+        if (!refine && !interleaved) || self.interacting || self.refinement_paused {
             return Work::Cached;
         }
         let total = if interleaved {

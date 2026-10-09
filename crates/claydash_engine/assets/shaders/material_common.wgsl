@@ -59,6 +59,15 @@ fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object
         default: { return base; }
     }
 }
+// Shared by simple and refined shading so switching preview quality does not
+// change the indirect fill. Material-specific studio baselines stay explicit.
+fn diffuse_ambient_fill(normal: vec3<f32>, studio_baseline: f32) -> f32 {
+    let daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);
+    var baseline = select(studio_baseline, mix(0.035, 0.20, daylight), camera.world_mode.x == 1u);
+    if camera.world_mode.x == 4u { baseline = 0.08; }
+    let hemisphere = mix(0.60, 1.0, clamp(normal.y * 0.5 + 0.5, 0.0, 1.0));
+    return baseline * camera.lighting_params.x * hemisphere;
+}
 fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object, surface: Surface, use_ao: bool) -> vec3<f32> {
     if HAS_METAL_MATERIAL && surface.metal_response {
         var metal_ao = 1.0;
@@ -94,16 +103,11 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
     var ao = 1.0;
     if use_ao { ao = ambient_occlusion(point, normal); }
     let sky_daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);
-    let sky_ambient = mix(0.035, 0.20, sky_daylight);
-    var ambient = select(select(0.13, 0.23, header.kind == MATERIAL_WOOD), sky_ambient,
-        camera.world_mode.x == 1u) * ao;
+    let ambient = diffuse_ambient_fill(shade_normal,
+        select(0.13, 0.23, header.kind == MATERIAL_WOOD)) * ao;
     var direct_strength = select(0.75, camera.sun_direction.w * sky_daylight,
         camera.world_mode.x == 1u);
-    if camera.world_mode.x == 4u {
-        ambient = 0.08 * ao;
-        direct_strength = 0.12;
-    }
-    ambient *= camera.lighting_params.x;
+    if camera.world_mode.x == 4u { direct_strength = 0.12; }
     return color * (ambient + diffuse * direct_strength * mix(0.55, 1.0, ao)) * (1.0 - metallic)
         + specular_color * specular * (1.0 - roughness * 0.5) * (1.0 - 0.72 * coat)
         + color * fiber_light + vec3(1.0, 0.98, 0.93) * coat_light

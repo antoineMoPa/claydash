@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn scene_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
+    let filter = object_list_filter(ui);
     let selection = selected(tree);
     let scene = objects(tree);
     if let Some(pick) = scene_actions::pending_boolean(tree) {
@@ -19,7 +20,7 @@ pub(super) fn scene_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
         }
         ui.separator();
     }
-    if selection.len() >= 2 {
+    if selection.len() >= 2 && crate::model::selected_variable(tree).is_none() {
         if let Some(target) = scene.iter().find(|object| object.uuid == selection[0]) {
             ui.label(RichText::new(format!("→ {}", target.display_name())).strong());
         }
@@ -48,18 +49,26 @@ pub(super) fn scene_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
         });
         ui.separator();
     }
+    let visible = filtered_object_ids(&scene, &filter);
     for object in scene
         .iter()
         .filter(|object| object.boolean_parent.is_none())
     {
-        subtree_rows(ui, tree, &scene, object, &selection, 0);
+        filtered_subtree_rows(ui, tree, &scene, object, &selection, &visible, 0);
     }
-    let cameras = crate::model::scene_cameras(tree);
+    variable_rows(ui, tree, &filter);
+    let cameras: Vec<_> = crate::model::scene_cameras(tree)
+        .into_iter()
+        .filter(|camera| name_matches(&camera.name, &filter))
+        .collect();
     if !cameras.is_empty() {
         ui.separator();
         ui.label(RichText::new("Cameras").strong());
         for camera in cameras {
-            let response = ui.selectable_label(selection.contains(&camera.uuid), &camera.name);
+            let response = ui.selectable_label(
+                crate::model::selected_variable(tree).is_none() && selection.contains(&camera.uuid),
+                &camera.name,
+            );
             if response.clicked() {
                 set_selected(tree, vec![camera.uuid]);
                 tree.set_path(
@@ -69,26 +78,6 @@ pub(super) fn scene_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
             }
             response.on_hover_text("Select camera object");
         }
-    }
-}
-
-pub(super) fn subtree_rows(
-    ui: &mut egui::Ui,
-    tree: &mut DataTree,
-    scene: &[SdfObject],
-    object: &SdfObject,
-    selection: &[uuid::Uuid],
-    depth: usize,
-) {
-    if depth >= scene.len() {
-        return;
-    }
-    object_row(ui, tree, object, selection, depth);
-    for child in scene
-        .iter()
-        .filter(|child| child.boolean_parent == Some(object.uuid))
-    {
-        subtree_rows(ui, tree, scene, child, selection, depth + 1);
     }
 }
 
@@ -149,10 +138,21 @@ pub(super) fn object_row(
     depth: usize,
 ) {
     ui.push_id(object.uuid, |ui| {
+        let rename_id = ui.id().with("rename");
+        let rename_focus_id = ui.id().with("rename-focus");
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("...", |ui| {
+                    if ui.button("Rename").clicked() {
+                        begin_row_rename(
+                            ui.ctx(),
+                            rename_id,
+                            rename_focus_id,
+                            object.display_name(),
+                        );
+                        ui.close();
+                    }
                     if ui.button("Duplicate").clicked() {
                         commands::duplicate_object(tree, object.uuid);
                         ui.close();
@@ -229,9 +229,8 @@ pub(super) fn object_row(
                                 .on_hover_text(object.operation.label());
                         }
                         primitive_icon(ui, PrimitiveKind::from_object_type(object.object_type));
-                        let selected_now = selection.contains(&object.uuid);
-                        let rename_id = ui.id().with("rename");
-                        let rename_focus_id = ui.id().with("rename-focus");
+                        let selected_now = crate::model::selected_variable(tree).is_none()
+                            && selection.contains(&object.uuid);
                         let response = if let Some(mut draft) =
                             ui.ctx().data(|data| data.get_temp::<String>(rename_id))
                         {
@@ -248,7 +247,7 @@ pub(super) fn object_row(
                                     data.insert_temp(rename_focus_id, true);
                                 });
                             }
-                            let cancel = response.has_focus()
+                            let cancel = (response.has_focus() || response.lost_focus())
                                 && ui.input(|input| input.key_pressed(egui::Key::Escape));
                             let commit = response.has_focus()
                                 && ui.input(|input| input.key_pressed(egui::Key::Enter));
@@ -284,13 +283,16 @@ pub(super) fn object_row(
                         let Some(response) = response else {
                             return;
                         };
-                        if response.double_clicked() {
+                        if response.double_clicked() || response.triple_clicked() {
                             ui.ctx().data_mut(|data| {
                                 data.insert_temp(rename_id, object.display_name());
                                 data.insert_temp(rename_focus_id, false);
                             });
                         }
-                        if response.clicked() && !response.double_clicked() {
+                        if response.clicked()
+                            && !response.double_clicked()
+                            && !response.triple_clicked()
+                        {
                             response.surrender_focus();
                             if !scene_actions::apply_boolean_pick(tree, object.uuid) {
                                 let extend = ui.input(|input| {
@@ -385,6 +387,15 @@ pub(super) fn object_row(
                                 }
                             });
                         response.context_menu(|ui| {
+                            if ui.button("Rename").clicked() {
+                                begin_row_rename(
+                                    ui.ctx(),
+                                    rename_id,
+                                    rename_focus_id,
+                                    object.display_name(),
+                                );
+                                ui.close();
+                            }
                             if ui.button("Duplicate").clicked() {
                                 commands::duplicate_object(tree, object.uuid);
                                 ui.close();
@@ -435,6 +446,7 @@ pub(super) fn rename_object(tree: &mut DataTree, id: uuid::Uuid, name: String) {
     if object.name == name {
         return;
     }
+    tree.make_undo_redo_snapshot();
     object.name = name;
     set_objects(tree, scene);
     tree.make_undo_redo_snapshot();
@@ -446,4 +458,258 @@ pub(super) fn apply_boolean(tree: &mut DataTree, operation: BooleanOperation) {
         return;
     }
     scene_actions::attach(tree, selection[0], &selection[1..], operation);
+}
+
+fn name_matches(name: &str, query: &str) -> bool {
+    query.is_empty() || name.to_lowercase().contains(&query.to_lowercase())
+}
+
+fn filtered_object_ids(scene: &[SdfObject], query: &str) -> std::collections::HashSet<uuid::Uuid> {
+    let mut visible = std::collections::HashSet::new();
+    for object in scene
+        .iter()
+        .filter(|object| name_matches(&object.display_name(), query))
+    {
+        let mut current = Some(object.uuid);
+        let mut ancestry = std::collections::HashSet::new();
+        while let Some(id) = current {
+            if !ancestry.insert(id) {
+                break;
+            }
+            visible.insert(id);
+            current = scene
+                .iter()
+                .find(|object| object.uuid == id)
+                .and_then(|object| object.boolean_parent);
+        }
+    }
+    visible
+}
+
+fn filtered_subtree_rows(
+    ui: &mut egui::Ui,
+    tree: &mut DataTree,
+    scene: &[SdfObject],
+    object: &SdfObject,
+    selection: &[uuid::Uuid],
+    visible: &std::collections::HashSet<uuid::Uuid>,
+    depth: usize,
+) {
+    if depth >= scene.len() || !visible.contains(&object.uuid) {
+        return;
+    }
+    object_row(ui, tree, object, selection, depth);
+    for child in scene
+        .iter()
+        .filter(|child| child.boolean_parent == Some(object.uuid))
+    {
+        filtered_subtree_rows(ui, tree, scene, child, selection, visible, depth + 1);
+    }
+}
+
+fn object_list_filter(ui: &mut egui::Ui) -> String {
+    let id = egui::Id::new("scene-name-filter");
+    let mut query = ui
+        .ctx()
+        .data(|data| data.get_temp::<String>(id))
+        .unwrap_or_default();
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().max(36.0), 24.0),
+        egui::Sense::hover(),
+    );
+    ui.put(
+        rect,
+        egui::TextEdit::singleline(&mut query)
+            .id(id.with("input"))
+            .hint_text("Filter...")
+            .vertical_align(egui::Align::Center)
+            .margin(egui::Margin {
+                left: 6,
+                right: 28,
+                top: 2,
+                bottom: 2,
+            }),
+    );
+    let clear = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 14.0, rect.center().y),
+        egui::vec2(20.0, 20.0),
+    );
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(id.with("rect"), rect);
+        data.insert_temp(id.with("clear-rect"), clear);
+    });
+    if !query.is_empty()
+        && ui
+            .put(
+                clear,
+                egui::Button::image(
+                    egui::Image::new(egui::include_image!("../../assets/icons/lucide/x.svg"))
+                        .fit_to_exact_size(egui::vec2(14.0, 14.0))
+                        .tint(ui.visuals().text_color()),
+                )
+                .frame(false),
+            )
+            .on_hover_text("Clear filter")
+            .clicked()
+    {
+        query.clear();
+        ui.memory_mut(|memory| memory.request_focus(id.with("input")));
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(id, query.clone()));
+    query
+}
+
+fn begin_row_rename(ctx: &egui::Context, rename: egui::Id, focus: egui::Id, name: String) {
+    ctx.data_mut(|data| {
+        data.insert_temp(rename, name);
+        data.insert_temp(focus, false);
+    });
+}
+
+fn variable_rows(ui: &mut egui::Ui, tree: &mut DataTree, filter: &str) {
+    use crate::model::{
+        scene_variables, selected_variable, set_selected_variable,
+    };
+    let before = scene_variables(tree);
+    let mut variables = before.clone();
+    let mut begin_edit = false;
+    let mut remove = None;
+    let world_locked_ids: Vec<_> = variables.vectors.iter().filter(|v| crate::model::is_variable_constraint_reference(&variables,v.id)).map(|v| v.id).collect();
+    for variable in variables
+        .vectors
+        .iter_mut()
+        .filter(|variable| name_matches(point_row_name(&variable.name), filter))
+    {
+        ui.push_id(("variable-row", variable.id), |ui| {
+            let rename = ui.id().with("rename");
+            let focus = ui.id().with("rename-focus");
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+                ui.add(icon_image(
+                    egui::include_image!("../../assets/icons/lucide/circle-dot.svg"),
+                    ui.visuals().text_color(),
+                ));
+                let mut draft = ui.ctx().data(|data| data.get_temp::<String>(rename));
+                if let Some(name) = &mut draft {
+                    let response = ui.add_sized(
+                        egui::vec2((ui.available_width() - 30.0).max(1.0), 24.0),
+                        egui::TextEdit::singleline(name),
+                    );
+                    if !ui
+                        .ctx()
+                        .data(|data| data.get_temp::<bool>(focus))
+                        .unwrap_or(false)
+                    {
+                        response.request_focus();
+                        ui.ctx().data_mut(|data| data.insert_temp(focus, true));
+                    }
+                    let cancel = (response.has_focus() || response.lost_focus())
+                        && ui.input(|input| input.key_pressed(egui::Key::Escape));
+                    let commit = response.has_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(rename, name.clone()));
+                    if cancel || commit || response.lost_focus() {
+                        ui.ctx().data_mut(|data| {
+                            data.remove_temp::<String>(rename);
+                            data.remove_temp::<bool>(focus);
+                        });
+                        if !cancel && variable.name != *name {
+                            begin_edit = true;
+                            variable.name = name.clone();
+                        }
+                    }
+                } else {
+                    let response = ui.add_sized(
+                        egui::vec2((ui.available_width() - 30.0).max(1.0), 24.0),
+                        egui::Button::new(point_row_name(&variable.name))
+                            .sense(egui::Sense::click_and_drag())
+                            .selected(selected_variable(tree) == Some(variable.id))
+                            .frame(false)
+                            .truncate(),
+                    );
+                    if response.double_clicked() || response.triple_clicked() {
+                        begin_row_rename(ui.ctx(), rename, focus, variable.name.clone());
+                    } else if response.clicked() {
+                        set_selected(tree, vec![]);
+                        set_selected_variable(tree, Some(variable.id));
+                        response.surrender_focus();
+                    }
+                    response
+                        .on_hover_text("Double-click to rename")
+                        .context_menu(|ui| {
+                            variable_row_menu(
+                                ui,
+                                variable,
+                                world_locked_ids.contains(&variable.id),
+                                rename,
+                                focus,
+                                &mut remove,
+                                &mut begin_edit,
+                            );
+                        });
+                }
+                ui.menu_button("...", |ui| {
+                    variable_row_menu(ui, variable, world_locked_ids.contains(&variable.id), rename, focus, &mut remove, &mut begin_edit)
+                });
+            });
+        });
+    }
+    if let Some(id) = remove {
+        variables.vectors.retain(|variable| variable.id != id);
+        crate::model::remove_variable_references(&mut variables, id);
+        if selected_variable(tree) == Some(id) {
+            set_selected_variable(tree, None);
+        }
+    }
+    if variables != before {
+        if begin_edit {
+            tree.make_undo_redo_snapshot();
+        }
+        if let Err(error) = crate::model::try_set_scene_variables(tree, variables) {
+            eprintln!("Point edit rejected: {error}");
+        }
+        tree.make_undo_redo_snapshot();
+    }
+}
+
+fn variable_row_menu(
+    ui: &mut egui::Ui,
+    variable: &mut crate::model::VectorVariable,
+    world_locked: bool,
+    rename: egui::Id,
+    focus: egui::Id,
+    remove: &mut Option<uuid::Uuid>,
+    begin_edit: &mut bool,
+) {
+    if ui.button("Rename").clicked() {
+        begin_row_rename(ui.ctx(), rename, focus, variable.name.clone());
+        ui.close();
+    }
+    ui.separator();
+    let before = variable.space;
+    ui.selectable_value(
+        &mut variable.space,
+        crate::model::VariableSpace::World,
+        "World coordinates",
+    );
+    ui.add_enabled_ui(!world_locked, |ui| {
+        ui.selectable_value(&mut variable.space, crate::model::VariableSpace::Local,"Local coordinates");
+    }).response.on_hover_text("Constraint points require World coordinates");
+    *begin_edit |= before != variable.space;
+    ui.separator();
+    if ui.button("Delete").clicked() {
+        *remove = Some(variable.id);
+        *begin_edit = true;
+        ui.close();
+    }
+}
+
+fn point_row_name(name: &str) -> &str {
+    if name.is_empty() {
+        "Point"
+    } else {
+        name
+    }
 }

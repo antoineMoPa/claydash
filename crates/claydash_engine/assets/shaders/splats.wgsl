@@ -48,7 +48,8 @@ struct VertexOutput {
     let alpha = exp(-0.5 * radius2)
         * (1.0 - smoothstep(4.0, 6.25, radius2)) * input.color_opacity.a;
     if alpha < 0.002 { discard; }
-    let shade = camera.right.w
+    let ambient_hemisphere = mix(0.60, 1.0, clamp(input.normal.y * 0.5 + 0.5, 0.0, 1.0));
+    let shade = camera.right.w * ambient_hemisphere
         + camera.light.w * max(dot(normalize(input.normal), camera.light.xyz), 0.0);
     return vec4(input.color_opacity.rgb * shade * alpha * camera.up.w, alpha);
 }

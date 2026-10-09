@@ -10,6 +10,7 @@ use crate::camera::SceneCamera;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ClaydashValue {
+    SceneVariables(super::SceneVariables),
     Animation(AnimationData),
     Material(Material),
     VecMaterialAsset(Vec<MaterialAsset>),
@@ -320,15 +321,47 @@ pub fn set_selected_box_face(tree: &mut DataTree, face: Option<BoxFaceSelection>
     set_selected_modeling_face(tree, face.map(ModelingFaceSelection::Box));
 }
 
-pub fn set_objects(tree: &mut DataTree, value: Vec<SdfObject>) {
+pub fn set_objects(tree: &mut DataTree, mut value: Vec<SdfObject>) {
+    let mut variables = super::scene_variables(tree);
+    super::evaluate_derived_variables(&mut variables);
+    let previous_count = variables.bindings.len() + variables.rigid_bindings.len();
+    variables.bindings.retain(|binding| {
+        !objects_ref(tree)
+            .iter()
+            .any(|object| object.uuid == binding.object)
+            || value.iter().any(|object| object.uuid == binding.object)
+    });
+    variables.rigid_bindings.retain(|binding| {
+        !objects_ref(tree)
+            .iter()
+            .any(|object| object.uuid == binding.object)
+            || value.iter().any(|object| object.uuid == binding.object)
+    });
+    if variables.bindings.len() + variables.rigid_bindings.len() != previous_count
+        || variables != super::scene_variables(tree)
+    {
+        tree.set_path(
+            "scene.variables",
+            ClaydashValue::SceneVariables(variables.clone()),
+        );
+    }
+    super::apply_vector_bindings(&variables, &mut value);
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
 }
 
-pub fn set_objects_transient(tree: &mut DataTree, value: Vec<SdfObject>) {
+pub fn set_objects_transient(tree: &mut DataTree, mut value: Vec<SdfObject>) {
+    let mut variables = super::scene_variables(tree);
+    super::evaluate_derived_variables(&mut variables);
+    tree.set_transient_path(
+        "scene.variables",
+        ClaydashValue::SceneVariables(variables.clone()),
+    );
+    super::apply_vector_bindings(&variables, &mut value);
     tree.set_transient_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
 }
 
 pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    super::set_selected_variable(tree, None);
     set_selected_modeling_face(tree, None);
     set_selected_curve_point(tree, None);
     tree.set_transient_path(
@@ -341,6 +374,7 @@ pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
 }
 
 pub fn set_selected_exact(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    super::set_selected_variable(tree, None);
     set_selected_modeling_face(tree, None);
     set_selected_curve_point(tree, None);
     tree.set_transient_path(

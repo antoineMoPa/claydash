@@ -219,6 +219,15 @@ impl InteractionState {
         commands::execute(command_map, name, tree);
         if name == "grab"
             && matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::EditorState(EditorState::Grabbing)
+            )
+        {
+            self.transform_session = None;
+            self.pending_grab_pointer = Some(self.mouse_position);
+        }
+        if name == "grab"
+            && matches!(
                 tree.get_path("editor.curve_grab_initial"),
                 ClaydashValue::VecSDFObject(_)
             )
@@ -228,6 +237,8 @@ impl InteractionState {
         }
         if name == "quit" || name == "finish" {
             self.curve_grab_mouse_start = None;
+            self.transform_session = None;
+            self.pending_grab_pointer = None;
         }
         if name == "grab"
             && matches!(

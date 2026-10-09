@@ -268,6 +268,7 @@ pub struct Renderer {
     mesh_vertex_count: u32,
     poisson_bake_pipeline: Option<(u64, wgpu::RenderPipeline)>,
     poisson_mesh: poisson_mesh::PoissonMeshState,
+    voxels: voxels::VoxelState,
     splat_camera_buffer: wgpu::Buffer,
     splat_camera_bind_group: wgpu::BindGroup,
     splat_instances: Vec<GpuSplat>,
@@ -323,7 +324,7 @@ pub struct Renderer {
 
 impl Renderer {
     fn mesh_is_visible(&self) -> bool {
-        self.poisson_mesh.shown_root().is_some()
+        self.poisson_mesh.shown_root().is_some() || self.voxels.is_visible()
     }
 }
 
@@ -401,6 +402,7 @@ mod neural_sdf;
 pub use neural_jobs::NeuralStatus;
 mod hybrid_splats;
 pub mod poisson_mesh;
+pub mod voxels;
 mod material_previews;
 mod modifier_gpu;
 mod primitive_upload;

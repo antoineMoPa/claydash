@@ -114,6 +114,7 @@ impl Renderer {
                     false,
                     false,
                     false,
+                    false,
                 );
             }
             let remaining = deadline

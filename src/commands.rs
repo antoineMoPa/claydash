@@ -221,6 +221,14 @@ pub fn register_all(commands: &mut Commands) {
     );
     register(
         commands,
+        "add-point",
+        "Add point",
+        "Create a shared World point at the 3D cursor.",
+        "",
+        create_point,
+    );
+    register(
+        commands,
         "add-image-plane",
         "Add Image Plane",
         "Create an image plane. Set or replace its texture in Object settings.",
@@ -494,6 +502,22 @@ pub fn create_image_plane(tree: &mut DataTree) -> uuid::Uuid {
     set_selected(tree, vec![id]);
     tree.make_undo_redo_snapshot();
     id
+}
+
+fn create_point(tree: &mut DataTree) {
+    let mut variables = crate::model::scene_variables(tree);
+    let id = uuid::Uuid::new_v4();
+    variables.vectors.push(crate::model::VectorVariable {
+        id,
+        name: format!("Point {}", variables.vectors.len() + 1),
+        value: crate::model::cursor_position(tree),
+        space: crate::model::VariableSpace::World,
+    });
+    tree.make_undo_redo_snapshot();
+    crate::model::set_scene_variables(tree, variables);
+    set_selected(tree, vec![]);
+    crate::model::set_selected_variable(tree, Some(id));
+    tree.make_undo_redo_snapshot();
 }
 
 pub fn spawn(tree: &mut DataTree, kind: i32) {

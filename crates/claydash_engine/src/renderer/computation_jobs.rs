@@ -9,7 +9,10 @@ impl Renderer {
         egui: &egui::Context, upload_scene: bool,
     ) {
         {
-            let mut mesh_changed = false;
+            let voxel_actions = egui.data_mut(|data| data.remove_temp::<Vec<super::voxels::VoxelAction>>(
+                egui::Id::new("voxel-actions"))).unwrap_or_default();
+            for action in voxel_actions { self.voxels.handle(action); }
+            let mut mesh_changed = self.voxels.advance(objects, scene_versions[0], egui);
             let actions = egui.data_mut(|data| data.remove_temp::<Vec<super::poisson_mesh::PoissonMeshAction>>(
                 egui::Id::new("poisson-mesh-actions"))).unwrap_or_default();
             for action in actions {
@@ -18,7 +21,7 @@ impl Renderer {
             mesh_changed |= self.poisson_mesh.invalidate_for_revision(mesh_source_revision);
             mesh_changed |= self.poisson_mesh.poll(mesh_source_revision);
             if mesh_changed {
-                self.poisson_mesh.rebuild_buffer(&self.device, objects, &mut self.mesh_buffer, &mut self.mesh_vertex_count);
+                self.poisson_mesh.rebuild_buffer(&self.device, objects, &mut self.mesh_buffer, &mut self.mesh_vertex_count, &self.voxels);
                 self.invalidate_scene();
             }
             if let Some(requested) = self.poisson_mesh.next_request() {
@@ -66,6 +69,7 @@ impl Renderer {
             cancelled |= self.neural_jobs.cancel(id);
             self.group_compute_requests.remove(&id);
             self.poisson_mesh.handle(super::poisson_mesh::PoissonMeshAction::Cancel(id));
+            self.voxels.handle(super::voxels::VoxelAction::Cancel(id));
             #[cfg(not(target_arch = "wasm32"))]
             {
                 if self.group_capture_bake.as_ref().is_some_and(|job| job.root == id) {
@@ -103,6 +107,9 @@ impl Renderer {
         if let Some((root, status)) = self.neural_jobs.computation_status() {
             computations.insert(root, status);
         }
+        if let Some((root, status)) = self.voxels.computation_status() {
+            computations.insert(root, status);
+        }
         if let Some((root, status)) = self.poisson_mesh.computation_status() {
             computations.insert(root, status);
         }
@@ -115,12 +122,17 @@ impl Renderer {
         egui.data_mut(|data| data.insert_temp(super::computation::status_id(), computations));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn has_pending_computations(&self, context: &egui::Context) -> bool {
-        self.poisson_mesh.is_busy() || self.neural_jobs.is_busy()
-            || self.group_capture_bake.is_some() || !self.group_compute_requests.is_empty()
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_pending = self.group_capture_bake.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let capture_pending = false;
+        self.poisson_mesh.is_busy() || self.voxels.is_busy() || self.neural_jobs.is_busy()
+            || capture_pending || !self.group_compute_requests.is_empty()
             || context.data(|data| {
-                data.get_temp::<Vec<poisson_mesh::PoissonMeshAction>>(egui::Id::new("poisson-mesh-actions"))
+                data.get_temp::<Vec<voxels::VoxelAction>>(egui::Id::new("voxel-actions"))
+                    .is_some_and(|actions| !actions.is_empty())
+                    || data.get_temp::<Vec<poisson_mesh::PoissonMeshAction>>(egui::Id::new("poisson-mesh-actions"))
                     .is_some_and(|actions| !actions.is_empty())
                     || ["group-optimization-recompute", "group-optimization-cancel"].iter().any(|key|
                         data.get_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(*key))

@@ -157,12 +157,15 @@ pub(super) fn pack_primitive(
         }
         SdfParams::BezierCurveParams(ref curve) => {
             let offset = polygon_points.len() as u32;
-            for &point in curve.points.iter().take(25) {
+            for (index, &point) in curve.points.iter().take(25).enumerate() {
                 polygon_points.push(GpuPolygonPoint {
                     position: [point.x, point.y],
                 });
                 polygon_points.push(GpuPolygonPoint {
-                    position: [point.z, 0.0],
+                    // The unused coordinate marks an analytic straight segment
+                    // at its first anchor, shared by all curve shader evaluators.
+                    position: [point.z, f32::from(index % 3 == 0
+                        && curve.linear_segment_direction(index / 3).is_some())],
                 });
             }
             let profile_offset = polygon_points.len() as u32;
@@ -251,5 +254,29 @@ pub(super) fn pack_primitive(
         path_radius,
         path_profile_count,
         text_geometry,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn straight_curve_upload_flag_follows_control_edits() {
+        let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::BezierCurve);
+        object.params = SdfParams::BezierCurveParams(crate::model::BezierCurveParams {
+            points: vec![Vec3::ZERO, Vec3::X / 3.0, Vec3::X * (2.0 / 3.0), Vec3::X],
+            closed: false,
+        });
+        for expected in [1.0, 0.0] {
+            let mut points = Vec::new();
+            pack_primitive(&object, std::slice::from_ref(&object), std::slice::from_ref(&object),
+                Vec3::ONE, 1.0, &mut points, &mut 0);
+            assert_eq!(points[1].position[1], expected);
+            // The z coordinates retain their original storage position.
+            assert_eq!(points[1].position[0], 0.0);
+            let SdfParams::BezierCurveParams(curve) = &mut object.params else { unreachable!() };
+            curve.points[1].y = 1e-6;
+        }
     }
 }

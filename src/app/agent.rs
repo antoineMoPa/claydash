@@ -44,6 +44,8 @@ pub enum Request {
     Apply(ApplyArgs),
     ExecuteCommand { name: String },
     SetView(ViewArgs),
+    BuildPoissonMesh { id: uuid::Uuid },
+    GetPoissonMeshStatus { id: uuid::Uuid },
     CaptureViewport(CaptureViewportArgs),
     CaptureOrthographic(CaptureOrthographicArgs),
     Undo,
@@ -122,6 +124,7 @@ pub enum Action {
     SetRenderRepresentation {
         id: uuid::Uuid,
         render_representation: GroupRenderRepresentation,
+        voxels: Option<model::VoxelSettings>,
     },
     SetBoolean {
         id: uuid::Uuid,
@@ -131,6 +134,37 @@ pub enum Action {
     },
     DeleteObject {
         id: uuid::Uuid,
+    },
+    CreateVectorVariable {
+        id: Option<uuid::Uuid>,
+        name: String,
+        value: Vec3,
+        space: Option<model::VariableSpace>,
+    },
+    UpdateVectorVariable {
+        id: uuid::Uuid,
+        name: Option<String>,
+        value: Option<Vec3>,
+        space: Option<model::VariableSpace>,
+    },
+    DeleteVectorVariable {
+        id: uuid::Uuid,
+    },
+    SetVectorBinding {
+        object: uuid::Uuid,
+        target: model::VectorBindingTarget,
+        variable: uuid::Uuid,
+        #[serde(default)]
+        offset: Vec3,
+    },
+    RemoveVectorBinding {
+        object: uuid::Uuid,
+        target: model::VectorBindingTarget,
+    },
+    SetRigidBinding { binding: model::RigidBinding },
+    RemoveRigidBinding { object: uuid::Uuid, target: model::RigidBindingTarget },
+    SetVariables {
+        variables: model::SceneVariables,
     },
     SetWorld {
         world: World,
@@ -386,6 +420,7 @@ impl App {
             Request::Apply(_)
                 | Request::ExecuteCommand { .. }
                 | Request::SetView(_)
+                | Request::BuildPoissonMesh { .. }
                 | Request::Undo
                 | Request::Redo
                 | Request::Open { .. }
@@ -409,6 +444,8 @@ impl App {
                 }
             }
             Request::SetView(args) => self.agent_set_view(args),
+            Request::BuildPoissonMesh { id } => self.agent_build_poisson_mesh(id),
+            Request::GetPoissonMeshStatus { id } => self.agent_poisson_mesh_status(id),
             Request::CaptureViewport(args) => {
                 if self.agent_capture.is_some() || self.pending_render.is_some() || self.guide_screenshot.is_some()
                     || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
@@ -491,6 +528,60 @@ impl App {
         let _ = reply.send(result);
     }
 
+    fn agent_poisson_mesh_target(&self, id: uuid::Uuid) -> Result<(), String> {
+        let object = model::objects_ref(&self.tree).iter().find(|object| object.uuid == id)
+            .ok_or_else(|| format!("unknown object: {id}"))?;
+        if object.boolean_parent.is_some() {
+            return Err("Poisson mesh cache requires a Boolean group root or standalone object".into());
+        }
+        if object.render_representation != GroupRenderRepresentation::PoissonMesh {
+            return Err("set the root render_representation to PoissonMesh first".into());
+        }
+        Ok(())
+    }
+
+    fn agent_build_poisson_mesh(&self, id: uuid::Uuid) -> AgentResult {
+        use crate::renderer::poisson_mesh::PoissonMeshAction;
+        self.agent_poisson_mesh_target(id)?;
+        self.egui.data_mut(|data| {
+            let key = egui::Id::new("poisson-mesh-actions");
+            let mut actions = data.get_temp::<Vec<PoissonMeshAction>>(key).unwrap_or_default();
+            if !actions.iter().any(|action| matches!(action, PoissonMeshAction::Build(root) if *root == id)) {
+                actions.push(PoissonMeshAction::Build(id));
+            }
+            data.insert_temp(key, actions);
+        });
+        self.egui.request_repaint();
+        Ok(json!({"id": id, "status": "queued"}))
+    }
+
+    fn agent_poisson_mesh_status(&self, id: uuid::Uuid) -> AgentResult {
+        use crate::renderer::poisson_mesh::{PoissonMeshAction, PoissonMeshStatus};
+        self.agent_poisson_mesh_target(id)?;
+        let (queued, status) = self.egui.data(|data| {
+            let queued = data.get_temp::<Vec<PoissonMeshAction>>(egui::Id::new("poisson-mesh-actions"))
+                .is_some_and(|actions| actions.iter().any(|action| matches!(action,
+                    PoissonMeshAction::Build(root) if *root == id)));
+            let status = data.get_temp::<HashMap<uuid::Uuid, PoissonMeshStatus>>(egui::Id::new("poisson-mesh-status"))
+                .and_then(|statuses| statuses.get(&id).cloned());
+            (queued, status)
+        });
+        let mut result = if queued { json!({"status": "queued"}) } else {
+            match status {
+                None => json!({"status": "not_built"}),
+                Some(PoissonMeshStatus::Sampling { percent }) => json!({"status": "sampling", "percent": percent}),
+                Some(PoissonMeshStatus::Reconstructing { percent }) => json!({"status": "reconstructing", "percent": percent}),
+                Some(PoissonMeshStatus::Ready { vertices, triangles, showing, available, sample_resolution, mesh_resolution }) =>
+                    json!({"status": "ready", "vertices": vertices, "triangles": triangles,
+                        "showing": showing, "available": available, "sample_resolution": sample_resolution,
+                        "mesh_resolution": mesh_resolution}),
+                Some(PoissonMeshStatus::Failed(error)) => json!({"status": "failed", "error": error}),
+            }
+        };
+        result["id"] = json!(id);
+        Ok(result)
+    }
+
     fn agent_state(&self) -> AgentResult {
         let raw_scene: Value = serde_json::from_slice(&document::serialize_scene(&self.tree)?)
             .map_err(|error| error.to_string())?;
@@ -507,6 +598,7 @@ impl App {
             "objects": model::objects_ref(&self.tree),
             "selection": model::selected_ref(&self.tree),
             "materials": model::material_assets(&self.tree),
+            "variables": model::scene_variables(&self.tree),
             "cameras": model::scene_cameras(&self.tree),
             "active_camera": model::active_camera_id(&self.tree),
             "world": model::world(&self.tree),

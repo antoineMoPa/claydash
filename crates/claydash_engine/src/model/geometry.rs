@@ -213,6 +213,8 @@ pub struct SdfObject {
     pub gaussian_splats: GaussianSplatSettings,
     #[serde(default, skip_serializing_if = "PoissonMeshSettings::is_default")]
     pub poisson_mesh: PoissonMeshSettings,
+    #[serde(default, skip_serializing_if = "VoxelSettings::is_default")]
+    pub voxels: VoxelSettings,
     #[serde(default, skip_serializing_if = "SphereAcceleratorSettings::is_default")]
     pub sphere_accelerator: SphereAcceleratorSettings,
     #[serde(default, skip_serializing_if = "BoxAcceleratorSettings::is_default")]
@@ -288,6 +290,7 @@ impl SdfObject {
             neural_sdf: NeuralSdfSettings::default(),
             gaussian_splats: GaussianSplatSettings::default(),
             poisson_mesh: PoissonMeshSettings::default(),
+            voxels: VoxelSettings::default(),
             sphere_accelerator: SphereAcceleratorSettings::default(),
             box_accelerator: BoxAcceleratorSettings::default(),
             saved_neural_field: None,
@@ -447,6 +450,26 @@ impl SdfObject {
         profile: Option<&[Vec2]>,
         text: Option<&PreparedText>,
     ) -> f32 {
+        if repeat && self.repetition.enabled {
+            if let RepetitionMode::Radial { axis, count, pivot } = self.repetition.mode {
+                let mut distance = f32::INFINITY;
+                for copy in 0..count.clamp(1, 32) {
+                    let angle = -std::f32::consts::TAU * copy as f32 / count.clamp(1, 32) as f32;
+                    let rotation = Mat4::from_translation(pivot)
+                        * Mat4::from_quat(axis.rotation(angle))
+                        * Mat4::from_translation(-pivot);
+                    distance = distance.min(self.distance_with_precomputed_inverse(
+                        point,
+                        rotation * inverse,
+                        distance_scale,
+                        false,
+                        profile,
+                        text,
+                    ));
+                }
+                return distance;
+            }
+        }
         let local = (inverse * point.extend(1.0)).truncate();
         let local = if repeat {
             self.repeated_local_point(local)
@@ -531,7 +554,7 @@ impl SdfObject {
     }
 
     pub(crate) fn repeated_local_point(&self, mut local: Vec3) -> Vec3 {
-        if !self.repetition.enabled {
+        if !self.repetition.enabled || self.repetition.mode != RepetitionMode::Linear {
             return local;
         }
         for axis in 0..3 {

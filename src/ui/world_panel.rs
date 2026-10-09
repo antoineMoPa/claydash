@@ -79,7 +79,16 @@ pub(super) fn world_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
             ui.add(egui::Slider::new(&mut settings.sun_intensity, 0.0..=4.0).text("Sun intensity"));
         }
     }
-    ui.add(egui::Slider::new(&mut settings.ambient_light, 0.0..=30.0).text("Ambient light"));
+    ui.add(
+        egui::Slider::new(&mut settings.ambient_light, 0.0..=30.0)
+            .logarithmic(true)
+            .smallest_positive(0.01)
+            .max_decimals(2)
+            .text("Ambient light ×"),
+    )
+    .on_hover_text(
+        "Indirect fill: 0 disables it, 1 is the calibrated baseline. Direct light is unchanged.",
+    );
     if settings != before {
         tree.set_path("scene.world", ClaydashValue::World(settings));
     }

@@ -2,6 +2,40 @@ use super::*;
 use crate::model::BooleanOperation;
 
 #[test]
+fn palette_add_point_creates_selected_world_point_at_cursor_with_undo() {
+    use crate::model::{scene_variables, selected_variable, VariableSpace};
+
+    let mut tree = DataTree::default();
+    let object = SdfObject::create(TYPE_BOX);
+    set_selected(&mut tree, vec![object.uuid]);
+    set_objects(&mut tree, vec![object]);
+    let cursor = glam::Vec3::new(2.5, -1.0, 4.0);
+    tree.set_path("scene.cursor_position", ClaydashValue::Vec3(cursor));
+    let before = scene_variables(&tree);
+    let mut commands = Commands::new();
+    register_all(&mut commands);
+    let command = commands.commands.get("add-point").unwrap();
+    assert_eq!(command.title, "Add point");
+    let Some(ClaydashValue::Fn(callback)) = command.parameters["callback"].value else {
+        panic!("Add point must provide a command callback");
+    };
+    callback(&mut tree);
+
+    let after = scene_variables(&tree);
+    assert_eq!(after.vectors.len(), before.vectors.len() + 1);
+    let point = after.vectors.last().unwrap();
+    assert_eq!(point.name, "Point 1");
+    assert_eq!(point.value, cursor);
+    assert_eq!(point.space, VariableSpace::World);
+    assert_eq!(selected_variable(&tree), Some(point.id));
+    assert!(selected(&tree).is_empty());
+    tree.undo();
+    assert_eq!(scene_variables(&tree), before);
+    tree.redo();
+    assert_eq!(scene_variables(&tree), after);
+}
+
+#[test]
 fn viewport_modes_keep_outline_and_full_material_rendering_mutually_exclusive() {
     let mut tree = DataTree::default();
     assert_eq!(viewport_mode(&tree), ViewportMode::FullMaterial);
@@ -152,6 +186,7 @@ fn camera_objects_are_regular_transform_targets() {
     set_transform_target(
         &mut scene,
         &mut cameras,
+        &mut crate::model::SceneVariables::default(),
         TransformTargetKind::Camera,
         id,
         transform,

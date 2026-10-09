@@ -1,9 +1,10 @@
 use super::*;
 
 pub(super) fn start_edit(tree: &mut DataTree, state: EditorState) {
-    if selected(tree).is_empty() {
+    if transform_targets(tree).is_empty() {
         return;
     }
+    tree.make_undo_redo_snapshot();
     tree.set_path("editor.constrain_x", ClaydashValue::Bool(false));
     tree.set_path("editor.constrain_y", ClaydashValue::Bool(false));
     tree.set_path("editor.constrain_z", ClaydashValue::Bool(false));
@@ -11,6 +12,13 @@ pub(super) fn start_edit(tree: &mut DataTree, state: EditorState) {
 }
 
 pub fn start_grab(tree: &mut DataTree) {
+    if crate::model::selected_variable(tree).is_some() {
+        start_edit(tree, EditorState::Grabbing);
+        return;
+    }
+    if transform_targets(tree).is_empty() {
+        return;
+    }
     if matches!(
         tree.get_path("editor.curve_grab_initial"),
         ClaydashValue::VecSDFObject(_)
@@ -65,10 +73,16 @@ pub fn start_grab(tree: &mut DataTree) {
 }
 
 pub fn start_scale(tree: &mut DataTree) {
+    if crate::model::selected_variable(tree).is_some() {
+        return;
+    }
     start_edit(tree, EditorState::Scaling);
 }
 
 pub fn start_rotate(tree: &mut DataTree) {
+    if crate::model::selected_variable(tree).is_some() {
+        return;
+    }
     start_edit(tree, EditorState::Rotating);
 }
 
@@ -179,6 +193,7 @@ pub(super) fn cancel(tree: &mut DataTree) {
         return;
     }
     let targets = transform_targets(tree);
+    let mut variables = crate::model::scene_variables(tree);
     let mut scene = objects(tree);
     let mut cameras = crate::model::scene_cameras(tree);
     for target in targets {
@@ -186,13 +201,24 @@ pub(super) fn cancel(tree: &mut DataTree) {
             TransformTargetKind::Object => "editor.initial_transform",
             TransformTargetKind::Group => "editor.initial_group_transform",
             TransformTargetKind::Camera => "editor.initial_camera_transform",
+            TransformTargetKind::Variable => "editor.initial_variable_transform",
         };
         if let ClaydashValue::Transform(transform) = tree.get_path(&format!("{path}.{}", target.id))
         {
-            set_transform_target(&mut scene, &mut cameras, target.kind, target.id, transform);
+            set_transform_target(
+                &mut scene,
+                &mut cameras,
+                &mut variables,
+                target.kind,
+                target.id,
+                transform,
+            );
         }
     }
     set_objects(tree, scene);
+    if variables != crate::model::scene_variables(tree) {
+        crate::model::set_scene_variables(tree, variables);
+    }
     crate::model::set_scene_cameras(tree, cameras);
     tree.set_path(
         "editor.state",

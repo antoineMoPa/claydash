@@ -22,6 +22,8 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
         ui.separator();
         modifiers_panel(ui, tree, runtime);
         group_optimizations_panel(ui, tree);
+        ui.separator();
+        super::variables::variable_bindings_editor(ui, tree);
         return;
     }
     if selection.len() != 1 {
@@ -35,93 +37,115 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
     let object_id = object.uuid;
     let mut keyframes = Vec::new();
     let mut changed = false;
+    let position_linked =
+        crate::model::vector_binding(tree, object_id, crate::model::VectorBindingTarget::Position)
+            .is_some();
     ui.label(RichText::new("Object settings").strong());
     changed |= ui.text_edit_singleline(&mut object.name).changed();
     ui.separator();
-    let reset_position = ui
-        .horizontal(|ui| {
-            ui.label("Position");
-            ui.add_enabled(
-                object.transform.translation != Vec3::ZERO,
-                egui::Button::new("Reset"),
-            )
-            .on_hover_text("Reset position to the origin")
-            .clicked()
-        })
-        .inner;
-    if reset_position {
-        tree.make_undo_redo_snapshot();
-        object.transform.translation = Vec3::ZERO;
-        changed = true;
-    }
-    changed |= animatable_vec3_editor(
-        ui,
-        tree,
-        runtime,
-        &mut object.transform.translation,
-        0.01,
+    let variables = crate::model::scene_variables(tree);
+    let rigid_bound = crate::model::rigid_binding(
+        &variables,
         object_id,
-        [
-            AnimatableProperty::Position(VectorAxis::X),
-            AnimatableProperty::Position(VectorAxis::Y),
-            AnimatableProperty::Position(VectorAxis::Z),
-        ],
-        &mut keyframes,
-    );
-    let reset_rotation = ui
-        .horizontal(|ui| {
-            ui.label("Rotation");
-            ui.add_enabled(
-                object.transform.rotation != glam::Quat::IDENTITY,
-                egui::Button::new("Reset"),
-            )
-            .on_hover_text("Reset rotation to zero on all axes")
-            .clicked()
-        })
-        .inner;
-    if reset_rotation {
-        tree.make_undo_redo_snapshot();
-        object.transform.rotation = glam::Quat::IDENTITY;
-        changed = true;
-    }
-    let (x, y, z) = object.transform.rotation.to_euler(EulerRot::XYZ);
-    let mut degrees = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
-    if animatable_vec3_editor(
-        ui,
-        tree,
-        runtime,
-        &mut degrees,
-        1.0,
-        object_id,
-        [
-            AnimatableProperty::Rotation(VectorAxis::X),
-            AnimatableProperty::Rotation(VectorAxis::Y),
-            AnimatableProperty::Rotation(VectorAxis::Z),
-        ],
-        &mut keyframes,
-    ) {
-        object.transform.rotation = glam::Quat::from_euler(
-            EulerRot::XYZ,
-            degrees.x.to_radians(),
-            degrees.y.to_radians(),
-            degrees.z.to_radians(),
+        crate::model::RigidBindingTarget::Object,
+    )
+    .is_some();
+    let mut reset_pose = false;
+    ui.add_enabled_ui(!rigid_bound, |ui| {
+        let reset_position = ui
+            .horizontal(|ui| {
+                ui.label("Position");
+                ui.add_enabled(
+                    !position_linked && object.transform.translation != Vec3::ZERO,
+                    egui::Button::new("Reset"),
+                )
+                .on_hover_text("Reset position to the origin")
+                .clicked()
+            })
+            .inner;
+        if reset_position {
+            tree.make_undo_redo_snapshot();
+            object.transform.translation = Vec3::ZERO;
+            changed = true;
+        }
+        changed |= ui
+            .add_enabled_ui(!position_linked, |ui| {
+                animatable_vec3_editor(
+                    ui,
+                    tree,
+                    runtime,
+                    &mut object.transform.translation,
+                    0.01,
+                    object_id,
+                    [
+                        AnimatableProperty::Position(VectorAxis::X),
+                        AnimatableProperty::Position(VectorAxis::Y),
+                        AnimatableProperty::Position(VectorAxis::Z),
+                    ],
+                    &mut keyframes,
+                )
+            })
+            .inner;
+        let reset_rotation = ui
+            .horizontal(|ui| {
+                ui.label("Rotation");
+                ui.add_enabled(
+                    object.transform.rotation != glam::Quat::IDENTITY,
+                    egui::Button::new("Reset"),
+                )
+                .on_hover_text("Reset rotation to zero on all axes")
+                .clicked()
+            })
+            .inner;
+        if reset_rotation {
+            tree.make_undo_redo_snapshot();
+            object.transform.rotation = glam::Quat::IDENTITY;
+            changed = true;
+        }
+        let (x, y, z) = object.transform.rotation.to_euler(EulerRot::XYZ);
+        let mut degrees = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+        if animatable_vec3_editor(
+            ui,
+            tree,
+            runtime,
+            &mut degrees,
+            1.0,
+            object_id,
+            [
+                AnimatableProperty::Rotation(VectorAxis::X),
+                AnimatableProperty::Rotation(VectorAxis::Y),
+                AnimatableProperty::Rotation(VectorAxis::Z),
+            ],
+            &mut keyframes,
+        ) {
+            object.transform.rotation = glam::Quat::from_euler(
+                EulerRot::XYZ,
+                degrees.x.to_radians(),
+                degrees.y.to_radians(),
+                degrees.z.to_radians(),
+            );
+            changed = true;
+        }
+        reset_pose = reset_position || reset_rotation;
+        ui.label("Scale");
+        changed |= animatable_vec3_editor(
+            ui,
+            tree,
+            runtime,
+            &mut object.transform.scale,
+            0.01,
+            object_id,
+            [
+                AnimatableProperty::Scale(VectorAxis::X),
+                AnimatableProperty::Scale(VectorAxis::Y),
+                AnimatableProperty::Scale(VectorAxis::Z),
+            ],
+            &mut keyframes,
         );
-        changed = true;
-    }
-    ui.label("Scale");
-    changed |= animatable_vec3_editor(
-        ui,
-        tree,
-        runtime,
-        &mut object.transform.scale,
-        0.01,
-        object_id,
-        [
-            AnimatableProperty::Scale(VectorAxis::X),
-            AnimatableProperty::Scale(VectorAxis::Y),
-            AnimatableProperty::Scale(VectorAxis::Z),
-        ],
-        &mut keyframes,
+    })
+    .response
+    .on_disabled_hover_text(
+        "Transform driven by shared points; unlink the rigid binding to edit it",
     );
     ui.separator();
     if matches!(object.params, SdfParams::PolygonPrismParams(_)) {
@@ -231,7 +255,7 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
             }
         }
         set_objects(tree, scene);
-        if reset_position || reset_rotation {
+        if reset_pose {
             tree.make_undo_redo_snapshot();
         }
     }
@@ -239,6 +263,8 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
     ui.separator();
     modifiers_panel(ui, tree, runtime);
     group_optimizations_panel(ui, tree);
+    ui.separator();
+    super::variables::variable_bindings_editor(ui, tree);
 }
 
 fn camera_object_panel(
@@ -444,99 +470,119 @@ fn group_transform_panel(
     let Some(object) = scene.iter_mut().find(|object| object.uuid == group) else {
         return;
     };
+    let position_linked = crate::model::vector_binding(
+        tree,
+        group,
+        crate::model::VectorBindingTarget::GroupPosition,
+    )
+    .is_some();
     ui.label(RichText::new("Group transform").strong());
     let mut changed = false;
     let mut keyframes = Vec::new();
-    ui.horizontal(|ui| {
-        ui.label("Position");
-        if ui
-            .add_enabled(
-                object.group_transform.translation != Vec3::ZERO,
-                egui::Button::new("Reset"),
-            )
-            .clicked()
-        {
-            object.group_transform.translation = Vec3::ZERO;
+    let variables = crate::model::scene_variables(tree);
+    let rigid_bound =
+        crate::model::rigid_binding(&variables, group, crate::model::RigidBindingTarget::Group)
+            .is_some();
+    ui.add_enabled_ui(!rigid_bound, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Position");
+            if ui
+                .add_enabled(
+                    !position_linked && object.group_transform.translation != Vec3::ZERO,
+                    egui::Button::new("Reset"),
+                )
+                .clicked()
+            {
+                object.group_transform.translation = Vec3::ZERO;
+                changed = true;
+            }
+        });
+        changed |= ui
+            .add_enabled_ui(!position_linked, |ui| {
+                animatable_vec3_editor(
+                    ui,
+                    tree,
+                    runtime,
+                    &mut object.group_transform.translation,
+                    0.01,
+                    group,
+                    [
+                        AnimatableProperty::GroupPosition(VectorAxis::X),
+                        AnimatableProperty::GroupPosition(VectorAxis::Y),
+                        AnimatableProperty::GroupPosition(VectorAxis::Z),
+                    ],
+                    &mut keyframes,
+                )
+            })
+            .inner;
+        ui.horizontal(|ui| {
+            ui.label("Rotation");
+            if ui
+                .add_enabled(
+                    object.group_transform.rotation != glam::Quat::IDENTITY,
+                    egui::Button::new("Reset"),
+                )
+                .clicked()
+            {
+                object.group_transform.rotation = glam::Quat::IDENTITY;
+                changed = true;
+            }
+        });
+        let (x, y, z) = object.group_transform.rotation.to_euler(EulerRot::XYZ);
+        let mut degrees = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+        if animatable_vec3_editor(
+            ui,
+            tree,
+            runtime,
+            &mut degrees,
+            1.0,
+            group,
+            [
+                AnimatableProperty::GroupRotation(VectorAxis::X),
+                AnimatableProperty::GroupRotation(VectorAxis::Y),
+                AnimatableProperty::GroupRotation(VectorAxis::Z),
+            ],
+            &mut keyframes,
+        ) {
+            object.group_transform.rotation = glam::Quat::from_euler(
+                EulerRot::XYZ,
+                degrees.x.to_radians(),
+                degrees.y.to_radians(),
+                degrees.z.to_radians(),
+            );
             changed = true;
         }
-    });
-    changed |= animatable_vec3_editor(
-        ui,
-        tree,
-        runtime,
-        &mut object.group_transform.translation,
-        0.01,
-        group,
-        [
-            AnimatableProperty::GroupPosition(VectorAxis::X),
-            AnimatableProperty::GroupPosition(VectorAxis::Y),
-            AnimatableProperty::GroupPosition(VectorAxis::Z),
-        ],
-        &mut keyframes,
-    );
-    ui.horizontal(|ui| {
-        ui.label("Rotation");
-        if ui
-            .add_enabled(
-                object.group_transform.rotation != glam::Quat::IDENTITY,
-                egui::Button::new("Reset"),
-            )
-            .clicked()
-        {
-            object.group_transform.rotation = glam::Quat::IDENTITY;
-            changed = true;
-        }
-    });
-    let (x, y, z) = object.group_transform.rotation.to_euler(EulerRot::XYZ);
-    let mut degrees = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
-    if animatable_vec3_editor(
-        ui,
-        tree,
-        runtime,
-        &mut degrees,
-        1.0,
-        group,
-        [
-            AnimatableProperty::GroupRotation(VectorAxis::X),
-            AnimatableProperty::GroupRotation(VectorAxis::Y),
-            AnimatableProperty::GroupRotation(VectorAxis::Z),
-        ],
-        &mut keyframes,
-    ) {
-        object.group_transform.rotation = glam::Quat::from_euler(
-            EulerRot::XYZ,
-            degrees.x.to_radians(),
-            degrees.y.to_radians(),
-            degrees.z.to_radians(),
+        ui.horizontal(|ui| {
+            ui.label("Scale");
+            if ui
+                .add_enabled(
+                    object.group_transform.scale != Vec3::ONE,
+                    egui::Button::new("Reset"),
+                )
+                .clicked()
+            {
+                object.group_transform.scale = Vec3::ONE;
+                changed = true;
+            }
+        });
+        changed |= animatable_vec3_editor(
+            ui,
+            tree,
+            runtime,
+            &mut object.group_transform.scale,
+            0.01,
+            group,
+            [
+                AnimatableProperty::GroupScale(VectorAxis::X),
+                AnimatableProperty::GroupScale(VectorAxis::Y),
+                AnimatableProperty::GroupScale(VectorAxis::Z),
+            ],
+            &mut keyframes,
         );
-        changed = true;
-    }
-    ui.horizontal(|ui| {
-        ui.label("Scale");
-        if ui
-            .add_enabled(
-                object.group_transform.scale != Vec3::ONE,
-                egui::Button::new("Reset"),
-            )
-            .clicked()
-        {
-            object.group_transform.scale = Vec3::ONE;
-            changed = true;
-        }
-    });
-    changed |= animatable_vec3_editor(
-        ui,
-        tree,
-        runtime,
-        &mut object.group_transform.scale,
-        0.01,
-        group,
-        [
-            AnimatableProperty::GroupScale(VectorAxis::X),
-            AnimatableProperty::GroupScale(VectorAxis::Y),
-            AnimatableProperty::GroupScale(VectorAxis::Z),
-        ],
-        &mut keyframes,
+    })
+    .response
+    .on_disabled_hover_text(
+        "Transform driven by shared points; unlink the rigid binding to edit it",
     );
     if changed {
         set_objects(tree, scene);

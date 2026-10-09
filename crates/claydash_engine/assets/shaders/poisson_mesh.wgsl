@@ -27,7 +27,9 @@ struct VertexOutput {
     let key = max(dot(normal, camera.light.xyz), 0.0);
     let bounce = max(dot(normal, fill), 0.0);
     let horizon = normal.y * 0.5 + 0.5;
-    let shade = max(camera.right.w, 0.15) + camera.light.w * key * 0.8
-        + 0.32 * bounce + 0.16 * horizon;
+    // Mesh preview fill follows the ambient control, including a true zero.
+    let fill_strength = camera.right.w / 0.13;
+    let shade = camera.right.w + camera.light.w * key * 0.8
+        + fill_strength * (0.32 * bounce + 0.16 * horizon);
     return vec4(vec3(0.76, 0.78, 0.81) * shade * camera.up.w, 1.0);
 }

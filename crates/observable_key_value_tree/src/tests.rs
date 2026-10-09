@@ -86,9 +86,8 @@ fn it_increments_version() {
 
     data2.set_tree("scene", scene.clone());
 
-    // TODO: I would expect this to start at 0
-    // Not so important because at least versions are increasing.
-    assert_eq!(data2.path_version("scene.some.very.deep.property"), 2);
+    // Each replaced node is updated once.
+    assert_eq!(data2.path_version("scene.some.very.deep.property"), 1);
     assert_eq!(data2.path_version("scene.some.very.deep"), 1);
     assert_eq!(data2.path_version("scene.some.very"), 1);
     assert_eq!(data2.path_version("scene.some"), 1);
@@ -101,7 +100,7 @@ fn it_increments_version() {
 
     data2.set_path("scene.some.very.deep", ExampleValueType::I32(5555));
 
-    assert_eq!(data2.path_version("scene.some.very.deep.property"), 2);
+    assert_eq!(data2.path_version("scene.some.very.deep.property"), 1);
     assert_eq!(data2.path_version("scene.some.very.deep"), 2);
     assert_eq!(data2.path_version("scene.some.very"), 2);
     assert_eq!(data2.path_version("scene.some"), 2);
@@ -375,4 +374,173 @@ fn clear_resets_undo_redo_history() {
     assert!(data.versions.is_empty());
     assert_eq!(data.current_version_index, None);
     assert_eq!(data.update_tracker.corresponding_previous_version, None);
+}
+
+#[test]
+fn new_committed_edit_after_redo_can_be_undone_and_redone() {
+    let mut data = ObservableKVTree::<ExampleValueType>::default();
+    data.set_path("scene.value", ExampleValueType::from(1.0));
+    data.make_undo_redo_snapshot();
+    data.set_path("scene.value", ExampleValueType::from(2.0));
+    data.make_undo_redo_snapshot();
+    data.undo();
+    data.redo();
+    data.set_path("scene.value", ExampleValueType::from(3.0));
+    data.make_undo_redo_snapshot();
+    data.undo();
+    assert_eq!(data.get_path("scene.value").unwrap_f32(), 2.0);
+    data.redo();
+    assert_eq!(data.get_path("scene.value").unwrap_f32(), 3.0);
+    data.undo();
+    data.set_path("scene.value", ExampleValueType::from(4.0));
+    data.make_undo_redo_snapshot();
+    data.undo();
+    assert_eq!(data.get_path("scene.value").unwrap_f32(), 2.0);
+    data.redo();
+    assert_eq!(data.get_path("scene.value").unwrap_f32(), 4.0);
+}
+
+#[test]
+fn branching_history_does_not_replay_abandoned_paths() {
+    let mut tree = ObservableKVTree::<Option<i32>>::default();
+    tree.set_path("base", Some(1));
+    tree.make_undo_redo_snapshot();
+    tree.set_path("abandoned", Some(2));
+    tree.make_undo_redo_snapshot();
+    tree.undo();
+    tree.set_path("branch", Some(3));
+    tree.make_undo_redo_snapshot();
+    tree.undo();
+    tree.redo();
+    assert_eq!(tree.get_path("abandoned"), None);
+    assert_eq!(tree.get_path("branch"), Some(3));
+}
+
+#[test]
+fn redo_does_not_replay_starting_snapshot_over_transient_values() {
+    let mut tree = ObservableKVTree::<Option<i32>>::default();
+    tree.set_path("animated", Some(1));
+    tree.make_undo_redo_snapshot();
+    tree.set_path("other", Some(2));
+    tree.make_undo_redo_snapshot();
+    tree.undo();
+    tree.set_transient_path("animated", Some(9));
+    tree.redo();
+    assert_eq!(tree.get_path("animated"), Some(9));
+}
+
+#[test]
+fn navigating_to_current_snapshot_discards_pending_edits() {
+    let mut tree = ObservableKVTree::<Option<i32>>::default();
+    tree.set_path("value", Some(1));
+    let version = tree.make_snapshot();
+    tree.set_path("value", Some(2));
+    tree.go_to_snapshot_with_version(version);
+    assert_eq!(tree.get_path("value"), Some(1));
+    assert!(tree.snapshot_change_accumulator.is_empty());
+}
+
+#[test]
+fn subtree_replacement_marks_each_ancestor_once_and_removes_old_keys() {
+    let mut tree = ObservableKVTree::<Option<i32>>::default();
+    tree.set_path("scene.old.deep", Some(1));
+    let mut scene = ObservableKVTree::default();
+    scene.set_path("new", Some(2));
+    let version = tree.update_tracker.version();
+    tree.set_tree("scene", scene);
+    assert_eq!(tree.update_tracker.version(), version + 1);
+    assert_eq!(tree.path_version("scene.new"), 1);
+    assert!(tree.get_tree("scene.old").is_none());
+    assert_eq!(tree.get_path("scene.new"), Some(2));
+}
+
+#[test]
+fn clear_changes_authored_version() {
+    let mut tree = ObservableKVTree::<Option<i32>>::default();
+    tree.set_path("scene.value", Some(1));
+    let version = tree.authored_version();
+    tree.clear();
+    assert_ne!(tree.authored_version(), version);
+}
+
+#[test]
+fn replacing_a_scene_discards_old_pending_edits_and_history() {
+    let mut tree = ObservableKVTree::<Option<i32>>::default();
+    tree.set_path("scene.old", Some(1));
+    tree.make_undo_redo_snapshot();
+    tree.set_path("scene.old", Some(2));
+    tree.make_undo_redo_snapshot();
+    tree.undo();
+    tree.set_path("scene.pending", Some(3));
+    let mut next = ObservableKVTree::default();
+    next.set_path("new", Some(4));
+    next.make_undo_redo_snapshot();
+    tree.set_tree("scene", next);
+    for _ in 0..3 {
+        tree.undo();
+        tree.redo();
+        assert!(tree.get_tree("scene.old").is_none());
+        assert!(tree.get_tree("scene.pending").is_none());
+        assert_eq!(tree.get_path("scene.new"), Some(4));
+    }
+    assert!(tree.snapshots.is_empty());
+    assert!(tree.get_tree("scene").unwrap().snapshots.is_empty());
+}
+
+#[test]
+fn empty_raw_snapshot_preserves_forward_history_and_version_identity() {
+    let mut tree = ObservableKVTree::<Option<i32>>::default();
+    tree.set_path("value", Some(1));
+    let first = tree.make_snapshot();
+    assert_eq!(tree.make_snapshot(), first);
+    tree.set_path("value", Some(2));
+    let second = tree.make_snapshot();
+    tree.rewind_to_version(first);
+    assert_eq!(tree.make_snapshot(), first);
+    tree.fast_forward_to_version(second);
+    assert_eq!(tree.get_path("value"), Some(2));
+}
+
+#[test]
+fn history_matches_a_value_model_across_many_branches() {
+    for seed in 1..=16u64 {
+        let mut rng = seed;
+        let mut tree = ObservableKVTree::<Option<i32>>::default();
+        tree.set_path("a", Some(0));
+        tree.make_undo_redo_snapshot();
+        let mut states = vec![[Some(0), None, None]];
+        let mut cursor: usize = 0;
+        let paths = ["a", "a.child", "b"];
+        for step in 0..300 {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            match (rng >> 32) % 5 {
+                0 => {
+                    tree.undo();
+                    cursor = cursor.saturating_sub(1);
+                }
+                1 => {
+                    tree.redo();
+                    cursor = (cursor + 1).min(states.len() - 1);
+                }
+                _ => {
+                    let mut state = states[cursor];
+                    let key = ((rng >> 16) % 3) as usize;
+                    state[key] = Some(step);
+                    tree.set_path(paths[key], Some(-1));
+                    tree.set_path(paths[key], state[key]);
+                    tree.make_undo_redo_snapshot();
+                    states.truncate(cursor + 1);
+                    states.push(state);
+                    cursor += 1;
+                }
+            }
+            for (key, path) in paths.iter().enumerate() {
+                assert_eq!(
+                    tree.get_path(path),
+                    states[cursor][key],
+                    "seed {seed}, step {step}, {path}"
+                );
+            }
+        }
+    }
 }

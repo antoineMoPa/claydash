@@ -457,6 +457,7 @@ pub(super) fn insert_transform_keyframes(
         );
         for axis in VectorAxis::ALL {
             let (position, rotation, scale) = match target.kind {
+                commands::TransformTargetKind::Variable => continue,
                 commands::TransformTargetKind::Group => (
                     AnimatableProperty::GroupPosition(axis),
                     AnimatableProperty::GroupRotation(axis),

@@ -37,9 +37,16 @@ impl UiState {
         camera: &Camera,
         blocker_count: usize,
     ) {
+        let selection = selected(tree);
+        let variables = crate::model::scene_variables(tree);
+        if selection
+            .iter()
+            .any(|id| crate::model::is_object_rigid_bound(&variables, *id))
+        {
+            return;
+        }
         draw_selected_polygon_face_overlay(ui, tree, camera);
         draw_selected_cylinder_cap_overlay(ui, tree, camera);
-        let selection = selected(tree);
         if selection.len() == 1 && draw_bezier_gizmo(self, ui, tree, camera, blocker_count) {
             return;
         }

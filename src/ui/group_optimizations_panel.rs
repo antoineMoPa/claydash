@@ -25,6 +25,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     let saved_box_accelerator = scene[index].box_accelerator;
     let saved_splats = scene[index].gaussian_splats;
     let saved_poisson = scene[index].poisson_mesh;
+    let saved_voxels = scene[index].voxels;
     let saved_mode = scene[index].render_representation;
     let mut selected_mode = saved_mode;
     let mut optimization_percent = None;
@@ -77,6 +78,15 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             poisson_mesh_controls(ui, target, scene[index].gaussian_splats.resolution,
                 scene[index].poisson_mesh.resolution);
         }
+    }
+    if selected_mode == crate::model::GroupRenderRepresentation::Voxels {
+        ui.horizontal(|ui| {
+            ui.label("Voxel resolution").on_hover_text("Surface rays per side of each box face. Cube size is the longest bounding-box side divided by resolution. Click Recompute to apply.");
+            ui.add(egui::DragValue::new(&mut scene[index].voxels.resolution)
+                .update_while_editing(false)
+                .range(crate::model::VoxelSettings::MIN_RESOLUTION..=crate::model::VoxelSettings::MAX_RESOLUTION));
+        });
+        voxel_controls(ui, target, scene[index].voxels.resolution);
     }
     if selected_mode.is_depth_accelerator() {
         let settings = match selected_mode {
@@ -181,6 +191,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     if selected_mode != scene[index].render_representation
         || saved_splats != scene[index].gaussian_splats
         || saved_poisson != scene[index].poisson_mesh
+        || saved_voxels != scene[index].voxels
         || saved_settings != scene[index].neural_sdf
         || saved_accelerator != scene[index].sphere_accelerator
         || saved_box_accelerator != scene[index].box_accelerator
@@ -188,6 +199,45 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
         scene[index].render_representation = selected_mode;
         set_objects(tree, scene);
         tree.make_undo_redo_snapshot();
+    }
+}
+
+fn voxel_controls(ui: &mut egui::Ui, target: uuid::Uuid, resolution: u32) {
+    use crate::renderer::voxels::{VoxelAction, VoxelStatus};
+    let mut status = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, VoxelStatus>>(
+        egui::Id::new("voxel-status")))
+        .and_then(|statuses| statuses.get(&target).cloned());
+    let busy = matches!(status, Some(VoxelStatus::Sampling { .. }));
+    let action = match computation_buttons(ui, busy) {
+        Some(ComputationAction::Recompute) => {
+            status = Some(VoxelStatus::Sampling { percent: 0 });
+            Some(VoxelAction::Build(target))
+        }
+        Some(ComputationAction::Cancel) => {
+            status = None;
+            Some(VoxelAction::Cancel(target))
+        }
+        None => None,
+    };
+    let active = matches!(status, Some(VoxelStatus::Sampling { .. }));
+    match status {
+        Some(VoxelStatus::Sampling { percent }) => { ui.weak(format!("Capturing surface voxels · {percent}%")); }
+        Some(VoxelStatus::Ready { cubes, resolution: built_resolution }) => {
+            ui.weak(format!("{cubes} cubes"));
+            if resolution != built_resolution { ui.weak("Settings changed. Click Recompute to apply."); }
+        }
+        Some(VoxelStatus::Failed(error)) => { ui.colored_label(ui.visuals().error_fg_color, error); }
+        None => { ui.weak("Preparing surface voxel capture…"); }
+    }
+    optimization_remaining(ui, target, active, Stage::Sampling);
+    if let Some(action) = action {
+        ui.ctx().data_mut(|data| {
+            let id = egui::Id::new("voxel-actions");
+            let mut actions = data.get_temp::<Vec<VoxelAction>>(id).unwrap_or_default();
+            actions.push(action);
+            data.insert_temp(id, actions);
+        });
+        ui.ctx().request_repaint();
     }
 }
 
@@ -336,6 +386,38 @@ mod progress_tests {
         }
         assert_eq!(context.data(|data| data.get_temp::<std::collections::HashSet<uuid::Uuid>>(request_id)),
             Some(std::collections::HashSet::from([id])));
+    }
+
+    #[test]
+    fn voxel_panel_only_requests_capture_on_click() {
+        let context = egui::Context::default();
+        let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        object.render_representation = crate::model::GroupRenderRepresentation::Voxels;
+        let id = object.uuid;
+        let mut tree = DataTree::default();
+        crate::model::set_objects(&mut tree, vec![object]);
+        crate::model::set_selected_exact(&mut tree, vec![id]);
+        let input = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 1000.0))),
+            events, ..Default::default()
+        };
+        let mut output = context.run_ui(input(vec![]), |ui| group_optimizations_panel(ui, &mut tree));
+        output.textures_delta.clear();
+        let button = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Recompute" => Some(text.pos + text.galley.size() * 0.5),
+            _ => None,
+        }).expect("voxel Recompute button");
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Preparing surface voxel capture…")));
+        let request_id = egui::Id::new("voxel-actions");
+        assert!(context.data(|data| data.get_temp::<Vec<crate::renderer::voxels::VoxelAction>>(request_id)).is_none());
+        for pressed in [true, false] {
+            let mut output = context.run_ui(input(vec![egui::Event::PointerMoved(button), egui::Event::PointerButton {
+                pos: button, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+            }]), |ui| group_optimizations_panel(ui, &mut tree));
+            output.textures_delta.clear();
+        }
+        let actions = context.data(|data| data.get_temp::<Vec<crate::renderer::voxels::VoxelAction>>(request_id)).unwrap();
+        assert!(matches!(actions.as_slice(), [crate::renderer::voxels::VoxelAction::Build(target)] if *target == id));
     }
 
     #[test]

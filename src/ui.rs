@@ -17,6 +17,8 @@ mod scene_panel;
 mod secondary_panels;
 mod selection_tools;
 mod status_bar;
+mod variables;
+mod variable_gizmos;
 pub(crate) use status_bar::RenderProgress;
 mod panel_placement;
 mod ui_widgets;
@@ -426,7 +428,19 @@ impl UiState {
                         .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
                 }
                 self.regions.extend(camera_overlay::draw(ui, tree, camera));
-                if polygon_editor::active(tree).is_none() {
+                let variable_pointer = if polygon_editor::active(tree).is_none()
+                    && !self.selection_tools.box_mode()
+                    && !self.selection_tools.face_cut_mode()
+                    && scene_actions::pending_boolean(tree).is_none()
+                    && (matches!(tree.get_path("editor.state"), ClaydashValue::None | ClaydashValue::EditorState(crate::model::EditorState::Start))
+                        || (crate::model::selected_variable(tree).is_some() && matches!(tree.get_path("editor.state"), ClaydashValue::EditorState(crate::model::EditorState::Grabbing))))
+                    && !matches!(tree.get_path("editor.place_cursor"), ClaydashValue::Bool(true))
+                {
+                    self.draw_variable_gizmos(ui, tree, camera, self.regions.len())
+                } else {
+                    false
+                };
+                if polygon_editor::active(tree).is_none() && !variable_pointer {
                     if let Some((curve, hit)) = object_gizmos::draw_bezier_paths(ui, tree, camera) {
                         set_selected(tree, vec![curve]);
                         self.regions.push(hit);
@@ -459,12 +473,14 @@ impl UiState {
                             && !self.selection_tools.face_cut_mode()
                             && !self.selection_tools.active()
                         {
-                            self.draw_object_gizmos_avoiding(
-                                ui,
-                                tree,
-                                camera,
-                                object_gizmo_blocker_count,
-                            );
+                            if crate::model::selected_variable(tree).is_none() {
+                                self.draw_object_gizmos_avoiding(
+                                    ui,
+                                    tree,
+                                    camera,
+                                    object_gizmo_blocker_count,
+                                );
+                            }
                         } else if !matches!(
                             tree.get_path("editor.place_cursor"),
                             ClaydashValue::Bool(true)

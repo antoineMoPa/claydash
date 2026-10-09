@@ -82,3 +82,20 @@ Preview pipelines enable only the requested material family and sphere geometry.
 Material previews use a dedicated sphere shader assembled from the shared material evaluators, lighting, environment and parameter ABI. Its source omits scene traversal, Boolean operations, captured geometry, modifiers and deferred entrypoints, and includes only the requested evaluator. Ordinary sphere hits are analytic; Fabric retains its sphere distance marcher and woven relief. Full optical transport, finite difference normals, refraction, hemisphere AO, Metal environment integration and transparent alpha are preserved.
 
 On the same Mac/Chrome installation, fresh isolated profiles measured first-use `createRenderPipelineAsync` completion at 129 ms for Basic, 300 ms for Brick, 265 ms for Fabric and 455 ms for Metal. The preserved full-scene preview build took 1,163 ms, 23,297 ms, 26,144 ms and 1,632 ms respectively. Fresh profiles do not guarantee cleared OS/driver caches. Optimized interaction frame gaps stayed within 16.8 ms and produced no WebGPU errors. Independent raw GPU comparisons of all 36 presets found byte-identical alpha and at most 0.016/255 mean RGB difference per card; the default scene viewport also matched exactly. Recheck these measurements when material or transport code changes.
+
+### Ambient fill calibration
+
+World ambient light is a multiplier: `0` disables indirect fill, `1` is the
+baseline, and values up to `30` remain supported in saved scenes. The logarithmic
+slider gives finer adjustment near zero (down to `0.01`) without changing the
+stored value or requiring a scene migration.
+
+Simple Shading and refined surface shading share the same ambient-fill function.
+Diffuse ambient fill uses a soft hemisphere: upward surfaces receive 100%,
+vertical surfaces 80%, and downward surfaces 60% of the baseline. Simple and refined surface shading share the environment and hemisphere fill
+function, including the wood baseline. Exact and deferred shading use the same `0.13` studio baseline; sky and night retain their
+existing environment baselines. Ambient occlusion still attenuates the fill.
+Direct illumination is independent of the ambient multiplier. Gaussian splats
+use the same hemisphere, and mesh preview bounce fill follows the multiplier
+instead of keeping an unconditional brightness floor. Specialized metal
+reflection and wood material responses retain their material-specific calibration.

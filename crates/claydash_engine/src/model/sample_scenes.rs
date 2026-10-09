@@ -1,12 +1,14 @@
+use super::{boolean_distance, object_world_matrix, BooleanOperation, SdfObject, SdfParams};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{
+    BoxParams, GroupRenderRepresentation, Material, MaterialKind, PolygonPrismParams,
+    PrimitiveKind, SphereParams, WoodSpecies,
+};
 use glam::{Mat4, Vec2, Vec3};
 #[cfg(not(target_arch = "wasm32"))]
 use glam::{Quat, Vec4};
 #[cfg(not(target_arch = "wasm32"))]
 use sdf_consts::{TYPE_BOX, TYPE_SPHERE};
-use super::{boolean_distance, object_world_matrix, BooleanOperation, SdfObject, SdfParams};
-#[cfg(not(target_arch = "wasm32"))]
-use super::{BoxParams, GroupRenderRepresentation, Material, MaterialKind, PolygonPrismParams,
-    PrimitiveKind, SphereParams, WoodSpecies};
 
 /// Deterministic visual QA scene: materials above, boolean operations below.
 #[cfg(not(target_arch = "wasm32"))]
@@ -93,6 +95,35 @@ pub fn scene_subtree_sample(
 }
 
 fn subtree_sample_at(
+    point: Vec3,
+    scene: &[SdfObject],
+    index: usize,
+    depth: usize,
+) -> (f32, uuid::Uuid) {
+    let object = &scene[index];
+    if object.repetition.enabled
+        && scene
+            .iter()
+            .any(|child| child.boolean_parent == Some(object.uuid))
+    {
+        if let super::RepetitionMode::Radial { axis, count, pivot } = object.repetition.mode {
+            let matrix = object_world_matrix(scene, object.uuid);
+            let local = matrix.inverse().transform_point3(point);
+            return (0..count.clamp(1, 32))
+                .map(|copy| {
+                    let rotation = axis
+                        .rotation(-std::f32::consts::TAU * copy as f32 / count.clamp(1, 32) as f32);
+                    let copy_point = matrix.transform_point3(pivot + rotation * (local - pivot));
+                    subtree_sample_once(copy_point, scene, index, depth)
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .unwrap();
+        }
+    }
+    subtree_sample_once(point, scene, index, depth)
+}
+
+fn subtree_sample_once(
     point: Vec3,
     scene: &[SdfObject],
     index: usize,
@@ -352,7 +383,8 @@ impl<'a> PreparedSubtreeSampler<'a> {
             && !scene[root].repetition.enabled
             && scene[root].mirror.is_none()
             && children[root].iter().all(|&index| {
-                scene[index].operation == BooleanOperation::Union && children[index].is_empty()
+                scene[index].operation == BooleanOperation::Union
+                    && children[index].is_empty()
                     && scene[index].mirror.is_none()
             });
         let cage_points = vec![Vec3::ZERO; lattices.len()];
@@ -438,9 +470,31 @@ impl<'a> PreparedSubtreeSampler<'a> {
 
     fn sample_at(&self, point: Vec3, index: usize, depth: usize) -> (f32, uuid::Uuid) {
         let object = &self.scene[index];
+        if object.repetition.enabled && !self.nodes[index].children.is_empty() {
+            if let super::RepetitionMode::Radial { axis, count, pivot } = object.repetition.mode {
+                let inverse = self.nodes[index].inverse;
+                let matrix = inverse.inverse();
+                let local = inverse.transform_point3(point);
+                return (0..count.clamp(1, 32))
+                    .map(|copy| {
+                        let rotation = axis.rotation(
+                            -std::f32::consts::TAU * copy as f32 / count.clamp(1, 32) as f32,
+                        );
+                        let copy_point =
+                            matrix.transform_point3(pivot + rotation * (local - pivot));
+                        self.sample_once(copy_point, index, depth)
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .unwrap();
+            }
+        }
+        self.sample_once(point, index, depth)
+    }
+
+    fn sample_once(&self, point: Vec3, index: usize, depth: usize) -> (f32, uuid::Uuid) {
+        let object = &self.scene[index];
         let node = &self.nodes[index];
-        let point = if let Some(mirror) = object.mirror
-        {
+        let point = if let Some(mirror) = object.mirror {
             mirror.fold_point(point, node.group)
         } else {
             point

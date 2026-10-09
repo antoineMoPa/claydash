@@ -364,6 +364,11 @@ fn gizmo_action_at(point: egui::Pos2, geometry: &GizmoGeometry) -> Option<GizmoA
         .map(|(_, axis)| GizmoAction::RotateAxis(axis))
 }
 
+pub(in crate::ui) fn movement_gizmo_contains(camera: &Camera, world: Vec3, scale: f32, point: egui::Pos2) -> bool {
+    selection_gizmo_geometry(camera, world, scale).and_then(|geometry| gizmo_action_at(point, &geometry))
+        .is_some_and(|action| matches!(action, GizmoAction::MoveFree | GizmoAction::MoveAxis(_)))
+}
+
 fn register_polyline_regions(regions: &mut Vec<egui::Rect>, points: &[egui::Pos2]) {
     for segment in points.windows(2) {
         regions.push(egui::Rect::from_two_pos(segment[0], segment[1]).expand(RING_HIT_RADIUS));

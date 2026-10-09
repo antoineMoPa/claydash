@@ -228,10 +228,40 @@ impl BezierCurveParams {
         (p[2] - p[1] * 2.0 + p[0]) * (6.0 * (1.0 - t)) + (p[3] - p[2] * 2.0 + p[1]) * (6.0 * t)
     }
 
+    /// Uniform straight controls, allowing only the rounding incurred by f32
+    /// endpoint interpolation. The length cap keeps large offsets from hiding
+    /// a bend in a short segment. Edited curved controls retain cubic evaluation.
+    pub fn linear_segment_direction(&self, segment: usize) -> Option<Vec3> {
+        let p = self.points.get(segment * 3..segment * 3 + 4)?;
+        if !p.iter().all(|point| point.is_finite()) { return None; }
+        let direction = p[3] - p[0];
+        let length = direction.length();
+        if !length.is_finite() || direction.length_squared() <= 0.0 { return None; }
+        let tolerance = (p[0].abs().max(p[3].abs()) * (2.0 * f32::EPSILON))
+            .min(Vec3::splat(length * 4.0 * f32::EPSILON));
+        for (index, point) in p[1..3].iter().enumerate() {
+            let expected = p[0] + direction * ((index + 1) as f32 / 3.0);
+            if !(point - expected).abs().cmple(tolerance).all() { return None; }
+        }
+        Some(direction)
+    }
+
     pub fn closest(&self, point: Vec3) -> Option<(Vec3, Vec3, usize, f32)> {
         let mut best = None;
         let mut best_distance = f32::INFINITY;
         for segment in 0..self.segment_count().min(Self::MAX_SEGMENTS) {
+            if let Some(direction) = self.linear_segment_direction(segment) {
+                let start = self.points[segment * 3];
+                let t = ((point - start).dot(direction) / direction.length_squared())
+                    .clamp(0.0, 1.0);
+                let position = start + direction * t;
+                let distance = position.distance_squared(point);
+                if distance < best_distance {
+                    best_distance = distance;
+                    best = Some((position, direction, segment, t));
+                }
+                continue;
+            }
             let mut seed = 0.0;
             let mut seed_distance = f32::INFINITY;
             for step in 0..=12 {
@@ -384,6 +414,50 @@ impl BezierCurveParams {
         self.points[1] = last + (last - previous_handle);
         self.closed = true;
         true
+    }
+}
+
+#[cfg(test)]
+mod straight_segment_tests {
+    use super::*;
+
+    fn straight(start: Vec3, end: Vec3) -> BezierCurveParams {
+        let direction = end - start;
+        BezierCurveParams {
+            points: vec![start, start + direction / 3.0, start + direction * (2.0 / 3.0), end],
+            closed: false,
+        }
+    }
+
+    #[test]
+    fn straight_bezier_closest_matches_segment_inside_and_past_endpoints() {
+        let curve = straight(Vec3::new(-1.46, 1.03, -0.6), Vec3::new(0.75, -0.2, 0.7));
+        let direction = curve.points[3] - curve.points[0];
+        assert!(curve.linear_segment_direction(0).is_some());
+        for amount in [-0.4, 0.0, 0.137, 0.6, 1.0, 1.4] {
+            let point = curve.points[0] + direction * amount;
+            let (position, tangent, segment, t) = curve.closest(point).unwrap();
+            assert!((t - amount.clamp(0.0, 1.0)).abs() < 2e-7);
+            assert!(position.distance(curve.points[0] + direction * amount.clamp(0.0, 1.0)) < 4e-7);
+            assert_eq!(tangent, direction);
+            assert_eq!(segment, 0);
+        }
+    }
+
+    #[test]
+    fn near_straight_and_offset_short_curves_keep_their_bend() {
+        let mut curve = straight(Vec3::ZERO, Vec3::X);
+        curve.points[1].y = 1e-6;
+        curve.points[2].y = 1e-6;
+        assert!(curve.linear_segment_direction(0).is_none());
+        let (position, _, _, _) = curve.closest(Vec3::new(0.5, 0.2, 0.0)).unwrap();
+        assert!(position.y > 7e-7, "the cubic bend must remain visible to distance queries");
+
+        let mut short = straight(Vec3::splat(1000.0), Vec3::splat(1000.0) + Vec3::X);
+        short.points[1].y += 0.000_061_035_156;
+        assert!(short.linear_segment_direction(0).is_none());
+        let degenerate = straight(Vec3::ONE, Vec3::ONE);
+        assert!(degenerate.linear_segment_direction(0).is_none());
     }
 }
 

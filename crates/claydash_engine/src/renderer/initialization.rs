@@ -466,6 +466,7 @@ impl Renderer {
             mesh_vertex_count: 0,
             poisson_bake_pipeline: None,
             poisson_mesh: Default::default(),
+            voxels: Default::default(),
             splat_camera_buffer,
             splat_camera_bind_group,
             splat_instances: Vec::new(),

@@ -4,10 +4,13 @@
 // The exact component path deliberately excludes the viewport BVH and captures,
 // keeping source sampling within WebGPU's eight-storage-buffer minimum.
 fn train_exact_component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    if HAS_REPETITION && component_has_radial_group(start, root) {
+        return radial_component_distance(point, start, root);
+    }
     let parent = objects[root];
     let mirrored = mirror_point(point, parent);
     if start == root { return vec2(object_distance(mirrored, parent), f32(root)); }
-    let repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+    let repeated = HAS_REPETITION && parent.repeat_count.w == 1;
     let group_point = select(mirrored, group_repeat_point(mirrored, parent), repeated);
     let parent_point = modifier_point(group_point, parent);
     var parent_shape = parent;

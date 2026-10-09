@@ -288,7 +288,11 @@ impl Renderer {
         if scene_changed && prepared_scene.is_none() && manage_scene_jobs {
             self.group_capture_cache.clear();
         }
-        let mesh_components = if manage_scene_jobs { self.poisson_mesh.shown_components() }
+        let mesh_components = if manage_scene_jobs {
+            let mut components = self.poisson_mesh.shown_components();
+            components.extend(self.voxels.shown_components());
+            components
+        }
             else { std::collections::HashSet::new() };
         let mut scene_objects_storage: Vec<SdfObject> = prepared_scene.as_ref()
             .map_or(source_objects, |prepared| prepared.objects.as_slice())
@@ -330,9 +334,9 @@ impl Renderer {
         // boolean tree in one forward pass while preserving sibling order.
         let ordered = boolean_postorder(scene_objects);
         let objects = &ordered;
-        if manage_scene_jobs && self.mesh_vertex_count > 0 {
+        if manage_scene_jobs && (self.mesh_vertex_count > 0 || self.mesh_is_visible()) {
             self.poisson_mesh.rebuild_buffer(&self.device, scene_objects,
-                &mut self.mesh_buffer, &mut self.mesh_vertex_count);
+                &mut self.mesh_buffer, &mut self.mesh_vertex_count, &self.voxels);
         }
         let mut atlases = self.upload_scene_atlases(objects, source_objects, prepared_scene.as_ref());
         let objects::PackedObjects {
@@ -524,6 +528,9 @@ impl Renderer {
                 material.opacity < 0.999 && material.metallic < 0.999
             })
             .map(|object| {
+                if matches!(object.repeat_count[3], 2 | 3) {
+                    return object.repeat_count[0].clamp(1, 32) as u64;
+                }
                 object.repeat_count[..3]
                     .iter()
                     .map(|&count| count.max(1) as u64)

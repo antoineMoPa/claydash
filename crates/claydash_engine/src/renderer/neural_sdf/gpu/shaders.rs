@@ -40,9 +40,19 @@ pub(super) fn source_shader(capacity: u32) -> String {
     );
     let native = format!("{native}\nfn train_brick_geometry_enabled(object: Object) -> bool {{\n    let header = material_headers[object.component.w];\n    return header.kind == MATERIAL_BRICK && material_params[header.offset + BRICK_RELIEF].x >= 0.001;\n}}\n");
     let native = format!("{native}\nfn train_fabric_geometry_enabled(object: Object) -> bool {{\n    if object.state.y != 1 && object.state.y != 2 {{ return false; }}\n    let header = material_headers[object.component.w];\n    return header.kind == MATERIAL_FABRIC && material_params[header.offset + FABRIC_PITCH].z >= 0.0005;\n}}\n");
-    let source = source.replace(
-        "let distance = primitive_distance(local, object);",
-        "let distance = train_native_primitive_distance(local, object);",
+    // Route every primitive query in the base evaluator through the editable
+    // source, including the finite radial-copy loop. Derived capture buffers
+    // must remain unreachable from the portable training entry point.
+    let base_start = source.find("fn base_object_distance_at(").unwrap();
+    let base_end = base_start + source[base_start..].find("fn combine_operand(").unwrap();
+    let source = format!(
+        "{}{}{}",
+        &source[..base_start],
+        source[base_start..base_end].replace(
+            "primitive_distance(",
+            "train_native_primitive_distance("
+        ),
+        &source[base_end..],
     );
     format!(
         "{source}\n{native}\n{SHARED}\n{}",

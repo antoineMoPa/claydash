@@ -25,6 +25,7 @@ impl App {
         }
         let mut draft = self.tree.clone();
         let mut created = Vec::new();
+        let mut created_variables = Vec::new();
         let mut created_materials = Vec::new();
         let mut created_post_process_passes = Vec::new();
         let mut replace = false;
@@ -106,6 +107,7 @@ impl App {
                 Action::SetRenderRepresentation {
                     id,
                     render_representation,
+                    voxels,
                 } => {
                     let mut objects = model::objects(&draft);
                     let object = objects
@@ -113,6 +115,9 @@ impl App {
                         .find(|object| object.uuid == id)
                         .ok_or_else(|| format!("object {id} does not exist"))?;
                     object.render_representation = render_representation;
+                    if let Some(settings) = voxels {
+                        object.voxels = settings;
+                    }
                     model::set_objects(&mut draft, objects);
                 }
                 Action::SetBoolean {
@@ -138,6 +143,12 @@ impl App {
                     if !objects.iter().any(|object| object.uuid == id) {
                         return Err(format!("object {id} does not exist"));
                     }
+                    let mut variables = model::scene_variables(&draft);
+                    variables.bindings.retain(|binding| binding.object != id);
+                    variables
+                        .rigid_bindings
+                        .retain(|binding| binding.object != id);
+                    model::set_scene_variables(&mut draft, variables);
                     objects.retain(|object| object.uuid != id);
                     for object in &mut objects {
                         if object.boolean_parent == Some(id) {
@@ -151,6 +162,116 @@ impl App {
                         .filter(|selected| *selected != id)
                         .collect();
                     model::set_selected(&mut draft, selection);
+                }
+                Action::CreateVectorVariable {
+                    id,
+                    name,
+                    value,
+                    space,
+                } => {
+                    let mut variables = model::scene_variables(&draft);
+                    let id = id.unwrap_or_else(uuid::Uuid::new_v4);
+                    if variables.vectors.iter().any(|variable| variable.id == id) {
+                        return Err(format!("duplicate variable id {id}"));
+                    }
+                    variables.vectors.push(model::VectorVariable {
+                        id,
+                        name,
+                        value,
+                        space: space.unwrap_or(model::VariableSpace::World),
+                    });
+                    created_variables.push(id);
+                    model::set_scene_variables(&mut draft, variables);
+                }
+                Action::UpdateVectorVariable {
+                    id,
+                    name,
+                    value,
+                    space,
+                } => {
+                    let mut variables = model::scene_variables(&draft);
+                    if value.is_some() && model::is_variable_derived(&variables, id) {
+                        return Err(format!(
+                            "derived variable {id} is read-only; update its driver instead"
+                        ));
+                    }
+                    let variable = variables
+                        .vectors
+                        .iter_mut()
+                        .find(|variable| variable.id == id)
+                        .ok_or_else(|| format!("variable {id} does not exist"))?;
+                    if let Some(name) = name {
+                        variable.name = name;
+                    }
+                    if let Some(value) = value {
+                        variable.value = value;
+                    }
+                    if let Some(space) = space {
+                        variable.space = space;
+                    }
+                    model::set_scene_variables(&mut draft, variables);
+                }
+                Action::DeleteVectorVariable { id } => {
+                    let mut variables = model::scene_variables(&draft);
+                    if !variables.vectors.iter().any(|variable| variable.id == id) {
+                        return Err(format!("variable {id} does not exist"));
+                    }
+                    variables.vectors.retain(|variable| variable.id != id);
+                    model::remove_variable_references(&mut variables, id);
+                    model::set_scene_variables(&mut draft, variables);
+                }
+                Action::SetVectorBinding {
+                    object,
+                    target,
+                    variable,
+                    offset,
+                } => {
+                    let mut variables = model::scene_variables(&draft);
+                    variables
+                        .bindings
+                        .retain(|binding| binding.object != object || binding.target != target);
+                    variables.bindings.push(model::VectorBinding {
+                        object,
+                        target,
+                        variable,
+                        offset,
+                    });
+                    model::set_scene_variables(&mut draft, variables);
+                }
+                Action::RemoveVectorBinding { object, target } => {
+                    let mut variables = model::scene_variables(&draft);
+                    let old_len = variables.bindings.len();
+                    variables
+                        .bindings
+                        .retain(|binding| binding.object != object || binding.target != target);
+                    if old_len == variables.bindings.len() {
+                        return Err(format!("binding on {object} {target:?} does not exist"));
+                    }
+                    model::set_scene_variables(&mut draft, variables);
+                }
+                Action::SetRigidBinding { binding } => {
+                    let mut variables = model::scene_variables(&draft);
+                    variables
+                        .rigid_bindings
+                        .retain(|old| old.object != binding.object || old.target != binding.target);
+                    variables.rigid_bindings.push(binding);
+                    model::set_scene_variables(&mut draft, variables);
+                }
+                Action::RemoveRigidBinding { object, target } => {
+                    let mut variables = model::scene_variables(&draft);
+                    let old_len = variables.rigid_bindings.len();
+                    variables
+                        .rigid_bindings
+                        .retain(|binding| binding.object != object || binding.target != target);
+                    if old_len == variables.rigid_bindings.len() {
+                        return Err(format!(
+                            "rigid binding on {object} {target:?} does not exist"
+                        ));
+                    }
+                    model::set_scene_variables(&mut draft, variables);
+                }
+                Action::SetVariables { variables } => {
+                    model::set_scene_variables(&mut draft, variables)
                 }
                 Action::SetWorld { world } => {
                     draft.set_path("scene.world", model::ClaydashValue::World(world))
@@ -300,6 +421,14 @@ impl App {
             }
         }
         validate_scene(&draft)?;
+        let variables = model::scene_variables(&draft);
+        if !variables.bindings.is_empty()
+            || !variables.rigid_bindings.is_empty()
+            || !variables.four_bar_constraints.is_empty()
+        {
+            model::set_scene_variables(&mut draft, variables);
+            validate_scene(&draft)?;
+        }
         if replace {
             self.replace_scene(draft.get_tree("scene").ok_or("missing scene")?);
         } else {
@@ -312,6 +441,7 @@ impl App {
         Ok(
             json!({"revision": self.scene_revision(), "created_ids": created,
             "created_material_ids": created_materials,
+            "created_variable_ids": created_variables,
             "created_post_process_pass_ids": created_post_process_passes}),
         )
     }

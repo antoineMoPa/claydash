@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::{RepetitionAxis, RepetitionMode};
 
 pub(super) fn operand_panel(
     ui: &mut egui::Ui,
@@ -148,6 +149,76 @@ pub(super) fn repetition_panel(
     let mut repetition = first.repetition;
     let mut keyframes = Vec::new();
     let mut changed = false;
+    let mut snapshot = false;
+    let radial_selected = matches!(repetition.mode, RepetitionMode::Radial { .. });
+    ui.horizontal(|ui| {
+        if ui.selectable_label(!radial_selected, "Linear").clicked() {
+            repetition.mode = RepetitionMode::Linear;
+            changed = true;
+            snapshot = true;
+        }
+        if ui
+            .add(egui::Button::selectable(radial_selected, "Radial"))
+            .on_hover_text(
+                "Rotate the complete object and its Boolean operands around a local pivot.",
+            )
+            .clicked()
+            && !radial_selected
+        {
+            repetition.mode = RepetitionMode::Radial {
+                axis: RepetitionAxis::Z,
+                count: 12,
+                pivot: Vec3::ZERO,
+            };
+            changed = true;
+            snapshot = true;
+        }
+    });
+    if let RepetitionMode::Radial { axis, count, pivot } = &mut repetition.mode {
+        ui.label("Copies around a full circle · includes original");
+        let response = ui.add(egui::DragValue::new(count).range(1..=32).prefix("Count "));
+        changed |= response.changed();
+        snapshot |= response.drag_started() || (response.changed() && !response.dragged());
+        ui.horizontal(|ui| {
+            ui.label("Local axis");
+            for (value, label) in [
+                (RepetitionAxis::X, "X"),
+                (RepetitionAxis::Y, "Y"),
+                (RepetitionAxis::Z, "Z"),
+            ] {
+                let response = ui.selectable_value(axis, value, label);
+                changed |= response.changed();
+                snapshot |= response.changed();
+            }
+        });
+        ui.label("Pivot in primitive local coordinates");
+        ui.horizontal(|ui| {
+            for (index, label) in ["X ", "Y ", "Z "].into_iter().enumerate() {
+                let response = ui.add(
+                    egui::DragValue::new(&mut pivot[index])
+                        .speed(0.02)
+                        .prefix(label),
+                );
+                changed |= response.changed();
+                snapshot |= response.drag_started() || (response.changed() && !response.dragged());
+            }
+        });
+        if snapshot {
+            tree.make_undo_redo_snapshot();
+        }
+        if changed {
+            for object in &mut scene {
+                if selection.contains(&object.uuid) {
+                    object.repetition = repetition;
+                }
+            }
+            set_objects(tree, scene);
+        }
+        return;
+    }
+    if snapshot {
+        tree.make_undo_redo_snapshot();
+    }
     ui.label("Copies · 1 means off for that axis");
     for axis in VectorAxis::ALL {
         let index = axis.index();

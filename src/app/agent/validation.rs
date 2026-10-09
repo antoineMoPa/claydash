@@ -33,6 +33,9 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
         {
             return Err(format!("custom material asset missing on {}", object.uuid));
         }
+        if !object.voxels.is_valid() {
+            return Err(format!("invalid voxel resolution on {}", object.uuid));
+        }
         if !object.sphere_accelerator.is_valid() || !object.box_accelerator.is_valid() {
             return Err(format!(
                 "invalid depth accelerator distance on {}",
@@ -148,6 +151,132 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
                 .ok_or_else(|| format!("missing boolean parent {parent}"))?
                 .boolean_parent;
         }
+    }
+    let variables = model::scene_variables(tree);
+    let mut variable_ids = std::collections::HashSet::new();
+    for variable in &variables.vectors {
+        if !variable_ids.insert(variable.id) {
+            return Err(format!("duplicate variable id {}", variable.id));
+        }
+        if !variable.value.is_finite() {
+            return Err(format!("nonfinite variable value {}", variable.id));
+        }
+    }
+    let mut targets = Vec::new();
+    for binding in &variables.bindings {
+        if targets.contains(&(binding.object, binding.target)) {
+            return Err(format!("duplicate binding target on {}", binding.object));
+        }
+        targets.push((binding.object, binding.target));
+        let variable = variables
+            .vectors
+            .iter()
+            .find(|variable| variable.id == binding.variable)
+            .ok_or_else(|| format!("binding variable {} does not exist", binding.variable))?;
+        let object = objects
+            .iter()
+            .find(|object| object.uuid == binding.object)
+            .ok_or_else(|| format!("binding object {} does not exist", binding.object))?;
+        if !binding.offset.is_finite() || !(variable.value + binding.offset).is_finite() {
+            return Err(format!(
+                "nonfinite binding offset or evaluated value on {}",
+                binding.object
+            ));
+        }
+        if let model::VectorBindingTarget::BezierPoint(index) = binding.target {
+            match &object.params {
+                SdfParams::BezierCurveParams(params) if index < params.points.len() => {}
+                _ => return Err(format!("invalid curve point {index} on {}", binding.object)),
+            }
+        }
+        if variable.space == model::VariableSpace::World {
+            let inverse =
+                model::vector_binding_frame(objects, binding.object, binding.target).inverse();
+            if !inverse.is_finite()
+                || !inverse
+                    .transform_point3(variable.value + binding.offset)
+                    .is_finite()
+            {
+                return Err(format!(
+                    "invalid world binding coordinate frame on {}",
+                    binding.object
+                ));
+            }
+        }
+    }
+    model::four_bar_constraint_order(&variables)?;
+    let mut drivers = std::collections::HashSet::new();
+    for constraint in &variables.four_bar_constraints {
+        if !drivers.insert(constraint.driver) {
+            return Err("four-bar constraints must have distinct driver points".into());
+        }
+        if model::is_variable_derived(&variables, constraint.driver) {
+            return Err("four-bar driver cannot also be a derived point".into());
+        }
+        let point = |id| {
+            variables
+                .vectors
+                .iter()
+                .find(|v| v.id == id && v.space == model::VariableSpace::World)
+                .map(|v| v.value)
+                .ok_or_else(|| format!("four-bar point {id} must exist in World space"))
+        };
+        let driver = point(constraint.driver)?;
+        let lower = point(constraint.lower_pivot)?;
+        let upper = point(constraint.upper_pivot)?;
+        point(constraint.lower_joint)?;
+        point(constraint.upper_joint)?;
+        let pivot_delta = upper - lower;
+        let pivot_distance = pivot_delta.truncate().length();
+        let mut travel_checks = vec![constraint.travel_min, constraint.travel_max, driver.y];
+        if pivot_distance > 1e-6 && pivot_delta.x != 0.0 {
+            let critical = lower.y
+                + pivot_delta.x.signum() * pivot_delta.y * constraint.lower_length / pivot_distance
+                - constraint.driver_y_offset;
+            if critical >= constraint.travel_min && critical <= constraint.travel_max {
+                travel_checks.push(critical);
+            }
+        }
+        for y in travel_checks {
+            if model::solve_planar_four_bar(
+                constraint,
+                Vec3::new(driver.x, y, driver.z),
+                lower,
+                upper,
+            )
+            .is_none()
+            {
+                return Err("four-bar travel is nonfinite or outside the feasible fixed-length linkage range".into());
+            }
+        }
+    }
+    let mut rigid_targets = Vec::new();
+    for binding in &variables.rigid_bindings {
+        if rigid_targets.contains(&(binding.object, binding.target)) {
+            return Err(format!(
+                "duplicate rigid binding target on {}",
+                binding.object
+            ));
+        }
+        rigid_targets.push((binding.object, binding.target));
+        let position_target = match binding.target {
+            model::RigidBindingTarget::Object => model::VectorBindingTarget::Position,
+            model::RigidBindingTarget::Group => model::VectorBindingTarget::GroupPosition,
+        };
+        if variables
+            .bindings
+            .iter()
+            .any(|b| b.object == binding.object && b.target == position_target)
+        {
+            return Err("rigid pose conflicts with a position binding".into());
+        }
+        if !binding.local_origin.is_finite()
+            || !binding.local_aim.is_finite()
+            || !binding.local_up.is_finite()
+        {
+            return Err("nonfinite rigid local anchors".into());
+        }
+        model::rigid_binding_pose(&variables, objects, binding)?;
     }
     Ok(())
 }

@@ -8,6 +8,7 @@ impl UiState {
         pointer: Option<egui::Pos2>,
         camera: &Camera,
         snap_rotation: bool,
+        movement_only: bool,
     ) {
         let hovered = pointer.and_then(|point| gizmo_action_at(point, geometry));
         let (active, active_start_pointer, active_initial_angle, active_initial_axis_vector) =
@@ -30,6 +31,20 @@ impl UiState {
                 1.6
             }
         };
+        if movement_only {
+            for axis in &geometry.axes {
+                self.draw_move_axis_control(
+                    ui,
+                    geometry.center,
+                    axis,
+                    axis.scale_handle,
+                    emphasized(GizmoAction::MoveAxis(axis.axis)),
+                    true,
+                );
+            }
+            self.draw_free_move_control(ui, geometry.free_move, emphasized(GizmoAction::MoveFree));
+            return;
+        }
         let rotation_stroke_width = |action| if emphasized(action) { 3.6 } else { 2.6 };
         let painter = ui.painter();
 
@@ -113,9 +128,7 @@ impl UiState {
             let scale_action = GizmoAction::ScaleAxis(axis.axis);
             let move_action = GizmoAction::MoveAxis(axis.axis);
             let scale_color = gizmo_color(axis_color(axis.axis), emphasized(scale_action));
-            let move_color = gizmo_color(axis_color(axis.axis), emphasized(move_action));
             let scale_stroke = Stroke::new(stroke_width(scale_action), scale_color);
-            let move_stroke = Stroke::new(stroke_width(move_action), move_color);
             let scale_handle = if active == Some(scale_action) {
                 pointer
                     .zip(active_start_pointer)
@@ -127,22 +140,18 @@ impl UiState {
                 axis.scale_handle
             };
             painter.line_segment([geometry.center, scale_handle], scale_stroke);
-            let arrow_base = axis.move_tip - axis.direction * 11.0;
-            paint_dashed_line(painter, scale_handle, arrow_base, move_stroke);
+            self.draw_move_axis_control(
+                ui,
+                geometry.center,
+                axis,
+                scale_handle,
+                emphasized(move_action),
+                false,
+            );
 
             let scale_rect = egui::Rect::from_center_size(scale_handle, egui::vec2(13.0, 13.0));
             painter.rect_stroke(scale_rect, 1.0, scale_stroke, egui::StrokeKind::Inside);
 
-            let perpendicular = egui::vec2(-axis.direction.y, axis.direction.x);
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    axis.move_tip,
-                    arrow_base + perpendicular * 6.0,
-                    arrow_base - perpendicular * 6.0,
-                ],
-                move_color,
-                move_stroke,
-            ));
             self.regions.push(
                 egui::Rect::from_center_size(
                     scale_handle,
@@ -191,20 +200,55 @@ impl UiState {
             Stroke::new(1.3, gizmo_color(Color32::WHITE, hovered.is_some())),
         );
 
-        let free_action = GizmoAction::MoveFree;
-        paint_move_glyph(
-            painter,
-            geometry.free_move,
-            Stroke::new(
-                stroke_width(free_action),
-                gizmo_color(Color32::WHITE, emphasized(free_action)),
-            ),
-        );
-        // Keep this last: focused gesture tests and assistive tooling identify
-        // the free-move control as the final discrete gizmo region.
-        self.regions.push(
-            egui::Rect::from_center_size(geometry.free_move, egui::vec2(28.0, 28.0))
+        self.draw_free_move_control(ui, geometry.free_move, emphasized(GizmoAction::MoveFree));
+    }
+
+    fn draw_move_axis_control(
+        &mut self,
+        ui: &egui::Ui,
+        center: egui::Pos2,
+        axis: &AxisGizmo,
+        shaft_start: egui::Pos2,
+        emphasized: bool,
+        standalone: bool,
+    ) {
+        let color = gizmo_color(axis_color(axis.axis), emphasized);
+        let stroke = Stroke::new(if emphasized { 2.8 } else { 1.6 }, color);
+        let painter = ui.painter();
+        if standalone {
+            painter.line_segment([center, shaft_start], stroke);
+        }
+        let arrow_base = axis.move_tip - axis.direction * 11.0;
+        paint_dashed_line(painter, shaft_start, arrow_base, stroke);
+        let perpendicular = egui::vec2(-axis.direction.y, axis.direction.x);
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                axis.move_tip,
+                arrow_base + perpendicular * 6.0,
+                arrow_base - perpendicular * 6.0,
+            ],
+            color,
+            stroke,
+        ));
+        if standalone {
+            self.regions.push(
+                egui::Rect::from_center_size(
+                    axis.move_tip,
+                    egui::Vec2::splat(HANDLE_HIT_RADIUS * 2.0),
+                )
                 .intersect(ui.clip_rect()),
+            );
+        }
+    }
+
+    fn draw_free_move_control(&mut self, ui: &egui::Ui, center: egui::Pos2, emphasized: bool) {
+        paint_move_glyph(
+            ui.painter(),
+            center,
+            Stroke::new(1.7, gizmo_color(Color32::WHITE, emphasized)),
+        );
+        self.regions.push(
+            egui::Rect::from_center_size(center, egui::vec2(28.0, 28.0)).intersect(ui.clip_rect()),
         );
     }
 
@@ -303,16 +347,21 @@ impl UiState {
             if let Some(Gesture::Transform(session)) = self.selection_tools.gesture.take() {
                 let mut scene = objects(tree);
                 let mut cameras = crate::model::scene_cameras(tree);
+                let mut variables = crate::model::scene_variables(tree);
                 for target in session.targets {
                     commands::set_transform_target(
                         &mut scene,
                         &mut cameras,
+                        &mut variables,
                         target.kind,
                         target.id,
                         target.transform,
                     );
                 }
                 set_objects(tree, scene);
+                if variables != crate::model::scene_variables(tree) {
+                    crate::model::set_scene_variables(tree, variables);
+                }
                 crate::model::set_scene_cameras(tree, cameras);
             }
             self.selection_tools.gesture = None;
@@ -330,11 +379,12 @@ impl UiState {
             && scene
                 .iter()
                 .any(|object| object.uuid == selection[0] && object.lattice.is_some());
-        let transform_targets = if lattice_selected {
-            Vec::new()
-        } else {
-            commands::transform_targets(tree)
-        };
+        let transform_targets =
+            if lattice_selected && crate::model::selected_variable(tree).is_none() {
+                Vec::new()
+            } else {
+                commands::transform_targets(tree)
+            };
         if !self.selection_tools.box_mode() && !transform_targets.is_empty() {
             let center = transform_targets
                 .iter()
@@ -342,8 +392,23 @@ impl UiState {
                 .sum::<Vec3>()
                 / transform_targets.len() as f32;
             if let Some(geometry) = selection_gizmo_geometry(camera, center, scale) {
-                self.draw_transform_gizmo(ui, &geometry, pointer, camera, snap_rotation);
-                let hovered_action = pointer.and_then(|point| gizmo_action_at(point, &geometry));
+                let movement_only = transform_targets
+                    .iter()
+                    .any(|target| target.kind == commands::TransformTargetKind::Variable);
+                self.draw_transform_gizmo(
+                    ui,
+                    &geometry,
+                    pointer,
+                    camera,
+                    snap_rotation,
+                    movement_only,
+                );
+                let hovered_action = pointer
+                    .and_then(|point| gizmo_action_at(point, &geometry))
+                    .filter(|action| {
+                        !movement_only
+                            || matches!(action, GizmoAction::MoveFree | GizmoAction::MoveAxis(_))
+                    });
                 if let (Some(point), Some(action)) = (pointer, hovered_action) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                     ui.interact(
@@ -353,6 +418,7 @@ impl UiState {
                     )
                     .on_hover_text(action.tooltip());
                     if pressed && !navigating && !self.selection_tools.active() {
+                        tree.make_undo_redo_snapshot();
                         let physical = Vec2::new(point.x, point.y) * scale;
                         let delta = point - geometry.center;
                         let axis_screen_direction = match action {
@@ -429,6 +495,7 @@ impl UiState {
                 if let Some(p) = pointer {
                     let mut scene = scene.clone();
                     let mut cameras = crate::model::scene_cameras(tree);
+                    let mut variables = crate::model::scene_variables(tree);
                     let mut operation = match session.action {
                         GizmoAction::MoveFree => {
                             let physical = Vec2::new(p.x, p.y) * scale;
@@ -545,6 +612,7 @@ impl UiState {
                         commands::set_transform_target(
                             &mut scene,
                             &mut cameras,
+                            &mut variables,
                             target.kind,
                             target.id,
                             crate::model::Transform {
@@ -555,6 +623,9 @@ impl UiState {
                         );
                     }
                     set_objects(tree, scene);
+                    if variables != crate::model::scene_variables(tree) {
+                        crate::model::set_scene_variables(tree, variables);
+                    }
                     crate::model::set_scene_cameras(tree, cameras);
                 }
                 if released {

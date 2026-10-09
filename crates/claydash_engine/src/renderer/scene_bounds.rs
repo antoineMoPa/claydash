@@ -82,6 +82,9 @@ pub(super) fn boolean_component_bounds(
 ) -> Vec<Option<ObjectBound>> {
     let mut result: Vec<_> = bounds.iter().copied().map(Some).collect();
     for (index, object) in objects.iter().enumerate() {
+        if object.repeat_count[3] == 3 {
+            result[index] = result[index].map(|bound| radial_group_bound(object, bound));
+        }
         let parent = object.meta[3];
         if parent < 0 {
             continue;
@@ -126,6 +129,47 @@ pub(super) fn boolean_component_bounds(
         };
     }
     result
+}
+
+fn radial_group_bound(object: &GpuObject, bound: ObjectBound) -> ObjectBound {
+    let inverse = glam::Mat4::from_cols(
+        glam::Vec4::from_array(object.inverse_rows[0]),
+        glam::Vec4::from_array(object.inverse_rows[1]),
+        glam::Vec4::from_array(object.inverse_rows[2]),
+        glam::Vec4::W,
+    )
+    .transpose();
+    let matrix = inverse.inverse();
+    let pivot = Vec3::from_slice(&object.repeat_spacing[..3]);
+    let axis = match object.repeat_count[1] {
+        0 => crate::model::RepetitionAxis::X,
+        1 => crate::model::RepetitionAxis::Y,
+        _ => crate::model::RepetitionAxis::Z,
+    };
+    let count = object.repeat_count[0].clamp(1, 32);
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    for copy in 0..count {
+        let rotation = axis.rotation(std::f32::consts::TAU * copy as f32 / count as f32);
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    let corner = bound.center + bound.half_extent * Vec3::new(x, y, z);
+                    let local = inverse.transform_point3(corner);
+                    let rotated = matrix.transform_point3(pivot + rotation * (local - pivot));
+                    minimum = minimum.min(rotated);
+                    maximum = maximum.max(rotated);
+                }
+            }
+        }
+    }
+    let half_extent = (maximum - minimum) * 0.5;
+    ObjectBound {
+        center: (minimum + maximum) * 0.5,
+        half_extent,
+        radius: half_extent.length(),
+        ..bound
+    }
 }
 
 pub(super) fn specialized_shader_source(source: &str, capacity: u32) -> String {
@@ -423,5 +467,52 @@ pub(super) fn mark_depth_accelerator_subtrees(objects: &mut [GpuObject]) {
             ancestor = (parent >= 0).then_some(parent as usize);
         }
         objects[index].operand_tree[2] = capture_root.map_or(0, |root| root as u32 + 1);
+    }
+}
+
+#[cfg(test)]
+mod radial_group_bounds_tests {
+    use super::*;
+    use bytemuck::Zeroable;
+
+    #[test]
+    fn nested_radial_group_bounds_propagate_distant_additive_children() {
+        let mut objects = vec![GpuObject::zeroed(); 3];
+        for (index, object) in objects.iter_mut().enumerate() {
+            object.meta[3] = if index == 2 { -1 } else { index as i32 + 1 };
+            object.inverse_rows = inverse_affine_rows(glam::Mat4::IDENTITY);
+        }
+        objects[1].repeat_count = [6, 2, 1, 3];
+        objects[1].repeat_spacing = [-0.8, 0.0, 0.0, 0.0];
+        objects[2].repeat_count = [3, 1, 1, 3];
+        let bounds: Vec<_> = [
+            (Vec3::new(4.0, 0.0, 0.0), 0.2),
+            (Vec3::ZERO, 0.65),
+            (Vec3::ZERO, 0.1),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (center, size))| ObjectBound {
+            center,
+            half_extent: Vec3::splat(size),
+            radius: size * 3.0_f32.sqrt(),
+            object_index: index as u32,
+        })
+        .collect();
+        let reduced = boolean_component_bounds(&objects, &bounds);
+        let pivot = Vec3::new(-0.8, 0.0, 0.0);
+        for inner in 0..6 {
+            for outer in 0..3 {
+                let inner_rotation =
+                    glam::Quat::from_rotation_z(std::f32::consts::TAU * inner as f32 / 6.0);
+                let outer_rotation =
+                    glam::Quat::from_rotation_y(std::f32::consts::TAU * outer as f32 / 3.0);
+                let point =
+                    outer_rotation * (pivot + inner_rotation * (Vec3::new(4.0, 0.0, 0.0) - pivot));
+                let root = reduced[2].unwrap();
+                assert!((point - root.center).abs().cmple(root.half_extent).all());
+                assert!((point - root.center).length() <= root.radius);
+            }
+        }
     }
 }

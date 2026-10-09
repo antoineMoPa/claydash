@@ -81,10 +81,12 @@ fn lit(position: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, roughness: f32
     let diffuse = max(dot(normal, light), 0.0);
     let specular = pow(max(dot(normal, halfway), 0.0), mix(256.0, 3.0, roughness * roughness));
     let daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);
-    var ambient = select(0.16, mix(0.035, 0.20, daylight), camera.world_mode.x == 1u);
+    var ambient = select(0.13, mix(0.035, 0.20, daylight), camera.world_mode.x == 1u);
     var direct = select(0.75, camera.sun_direction.w * daylight, camera.world_mode.x == 1u);
     if camera.world_mode.x == 4u { ambient = 0.08; direct = 0.12; }
-    ambient *= camera.lighting_params.x;
+    // Match the exact surface shader's calibrated hemispherical fill.
+    let ambient_hemisphere = mix(0.60, 1.0, clamp(normal.y * 0.5 + 0.5, 0.0, 1.0));
+    ambient *= camera.lighting_params.x * ambient_hemisphere;
     return albedo * (ambient * ao + diffuse * direct * mix(0.55, 1.0, ao)) * (1.0 - metallic)
         + mix(vec3(reflectivity), albedo, metallic) * specular * (1.0 - roughness * 0.5);
 }

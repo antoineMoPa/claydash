@@ -256,6 +256,7 @@ impl InteractionState {
                 commands::TransformTargetKind::Object => "editor.initial_transform",
                 commands::TransformTargetKind::Group => "editor.initial_group_transform",
                 commands::TransformTargetKind::Camera => "editor.initial_camera_transform",
+                commands::TransformTargetKind::Variable => "editor.initial_variable_transform",
             };
             tree.set_path(
                 &format!("{path}.{}", target.id),
@@ -263,7 +264,10 @@ impl InteractionState {
             );
         }
         let initial_cursor = if mode == EditorState::Grabbing {
-            camera.cursor_on_plane(self.mouse_position, center)
+            camera.cursor_on_plane(
+                self.pending_grab_pointer.take().unwrap_or(self.mouse_position),
+                center,
+            )
         } else {
             camera.cursor_at_depth(self.mouse_position, center)
         };

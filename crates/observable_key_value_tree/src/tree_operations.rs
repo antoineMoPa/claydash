@@ -48,35 +48,39 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
         );
     }
 
-    /// Set the whole subtree at given path
-    /// This is useful to deserialize the tree.
+    /// Replaces persisted subtree data, removing absent keys.
+    /// This load boundary resets this tree's entire history and pending edits;
+    /// replacement is not undoable and does not emit channel notifications.
     pub fn set_tree(&mut self, path: &str, value: ObservableKVTree<ValueType>) {
         self.authored_version = self.authored_version.wrapping_add(1);
         let parts = path.split(".");
         self.set_path_with_parts(parts.collect(), value, true);
-        self.notify_change();
+        self.reset_history();
     }
 
-    /// Get the whole subtree at given path
-    /// This is useful to serialize the tree.
+    /// Returns a cloned value, or the explicit none value for a missing path.
     pub fn get_path(&self, path: &str) -> ValueType {
-        match self.get_path_with_parts(&path.split(".").collect()) {
-            Some(data) => data.value,
-            _ => ValueType::none(),
-        }
+        self.get_path_ref(path)
+            .cloned()
+            .unwrap_or_else(ValueType::none)
     }
 
     /// Borrows a value without cloning its containing tree.
     pub fn get_path_ref(&self, path: &str) -> Option<&ValueType> {
+        self.get_tree_ref(path).map(|node| &node.value)
+    }
+
+    pub(super) fn get_tree_ref(&self, path: &str) -> Option<&Self> {
         let mut node = self;
         for part in path.split('.') {
             node = node.subtree.get(part)?;
         }
-        Some(&node.value)
+        Some(node)
     }
 
-    pub fn get_tree(&self, path: &str) -> Option<ObservableKVTree<ValueType>> {
-        return self.get_path_with_parts(&path.split(".").collect());
+    /// Returns an owned copy of the subtree, including its runtime metadata.
+    pub fn get_tree(&self, path: &str) -> Option<Self> {
+        self.get_tree_ref(path).cloned()
     }
 
     fn set_path_with_parts(
@@ -85,81 +89,48 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
         value: ObservableKVTree<ValueType>,
         override_subtree: bool,
     ) {
+        let leaf = self.subtree.entry(parts[0].to_owned()).or_default();
         if parts.len() == 1 {
-            if !self.subtree.contains_key(parts[0]) {
-                self.subtree
-                    .insert(parts[0].to_string(), ObservableKVTree::default());
-            }
-
-            let mut notified_update = false;
-
-            let leaf = &mut self.subtree.get_mut(parts[0]).unwrap();
-            leaf.value = value.value;
-            leaf.update_tracker.notify_update();
-
             if override_subtree {
-                let mut keys_to_remove: Vec<String> = Vec::new();
-                for (key, _subvalue) in leaf.subtree.iter() {
-                    if !value.subtree.contains_key(key) {
-                        // Value does not exist in new subtree. remove.
-                        keys_to_remove.push(key.clone());
-                    }
-                }
-
-                for key in keys_to_remove {
-                    leaf.subtree.remove(&key);
-                }
-
-                for (key, subvalue) in value.subtree.iter() {
-                    if !value.subtree.contains_key(key) {
-                        leaf.subtree.insert(key.clone(), subvalue.clone());
-                    } else {
-                        let parts: Vec<&str> = vec![key];
-                        leaf.set_path_with_parts(parts, subvalue.clone(), override_subtree);
-                        // Prevent a double update
-                        notified_update = true;
-                    }
-                }
-
-                if !notified_update {
-                    leaf.update_tracker.notify_update();
-                }
-
-                return;
+                leaf.replace_subtree_values(value);
+            } else {
+                leaf.value = value.value;
+                leaf.notify_change();
             }
         } else {
-            if !self.subtree.contains_key(parts[0]) {
-                self.subtree
-                    .insert(parts[0].to_string(), ObservableKVTree::default());
-            }
-            let subtree = &mut self.subtree.get_mut(parts[0]).unwrap();
-            subtree.set_path_with_parts(parts[1..].to_vec(), value, override_subtree);
+            leaf.set_path_with_parts(parts[1..].to_vec(), value, override_subtree);
         }
-
         self.notify_change();
     }
 
-    fn get_path_with_parts(&self, parts: &Vec<&str>) -> Option<ObservableKVTree<ValueType>> {
-        if parts.len() == 1 {
-            return self.subtree.get(parts[0]).cloned();
-        } else {
-            if !self.subtree.contains_key(parts[0]) {
-                return None;
-            }
-            let subtree = &self.subtree.get(parts[0]).unwrap();
-            let value = match subtree.get_path_with_parts(&parts[1..].to_vec()) {
-                Some(value) => value,
-                _ => return None,
-            };
-            return Some(value);
+    // Copy only persisted data; imported listeners and undo history belong to
+    // the source tree. Retained nodes keep their local version counters.
+    fn replace_subtree_values(&mut self, value: Self) {
+        self.reset_history();
+        self.value = value.value;
+        self.subtree
+            .retain(|key, _| value.subtree.contains_key(key));
+        for (key, child) in value.subtree {
+            self.subtree
+                .entry(key)
+                .or_default()
+                .replace_subtree_values(child);
         }
+        self.notify_change();
     }
 
+    /// Resets data, listeners and history. Authored revision still advances.
     pub fn clear(&mut self) {
+        self.authored_version = self.authored_version.wrapping_add(1);
         self.subtree.clear();
         self.value = ValueType::none();
         self.update_tracker.clear();
         self.update_listeners.clear();
+        self.reset_history();
+    }
+
+    fn reset_history(&mut self) {
+        self.update_tracker.corresponding_previous_version = None;
         self.snapshot_change_accumulator.clear();
         self.snapshots.clear();
         self.last_snapshot_version = i32::default();
@@ -170,7 +141,29 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     ///  ---------------------  SNAPSHOT MANAGEMENT  ---------------------
 
     pub fn make_snapshot(&mut self) -> i32 {
+        if self.snapshot_change_accumulator.is_empty() {
+            if let Some(version) = self.update_tracker.corresponding_previous_version {
+                return version;
+            }
+        }
+        // Snapshots are deltas along one timeline. A new branch must remove
+        // abandoned deltas as well as their Undo/Redo version references.
+        if let Some(current) = self.update_tracker.corresponding_previous_version {
+            if let Some(position) = self.snapshots.iter().position(|s| s.version == current) {
+                self.snapshots.truncate(position + 1);
+                // Snapshot versions increase along the retained timeline.
+                self.versions.retain(|version| *version <= current);
+                self.current_version_index = self.versions.len().checked_sub(1).map(|i| i as i32);
+            }
+        }
         let version = self.update_tracker.version;
+        if self
+            .snapshots
+            .last()
+            .is_some_and(|snapshot| snapshot.version == version)
+        {
+            return version;
+        }
         self.snapshots.push(Snapshot {
             version,
             old_values: self.snapshot_change_accumulator.old_values.clone(),
@@ -178,6 +171,8 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
         });
         self.snapshot_change_accumulator.clear();
         self.last_snapshot_version = version;
+        // The materialized tree now corresponds to this newly captured state.
+        self.update_tracker.corresponding_previous_version = Some(version);
         return version;
     }
 
@@ -207,99 +202,49 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
         }
     }
 
+    /// Restores a captured state, discarding pending authored changes.
+    /// Transient values on paths untouched by replay remain unchanged.
     pub fn go_to_snapshot_with_version(&mut self, version: i32) {
-        let snapshot: Option<Snapshot<ValueType>> = self
+        let target = self
             .snapshots
             .iter()
-            .find(|snapshot| snapshot.version == version)
-            .cloned();
+            .position(|s| s.version == version)
+            .expect("snapshot with this version does not exist");
+        let current = self
+            .update_tracker
+            .corresponding_previous_version
+            .and_then(|v| self.snapshots.iter().position(|s| s.version == v))
+            .expect("tree has no current snapshot");
 
-        match snapshot {
-            Some(snapshot) => {
-                let current_version = match self.update_tracker.corresponding_previous_version {
-                    Some(version) => version,
-                    None => self.update_tracker.version,
-                };
-
-                if snapshot.version < current_version {
-                    self.rewind_to_version(snapshot.version);
-                }
-                if snapshot.version > current_version {
-                    self.fast_forward_to_version(snapshot.version);
-                }
-                self.snapshot_change_accumulator.clear();
+        let pending = self.snapshot_change_accumulator.clone();
+        self.revert_snapshot(&pending);
+        if target < current {
+            for i in (target + 1..=current).rev() {
+                self.revert_snapshot(&self.snapshots[i].clone());
             }
-            None => {
-                panic!("snapshot with this name does not exist");
+        } else {
+            for i in current + 1..=target {
+                self.apply_snapshot(&self.snapshots[i].clone());
             }
         }
+        self.snapshot_change_accumulator.clear();
+        self.update_tracker.corresponding_previous_version = Some(version);
+        self.current_version_index = self
+            .versions
+            .iter()
+            .position(|v| *v == version)
+            .map(|i| i as i32);
     }
 
     pub fn rewind_to_version(&mut self, version: i32) {
-        let current_version = match self.update_tracker.corresponding_previous_version {
-            Some(version) => version,
-            None => self.update_tracker.version,
-        };
-        let current_position = match self
-            .snapshots
-            .iter()
-            .position(|snapshot| snapshot.version == current_version)
-        {
-            Some(position) => position,
-            None => {
-                self.make_snapshot();
-                self.snapshots.len() - 1
-            }
-        };
-
-        let snapshot_position = self
-            .snapshots
-            .iter()
-            .position(|snapshot| snapshot.version == version)
-            .unwrap();
-        let mut i = current_position;
-
-        while i > snapshot_position {
-            self.revert_snapshot(&self.snapshots[i].clone());
-            i -= 1;
-        }
-
-        self.update_tracker.corresponding_previous_version = Some(version);
+        self.go_to_snapshot_with_version(version);
     }
 
     pub fn fast_forward_to_version(&mut self, version: i32) {
-        let current_version = match self.update_tracker.corresponding_previous_version {
-            Some(version) => version,
-            None => self.update_tracker.version,
-        };
-        let current_position = match self
-            .snapshots
-            .iter()
-            .position(|snapshot| snapshot.version == current_version)
-        {
-            Some(position) => position,
-            None => {
-                //self.make_snapshot();
-                self.snapshots.len() - 1
-            }
-        };
-
-        let snapshot_position = self
-            .snapshots
-            .iter()
-            .position(|snapshot| snapshot.version == version)
-            .unwrap();
-        let mut i = current_position;
-
-        while i <= snapshot_position {
-            self.apply_snapshot(&self.snapshots[i].clone());
-            i += 1;
-        }
-
-        self.update_tracker.corresponding_previous_version = Some(version);
+        self.go_to_snapshot_with_version(version);
     }
 
-    // Reverts a snapshot version and returns the reverted snapshot (if found)
+    /// Applies a snapshot delta as ordinary authored edits.
     pub fn apply_snapshot(&mut self, snapshot: &Snapshot<ValueType>) {
         for (path, new_value) in snapshot.new_values.iter() {
             self.set_path(path.as_str(), new_value.to_owned())
@@ -315,15 +260,16 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
     // After setting a path, this method updates
     // the accumulator to set the old_value and the new_value
     fn update_snapshot_accumulator(&mut self, path: &str, value: ValueType) {
-        let old_value: ValueType = self
+        if !self
             .snapshot_change_accumulator
             .old_values
-            .get(path)
-            .unwrap_or(&self.get_path(path))
-            .clone();
-        self.snapshot_change_accumulator
-            .old_values
-            .insert(path.to_owned(), old_value);
+            .contains_key(path)
+        {
+            let old_value = self.get_path(path);
+            self.snapshot_change_accumulator
+                .old_values
+                .insert(path.to_owned(), old_value);
+        }
         self.snapshot_change_accumulator
             .new_values
             .insert(path.to_owned(), value);

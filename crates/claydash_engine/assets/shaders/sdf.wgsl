@@ -203,6 +203,21 @@ fn bezier_extrusion_distance(point: vec3<f32>, object: Object) -> f32 {
         let upper = max(max(a, b), max(c, d));
         let outside = max(max(lower - point, point - upper), vec3(0.0));
         if dot(outside, outside) >= best_distance { continue; }
+        if polygon_points[offset + base * 2u + 1u].y != 0.0 {
+            let direction = d - a;
+            let t = clamp(dot(point - a, direction) / dot(direction, direction), 0.0, 1.0);
+            let position = a + direction * t;
+            let delta = position - point;
+            let distance = dot(delta, delta);
+            if distance < best_distance {
+                best_distance = distance;
+                best_position = position;
+                best_tangent = direction;
+                best_t = t;
+                best_segment = segment;
+            }
+            continue;
+        }
         var seed = 0.0;
         var seed_distance = 1e20;
         // Evaluate the same 13 uniform seeds by forward differences, using
@@ -993,14 +1008,38 @@ fn base_object_distance_at(sample_point: vec3<f32>, object: Object) -> f32 {
         dot(object.inverse_rows[1], homogeneous),
         dot(object.inverse_rows[2], homogeneous)
     );
-    if object.repeat_count.w != 0 {
+    if object.repeat_count.w == 1 {
         local = vec3(
             repeated_axis(local.x, object.repeat_spacing.x, object.repeat_count.x),
             repeated_axis(local.y, object.repeat_spacing.y, object.repeat_count.y),
             repeated_axis(local.z, object.repeat_spacing.z, object.repeat_count.z)
         );
     }
-    let distance = primitive_distance(local, object);
+    var distance = primitive_distance(local, object);
+    if object.repeat_count.w == 2 {
+        let original = local;
+        let pivot = object.repeat_spacing.xyz;
+        let count = clamp(object.repeat_count.x, 1, 32);
+        for (var copy = 1; copy < count; copy += 1) {
+            let angle = -6.28318530718 * f32(copy) / f32(count);
+            let c = cos(angle);
+            let s = sin(angle);
+            let p = original - pivot;
+            var rotated = p;
+            if object.repeat_count.y == 0 {
+                rotated = vec3(p.x, c * p.y - s * p.z, s * p.y + c * p.z);
+            } else if object.repeat_count.y == 1 {
+                rotated = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
+            } else {
+                rotated = vec3(c * p.x - s * p.y, s * p.x + c * p.y, p.z);
+            }
+            let candidate = primitive_distance(rotated + pivot, object);
+            if candidate < distance {
+                distance = candidate;
+                local = rotated + pivot;
+            }
+        }
+    }
     var world_distance = distance * object.params.w;
     if object.state.y == 2 && brick_geometry_visible(object) {
         let relief = material_params[material_headers[object.component.w].offset + BRICK_RELIEF];
@@ -1088,7 +1127,101 @@ fn object_distance(point: vec3<f32>, object: Object) -> f32 {
 
 // Each leaf is a complete Boolean component in contiguous postorder.
 // Direct operands stream through one accumulator; nested components use scratch.
+// A radial Boolean group repeats its complete result, including cuts. A small
+// explicit traversal stack also supports radial groups nested inside operands.
+fn component_has_radial_group(start: u32, root: u32) -> bool {
+    for (var i = start; i <= root; i++) {
+        if objects[i].repeat_count.w == 3 { return true; }
+    }
+    return false;
+}
+
+fn radial_group_point(point: vec3<f32>, object: Object, copy: u32) -> vec3<f32> {
+    let h = vec4(point, 1.0);
+    let local = vec3(dot(object.inverse_rows[0], h), dot(object.inverse_rows[1], h), dot(object.inverse_rows[2], h));
+    let p = local - object.repeat_spacing.xyz;
+    let angle = -6.28318530718 * f32(copy) / f32(clamp(object.repeat_count.x, 1, 32));
+    let c = cos(angle);
+    let s = sin(angle);
+    var rotated = vec3(c*p.x-s*p.y, s*p.x+c*p.y, p.z);
+    if object.repeat_count.y == 0 { rotated = vec3(p.x, c*p.y-s*p.z, s*p.y+c*p.z); }
+    if object.repeat_count.y == 1 { rotated = vec3(c*p.x+s*p.z, p.y, -s*p.x+c*p.z); }
+    let delta = rotated + object.repeat_spacing.xyz - local;
+    let x = object.inverse_rows[0].xyz;
+    let y = object.inverse_rows[1].xyz;
+    let z = object.inverse_rows[2].xyz;
+    let determinant = dot(x, cross(y, z));
+    if abs(determinant) < 1e-20 { return point; }
+    return point + (cross(y,z)*delta.x + cross(z,x)*delta.y + cross(x,y)*delta.z) / determinant;
+}
+
+fn radial_component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    var nodes: array<u32, CSG_SIZE>;
+    var sources: array<vec3<f32>, CSG_SIZE>;
+    var samples: array<vec3<f32>, CSG_SIZE>;
+    var cursors: array<u32, CSG_SIZE>;
+    var copies: array<u32, CSG_SIZE>;
+    var counts: array<u32, CSG_SIZE>;
+    var values: array<vec2<f32>, CSG_SIZE>;
+    var best: array<vec2<f32>, CSG_SIZE>;
+    var depth = 0u;
+    var entering = true;
+    nodes[0] = root;
+    sources[0] = point;
+    loop {
+        let index = nodes[depth];
+        let object = objects[index];
+        if entering {
+            copies[depth] = 0u;
+            counts[depth] = select(1u, u32(clamp(object.repeat_count.x, 1, 32)), object.repeat_count.w == 3);
+            best[depth] = vec2(1e30, f32(index));
+            cursors[depth] = 0xffffffffu;
+            entering = false;
+        }
+        if cursors[depth] == 0xffffffffu {
+            var sample = sources[depth];
+            if object.repeat_count.w == 3 { sample = radial_group_point(sample, object, copies[depth]); }
+            sample = mirror_point(sample, object);
+            var has_children = false;
+            for (var child = start; child < index; child++) {
+                if objects[child].state.w == i32(index) { has_children = true; break; }
+            }
+            var shape = object;
+            if has_children && object.repeat_count.w == 1 { sample = group_repeat_point(sample, object); }
+            if has_children { shape.repeat_count.w = 0; }
+            samples[depth] = sample;
+            values[depth] = vec2(object_distance_at(modifier_point(sample, object), shape), f32(index));
+            cursors[depth] = start;
+        }
+        var child = cursors[depth];
+        while child < index && objects[child].state.w != i32(index) { child += 1u; }
+        if child < index {
+            cursors[depth] = child + 1u;
+            let sample = samples[depth];
+            depth += 1u;
+            nodes[depth] = child;
+            sources[depth] = sample;
+            entering = true;
+            continue;
+        }
+        if values[depth].x < best[depth].x { best[depth] = values[depth]; }
+        copies[depth] += 1u;
+        if copies[depth] < counts[depth] {
+            cursors[depth] = 0xffffffffu;
+            continue;
+        }
+        let result = best[depth];
+        if depth == 0u { return result; }
+        depth -= 1u;
+        values[depth] = combine_operand(values[depth], result, object, objects[nodes[depth]]);
+    }
+    return vec2(1e30, f32(root));
+}
+
 fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    if HAS_REPETITION && component_has_radial_group(start, root) {
+        return radial_component_distance(point, start, root);
+    }
     let mirrored_point = mirror_point(point, objects[root]);
     if !HAS_BOOLEANS || start == root {
         return vec2(object_distance(mirrored_point, objects[root]), f32(root));
@@ -1096,7 +1229,7 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     if CSG_SIZE == 2u && root == start + 1u {
         let parent = objects[root];
         let operand = objects[start];
-        let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+        let group_repeated = HAS_REPETITION && parent.repeat_count.w == 1;
         let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
         let parent_point = modifier_point(group_point, parent);
         var operand_point = parent_point;
@@ -1112,7 +1245,7 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
     }
     let parent = objects[root];
     if HAS_FLAT_UNIONS && parent.state.w == FLAT_UNION_ROOT {
-        let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+        let group_repeated = HAS_REPETITION && parent.repeat_count.w == 1;
         let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
         let parent_point = modifier_point(group_point, parent);
         var parent_shape = parent;
@@ -1171,7 +1304,7 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
         return closest;
     }
     if parent.state.w == FLAT_COMPONENT_ROOT {
-        let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+        let group_repeated = HAS_REPETITION && parent.repeat_count.w == 1;
         let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
         let parent_point = modifier_point(group_point, parent);
         var parent_shape = parent;
@@ -1189,7 +1322,7 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
         return value;
     }
     var values: array<vec2<f32>, CSG_SIZE>;
-    let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+    let group_repeated = HAS_REPETITION && parent.repeat_count.w == 1;
     let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
     let parent_point = modifier_point(group_point, parent);
     for (var i = start; i <= root; i++) {
@@ -1601,8 +1734,11 @@ fn depth_accelerator_source_distance(point: vec3<f32>, owner: u32) -> f32 {
     var object = objects[owner];
     let root = object.component.y;
     let parent = objects[root];
+    if HAS_REPETITION && component_has_radial_group(parent.component.x, root) {
+        return radial_component_distance(point, parent.component.x, root).x;
+    }
     let mirrored_point = mirror_point(point, parent);
-    let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+    let group_repeated = HAS_REPETITION && parent.repeat_count.w == 1;
     let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
     if owner == root && group_repeated { object.repeat_count.w = 0; }
     return object_distance_at(modifier_point(group_point, object), object);
@@ -1670,9 +1806,12 @@ fn refine_depth_accelerator_crossing(origin: vec3<f32>, direction: vec3<f32>,
 // Captured subtrees contribute one texture query. Uncaptured siblings retain
 // their native SDFs and the enclosing Boolean operations remain in effect.
 fn depth_accelerator_component_distance(point: vec3<f32>, direction: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
+    if HAS_REPETITION && component_has_radial_group(start, root) {
+        return radial_component_distance(point, start, root);
+    }
     let parent = objects[root];
     let mirrored_point = mirror_point(point, parent);
-    let group_repeated = HAS_REPETITION && parent.repeat_count.w != 0;
+    let group_repeated = HAS_REPETITION && parent.repeat_count.w == 1;
     let group_point = select(mirrored_point, group_repeat_point(mirrored_point, parent), group_repeated);
     let parent_point = modifier_point(group_point, parent);
     var values: array<vec2<f32>, CSG_SIZE>;
@@ -2161,7 +2300,10 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 if FAST_PREVIEW {
                     let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
                         normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
-                    let shade = 0.22 * camera.lighting_params.x + 0.78 * max(dot(normal, light), 0.0);
+                    let header = material_headers[material_capture(point, -direction, object).index];
+                    let ambient = diffuse_ambient_fill(surface.normal,
+                        select(0.13, 0.23, header.kind == MATERIAL_WOOD));
+                    let shade = ambient + 0.78 * max(dot(normal, light), 0.0);
                     radiance += throughput * surface.color * shade * alpha;
                 } else {
                     radiance += throughput * surface_light(point, normal, -direction,
@@ -2195,7 +2337,10 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                     normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
                 var surface = material_surface(point, normal, -direction, object);
                 let decal = material_stencil_color(point, normal, object);
-                let shade = 0.22 * camera.lighting_params.x + 0.78 * max(dot(normal, light), 0.0);
+                let header = material_headers[material_capture(point, -direction, object).index];
+                let ambient = diffuse_ambient_fill(surface.normal,
+                    select(0.13, 0.23, header.kind == MATERIAL_WOOD));
+                let shade = ambient + 0.78 * max(dot(normal, light), 0.0);
                 if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 && !metal_image_detail_enabled(object) {
                     surface.color = decal.rgb;
                     surface.opacity = decal.a;

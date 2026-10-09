@@ -35,6 +35,10 @@ pub const EXAMPLES: &[Example] = &[
         file: "ssao_duck.claydash",
     },
     Example {
+        title: "Single-wheel suspension",
+        file: "single_wheel_suspension.claydash",
+    },
+    Example {
         title: "Text on path",
         file: "text_on_path.claydash",
     },
@@ -137,6 +141,171 @@ pub fn open_guide() -> std::io::Result<()> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suspension_keeps_rigid_arms_and_articulates_wheel_through_travel() {
+        use crate::model::{self, SdfParams};
+        let scene = crate::document::deserialize_scene(include_bytes!(
+            "../examples/single_wheel_suspension.claydash"
+        ))
+        .expect("bundled suspension scene");
+        let mut tree = model::DataTree::default();
+        tree.set_tree("scene", scene);
+        let variables = model::scene_variables(&tree);
+        assert_eq!(variables.vectors.len(), 10);
+        assert_eq!(variables.bindings.len(), 5);
+        assert_eq!(variables.rigid_bindings.len(), 28);
+        assert_eq!(variables.four_bar_constraints.len(), 1);
+        model::set_scene_variables(&mut tree, variables.clone());
+        let neutral = model::objects(&tree);
+        assert_eq!(neutral.len(), 35);
+        assert_eq!(
+            model::world(&tree).render_pipeline,
+            model::RenderPipelineMode::Deferred
+        );
+        let root = neutral
+            .iter()
+            .find(|object| object.boolean_parent.is_none())
+            .unwrap();
+        assert_eq!(
+            root.render_representation,
+            model::GroupRenderRepresentation::PoissonMesh
+        );
+        assert_eq!(root.softness, 0.0);
+        assert!(model::scene_cameras(&tree).is_empty());
+        assert!(model::active_camera_id(&tree).is_none());
+        for binding in &variables.rigid_bindings {
+            assert!(neutral.iter().any(|object| object.uuid == binding.object));
+            assert!(
+                !variables
+                    .bindings
+                    .iter()
+                    .any(|point| point.object == binding.object),
+                "rigid bodies must not also deform their control points"
+            );
+        }
+        let world_endpoints = |objects: &[model::SdfObject], name: &str| {
+            let object = objects.iter().find(|object| object.name == name).unwrap();
+            let SdfParams::BezierCurveParams(curve) = &object.params else {
+                panic!("expected rod");
+            };
+            let matrix = model::object_world_matrix(objects, object.uuid);
+            (
+                matrix.transform_point3(curve.points[0]),
+                matrix.transform_point3(*curve.points.last().unwrap()),
+            )
+        };
+        for travel in [-0.65, -0.4, 0.0, 0.4, 0.65] {
+            let mut changed = variables.clone();
+            changed
+                .vectors
+                .iter_mut()
+                .find(|v| v.name == "Wheel travel - drag Y")
+                .unwrap()
+                .value
+                .y = travel;
+            model::set_scene_variables(&mut tree, changed);
+            let moved = model::objects(&tree);
+            let solved = model::scene_variables(&tree);
+            let point = |name: &str| {
+                solved
+                    .vectors
+                    .iter()
+                    .find(|v| v.name == name)
+                    .unwrap()
+                    .value
+            };
+            for (name, pivot, joint) in [
+                (
+                    "Upper wishbone - front",
+                    "Upper chassis pivot - front",
+                    "Upper ball joint",
+                ),
+                (
+                    "Upper wishbone - rear",
+                    "Upper chassis pivot - rear",
+                    "Upper ball joint",
+                ),
+                (
+                    "Lower wishbone - front",
+                    "Lower chassis pivot - front",
+                    "Lower ball joint",
+                ),
+                (
+                    "Lower wishbone - rear",
+                    "Lower chassis pivot - rear",
+                    "Lower ball joint",
+                ),
+            ] {
+                let (a, b) = world_endpoints(&moved, name);
+                let (original_a, original_b) = world_endpoints(&neutral, name);
+                assert!(
+                    a.distance(point(pivot)) < 1e-5,
+                    "{name} chassis pivot moved"
+                );
+                assert!(b.distance(point(joint)) < 1e-5, "{name} missed ball joint");
+                assert!((a.distance(b) - original_a.distance(original_b)).abs() < 1e-5);
+            }
+            let (upper, lower) = world_endpoints(&moved, "Upright - upper to lower ball joint");
+            assert!(upper.distance(point("Upper ball joint")) < 1e-5);
+            assert!(lower.distance(point("Lower ball joint")) < 1e-5);
+            assert!((upper.distance(lower) - 0.91).abs() < 1e-5);
+            for binding in &variables.rigid_bindings {
+                let before = neutral.iter().find(|o| o.uuid == binding.object).unwrap();
+                let after = moved.iter().find(|o| o.uuid == binding.object).unwrap();
+                assert_eq!(
+                    serde_json::to_value(&after.params).unwrap(),
+                    serde_json::to_value(&before.params).unwrap(),
+                    "{} changed rigid geometry",
+                    after.name
+                );
+                assert_eq!(after.transform.scale, before.transform.scale);
+            }
+            let tire = moved
+                .iter()
+                .find(|o| o.name == "Wheel - rubber tire")
+                .unwrap();
+            let original_tire = neutral.iter().find(|o| o.uuid == tire.uuid).unwrap();
+            if travel.abs() > 0.3 {
+                assert!(
+                    tire.transform
+                        .rotation
+                        .angle_between(original_tire.transform.rotation)
+                        > 0.04
+                );
+            }
+            let (shaft_top, shaft_bottom) = world_endpoints(&moved, "Damper - linked piston");
+            let (body_bottom, body_top) = world_endpoints(&moved, "Damper - red lower body");
+            assert!(shaft_top.distance(point("Shock tower mount")) < 1e-5);
+            assert!(body_bottom.distance(lower) < 1e-5);
+            assert!((shaft_top.distance(shaft_bottom) - 1.9).abs() < 1e-5);
+            assert!((body_bottom.distance(body_top) - 1.5).abs() < 1e-5);
+            let damper_axis = shaft_top - body_bottom;
+            assert!(damper_axis.cross(body_top - body_bottom).length() < 1e-5);
+            assert!(damper_axis.cross(shaft_bottom - body_bottom).length() < 1e-5);
+            assert!((body_top - shaft_bottom).dot(damper_axis) > 0.0, "damper pieces must overlap");
+            assert_eq!(
+                moved
+                    .iter()
+                    .find(|o| o.uuid == root.uuid)
+                    .unwrap()
+                    .transform,
+                root.transform
+            );
+        }
+        let bytes = crate::document::serialize_scene(&tree).unwrap();
+        let scene = crate::document::deserialize_scene(&bytes).unwrap();
+        let mut loaded = model::DataTree::default();
+        loaded.set_tree("scene", scene);
+        assert_eq!(
+            model::scene_variables(&loaded),
+            model::scene_variables(&tree)
+        );
+        assert_eq!(
+            serde_json::to_value(model::objects(&loaded)).unwrap(),
+            serde_json::to_value(model::objects(&tree)).unwrap()
+        );
+    }
 
     #[test]
     fn menu_covers_all_example_files_and_each_project_loads() {

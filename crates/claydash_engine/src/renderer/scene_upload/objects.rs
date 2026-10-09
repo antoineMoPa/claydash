@@ -24,8 +24,12 @@ impl Renderer {
         training_only: bool,
     ) -> PackedObjects {
         let super::super::atlas_upload::UploadedAtlases {
-            box_depth_metadata, splat_bvh_metadata, depth_accelerator_transforms,
-            materials, stencil_layers, ..
+            box_depth_metadata,
+            splat_bvh_metadata,
+            depth_accelerator_transforms,
+            materials,
+            stencil_layers,
+            ..
         } = atlases;
         let selected_ids = visible_selection(source_objects, scene_objects, selected);
         let scene_lookup: std::collections::HashMap<_, _> = scene_objects
@@ -176,39 +180,50 @@ impl Renderer {
                         position: [inlay.offset, inlay.thickness],
                     });
                     polygon_points.push(GpuPolygonPoint {
-                        position: [f32::from_bits(inlay_hosts.starts[host as usize]),
-                            f32::from_bits(inlay_hosts.parents_offset)],
+                        position: [
+                            f32::from_bits(inlay_hosts.starts[host as usize]),
+                            f32::from_bits(inlay_hosts.parents_offset),
+                        ],
                     });
                     offset
                 });
-                let repeated_radius = if object.repetition.enabled && !repeats_group {
-                    let extent = Vec3::from_array([
-                        if object.repetition.count[0] > 1 {
-                            (object.repetition.count[0].saturating_sub(1)) as f32
-                                * object.repetition.spacing.x
-                                * 0.5
-                        } else {
-                            0.0
-                        },
-                        if object.repetition.count[1] > 1 {
-                            (object.repetition.count[1].saturating_sub(1)) as f32
-                                * object.repetition.spacing.y
-                                * 0.5
-                        } else {
-                            0.0
-                        },
-                        if object.repetition.count[2] > 1 {
-                            (object.repetition.count[2].saturating_sub(1)) as f32
-                                * object.repetition.spacing.z
-                                * 0.5
-                        } else {
-                            0.0
-                        },
-                    ]);
-                    radius + extent.length() * abs_scale.max_element()
-                } else {
-                    radius
+                let radial = match object.repetition.mode {
+                    crate::model::RepetitionMode::Radial { axis, count, pivot }
+                        if object.repetition.enabled =>
+                    {
+                        Some((axis, count.clamp(1, 32), pivot))
+                    }
+                    _ => None,
                 };
+                let mut repeated_radius =
+                    if object.repetition.enabled && !repeats_group && radial.is_none() {
+                        let extent = Vec3::from_array([
+                            if object.repetition.count[0] > 1 {
+                                (object.repetition.count[0].saturating_sub(1)) as f32
+                                    * object.repetition.spacing.x
+                                    * 0.5
+                            } else {
+                                0.0
+                            },
+                            if object.repetition.count[1] > 1 {
+                                (object.repetition.count[1].saturating_sub(1)) as f32
+                                    * object.repetition.spacing.y
+                                    * 0.5
+                            } else {
+                                0.0
+                            },
+                            if object.repetition.count[2] > 1 {
+                                (object.repetition.count[2].saturating_sub(1)) as f32
+                                    * object.repetition.spacing.z
+                                    * 0.5
+                            } else {
+                                0.0
+                            },
+                        ]);
+                        radius + extent.length() * abs_scale.max_element()
+                    } else {
+                        radius
+                    };
                 let local_extent = match object.params {
                     SdfParams::SphereParams(ref p) => Vec3::splat(p.radius),
                     SdfParams::BoxParams(ref p) => p.box_q,
@@ -243,8 +258,13 @@ impl Renderer {
                         .as_ref()
                         .map_or(Vec3::ZERO, |text| text.local_extent()),
                 };
+                if let Some((_, _, pivot)) = radial.filter(|_| !repeats_group) {
+                    repeated_radius = radial_bound_radius(local_extent, pivot, abs_scale);
+                }
                 let mut repeated_extent = local_extent;
-                if object.repetition.enabled && !repeats_group {
+                if let Some((_, _, pivot)) = radial.filter(|_| !repeats_group) {
+                    repeated_extent = Vec3::splat(local_extent.length() + 2.0 * pivot.length());
+                } else if object.repetition.enabled && !repeats_group {
                     for axis in 0..3 {
                         if object.repetition.count[axis] > 1 {
                             repeated_extent[axis] += object.repetition.count[axis].saturating_sub(1)
@@ -431,12 +451,20 @@ impl Renderer {
                     inverse_rows: inverse_affine_rows(matrix.inverse()),
                     group_inverse_rows: inverse_affine_rows(group_matrix.inverse()),
                     params,
-                    repeat_spacing: object
-                        .repetition
-                        .spacing
+                    repeat_spacing: radial
+                        .map_or(object.repetition.spacing, |(_, _, pivot)| pivot)
                         .extend(inlay_parameters.map_or(0.0, f32::from_bits))
                         .to_array(),
-                    repeat_count: if object.repetition.enabled {
+                    repeat_count: if let Some((axis, count, _)) = radial {
+                        [
+                            count as i32,
+                            axis.gpu_code(),
+                            1,
+                            if repeats_group { 3 } else { 2 },
+                        ]
+                    } else if object.repetition.enabled
+                        && object.repetition.mode == crate::model::RepetitionMode::Linear
+                    {
                         [
                             object.repetition.count[0] as i32,
                             object.repetition.count[1] as i32,
@@ -509,8 +537,16 @@ impl Renderer {
                 }
             })
             .collect();
-        PackedObjects { gpu_objects, bounds, distance_bound_factors, polygon_points,
-            host_capacity: inlay_hosts.capacity, lattice_points, lattice_atlas_uploads, modifiers }
+        PackedObjects {
+            gpu_objects,
+            bounds,
+            distance_bound_factors,
+            polygon_points,
+            host_capacity: inlay_hosts.capacity,
+            lattice_points,
+            lattice_atlas_uploads,
+            modifiers,
+        }
     }
 }
 
@@ -549,3 +585,48 @@ fn convex_polygon_winding(vertices: &[Vec2]) -> u32 {
     winding
 }
 
+// Frobenius norm bounds the transform in every rotated direction, including shear.
+fn radial_bound_radius(extent: Vec3, pivot: Vec3, column_lengths: Vec3) -> f32 {
+    (extent.length() + 2.0 * pivot.length()) * column_lengths.length()
+}
+
+#[cfg(test)]
+mod radial_bound_tests {
+    use super::*;
+
+    #[test]
+    fn radial_sphere_contains_rotated_spokes_with_nonuniform_scale_and_shear() {
+        let extent = Vec3::new(4.0, 0.02, 0.02);
+        let pivot = Vec3::new(-4.2, 0.0, 0.0);
+        for matrix in [
+            glam::Mat4::from_scale(Vec3::new(0.1, 8.0, 0.5)),
+            glam::Mat4::from_cols(
+                Vec3::new(0.1, 0.0, 0.0).extend(0.0),
+                Vec3::new(5.0, 8.0, 0.0).extend(0.0),
+                Vec3::new(0.0, 0.0, 0.5).extend(0.0),
+                Vec3::ZERO.extend(1.0),
+            ),
+        ] {
+            let columns = Vec3::new(
+                matrix.x_axis.truncate().length(),
+                matrix.y_axis.truncate().length(),
+                matrix.z_axis.truncate().length(),
+            );
+            let radius = radial_bound_radius(extent, pivot, columns);
+            for copy in 0..32 {
+                let rotation =
+                    glam::Quat::from_rotation_z(std::f32::consts::TAU * copy as f32 / 32.0);
+                for x in [-1.0, 1.0] {
+                    for y in [-1.0, 1.0] {
+                        for z in [-1.0, 1.0] {
+                            let corner = extent * Vec3::new(x, y, z);
+                            let point =
+                                matrix.transform_vector3(pivot + rotation * (corner - pivot));
+                            assert!(point.length() <= radius);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

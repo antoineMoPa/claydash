@@ -480,6 +480,11 @@ impl App {
             .is_some_and(|capture| capture.mode == agent::CaptureMode::Outline);
         #[cfg(any(target_arch = "wasm32", not(unix)))]
         let outline_capture = false;
+        // Pointer gizmos and modal G/R/S transforms can pause between motion
+        // events. Do not queue expensive refinement ahead of their next edit.
+        let interacting = !capture_render && (self.egui.input(|input| input.pointer.any_down())
+            || matches!(self.tree.get_path("editor.state"),
+                ClaydashValue::EditorState(state) if state != EditorState::Start));
         if let Some(renderer) = &mut self.renderer {
             // Selection is drawn by the editor gizmos. Keep the cached scene
             // image when only selection changes, avoiding a full refinement.
@@ -507,6 +512,7 @@ impl App {
                 offscreen_capture,
                 refine,
                 animation_playback,
+                interacting,
                 outline_capture,
                 commands::outline_mode(&self.tree) && !capture_render,
             );

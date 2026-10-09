@@ -1,7 +1,8 @@
 {
-  "build": "cargo build",
-  "run": "cargo run",
+  "build": "cargo build --release",
+  "run": "cargo run --release",
   "indent": {
     "spaces": 4
-  }
+  },
+  "day_ends_at": "16:30"
 }

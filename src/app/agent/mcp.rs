@@ -11,13 +11,21 @@ const MODEL_ORGANIZATION: &str = concat!(
 
 pub(super) fn schema() -> Value {
     json!({
-        "version": 9,
-        "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
-        "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
+        "version": 13,
+        "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "BuildPoissonMesh", "GetPoissonMeshStatus", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
+        "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
+        "variable_spaces": ["Local", "World"],
+        "vector_binding_targets": ["Position", "GroupPosition", {"BezierPoint": 0}],
+        "variables_example": {"vectors": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Anchor", "value": [0, 1, 0], "space": "World"}], "bindings": []},
         "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| json!({"kind": kind, "example": SdfObject::create_kind(*kind)})).collect::<Vec<_>>(),
         "render_representations": GroupRenderRepresentation::ALL.iter().map(|mode| json!({"value": mode, "label": mode.label(), "description": mode.description(), "limitation": mode.limitation()})).collect::<Vec<_>>(),
         "notes": format!("{}{}", MODEL_ORGANIZATION, concat!(
-            "GetState returns complete typed objects and the raw .claydash scene document. ",
+            "GetState returns complete typed objects, variables (vectors and bindings), and the raw .claydash scene document. ",
+            "CreateVectorVariable accepts name, value [x,y,z], optional id, and space (World by default). It returns created_variable_ids; supply an id to bind within the same Apply. ",
+            "UpdateVectorVariable edits name/value/space. SetVectorBinding takes object, target (Position, GroupPosition, or {BezierPoint:index}), variable, and optional offset [x,y,z] defaulting to zero, replacing any link on that target. ",
+            "SetRigidBinding takes binding {object,target:Object|Group,origin,aim,up:{WorldDirection:[x,y,z]}|{Point:uuid},local_origin,local_aim,local_up}; anchors are local points and referenced points require World space. It preserves geometry and scale, solving translation/rotation from a rigid frame. RemoveRigidBinding takes object and target and retains the current pose. Positive uniform parent scale is required. ",
+            "SetVariables optionally includes rigid_bindings and four_bar_constraints. Four-bar constraints solve a fixed-length World XY linkage from driver Y, with typed driver/pivot/output point UUIDs, lower_length,upper_length,upright_length,driver_y_offset,travel_min,travel_max,branch:Positive|Negative. Output points are derived and driver Y is clamped to the feasible authored travel range. ",
+            "Offsets use the variable space. RemoveVectorBinding and DeleteVectorVariable preserve the last evaluated coordinates. SetVariables replaces the complete typed vectors/bindings state. ",
             "CreateCustomMaterial takes name and wgsl, returning its UUID in created_material_ids. ",
             "The WGSL is a function body returning Surface, with point, normal, view, and base inputs. ",
             "UpdateCustomMaterial edits name and/or wgsl; AssignMaterial links it to object_ids. ",
@@ -26,7 +34,8 @@ pub(super) fn schema() -> Value {
             "Passes run in array order before editor UI and exports, with source validation before atomic Apply. ",
             "CreatePostProcessPass returns its UUID in created_post_process_pass_ids. ",
             "CreateObject accepts an optional position [x,y,z], full transform, shape params, and render_representation. ",
-            "SetRenderRepresentation accepts an object or Boolean group root id. ",
+            "SetRenderRepresentation accepts an object or Boolean group root id and optional voxels settings {resolution:8..128}, default 32. Voxels automatically captures six box faces and renders surface samples as cubes; Recompute in Group optimizations refreshes the capture. ",
+            "BuildPoissonMesh queues a cache build/recompute for an existing standalone object or Boolean root in PoissonMesh mode. GetPoissonMeshStatus reads queued/not_built/sampling/reconstructing/ready/failed; ready includes vertex and triangle counts, showing, available, and built resolutions. Caches are runtime-only and may be invalidated by source edits. ",
             "ExactSdf uses the source; BoxDepthAtlas captures from six box faces; SphereDepthAtlas captures with radial rays; GaussianSplats uses layered box-face captures rasterized as hybrid splats. ",
             "Captures retain depth, base color, and the hit material. ",
             "Older documents with removed choices load as ExactSdf. ",
@@ -72,6 +81,8 @@ pub(super) fn run_mcp() {
                     "apply" => "Apply",
                     "execute_command" => "ExecuteCommand",
                     "set_view" => "SetView",
+                    "build_poisson_mesh" => "BuildPoissonMesh",
+                    "get_poisson_mesh_status" => "GetPoissonMeshStatus",
                     "capture_viewport" => "CaptureViewport",
                     "capture_orthographic" => "CaptureOrthographic",
                     "undo" => "Undo",
@@ -121,15 +132,34 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         "type": "string",
         "enum": GroupRenderRepresentation::ALL
     });
+    let vector =
+        json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
+    let space = json!({"enum": ["Local", "World"]});
+    let target = json!({"oneOf": [{"enum": ["Position", "GroupPosition"]}, {"type": "object", "properties": {"BezierPoint": {"type": "integer", "minimum": 0}}, "required": ["BezierPoint"], "additionalProperties": false}]});
+    let variable = json!({"type": "object", "properties": {"id": uuid, "name": {"type": "string"}, "value": vector, "space": space}, "required": ["id", "name", "value"]});
+    let binding = json!({"type": "object", "properties": {"object": uuid, "target": target, "variable": uuid, "offset": vector}, "required": ["object", "target", "variable", "offset"]});
+    let rigid_target = json!({"enum":["Object","Group"]});
+    let rigid_up = json!({"oneOf":[{"type":"object","properties":{"Point":uuid},"required":["Point"],"additionalProperties":false},{"type":"object","properties":{"WorldDirection":vector},"required":["WorldDirection"],"additionalProperties":false}]});
+    let rigid_binding = json!({"type":"object","properties":{"object":uuid,"target":rigid_target,"origin":uuid,"aim":uuid,"up":rigid_up,"local_origin":vector,"local_aim":vector,"local_up":vector},"required":["object","target","origin","aim","up","local_origin","local_aim","local_up"]});
+    let four_bar = json!({"type":"object","properties":{"driver":uuid,"lower_pivot":uuid,"upper_pivot":uuid,"lower_joint":uuid,"upper_joint":uuid,"lower_length":{"type":"number","exclusiveMinimum":0},"upper_length":{"type":"number","exclusiveMinimum":0},"upright_length":{"type":"number","exclusiveMinimum":0},"driver_y_offset":{"type":"number"},"travel_min":{"type":"number"},"travel_max":{"type":"number"},"branch":{"enum":["Positive","Negative"]}},"required":["driver","lower_pivot","upper_pivot","lower_joint","upper_joint","lower_length","upper_length","upright_length","driver_y_offset","travel_min","travel_max","branch"]});
+    let variables = json!({"type": "object", "properties": {"vectors": {"type": "array", "items": variable}, "bindings": {"type": "array", "items": binding}, "rigid_bindings":{"type":"array","items":rigid_binding}, "four_bar_constraints":{"type":"array","items":four_bar}}, "required": ["vectors", "bindings"]});
     let action = json!({"oneOf": [
         {"type": "object", "properties": {"type": {"const": "CreateObject"}, "kind": {"enum": ["Sphere", "Box", "Cylinder", "Torus", "PolygonPrism", "BezierCurve", "Loft", "Text"]}, "name": {"type": "string"}, "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "transform": object, "params": object, "render_representation": representations}, "required": ["type", "kind"]},
         {"type": "object", "properties": {"type": {"const": "PutObject"}, "object": object}, "required": ["type", "object"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectName"}, "id": uuid, "name": {"type": "string"}}, "required": ["type", "id", "name"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectTransform"}, "id": uuid, "transform": object}, "required": ["type", "id", "transform"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectParams"}, "id": uuid, "params": object}, "required": ["type", "id", "params"]},
-        {"type": "object", "properties": {"type": {"const": "SetRenderRepresentation"}, "id": uuid, "render_representation": representations}, "required": ["type", "id", "render_representation"]},
+        {"type": "object", "properties": {"type": {"const": "SetRenderRepresentation"}, "id": uuid, "render_representation": representations, "voxels": {"type": "object", "properties": {"resolution": {"type": "integer", "minimum": 8, "maximum": 128}}, "additionalProperties": false}}, "required": ["type", "id", "render_representation"]},
         {"type": "object", "properties": {"type": {"const": "SetBoolean"}, "id": uuid, "parent": {"type": ["string", "null"]}, "operation": {"enum": ["Union", "Subtract", "Intersect"]}, "softness": {"type": "number"}}, "required": ["type", "id", "parent", "operation"]},
         {"type": "object", "properties": {"type": {"const": "DeleteObject"}, "id": uuid}, "required": ["type", "id"]},
+        {"type": "object", "properties": {"type": {"const": "CreateVectorVariable"}, "id": uuid, "name": {"type": "string"}, "value": vector, "space": space}, "required": ["type", "name", "value"]},
+        {"type": "object", "properties": {"type": {"const": "UpdateVectorVariable"}, "id": uuid, "name": {"type": "string"}, "value": vector, "space": space}, "required": ["type", "id"]},
+        {"type": "object", "properties": {"type": {"const": "DeleteVectorVariable"}, "id": uuid}, "required": ["type", "id"]},
+        {"type": "object", "properties": {"type": {"const": "SetVectorBinding"}, "object": uuid, "target": target, "variable": uuid, "offset": vector}, "required": ["type", "object", "target", "variable"]},
+        {"type": "object", "properties": {"type": {"const": "RemoveVectorBinding"}, "object": uuid, "target": target}, "required": ["type", "object", "target"]},
+        {"type":"object","properties":{"type":{"const":"SetRigidBinding"},"binding":rigid_binding},"required":["type","binding"]},
+        {"type":"object","properties":{"type":{"const":"RemoveRigidBinding"},"object":uuid,"target":rigid_target},"required":["type","object","target"]},
+        {"type": "object", "properties": {"type": {"const": "SetVariables"}, "variables": variables}, "required": ["type", "variables"]},
         {"type": "object", "properties": {"type": {"const": "SetWorld"}, "world": object}, "required": ["type", "world"]},
         {"type": "object", "properties": {"type": {"const": "CreatePostProcessPass"}, "name": {"type": "string"}, "wgsl": {"type": "string"}, "enabled": {"type": "boolean"}}, "required": ["type", "name", "wgsl"]},
         {"type": "object", "properties": {"type": {"const": "UpdatePostProcessPass"}, "id": uuid, "name": {"type": "string"}, "wgsl": {"type": "string"}, "enabled": {"type": "boolean"}}, "required": ["type", "id"]},
@@ -147,12 +177,14 @@ pub(super) fn mcp_tools() -> Vec<Value> {
     ]});
     let empty = json!({"type": "object", "properties": {}, "additionalProperties": false});
     [
-        ("get_state", "Read the full live Claydash scene, selection, materials, post-processing passes, animation, camera, and revision.", empty.clone()),
+        ("get_state", "Read the full live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, and revision.", empty.clone()),
         ("get_schema", "Get action names and example serialized objects for each primitive type.", empty.clone()),
         ("list_commands", "List Claydash's existing command palette commands.", empty.clone()),
         ("apply", "Apply typed scene actions as one undoable transaction. Read get_schema first; include expected_revision from get_state.", json!({"type": "object", "properties": {"expected_revision": {"type": "integer"}, "actions": {"type": "array", "items": action, "minItems": 1}}, "required": ["actions"]})),
         ("execute_command", "Run an existing Claydash command by name. Some commands start an interactive gesture.", json!({"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]})),
         ("set_view", "Set the live viewport camera. position and target are [x,y,z]; projection_mode is Perspective or Orthographic.", json!({"type": "object", "properties": {"position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "target": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "up": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "projection_mode": {"enum": ["Perspective", "Orthographic"]}}, "required": ["position", "target"]})),
+        ("build_poisson_mesh", "Queue a Poisson mesh cache build or recompute for a standalone object or Boolean root already set to PoissonMesh. Poll get_poisson_mesh_status for completion. Runtime caches are invalidated by source edits.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
+        ("get_poisson_mesh_status", "Read Poisson cache progress and completion for a PoissonMesh root. Ready includes vertices, triangles, showing, available, and built sample/mesh resolutions.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
         ("capture_viewport", "Render and return a PNG of the viewport. Pass object_ids to isolate groups. mode: simple_shading (default), full_material for material inspection, or outline for all primitive wires including hidden Boolean operands. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"object_ids": {"type": "array", "items": uuid, "minItems": 1}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("capture_orthographic", "Return one compact PNG with X, Y, Z orthographic views toward the origin. Optional object_ids isolate groups. mode: simple_shading (default), full_material, or outline for all primitive wires including hidden Boolean operands. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"object_ids": {"type": "array", "items": uuid, "minItems": 1}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 512}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("undo", "Undo the last scene edit.", empty.clone()),

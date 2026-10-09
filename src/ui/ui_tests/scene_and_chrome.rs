@@ -420,3 +420,131 @@ fn cursor_menu_moves_to_selected_object_center_and_resets() {
         ClaydashValue::Bool(false)
     ));
 }
+
+#[test]
+fn object_list_filter_keeps_ancestors_filters_points_and_clears_inside_input() {
+    use crate::model::{set_scene_variables, SceneVariables, VectorVariable, VariableSpace};
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let mut root = SdfObject::create(sdf_consts::TYPE_BOX);
+    root.name = "Assembly".into();
+    let mut child = SdfObject::create(sdf_consts::TYPE_SPHERE);
+    child.name = "Spoke".into(); child.boolean_parent = Some(root.uuid);
+    let mut sibling = SdfObject::create(sdf_consts::TYPE_BOX);
+    sibling.name = "Other shape".into(); sibling.boolean_parent = Some(root.uuid);
+    set_objects(&mut tree, vec![root, child, sibling]);
+    set_scene_variables(&mut tree, SceneVariables { vectors: vec![VectorVariable { id: uuid::Uuid::new_v4(), name: "Spoke anchor".into(), value: Vec3::ZERO, space: VariableSpace::World }], bindings: vec![],
+            ..SceneVariables::default()
+        });
+    let id = egui::Id::new("scene-name-filter");
+    ctx.data_mut(|data| data.insert_temp(id, "SPOKE".to_string()));
+    let labels = |shapes: Vec<egui::epaint::ClippedShape>| shapes.into_iter().filter_map(|shape| match shape.shape { egui::Shape::Text(text) => Some(text.galley.text().to_string()), _ => None }).collect::<Vec<_>>();
+    let text = labels(scene_frame(&ctx, &mut tree, vec![], egui::Modifiers::NONE));
+    assert!(text.contains(&"Assembly".to_string()));
+    assert!(text.contains(&"Spoke".to_string()));
+    assert!(text.contains(&"Spoke anchor".to_string()));
+    assert!(!text.contains(&"Other shape".to_string()));
+    let rect = ctx.data(|data| data.get_temp::<egui::Rect>(id.with("rect"))).unwrap();
+    let clear = ctx.data(|data| data.get_temp::<egui::Rect>(id.with("clear-rect"))).unwrap();
+    assert!(rect.contains_rect(clear));
+    assert_eq!(rect.center().y, clear.center().y);
+    for pressed in [true, false] {
+        scene_frame(&ctx, &mut tree, vec![egui::Event::PointerMoved(clear.center()), egui::Event::PointerButton { pos: clear.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }], egui::Modifiers::NONE);
+    }
+    assert_eq!(ctx.data(|data| data.get_temp::<String>(id)).unwrap(), "");
+    assert!(labels(scene_frame(&ctx, &mut tree, vec![], egui::Modifiers::NONE)).contains(&"Other shape".to_string()));
+}
+
+#[test]
+fn object_list_points_have_no_creation_section_and_selection_drives_g() {
+    use crate::model::{scene_variables, set_scene_variables, selected_variable, SceneVariables, VectorVariable, VariableSpace};
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let object = SdfObject::create(sdf_consts::TYPE_BOX);
+    set_objects(&mut tree, vec![object.clone()]); set_selected(&mut tree, vec![object.uuid]);
+    let variable = VectorVariable { id: uuid::Uuid::new_v4(), name: "Joint".into(), value: Vec3::ZERO, space: VariableSpace::World };
+    set_scene_variables(&mut tree, SceneVariables { vectors: vec![variable.clone()], bindings: vec![],
+            ..SceneVariables::default()
+        });
+    let text: Vec<_> = scene_frame(&ctx, &mut tree, vec![], egui::Modifiers::NONE)
+        .into_iter()
+        .filter_map(|shape| match shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(text.contains(&"Joint".to_string()));
+    assert!(text.contains(&"Filter...".to_string()));
+    assert!(!text.iter().any(|label| matches!(label.as_str(), "Variables" | "Add point")));
+    click_scene_text(&ctx, &mut tree, "Joint", egui::Modifiers::NONE);
+    assert_eq!(selected_variable(&tree), Some(variable.id));
+    assert!(selected(&tree).is_empty());
+    assert!(ctx.memory(|memory| memory.focused()).is_none());
+    let mut command_map = crate::commands::Commands::new(); crate::commands::register_all(&mut command_map);
+    let mut interaction = crate::interactions::InteractionState::default();
+    interaction.mouse_position = Vec2::new(400.0, 300.0);
+    interaction.key_pressed(winit::keyboard::KeyCode::KeyG, false, &command_map, &mut tree);
+    interaction.cursor_moved(Vec2::new(490.0, 250.0), false);
+    let mut camera = Camera::new(); camera.viewport = Vec2::new(800.0, 600.0);
+    interaction.update(&mut camera, &mut tree);
+    assert!(scene_variables(&tree).vectors[0].value.length() > 0.1);
+    interaction.key_pressed(winit::keyboard::KeyCode::Escape, false, &command_map, &mut tree);
+    assert_eq!(scene_variables(&tree).vectors.len(), 1);
+}
+
+#[test]
+fn list_double_click_renames_objects_and_points_and_escape_cancels() {
+    use crate::model::{scene_variables, set_scene_variables, SceneVariables, VectorVariable, VariableSpace};
+    let ctx = egui::Context::default(); let mut tree = DataTree::default();
+    let mut object = SdfObject::create(sdf_consts::TYPE_BOX); object.name = "Original object".into();
+    set_objects(&mut tree, vec![object]);
+    set_scene_variables(&mut tree, SceneVariables { vectors: vec![VectorVariable { id: uuid::Uuid::new_v4(), name: "Original point".into(), value: Vec3::ZERO, space: VariableSpace::World }], bindings: vec![],
+            ..SceneVariables::default()
+        });
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    let command = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    for (old, new, point) in [("Original object", "Named object", false), ("Original point", "Named point", true)] {
+        click_scene_text(&ctx, &mut tree, old, egui::Modifiers::NONE);
+        click_scene_text(&ctx, &mut tree, old, egui::Modifiers::NONE);
+        scene_frame(&ctx, &mut tree, vec![], egui::Modifiers::NONE);
+        scene_frame(&ctx, &mut tree, vec![key(egui::Key::A, command)], command);
+        scene_frame(&ctx, &mut tree, vec![egui::Event::Text(new.into())], egui::Modifiers::NONE);
+        scene_frame(&ctx, &mut tree, vec![key(egui::Key::Enter, egui::Modifiers::NONE)], egui::Modifiers::NONE);
+        assert_eq!(if point { scene_variables(&tree).vectors[0].name.clone() } else { objects(&tree)[0].name.clone() }, new);
+        tree.undo();
+        assert_eq!(if point { scene_variables(&tree).vectors[0].name.clone() } else { objects(&tree)[0].name.clone() }, old);
+        tree.redo();
+    }
+    click_scene_text(&ctx, &mut tree, "Named point", egui::Modifiers::NONE);
+    click_scene_text(&ctx, &mut tree, "Named point", egui::Modifiers::NONE);
+    scene_frame(&ctx, &mut tree, vec![], egui::Modifiers::NONE);
+    scene_frame(&ctx, &mut tree, vec![key(egui::Key::A, command)], command);
+    scene_frame(&ctx, &mut tree, vec![egui::Event::Text("Canceled name".into())], egui::Modifiers::NONE);
+    scene_frame(&ctx, &mut tree, vec![key(egui::Key::Escape, egui::Modifiers::NONE)], egui::Modifiers::NONE);
+    assert_eq!(scene_variables(&tree).vectors[0].name, "Named point");
+}
+
+#[test]
+fn inspector_keeps_only_bindings_at_bottom_for_primitives_and_groups() {
+    use crate::model::{set_scene_variables, SceneVariables, VectorVariable, VariableSpace};
+    for group in [false, true] {
+        let ctx = egui::Context::default(); let mut tree = DataTree::default();
+        let root = SdfObject::create(sdf_consts::TYPE_BOX); let id = root.uuid;
+        let mut scene = vec![root];
+        if group { let mut child = SdfObject::create(sdf_consts::TYPE_SPHERE); child.boolean_parent = Some(id); scene.push(child); }
+        set_objects(&mut tree, scene); set_selected(&mut tree, vec![id]);
+        set_scene_variables(&mut tree, SceneVariables { vectors: vec![VectorVariable { id: uuid::Uuid::new_v4(), name: "Managed in list".into(), value: Vec3::ZERO, space: VariableSpace::World }], bindings: vec![],
+            ..SceneVariables::default()
+        });
+        let mut runtime = AnimationRuntime::default();
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(450.0, 2000.0))), ..Default::default() }, |ui| object_panel(ui, &mut tree, &mut runtime));
+        output.textures_delta.clear();
+        let labels: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape { egui::Shape::Text(text) => Some(text.galley.text().to_string()), _ => None }).collect();
+        assert!(labels.iter().any(|label| label == "Variable bindings"));
+        let links = labels.iter().position(|label| label == "Variable bindings").unwrap();
+        let rigid = labels.iter().position(|label| label == "Rigid transform").unwrap();
+        assert!(rigid > links);
+        assert!(labels.iter().any(|label| label == "Add rigid transform"));
+        assert!(!labels.iter().any(|label| matches!(label.as_str(), "Variables" | "Add point" | "Managed in list" | "World coordinates" | "Local coordinates")));
+    }
+}

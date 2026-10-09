@@ -11,6 +11,7 @@ pub enum GroupRenderRepresentation {
     SphereAccelerator,
     GaussianSplats,
     PoissonMesh,
+    Voxels,
     NeuralSdf,
     #[default]
     #[serde(other)]
@@ -18,7 +19,7 @@ pub enum GroupRenderRepresentation {
 }
 
 impl GroupRenderRepresentation {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::ExactSdf,
         Self::BoxDepthAtlas,
         Self::SphereDepthAtlas,
@@ -26,6 +27,7 @@ impl GroupRenderRepresentation {
         Self::BoxAccelerator,
         Self::GaussianSplats,
         Self::PoissonMesh,
+        Self::Voxels,
         Self::NeuralSdf,
     ];
 
@@ -38,6 +40,7 @@ impl GroupRenderRepresentation {
             Self::SphereAccelerator => "Sphere accelerator",
             Self::GaussianSplats => "Gaussian splats",
             Self::PoissonMesh => "Mesh (Poisson)",
+            Self::Voxels => "Voxels",
             Self::NeuralSdf => "Neural SDF",
         }
     }
@@ -58,6 +61,7 @@ impl GroupRenderRepresentation {
             Self::NeuralSdf => {
                 "Fit a ray-conditioned neural field to random positions and unit ray directions."
             }
+            Self::Voxels => "Capture the containing Boolean component from six box faces and render tiny cubes. Bakes automatically.",
             Self::GaussianSplats => "Approximate the group with soft Gaussian surface samples.",
             Self::PoissonMesh => "Reconstruct a triangle mesh from implicit oriented surface samples. Click Recompute to build it.",
         }
@@ -78,6 +82,7 @@ impl GroupRenderRepresentation {
             Self::GaussianSplats => {
                 "Fast splats for opaque solid scenes; other materials use ray composition. Thin details may be lost."
             }
+            Self::Voxels => "A surface approximation; occluded surfaces and thin details may be missed.",
             Self::PoissonMesh => "Thin features may be lost at the chosen sampling resolution.",
         }
     }
@@ -598,4 +603,51 @@ fn neural_presets_are_valid_and_manual_edits_become_custom() {
     );
 }
 
+}
+
+/// Saved sampling density for six-face surface voxel captures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "StoredVoxelSettings")]
+pub struct VoxelSettings {
+    pub resolution: u32,
+}
+impl Default for VoxelSettings {
+    fn default() -> Self { Self { resolution: 32 } }
+}
+impl VoxelSettings {
+    pub const MIN_RESOLUTION: u32 = 8;
+    pub const MAX_RESOLUTION: u32 = 128;
+    pub fn is_default(&self) -> bool { *self == Self::default() }
+    pub fn is_valid(&self) -> bool {
+        (Self::MIN_RESOLUTION..=Self::MAX_RESOLUTION).contains(&self.resolution)
+    }
+}
+#[derive(Deserialize)]
+#[serde(default)]
+struct StoredVoxelSettings { resolution: u32 }
+impl Default for StoredVoxelSettings {
+    fn default() -> Self { Self { resolution: VoxelSettings::default().resolution } }
+}
+impl TryFrom<StoredVoxelSettings> for VoxelSettings {
+    type Error = &'static str;
+    fn try_from(value: StoredVoxelSettings) -> Result<Self, Self::Error> {
+        let settings = Self { resolution: value.resolution };
+        settings.is_valid().then_some(settings).ok_or("Voxel resolution must be between 8 and 128")
+    }
+}
+#[cfg(test)]
+mod voxel_settings_tests {
+    use super::*;
+    #[test]
+    fn voxel_settings_persist_and_reject_unsupported_resolutions() {
+        assert_eq!(serde_json::from_str::<VoxelSettings>("{}").unwrap(), VoxelSettings::default());
+        for resolution in [8, 32, 128] {
+            let settings = VoxelSettings { resolution };
+            assert_eq!(serde_json::from_str::<VoxelSettings>(&serde_json::to_string(&settings).unwrap()).unwrap(), settings);
+        }
+        for resolution in [0, 7, 129, u32::MAX] {
+            assert!(serde_json::from_value::<VoxelSettings>(serde_json::json!({"resolution": resolution})).is_err());
+        }
+        assert_eq!(serde_json::from_str::<GroupRenderRepresentation>("\"voxels\"").unwrap(), GroupRenderRepresentation::Voxels);
+    }
 }

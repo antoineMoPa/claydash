@@ -26,6 +26,7 @@ impl Renderer {
         offscreen_capture: bool,
         refine: bool,
         animation_playback: bool,
+        interacting: bool,
         outline_capture: bool,
         outline_viewport: bool,
     ) -> bool {
@@ -158,9 +159,21 @@ impl Renderer {
         };
         let deferred = !mesh_only && world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported;
-        let interleaved = refine && !deferred && !self.hybrid_enabled && self.mesh_vertex_count == 0;
+        let computing_optimization = self.has_pending_computations(egui);
+        let interleaved = refine && !computing_optimization && !interacting && !deferred && !self.hybrid_enabled && self.mesh_vertex_count == 0;
         let viewport_refine = refine && !mesh_only;
         self.viewport.set_playback_budget(animation_playback);
+        self.viewport.set_interacting(interacting);
+        self.viewport.set_refinement_paused(computing_optimization);
+        self.viewport.set_rendering_path(if mesh_only {
+            crate::viewport::RenderingPath::Mesh
+        } else if deferred {
+            crate::viewport::RenderingPath::Deferred
+        } else if self.hybrid_enabled {
+            crate::viewport::RenderingPath::Hybrid
+        } else {
+            crate::viewport::RenderingPath::Exact
+        });
         let work = self.viewport.prepare(
             &self.device,
             view_key.clone(),
@@ -230,6 +243,7 @@ impl Renderer {
         // resolution tile for this exact camera and scene state. If the final
         // tile is part of this submission, the later texture copy observes it.
         let capture = capture
+            && !computing_optimization
             && self.viewport.matches(&view_key)
             && (!viewport_refine || self.viewport.is_refined())
             && !self.capture_pending;

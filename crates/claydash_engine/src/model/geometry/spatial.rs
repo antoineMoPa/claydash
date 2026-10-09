@@ -3,8 +3,46 @@ use serde::{Deserialize, Serialize};
 
 use super::{SdfObject, SdfParams};
 
+/// Radial repetition uses the owning primitive's local coordinate system.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepetitionAxis {
+    X,
+    Y,
+    #[default]
+    Z,
+}
+
+impl RepetitionAxis {
+    pub fn rotation(self, angle: f32) -> Quat {
+        match self {
+            Self::X => Quat::from_rotation_x(angle),
+            Self::Y => Quat::from_rotation_y(angle),
+            Self::Z => Quat::from_rotation_z(angle),
+        }
+    }
+    pub fn gpu_code(self) -> i32 {
+        match self {
+            Self::X => 0,
+            Self::Y => 1,
+            Self::Z => 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum RepetitionMode {
+    #[default]
+    Linear,
+    Radial {
+        axis: RepetitionAxis,
+        count: u32,
+        pivot: Vec3,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Repetition {
+    pub mode: RepetitionMode,
     pub enabled: bool,
     pub count: [u32; 3],
     pub spacing: Vec3,
@@ -12,6 +50,8 @@ pub struct Repetition {
 
 #[derive(Deserialize)]
 struct StoredRepetition {
+    #[serde(default)]
+    mode: RepetitionMode,
     enabled: bool,
     #[serde(default)]
     axes: Option<[bool; 3]>,
@@ -26,6 +66,7 @@ impl<'de> Deserialize<'de> for Repetition {
             std::array::from_fn(|axis| if axes[axis] { stored.count[axis] } else { 1 })
         });
         Ok(Self {
+            mode: stored.mode,
             enabled: stored.enabled,
             count,
             spacing: stored.spacing,
@@ -36,6 +77,7 @@ impl<'de> Deserialize<'de> for Repetition {
 impl Default for Repetition {
     fn default() -> Self {
         Self {
+            mode: RepetitionMode::Linear,
             enabled: false,
             count: [3, 1, 1],
             spacing: Vec3::splat(0.8),
@@ -367,7 +409,11 @@ pub(crate) fn capture_bounds(scene: &[SdfObject], root: uuid::Uuid) -> Option<(V
     subtree_bounds(scene, root, true)
 }
 
-fn subtree_bounds(scene: &[SdfObject], root: uuid::Uuid, include_mirrors: bool) -> Option<(Vec3, Vec3)> {
+fn subtree_bounds(
+    scene: &[SdfObject],
+    root: uuid::Uuid,
+    include_mirrors: bool,
+) -> Option<(Vec3, Vec3)> {
     let root_inverse = lattice_world_matrix(scene, root).inverse();
     let mut minimum = Vec3::splat(f32::INFINITY);
     let mut maximum = Vec3::splat(f32::NEG_INFINITY);
@@ -425,8 +471,18 @@ fn subtree_bounds(scene: &[SdfObject], root: uuid::Uuid, include_mirrors: bool) 
         };
         let mut extent = extent;
         if object.repetition.enabled {
+            if let RepetitionMode::Radial { pivot, .. } = object.repetition.mode {
+                if !scene
+                    .iter()
+                    .any(|child| child.boolean_parent == Some(object.uuid))
+                {
+                    extent = Vec3::splat(extent.length() + 2.0 * pivot.length());
+                }
+            }
             for axis in 0..3 {
-                if object.repetition.count[axis] > 1 {
+                if object.repetition.mode == RepetitionMode::Linear
+                    && object.repetition.count[axis] > 1
+                {
                     extent[axis] += object.repetition.count[axis].saturating_sub(1) as f32
                         * object.repetition.spacing[axis].max(0.001)
                         * 0.5;
@@ -443,16 +499,25 @@ fn subtree_bounds(scene: &[SdfObject], root: uuid::Uuid, include_mirrors: bool) 
         if include_mirrors {
             let mut ancestor = Some(object.uuid);
             for _ in 0..scene.len() {
-                let Some(node) = ancestor.and_then(|id| scene.iter().find(|node| node.uuid == id)) else { break };
+                let Some(node) = ancestor.and_then(|id| scene.iter().find(|node| node.uuid == id))
+                else {
+                    break;
+                };
                 if let Some(mirror) = node.mirror {
                     let frame = root_inverse * group_world_matrix(scene, node.uuid);
                     let inverse = frame.inverse();
                     let center = (part_min + part_max) * 0.5;
                     let half = (part_max - part_min) * 0.5;
                     for mask in 1..8 {
-                        if (0..3).any(|axis| mask & (1 << axis) != 0 && !mirror.axes[axis]) { continue; }
+                        if (0..3).any(|axis| mask & (1 << axis) != 0 && !mirror.axes[axis]) {
+                            continue;
+                        }
                         let signs = Vec3::from_array(std::array::from_fn(|axis| {
-                            if mask & (1 << axis) != 0 { -1.0 } else { 1.0 }
+                            if mask & (1 << axis) != 0 {
+                                -1.0
+                            } else {
+                                1.0
+                            }
                         }));
                         let reflected = frame * Mat4::from_scale(signs) * inverse;
                         let reflected_center = reflected.transform_point3(center);
@@ -463,9 +528,54 @@ fn subtree_bounds(scene: &[SdfObject], root: uuid::Uuid, include_mirrors: bool) 
                         part_max = part_max.max(reflected_center + reflected_half);
                     }
                 }
-                if node.uuid == root { break; }
+                if node.uuid == root {
+                    break;
+                }
                 ancestor = node.boolean_parent;
             }
+        }
+        // Repetition belongs to the completed group, so additive operands must
+        // rotate with it too. Walk outward to include nested radial groups.
+        let mut ancestor = Some(object.uuid);
+        for _ in 0..scene.len() {
+            let Some(node) = ancestor.and_then(|id| scene.iter().find(|node| node.uuid == id))
+            else {
+                break;
+            };
+            if node.repetition.enabled
+                && scene
+                    .iter()
+                    .any(|child| child.boolean_parent == Some(node.uuid))
+            {
+                if let RepetitionMode::Radial { axis, count, pivot } = node.repetition.mode {
+                    let frame = root_inverse * object_world_matrix(scene, node.uuid);
+                    let inverse = frame.inverse();
+                    let mut radial_min = Vec3::splat(f32::INFINITY);
+                    let mut radial_max = Vec3::splat(f32::NEG_INFINITY);
+                    for copy in 0..count.clamp(1, 32) {
+                        let rotation = axis.rotation(
+                            std::f32::consts::TAU * copy as f32 / count.clamp(1, 32) as f32,
+                        );
+                        for x in [part_min.x, part_max.x] {
+                            for y in [part_min.y, part_max.y] {
+                                for z in [part_min.z, part_max.z] {
+                                    let local = inverse.transform_point3(Vec3::new(x, y, z));
+                                    let corner =
+                                        frame.transform_point3(pivot + rotation * (local - pivot));
+                                    radial_min = radial_min.min(corner);
+                                    radial_max = radial_max.max(corner);
+                                }
+                            }
+                        }
+                    }
+                    part_min = radial_min;
+                    part_max = radial_max;
+                }
+            }
+            if node.uuid == root {
+                break;
+            }
+            ancestor = node.boolean_parent;
         }
         minimum = minimum.min(part_min);
         maximum = maximum.max(part_max);
@@ -475,4 +585,145 @@ fn subtree_bounds(scene: &[SdfObject], root: uuid::Uuid, include_mirrors: bool) 
     }
     let padding = (maximum - minimum).max(Vec3::splat(0.1)) * 0.1;
     Some((minimum - padding, maximum + padding))
+}
+
+#[cfg(test)]
+mod radial_repetition_tests {
+    use super::*;
+    use crate::model::{PrimitiveKind, SdfParams};
+
+    fn spoke() -> SdfObject {
+        let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+        if let SdfParams::BoxParams(params) = &mut object.params {
+            params.box_q = Vec3::new(0.65, 0.035, 0.035);
+            params.corner_radius = 0.0;
+        }
+        object.repetition.enabled = true;
+        object.repetition.mode = RepetitionMode::Radial {
+            axis: RepetitionAxis::Z,
+            count: 12,
+            pivot: Vec3::new(-0.8, 0.0, 0.0),
+        };
+        object
+    }
+
+    #[test]
+    fn radial_spokes_match_explicit_rotated_primitives() {
+        let object = spoke();
+        let RepetitionMode::Radial { axis, count, pivot } = object.repetition.mode else {
+            unreachable!()
+        };
+        let mut original = object.clone();
+        original.repetition.enabled = false;
+        for x in -20..=20 {
+            for y in -20..=20 {
+                let point = Vec3::new(x as f32 * 0.1, y as f32 * 0.1, 0.01);
+                let expected = (0..count)
+                    .map(|copy| {
+                        let rotation =
+                            axis.rotation(-std::f32::consts::TAU * copy as f32 / count as f32);
+                        original.distance(pivot + rotation * (point - pivot))
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                assert!((object.distance(point) - expected).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn radial_settings_round_trip_and_legacy_files_stay_linear() {
+        let object = spoke();
+        let saved = serde_json::to_string(&object.repetition).unwrap();
+        let loaded: Repetition = serde_json::from_str(&saved).unwrap();
+        assert_eq!(loaded.mode, object.repetition.mode);
+        let legacy: Repetition =
+            serde_json::from_str(r#"{"enabled":true,"count":[3,1,1],"spacing":[1,1,1]}"#).unwrap();
+        assert_eq!(legacy.mode, RepetitionMode::Linear);
+    }
+
+    #[test]
+    fn radial_copies_remain_pickable_and_fit_capture_bounds() {
+        let object = spoke();
+        let id = object.uuid;
+        let scene = vec![object];
+        let pivot = Vec3::new(-0.8, 0.0, 0.0);
+        let (minimum, maximum) = capture_bounds(&scene, id).unwrap();
+        for copy in 0..12 {
+            let rotation = Quat::from_rotation_z(std::f32::consts::TAU * copy as f32 / 12.0);
+            let point = pivot + rotation * (-pivot);
+            let (distance, owner) = crate::model::scene_sample(point, &scene).unwrap();
+            assert!(distance < 0.0);
+            assert_eq!(owner, id);
+            assert!(point.cmpge(minimum).all() && point.cmple(maximum).all());
+        }
+    }
+
+    #[test]
+    fn radial_cut_groups_match_explicit_rotated_subtrees_and_prepared_sampler() {
+        let mut root = spoke();
+        root.transform.scale = Vec3::new(1.1, 0.8, 1.4);
+        root.transform.rotation = Quat::from_rotation_y(0.23);
+        root.transform.translation = Vec3::new(0.2, -0.15, 0.3);
+        let mut cut = SdfObject::create_kind(PrimitiveKind::Box);
+        cut.boolean_parent = Some(root.uuid);
+        cut.operation = crate::model::BooleanOperation::Subtract;
+        cut.transform = root.transform;
+        if let SdfParams::BoxParams(params) = &mut cut.params {
+            params.box_q = Vec3::new(0.12, 0.2, 0.2);
+        }
+        let scene = vec![root.clone(), cut];
+        let mut original = scene.clone();
+        original[0].repetition.enabled = false;
+        let matrix = object_world_matrix(&scene, root.uuid);
+        let inverse = matrix.inverse();
+        let pivot = Vec3::new(-0.8, 0.0, 0.0);
+        let mut prepared = crate::model::PreparedSubtreeSampler::new(&scene, root.uuid).unwrap();
+        for x in -15..=10 {
+            for y in -15..=15 {
+                let point = Vec3::new(x as f32 * 0.1, y as f32 * 0.1, 0.3);
+                let local = inverse.transform_point3(point);
+                let expected = (0..12)
+                    .map(|copy| {
+                        let rotation =
+                            Quat::from_rotation_z(-std::f32::consts::TAU * copy as f32 / 12.0);
+                        let sample = matrix.transform_point3(pivot + rotation * (local - pivot));
+                        crate::model::scene_sample(sample, &original).unwrap().0
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                let actual = crate::model::scene_sample(point, &scene).unwrap().0;
+                assert!((actual - expected).abs() < 1e-5);
+                assert!((prepared.sample(point).0 - expected).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn radial_group_capture_bounds_include_distant_additive_operands() {
+        let root = spoke();
+        let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+        child.boolean_parent = Some(root.uuid);
+        child.transform.translation = Vec3::new(4.0, 0.0, 0.0);
+        let scene = vec![root.clone(), child];
+        let (minimum, maximum) = capture_bounds(&scene, root.uuid).unwrap();
+        let pivot = Vec3::new(-0.8, 0.0, 0.0);
+        for copy in 0..12 {
+            let rotation = Quat::from_rotation_z(std::f32::consts::TAU * copy as f32 / 12.0);
+            let point = pivot + rotation * (Vec3::new(4.0, 0.0, 0.0) - pivot);
+            assert!(crate::model::scene_sample(point, &scene).unwrap().0 < 0.0);
+            assert!(point.cmpge(minimum).all() && point.cmple(maximum).all());
+        }
+    }
+
+    #[test]
+    fn radial_count_limits_are_finite() {
+        let mut object = spoke();
+        for count in [0, 1, 32, u32::MAX] {
+            object.repetition.mode = RepetitionMode::Radial {
+                axis: RepetitionAxis::X,
+                count,
+                pivot: Vec3::ZERO,
+            };
+            assert!(object.distance(Vec3::ONE).is_finite());
+        }
+    }
 }

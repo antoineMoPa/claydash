@@ -65,6 +65,7 @@ enum WebDocumentMessage {
         request: u64,
         name: std::path::PathBuf,
         bytes: Vec<u8>,
+        apply_example_camera: bool,
     },
     ExampleError {
         request: u64,
@@ -227,23 +228,31 @@ impl App {
         tree
     }
 
-    fn replace_scene(&mut self, scene: DataTree) {
+    fn cancel_document_work(&mut self) {
         self.cancel_render();
         self.cancel_mesh_export_for_document_change();
+        // The worker retains its cancellation token. Its eventual completion
+        // must neither block a new render nor report errors on the new document.
+        self.encoding = None;
+        if let Some(renderer) = &mut self.renderer {
+            renderer.reset_optimized_fields();
+            renderer.invalidate_scene();
+        }
+        // Renderer reset detaches old capture callbacks entirely.
+        self.discard_capture = false;
+    }
+
+    fn replace_scene(&mut self, scene: DataTree) {
+        self.cancel_document_work();
         self.tree = data_tree_with_scene(scene);
         self.interactions = InteractionState::default();
         self.ui.reset_document_gestures();
         self.clear_document_egui_state();
         self.ui.reset_animation(&self.tree);
-        if let Some(renderer) = &mut self.renderer {
-            renderer.reset_optimized_fields();
-            renderer.invalidate_scene();
-        }
     }
 
     fn clear_scene(&mut self) {
-        self.cancel_render();
-        self.cancel_mesh_export_for_document_change();
+        self.cancel_document_work();
         self.tree.make_undo_redo_snapshot();
         crate::model::set_objects(&mut self.tree, Vec::new());
         crate::model::set_scene_cameras(&mut self.tree, Vec::new());
@@ -274,16 +283,16 @@ impl App {
         self.ui.reset_document_gestures();
         self.clear_document_egui_state();
         self.ui.reset_animation(&self.tree);
-        if let Some(renderer) = &mut self.renderer {
-            renderer.reset_optimized_fields();
-            renderer.invalidate_scene();
-        }
         self.document.clear_error();
     }
 
     fn clear_document_egui_state(&self) {
         self.egui.data_mut(|data| {
             data.remove_temp::<crate::renderer::computation::Statuses>(crate::renderer::computation::status_id());
+            data.remove_temp::<Vec<crate::renderer::voxels::VoxelAction>>(
+                egui::Id::new("voxel-actions"));
+            data.remove_temp::<std::collections::HashMap<uuid::Uuid,
+                crate::renderer::voxels::VoxelStatus>>(egui::Id::new("voxel-status"));
             data.remove_temp::<Vec<crate::renderer::poisson_mesh::PoissonMeshAction>>(
                 egui::Id::new("poisson-mesh-actions"));
             data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(
@@ -353,6 +362,14 @@ impl App {
                 match document::read_scene(&path) {
                     Ok(scene) => {
                         self.replace_scene(scene);
+                        if let Some(active) = crate::model::active_camera_id(&self.tree) {
+                            if let Some(camera) = crate::model::scene_cameras(&self.tree)
+                                .into_iter()
+                                .find(|camera| camera.uuid == active)
+                            {
+                                camera.apply_to_view(&mut self.camera);
+                            }
+                        }
                         self.document.start_new();
                         self.document.mark_scene_clean(&self.tree);
                     }
@@ -445,6 +462,7 @@ impl App {
                             request,
                             name: example.file.into(),
                             bytes: bytes.to_vec(),
+                            apply_example_camera: true,
                         },
                         Err(error) => WebDocumentMessage::ExampleError {
                             request,
@@ -471,6 +489,7 @@ impl App {
                             request,
                             name,
                             bytes,
+                            apply_example_camera: false,
                         });
                     }
                 });
@@ -572,6 +591,7 @@ impl App {
                     request,
                     name,
                     bytes,
+                    apply_example_camera,
                 } => {
                     if request != self.document_request {
                         continue;
@@ -579,6 +599,16 @@ impl App {
                     match crate::document::deserialize_scene(&bytes) {
                         Ok(scene) => {
                             self.replace_scene(scene);
+                            if apply_example_camera {
+                                if let Some(active) = crate::model::active_camera_id(&self.tree) {
+                                    if let Some(camera) = crate::model::scene_cameras(&self.tree)
+                                        .into_iter()
+                                        .find(|camera| camera.uuid == active)
+                                    {
+                                        camera.apply_to_view(&mut self.camera);
+                                    }
+                                }
+                            }
                             self.document.mark_opened(name);
                             self.document.mark_scene_clean(&self.tree);
                         }
@@ -617,13 +647,34 @@ impl App {
 mod file_action_tests {
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn opening_suspension_example_has_no_camera() {
+        let mut app = App::new();
+        let example = crate::examples::EXAMPLES.iter()
+            .find(|example| example.file == "single_wheel_suspension.claydash").unwrap();
+        app.handle_file_action(FileMenuAction::OpenExample(*example));
+        assert!(crate::model::scene_cameras(&app.tree).is_empty());
+        assert!(crate::model::active_camera_id(&app.tree).is_none());
+        assert!(app.document.current_path().is_none());
+    }
+
     #[test]
     fn opening_another_scene_discards_old_document_actions() {
         let mut app = App::new();
         let old = objects_ref(&app.tree)[0].uuid;
         app.tree.set_path("scene.old_document_marker", ClaydashValue::Bool(true));
         app.tree.set_transient_path("editor.old_document_marker", ClaydashValue::Bool(true));
+        app.tree.make_undo_redo_snapshot();
+        app.tree.set_path("scene.pending_old_marker", ClaydashValue::Bool(true));
+        app.tree.undo(); // Leave old forward history as well as a pending edit.
+        app.tree.set_path("scene.pending_old_marker", ClaydashValue::Bool(true));
         app.egui.data_mut(|data| {
+            data.insert_temp(egui::Id::new("voxel-actions"),
+                vec![crate::renderer::voxels::VoxelAction::Build(old)]);
+            data.insert_temp(egui::Id::new("voxel-status"),
+                std::collections::HashMap::from([(old,
+                    crate::renderer::voxels::VoxelStatus::Sampling { percent: 1 })]));
             data.insert_temp(egui::Id::new("poisson-mesh-actions"),
                 vec![crate::renderer::poisson_mesh::PoissonMeshAction::Build(old)]);
             data.insert_temp(egui::Id::new("group-optimization-recompute"),
@@ -648,7 +699,20 @@ mod file_action_tests {
         assert_eq!(objects_ref(&app.tree)[0].uuid, replacement_id);
         assert!(matches!(app.tree.get_path("scene.old_document_marker"), ClaydashValue::None));
         assert!(matches!(app.tree.get_path("editor.old_document_marker"), ClaydashValue::None));
+        let scene_bytes = crate::document::serialize_scene(&app.tree).unwrap();
+        for _ in 0..3 {
+            app.tree.undo();
+            app.tree.redo();
+            assert_eq!(crate::document::serialize_scene(&app.tree).unwrap(), scene_bytes);
+        }
+        assert!(app.tree.get_tree("scene.old_document_marker").is_none());
+        assert!(app.tree.get_tree("scene.pending_old_marker").is_none());
+        assert!(app.tree.get_tree("editor.old_document_marker").is_none());
         app.egui.data(|data| {
+            assert!(data.get_temp::<Vec<crate::renderer::voxels::VoxelAction>>(
+                egui::Id::new("voxel-actions")).is_none());
+            assert!(data.get_temp::<std::collections::HashMap<uuid::Uuid,
+                crate::renderer::voxels::VoxelStatus>>(egui::Id::new("voxel-status")).is_none());
             assert!(data.get_temp::<Vec<crate::renderer::poisson_mesh::PoissonMeshAction>>(
                 egui::Id::new("poisson-mesh-actions")).is_none());
             for key in ["group-optimization-recompute", "group-optimization-cancel"] {
@@ -663,6 +727,38 @@ mod file_action_tests {
                 crate::renderer::poisson_mesh::PoissonMeshStatus>>(
                 egui::Id::new("poisson-mesh-status")).is_none());
         });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn switching_scenes_cancels_and_detaches_pending_renders() {
+        let mut app = App::new();
+        let control = Arc::new(crate::render_export::EncodingControl::default());
+        let (sender, completed) = channel();
+        app.encoding = Some(NativeEncoding {
+            control: control.clone(), completed, total: 1, cancelling: false,
+            format: crate::document::RenderFormat::WebP,
+        });
+        app.pending_render = Some(PendingRender::Still { path: "unused.webp".into() });
+        app.discard_capture = true;
+        app.replace_scene(DataTree::default());
+        assert!(control.cancelled.load(Ordering::Relaxed));
+        assert!(app.encoding.is_none());
+        assert!(app.pending_render.is_none());
+        assert!(!app.discard_capture);
+        assert!(sender.send(Err("obsolete encoding error".into())).is_err());
+
+        let frames_directory = std::env::temp_dir().join(format!("claydash-cancel-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&frames_directory).unwrap();
+        std::fs::write(frames_directory.join("frame"), b"partial frame").unwrap();
+        app.pending_render = Some(PendingRender::Video {
+            path: "unused.mp4".into(), frames_directory: frames_directory.clone(),
+            start_frame: 0, next_frame: 1, end_frame: 2, output_index: 1,
+            fps: 24.0, restore_frame: 0.0,
+        });
+        app.replace_scene(DataTree::default());
+        assert!(app.pending_render.is_none());
+        assert!(!frames_directory.exists());
     }
 
     #[test]

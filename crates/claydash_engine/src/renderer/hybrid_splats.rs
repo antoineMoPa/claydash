@@ -179,6 +179,7 @@ pub(super) fn create_splat_resources(
 pub(super) struct GpuMeshVertex {
     pub position: [f32; 4],
     pub normal: [f32; 4],
+    pub captured_color: [f32; 4],
 }
 
 impl Renderer {
@@ -190,11 +191,12 @@ impl Renderer {
         let sun = Vec3::from_array(world.sun_direction());
         let (direction, ambient, direct) = if world.background == crate::model::BackgroundMode::Sky
         {
-            let daylight = ((sun.y + 0.18) / 0.34).clamp(0.0, 1.0);
+            let daylight_position = ((sun.y + 0.18) / 0.34).clamp(0.0, 1.0);
+            let daylight = daylight_position * daylight_position * (3.0 - 2.0 * daylight_position);
             (
                 sun,
                 0.035 + 0.165 * daylight,
-                world.sun_intensity * daylight,
+                world.sun_intensity * daylight_position,
             )
         } else if world.background == crate::model::BackgroundMode::NightSky {
             (Vec3::new(2.0, 3.0, 2.0).normalize(), 0.08, 0.12)
@@ -262,9 +264,9 @@ mod tests {
             };
             queue.write_buffer(&camera, 0, bytemuck::bytes_of(&data));
             let vertices = [
-                GpuMeshVertex { position: [-0.8, -0.8, 0.5, 1.0], normal: [0.0, 0.0, 1.0, 0.0] },
-                GpuMeshVertex { position: [0.8, -0.8, 0.5, 1.0], normal: [0.0, 0.0, 1.0, 0.0] },
-                GpuMeshVertex { position: [0.0, 0.8, 0.5, 1.0], normal: [0.0, 0.0, 1.0, 0.0] },
+                GpuMeshVertex { position: [-0.8, -0.8, 0.5, 1.0], normal: [0.0, 0.0, 1.0, 0.0], captured_color: [0.0; 4] },
+                GpuMeshVertex { position: [0.8, -0.8, 0.5, 1.0], normal: [0.0, 0.0, 1.0, 0.0], captured_color: [0.0; 4] },
+                GpuMeshVertex { position: [0.0, 0.8, 0.5, 1.0], normal: [0.0, 0.0, 1.0, 0.0], captured_color: [0.0; 4] },
             ];
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("mesh depth test triangle"), contents: bytemuck::cast_slice(&vertices),
@@ -298,7 +300,15 @@ mod tests {
             let color_view = color.create_view(&Default::default());
             let depth_view = depth.create_view(&Default::default());
             let mut bright = 0;
-            for (clear_depth, visible, dim) in [(1.0, true, false), (1.0, true, true), (0.1, false, false)] {
+            for (clear_depth, visible, dim, ambient) in [
+                (1.0, true, false, 0.25),
+                (1.0, true, true, 0.25),
+                (0.1, false, false, 0.25),
+                (1.0, false, true, 0.0),
+            ] {
+                let mut lighting = data;
+                lighting.right[3] = ambient;
+                queue.write_buffer(&camera, 0, bytemuck::bytes_of(&lighting));
                 let mut encoder = device.create_command_encoder(&Default::default());
                 {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -334,7 +344,14 @@ mod tests {
                 let center = &data[4 * 256 + 4 * 4..4 * 256 + 4 * 4 + 3];
                 assert_eq!(center[0] > 20, visible, "triangle depth result: {center:?}");
                 if !dim && visible { bright = center[0]; }
-                if dim { assert!(center[0] + 25 < bright, "surface normals must visibly affect shading: bright={bright}, dim={center:?}"); }
+                if ambient == 0.0 {
+                    assert_eq!(
+                        center,
+                        &[0, 0, 0],
+                        "zero ambient must disable all mesh fill"
+                    );
+                }
+                if dim && ambient > 0.0 { assert!(center[0] + 25 < bright, "surface normals must visibly affect shading: bright={bright}, dim={center:?}"); }
                 drop(data);
                 readback.unmap();
             }

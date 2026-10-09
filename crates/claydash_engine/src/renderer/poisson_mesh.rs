@@ -132,7 +132,19 @@ pub(super) struct PoissonMeshState {
 }
 
 impl PoissonMeshState {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn seed_pending_scene_reset_test(&mut self) -> Arc<std::sync::atomic::AtomicBool> {
+        let root = uuid::Uuid::new_v4();
+        let (_, receiver) = mpsc::channel();
+        let work = Computation::new(Stage::Sampling);
+        let cancel = work.cancel.clone();
+        self.requests.push_back(root);
+        self.job = Some(Job { root, component: root, revision: 1,
+            sample_resolution: 16, mesh_resolution: 16, baked_frame_inverse: glam::Mat4::IDENTITY,
+            work, receiver, invalidated: false });
+        cancel
+    }
+
     pub(super) fn is_busy(&self) -> bool { self.job.is_some() || !self.requests.is_empty() }
 
     fn cached_for_export(&self, source: &[SdfObject], root: uuid::Uuid, revision: i32) -> Option<CachedExportMesh> {
@@ -306,7 +318,7 @@ impl PoissonMeshState {
         true
     }
 
-    pub fn rebuild_buffer(&self, device: &wgpu::Device, source: &[SdfObject], buffer: &mut wgpu::Buffer, count: &mut u32) {
+    pub fn rebuild_buffer(&self, device: &wgpu::Device, source: &[SdfObject], buffer: &mut wgpu::Buffer, count: &mut u32, voxels: &super::voxels::VoxelState) {
         let owners: HashMap<_, _> = super::bvh::boolean_postorder(source).iter().enumerate()
             .map(|(index, object)| (object.uuid, index as u32)).collect();
         let capacity = self.ready.values().filter(|ready| ready.showing)
@@ -322,10 +334,12 @@ impl PoissonMeshState {
                     let normal = normal_pose.transform_vector3(ready.mesh.normals[triangle_index][corner]);
                     vertices.push(super::hybrid_splats::GpuMeshVertex {
                         position: point.extend(1.0).to_array(), normal: normal.extend(owner as f32).to_array(),
+                        captured_color: [0.0; 4],
                     });
                 }
             }
         }
+        voxels.append_vertices(source, &mut vertices);
         *count = vertices.len() as u32;
         if !vertices.is_empty() {
             *buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

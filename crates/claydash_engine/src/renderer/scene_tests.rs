@@ -276,6 +276,7 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
                 }
                 GroupRenderRepresentation::ExactSdf
                 | GroupRenderRepresentation::PoissonMesh
+                | GroupRenderRepresentation::Voxels
                 | GroupRenderRepresentation::NeuralSdf
                 | GroupRenderRepresentation::SphereAccelerator
                 | GroupRenderRepresentation::BoxAccelerator => {

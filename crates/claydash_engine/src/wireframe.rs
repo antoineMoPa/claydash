@@ -6,10 +6,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 
 use crate::{
     camera::Camera,
-    model::{
-        BooleanOperation, SdfObject,
-        SdfParams,
-    },
+    model::{BooleanOperation, SdfObject, SdfParams},
 };
 
 const SEGMENT_BUDGET: usize = 8192;
@@ -92,40 +89,49 @@ pub fn draw_guides(
         };
         let segments = primitive_segments(&object.params, prepared_text.as_deref());
         let transform = crate::model::object_world_matrix(scene, object.uuid);
-        let world_to_clip = projection * transform;
-        let local_eye = transform.inverse().transform_point3(camera.position);
-        let cells: [Vec<Cell>; 3] = std::array::from_fn(|axis| {
-            let count = if object.repetition.enabled {
-                object.repetition.count[axis]
-            } else {
-                1
-            };
-            repetition_cells(count, object.repetition.spacing[axis], local_eye[axis])
-        });
-        'copies: for x in &cells[0] {
-            for y in &cells[1] {
-                for z in &cells[2] {
-                    let offset = Vec3::new(x.offset, y.offset, z.offset);
-                    let minimum = Vec3::new(x.minimum, y.minimum, z.minimum);
-                    let maximum = Vec3::new(x.maximum, y.maximum, z.maximum);
-                    for &[a, b] in &segments {
-                        if remaining == 0 {
-                            simplified = true;
-                            break 'copies;
+        let transforms = radial_instance_transforms(scene, object.uuid, transform, SEGMENT_BUDGET);
+        for transform in transforms {
+            let world_to_clip = projection * transform;
+            let local_eye = transform.inverse().transform_point3(camera.position);
+            let cells: [Vec<Cell>; 3] = std::array::from_fn(|axis| {
+                let count = if object.repetition.enabled
+                    && object.repetition.mode == crate::model::RepetitionMode::Linear
+                {
+                    object.repetition.count[axis]
+                } else {
+                    1
+                };
+                repetition_cells(count, object.repetition.spacing[axis], local_eye[axis])
+            });
+            'copies: for x in &cells[0] {
+                for y in &cells[1] {
+                    for z in &cells[2] {
+                        let offset = Vec3::new(x.offset, y.offset, z.offset);
+                        let minimum = Vec3::new(x.minimum, y.minimum, z.minimum);
+                        let maximum = Vec3::new(x.maximum, y.maximum, z.maximum);
+                        for &[a, b] in &segments {
+                            if remaining == 0 {
+                                simplified = true;
+                                break 'copies;
+                            }
+                            remaining -= 1;
+                            let Some((a, b)) =
+                                clip_to_cell(a + offset, b + offset, minimum, maximum)
+                            else {
+                                continue;
+                            };
+                            let Some(points) = project_segment(world_to_clip, a, b, camera, scale)
+                            else {
+                                continue;
+                            };
+                            ui.painter().line_segment(points, stroke);
+                            ghosts.0.push((object.uuid, points));
                         }
-                        remaining -= 1;
-                        let Some((a, b)) = clip_to_cell(a + offset, b + offset, minimum, maximum)
-                        else {
-                            continue;
-                        };
-                        let Some(points) = project_segment(world_to_clip, a, b, camera, scale)
-                        else {
-                            continue;
-                        };
-                        ui.painter().line_segment(points, stroke);
-                        ghosts.0.push((object.uuid, points));
                     }
                 }
+            }
+            if remaining == 0 {
+                break;
             }
         }
         if remaining == 0 {
@@ -147,6 +153,52 @@ pub fn draw_guides(
         );
     }
     ghosts
+}
+
+fn radial_instance_transforms(
+    scene: &[SdfObject],
+    id: uuid::Uuid,
+    matrix: Mat4,
+    limit: usize,
+) -> Vec<Mat4> {
+    let mut transforms = vec![matrix];
+    let mut ancestor = Some(id);
+    for _ in 0..scene.len() {
+        let Some(object) = ancestor.and_then(|id| scene.iter().find(|object| object.uuid == id))
+        else {
+            break;
+        };
+        if object.repetition.enabled {
+            if let crate::model::RepetitionMode::Radial { axis, count, pivot } =
+                object.repetition.mode
+            {
+                let frame = crate::model::object_world_matrix(scene, object.uuid);
+                let inverse = frame.inverse();
+                let mut copies = Vec::new();
+                for matrix in transforms {
+                    for copy in 0..count.clamp(1, 32) {
+                        if copies.len() == limit {
+                            break;
+                        }
+                        let rotation = axis.rotation(
+                            std::f32::consts::TAU * copy as f32 / count.clamp(1, 32) as f32,
+                        );
+                        copies.push(
+                            frame
+                                * Mat4::from_translation(pivot)
+                                * Mat4::from_quat(rotation)
+                                * Mat4::from_translation(-pivot)
+                                * inverse
+                                * matrix,
+                        );
+                    }
+                }
+                transforms = copies;
+            }
+        }
+        ancestor = object.boolean_parent;
+    }
+    transforms
 }
 
 fn editing_operands(
@@ -439,11 +491,10 @@ fn project_segment(
     Some(points)
 }
 
-
 #[cfg(test)]
 mod tests {
-use super::*;
-use crate::model::PrimitiveKind;
+    use super::*;
+    use crate::model::PrimitiveKind;
     #[test]
     fn selected_cutters_and_nested_target_operands_are_visible_without_unrelated_roots() {
         let root = SdfObject::create_kind(PrimitiveKind::Box);
@@ -489,7 +540,6 @@ use crate::model::PrimitiveKind;
             }
         }
     }
-
 
     #[test]
     fn even_repetition_includes_the_central_cell_and_clips_edge_copies() {

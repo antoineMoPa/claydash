@@ -1,6 +1,64 @@
 use super::*;
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn point_drag_previews_changes_without_queuing_native_refinement() {
+    pollster::block_on(async {
+        let adapter = wgpu::Instance::default().request_adapter(&Default::default())
+            .await.expect("GPU adapter");
+        let (device, _) = adapter.request_device(&Default::default()).await.expect("GPU device");
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("interactive refinement test"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None,
+                }, count: None,
+            }],
+        });
+        for deferred in [false, true] {
+            let mut viewport = Viewport::new(&device, wgpu::TextureFormat::Rgba8Unorm,
+                false, &layout);
+            let mut key = ViewKey {
+                matrix: glam::Mat4::IDENTITY.to_cols_array_2d(), position: [0.0; 3],
+                projection: 0, versions: [1, 1], size: [1024, 1024], refine: true,
+            };
+            viewport.set_interacting(true);
+            viewport.set_rendering_path(RenderingPath::Mesh);
+            viewport.pixel_budget = 1024 * 1024;
+            // Unchanged initial budgets used to retain learned fast mesh
+            // throughput after a point edit discarded the cached mesh.
+            viewport.set_initial_budget(INITIAL_PIXELS);
+            assert_eq!(viewport.pixel_budget, 1024 * 1024);
+            viewport.pending = true;
+            viewport.submitted_pixels = 1024 * 1024;
+            viewport.submitted_budget = 1024 * 1024;
+            viewport.set_rendering_path(if deferred { RenderingPath::Deferred } else { RenderingPath::Exact });
+            assert_eq!(viewport.pixel_budget, INITIAL_PIXELS);
+            assert!(viewport.pending, "switching paths must preserve the GPU fence");
+            assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Cached);
+            *viewport.timing.lock().unwrap() = Some(Some(0.1));
+            assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Preview);
+            assert_eq!(viewport.pixel_budget, INITIAL_PIXELS, "old mesh timings cannot inflate fallback work");
+            for _ in 0..3 {
+                assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Cached);
+                assert_eq!(viewport.completed, 0);
+                if deferred {
+                    assert!(viewport.targets.as_ref().unwrap().deferred.as_ref().unwrap().native.is_none());
+                }
+                key.versions[0] += 1;
+                assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Preview);
+            }
+            let learned_budget = viewport.pixel_budget;
+            viewport.set_interacting(false);
+            assert!(matches!(viewport.prepare(&device, key, true, deferred, false), Work::Refine { .. }));
+            assert_eq!(viewport.pixel_budget, learned_budget);
+        }
+    });
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn mesh_only_view_renders_at_native_resolution_then_uses_cache() {
     pollster::block_on(async {
         let adapter = wgpu::Instance::default().request_adapter(&Default::default())
@@ -196,4 +254,50 @@ fn deferred_shader_modules_validate() {
     )
     .validate(&module)
     .expect("validate deferred lighting and transmission");
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn optimization_work_pauses_refinement_but_keeps_previews_and_resumes() {
+    pollster::block_on(async {
+        let adapter = wgpu::Instance::default().request_adapter(&Default::default())
+            .await.expect("GPU adapter");
+        let (device, _) = adapter.request_device(&Default::default()).await.expect("GPU device");
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("optimization pause test"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None,
+                }, count: None,
+            }],
+        });
+        for deferred in [false, true] {
+            let mut viewport = Viewport::new(&device, wgpu::TextureFormat::Rgba8Unorm, false, &layout);
+            let mut key = ViewKey {
+                matrix: glam::Mat4::IDENTITY.to_cols_array_2d(), position: [0.0; 3],
+                projection: 0, versions: [1, 1], size: [1024, 1024], refine: true,
+            };
+            viewport.set_refinement_paused(true);
+            assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Preview);
+            for _ in 0..3 {
+                assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Cached);
+                assert_eq!(viewport.completed, 0);
+                key.versions[0] += 1;
+                assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Preview);
+            }
+            viewport.set_refinement_paused(false);
+            assert!(matches!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Refine { .. }));
+            let completed = viewport.completed;
+            viewport.set_refinement_paused(true);
+            assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Cached);
+            assert_eq!(viewport.completed, completed);
+            viewport.set_refinement_paused(false);
+            assert!(matches!(viewport.prepare(&device, key, true, deferred, false), Work::Refine { .. }));
+            viewport.set_refinement_paused(true);
+            viewport.reset_for_scene();
+            assert!(!viewport.refinement_paused);
+        }
+    });
 }

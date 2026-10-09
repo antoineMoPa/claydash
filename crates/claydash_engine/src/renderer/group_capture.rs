@@ -393,7 +393,7 @@ pub(super) fn prepare_group_scene_with_pending(
                 proxy.path_extrusion = None;
                 proxy.surface_inlay = None;
             }
-            GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::PoissonMesh => continue,
+            GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::PoissonMesh | GroupRenderRepresentation::Voxels => continue,
         }
         if group_ids.contains(&root.uuid) {
             proxy.transform = Transform {

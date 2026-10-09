@@ -759,6 +759,48 @@ mod tests {
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn scene_reset_cancels_computations_and_isolates_late_capture_results() {
+    use std::sync::atomic::Ordering;
+    let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+        width: 16, height: 16, ..Default::default()
+    })).expect("headless renderer");
+    let context = egui::Context::default();
+    let root = uuid::Uuid::new_v4();
+    let mut tokens = vec![renderer.poisson_mesh.seed_pending_scene_reset_test(),
+        renderer.voxels.seed_pending_scene_reset_test()];
+    let work = Computation::new(Stage::Training);
+    tokens.push(work.cancel.clone());
+    let (neural_sender, receiver) = std::sync::mpsc::channel();
+    renderer.neural_jobs.active = Some(Active { root, key: 1, generation: 1, receiver, work });
+    let work = Computation::new(Stage::Capture);
+    tokens.push(work.cancel.clone());
+    let (bake_sender, receiver) = std::sync::mpsc::channel();
+    renderer.group_capture_bake = Some(super::group_capture::CaptureBakeJob {
+        root, key: 1, source_revision: 1, work, receiver,
+    });
+    renderer.group_compute_requests.insert(root);
+    renderer.capture_pending = true;
+    tokens.push(renderer.capture_cancel.clone());
+    let old_result = renderer.capture_result.clone();
+    assert!(renderer.has_pending_computations(&context));
+
+    renderer.reset_optimized_fields();
+
+    assert!(tokens.iter().all(|token| token.load(Ordering::Relaxed)));
+    assert!(!renderer.has_pending_computations(&context));
+    assert!(!renderer.capture_pending());
+    assert!(!renderer.capture_cancel.load(Ordering::Relaxed));
+    assert!(neural_sender.send(Err("old training completion")).is_err());
+    assert!(bake_sender.send(None).is_err());
+    *old_result.lock().unwrap() = Some(Err("old capture completion".into()));
+    assert!(renderer.take_capture().is_none());
+    *renderer.capture_result.lock().unwrap() = Some(Err("new capture completion".into()));
+    assert!(matches!(renderer.take_capture(), Some(Err(message)) if message == "new capture completion"));
+}
+
 impl Renderer {
     pub fn optimized_objects_for_save(&self, source: &[SdfObject]) -> Vec<SdfObject> {
         let mut objects = self.neural_jobs.objects_for_save(source);
@@ -771,9 +813,16 @@ impl Renderer {
     }
 
     pub fn reset_optimized_fields(&mut self) {
+        // Submitted GPU commands may finish, but their callbacks own only the
+        // old mailboxes. New captures and progressive batches start independently.
+        self.cancel_pending_capture();
+        self.capture_result = Arc::new(std::sync::Mutex::new(None));
+        self.capture_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.capture_pending = false;
         self.viewport.reset_for_scene();
         {
             self.poisson_mesh = Default::default();
+            self.voxels = Default::default();
             self.mesh_vertex_count = 0;
         }
         self.neural_jobs = NeuralJobs::default();

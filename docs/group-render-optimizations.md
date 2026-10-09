@@ -419,3 +419,38 @@ sets use a seeded bijective index mapping instead of allocating a sample-order
 array. Material storage stays at 32³, so increasing the sample count does not
 increase the GPU payload or trigger the cache budget. Old `samples_per_side`
 settings map to their cubed total count when loaded; new saves store `samples`.
+
+## Voxels
+
+Choose **Voxels** in the Group optimizations inspector. The model is captured
+from the six sides of its local bounding box and displayed as tiny solid cubes.
+When selected on a Boolean child, the containing Boolean component is captured
+as a whole so subtraction/intersection results remain intact.
+The **Voxels across longest side** setting controls the grid resolution (8–128,
+32 by default). All three axes use the same cell size; projected samples that
+land in the same cell share one cube. Shared cube faces are omitted, and exposed
+faces have flat cube normals and the captured surface color.
+
+Capturing starts automatically when selecting the mode or opening a saved voxel
+scene. The inspector reports progress, cube count, and failures; **Recompute**
+rebuilds explicitly and **Cancel** stops the current capture. Exact source
+geometry remains visible until the capture is ready. Geometry, material, and
+resolution edits invalidate the capture; rigid movement reuses the local grid.
+The conservative source fingerprint can also rebake after unrelated object edits.
+Native capture runs on a background thread and browser capture on a Web Worker.
+The saved scene retains the editable source, selected mode, and resolution;
+cube geometry rebuilds after reopening.
+
+The cubes use the triangle raster depth pass and occlude, and are occluded by,
+Exact objects. This is a surface approximation, not a filled volume: surfaces
+missed by all six projections and their bounded depth layers are absent, and
+features smaller than a cell may disappear. Captured colors use opaque diffuse
+lighting; transparency, source reflections and source procedural material
+responses are approximated. Nonuniform group scaling stretches the local cubes.
+Voxel geometry is capped at 400,000 exposed triangles across the scene; lower
+the resolution if the inspector reports the geometry budget was exceeded.
+
+MCP clients select `render_representation: "voxels"` with optional
+`voxels: { "resolution": 32 }` through `SetRenderRepresentation`. `GetState`
+includes the persisted voxel settings. Selecting the mode schedules the bake;
+no separate inspector click is needed.
