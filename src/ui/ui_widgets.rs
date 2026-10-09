@@ -4,6 +4,7 @@ pub(super) fn orientation_axes(ui: &mut egui::Ui, tree: &mut DataTree, camera: &
     let (rect, _) = ui.allocate_exact_size(egui::vec2(96.0, 82.0), egui::Sense::hover());
     let center = rect.center();
     let view = camera.view();
+    let offset = camera.position - camera.target;
     let axes = [
         (Vec3::X, "X", axis_color(0), ViewAngle::Right),
         (Vec3::NEG_X, "", axis_color(0), ViewAngle::Left),
@@ -37,7 +38,143 @@ pub(super) fn orientation_axes(ui: &mut egui::Ui, tree: &mut DataTree, camera: &
         }
         if response.clicked() {
             exit_camera_view(tree);
+            // The two endpoints overlap when looking along an axis. Whichever
+            // endpoint receives the click, flip from the current side. A one
+            // degree tolerance also handles nearly aligned orbit/camera views.
+            let alignment = offset.dot(axis) / offset.length().max(f32::EPSILON);
+            let angle = if alignment >= 1.0_f32.to_radians().cos() {
+                match angle {
+                    ViewAngle::Right => ViewAngle::Left,
+                    ViewAngle::Left => ViewAngle::Right,
+                    ViewAngle::Top => ViewAngle::Bottom,
+                    ViewAngle::Bottom => ViewAngle::Top,
+                    ViewAngle::Front => ViewAngle::Back,
+                    ViewAngle::Back => ViewAngle::Front,
+                    ViewAngle::Isometric => ViewAngle::Isometric,
+                }
+            } else {
+                angle
+            };
             camera.snap(angle);
+        }
+    }
+}
+
+#[cfg(test)]
+mod orientation_tests {
+    use super::*;
+    use crate::camera::ProjectionMode;
+    use glam::Quat;
+
+    fn frame(
+        ctx: &egui::Context,
+        tree: &mut DataTree,
+        camera: &mut Camera,
+        events: Vec<egui::Event>,
+    ) -> egui::Pos2 {
+        let mut center = egui::Pos2::ZERO;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                center = ui.next_widget_position() + egui::vec2(48.0, 41.0);
+                orientation_axes(ui, tree, camera);
+            },
+        );
+        output.textures_delta.clear();
+        center
+    }
+
+    fn click(ctx: &egui::Context, tree: &mut DataTree, camera: &mut Camera, position: egui::Pos2) {
+        for pressed in [true, false] {
+            frame(
+                ctx,
+                tree,
+                camera,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn orientation_gizmo_center_clicks_toggle_all_axis_views() {
+        for angle in [
+            ViewAngle::Right,
+            ViewAngle::Left,
+            ViewAngle::Top,
+            ViewAngle::Bottom,
+            ViewAngle::Front,
+            ViewAngle::Back,
+        ] {
+            for projection in [ProjectionMode::Perspective, ProjectionMode::Orthographic] {
+                let ctx = egui::Context::default();
+                let mut tree = DataTree::default();
+                let mut camera = Camera::new();
+                camera.target = Vec3::new(2.0, -3.0, 4.0);
+                camera.position = camera.target + Vec3::Z * 7.0;
+                camera.projection_mode = projection;
+                camera.snap(angle);
+                let target = camera.target;
+                for _ in 0..3 {
+                    let offset = camera.position - target;
+                    tree.set_transient_path("editor.camera_view", ClaydashValue::Bool(true));
+                    let center = frame(&ctx, &mut tree, &mut camera, vec![]);
+                    click(&ctx, &mut tree, &mut camera, center);
+                    assert!(
+                        camera.position.distance(target - offset) < 0.0001,
+                        "{angle:?}, {projection:?} did not flip"
+                    );
+                    assert_eq!(camera.target, target);
+                    assert_eq!(camera.projection_mode, projection);
+                    assert!(camera.view().is_finite());
+                    assert!(matches!(
+                        tree.get_path("editor.camera_view"),
+                        ClaydashValue::Bool(false)
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn orientation_gizmo_snaps_other_axes_and_unaligned_views() {
+        for initial in [ViewAngle::Front, ViewAngle::Isometric] {
+            for (axis, expected) in [(Vec3::X, ViewAngle::Right), (Vec3::NEG_X, ViewAngle::Left)] {
+                let ctx = egui::Context::default();
+                let mut tree = DataTree::default();
+                let mut camera = Camera::new();
+                camera.snap(initial);
+                let mut expected_camera = camera.clone();
+                expected_camera.snap(expected);
+                let center = frame(&ctx, &mut tree, &mut camera, vec![]);
+                let direction = camera.view().transform_vector3(axis);
+                let position = center + egui::vec2(direction.x, -direction.y) * 31.0;
+                click(&ctx, &mut tree, &mut camera, position);
+                assert!(camera.position.distance(expected_camera.position) < 0.0001);
+            }
+        }
+    }
+
+    #[test]
+    fn orientation_gizmo_flips_nearly_aligned_view() {
+        for axis in [Vec3::Z, Vec3::NEG_Z] {
+            let ctx = egui::Context::default();
+            let mut tree = DataTree::default();
+            let mut camera = Camera::new();
+            camera.position = Quat::from_rotation_y(0.5_f32.to_radians()) * axis * 5.0;
+            let center = frame(&ctx, &mut tree, &mut camera, vec![]);
+            click(&ctx, &mut tree, &mut camera, center);
+            assert!(camera.position.distance(-axis * 5.0) < 0.0001);
         }
     }
 }
