@@ -5,6 +5,7 @@ pub(crate) mod agent;
 mod events;
 mod initialization;
 mod rendering;
+mod mesh_export_options;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_export;
 #[cfg(target_arch = "wasm32")]
@@ -108,6 +109,9 @@ pub struct App {
     #[cfg(not(target_arch = "wasm32"))]
     encoding: Option<NativeEncoding>,
     mesh_export: Option<mesh_export::MeshExportJob>,
+    #[cfg(not(target_arch = "wasm32"))]
+    mesh_export_history: std::collections::VecDeque<mesh_export::ExportRecord>,
+    mesh_export_options: Option<mesh_export_options::ExportOptions>,
     #[cfg(target_arch = "wasm32")]
     pending_render: Option<WebPendingRender>,
     #[cfg(target_arch = "wasm32")]
@@ -119,8 +123,6 @@ pub struct App {
     guide_screenshot: Option<std::path::PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
     guide_capture_done: bool,
-    #[cfg(all(not(target_arch = "wasm32"), unix))]
-    agent_headless: bool,
     window_focused: bool,
     window_occluded: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -229,6 +231,7 @@ impl App {
     }
 
     fn cancel_document_work(&mut self) {
+        self.mesh_export_options = None;
         self.cancel_render();
         self.cancel_mesh_export_for_document_change();
         // The worker retains its cancellation token. Its eventual completion
@@ -394,7 +397,7 @@ impl App {
                     self.save_path(path);
                 }
             }
-            FileMenuAction::ExportGlb => self.start_mesh_export(),
+            FileMenuAction::ExportGlb => self.request_mesh_export(),
             FileMenuAction::Render(format) => {
                 if self.pending_render.is_some() || self.encoding.is_some() {
                     return;
@@ -451,7 +454,7 @@ impl App {
         }
         let request = self.document_request;
         match action {
-            FileMenuAction::ExportGlb => self.start_mesh_export(),
+            FileMenuAction::ExportGlb => self.request_mesh_export(),
             FileMenuAction::Guide => crate::examples::open_guide(),
             FileMenuAction::OpenExample(example) => {
                 let tx = self.document_tx.clone();
@@ -835,7 +838,7 @@ pub fn run() {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
         let mut builder = EventLoop::<AppEvent>::with_user_event();
         if std::env::args().any(|argument| {
-            argument.starts_with("--guide-screenshot=") || argument == "--agent-headless"
+            argument.starts_with("--guide-screenshot=")
         }) {
             builder.with_activation_policy(ActivationPolicy::Prohibited);
         }

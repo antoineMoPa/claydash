@@ -9,11 +9,21 @@ use super::super::box_depth_atlas::{bake_box_depth_atlas_with_progress, BoxCaptu
 use super::super::poisson_mesh::geometry::Mesh;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(super) struct VoxelGeometry {
+pub struct VoxelGeometry {
     pub mesh: Mesh,
     /// One flat sampled color per triangle.
     pub colors: Vec<[f32; 4]>,
     pub cubes: usize,
+}
+
+impl VoxelGeometry {
+    /// Move the same component-local cubes used by the viewport into GLB world space.
+    pub fn into_world(mut self, source: &[SdfObject], root: Uuid,
+        cancel: &AtomicBool) -> Result<Self, String> {
+        self.mesh = super::super::poisson_mesh::mesh_at_pose(self.mesh,
+            crate::model::lattice_world_matrix(source, root), cancel)?;
+        Ok(self)
+    }
 }
 
 fn report_progress(progress: &AtomicU32, percent: u32) {
@@ -22,7 +32,7 @@ fn report_progress(progress: &AtomicU32, percent: u32) {
     super::web_worker::post_progress(percent);
 }
 
-pub(super) fn build(
+pub fn build(
     source: &[SdfObject], root: Uuid, resolution: u32,
     progress: &AtomicU32, cancel: Option<&AtomicBool>,
 ) -> Result<VoxelGeometry, String> {

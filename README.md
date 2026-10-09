@@ -219,3 +219,9 @@ make build
 make serve
 open http://localhost:3001
 ```
+
+### Headless server and MCP
+
+Run `claydash serve` to expose the existing agent/MCP operations without an app window.
+
+See [agent integration](docs/agent-integration.md) for configuration.

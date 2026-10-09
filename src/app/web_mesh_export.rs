@@ -1,4 +1,5 @@
 use super::*;
+use super::mesh_export_options::{ExportOptions, MeshKind};
 use crate::renderer::{computation::{Computation, Stage}, poisson_mesh::{geometry::Mesh,
     textured_glb::{Page, PAGE_TRIANGLES}, web_worker::{WebJob, WebBytesJob}}};
 use std::sync::atomic::Ordering;
@@ -8,7 +9,8 @@ pub(super) struct MeshExportJob {
     source: Vec<crate::model::SdfObject>,
     roots: Vec<uuid::Uuid>,
     index: usize,
-    worker: Option<WebJob>,
+    worker: Option<GeometryWorker>,
+    options: ExportOptions,
     pages: Vec<Page>,
     texture_index: usize,
     texture: Option<crate::renderer::poisson_bake::TextureReadback>,
@@ -20,15 +22,33 @@ pub(super) struct MeshExportJob {
     world: crate::model::World,
 }
 
+enum GeometryWorker {
+    Smooth(WebJob),
+    Voxels(crate::renderer::voxels::web_worker::WebJob),
+}
+impl GeometryWorker {
+    fn progress(&self) -> u32 {
+        match self { Self::Smooth(worker) => worker.progress(), Self::Voxels(worker) => worker.progress().min(99) }
+    }
+    fn take_result(&self) -> Option<Result<(Mesh, Option<Arc<Vec<[f32; 4]>>>), String>> {
+        match self {
+            Self::Smooth(worker) => worker.take_result().map(|result| result.map(|mesh| (mesh, None))),
+            Self::Voxels(worker) => worker.take_result().map(|result| result.map(|geometry|
+                (geometry.mesh, Some(Arc::new(geometry.colors))))),
+        }
+    }
+}
+
 impl MeshExportJob {
-    fn add_mesh(&mut self, root: uuid::Uuid, mesh: Mesh) {
+    fn add_mesh(&mut self, root: uuid::Uuid, mesh: Mesh, colors: Option<Arc<Vec<[f32; 4]>>>) {
         let name = self.source.iter().find(|object| object.uuid == root)
             .map_or_else(|| "Mesh".to_owned(), |object| object.name.clone());
         let mesh = Arc::new(mesh);
-        for first in (0..mesh.triangles.len()).step_by(PAGE_TRIANGLES) {
-            let count = (mesh.triangles.len() - first).min(PAGE_TRIANGLES);
+        let page_triangles = if colors.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
+        for first in (0..mesh.triangles.len()).step_by(page_triangles) {
+            let count = (mesh.triangles.len() - first).min(page_triangles);
             self.pages.push(Page { name: name.clone(), root, mesh: mesh.clone(), first, count,
-                size: crate::renderer::poisson_mesh::textured_glb::page_size(count), png: Vec::new() });
+                size: if colors.is_some() { 64 } else { crate::renderer::poisson_mesh::textured_glb::page_size(count) }, png: Vec::new(), colors: colors.clone() });
         }
         self.index += 1;
         self.work.progress.store(0, Ordering::Relaxed);
@@ -56,7 +76,7 @@ impl App {
         self.mesh_export = None;
     }
 
-    pub(super) fn start_mesh_export(&mut self) {
+    pub(super) fn start_mesh_export(&mut self, options: ExportOptions) {
         if self.mesh_export.is_some() { return; }
         let source = crate::model::objects(&self.tree);
         let selection = commands::effective_selected_ids(&self.tree);
@@ -65,7 +85,7 @@ impl App {
             self.document.set_error("export Glb", "Select an object or add objects to the scene");
             return;
         }
-        self.mesh_export = Some(MeshExportJob { source, roots, index: 0, worker: None,
+        self.mesh_export = Some(MeshExportJob { source, roots, index: 0, worker: None, options,
             pages: Vec::new(), texture_index: 0, texture: None,
             png_job: None, glb_job: None, work: Computation::new(Stage::Sampling),
             assets: crate::model::material_assets(&self.tree), camera: self.camera.clone(),
@@ -83,32 +103,43 @@ impl App {
                 if let Some(result) = worker.take_result() {
                     job.worker = None;
                     match result {
-                        Ok(mesh) => job.add_mesh(root, mesh),
+                        Ok((mesh, colors)) => job.add_mesh(root, mesh, colors),
                         Err(error) => finish = Some(Err(error)),
                     }
                 }
             } else {
-                let revision = super::rendering::mesh_source_revision(&job.source);
-                let cached = self.renderer.as_ref().and_then(|renderer|
-                    renderer.cached_mesh_for_export(&job.source, root, revision));
-                if let Some(cached) = cached {
-                    match cached.world_mesh(&std::sync::atomic::AtomicBool::new(false)) {
-                        Ok(mesh) => job.add_mesh(root, mesh),
+                let object = job.source.iter().find(|object| object.uuid == root).unwrap();
+                if let MeshKind::Voxels { resolution } = job.options.mesh_kind(object) {
+                    match crate::renderer::voxels::web_worker::WebJob::start_export(
+                        job.source.clone(), root, resolution, &self.egui) {
+                        Ok(worker) => job.worker = Some(GeometryWorker::Voxels(worker)),
                         Err(error) => finish = Some(Err(error)),
                     }
                 } else {
-                    let resolution = job.source.iter().find(|object| object.uuid == root)
-                        .map_or(0, |object| object.gaussian_splats.resolution);
-                    let mesh_resolution = job.source.iter().find(|object| object.uuid == root)
-                        .map_or(0, |object| object.poisson_mesh.resolution);
-                    match WebJob::start(job.source.clone(), root, resolution, mesh_resolution, &self.egui) {
-                        Ok(worker) => job.worker = Some(worker),
-                        Err(error) => finish = Some(Err(error)),
+                    let revision = super::rendering::mesh_source_revision(&job.source);
+                    let cached = self.renderer.as_ref().and_then(|renderer|
+                        renderer.cached_mesh_for_export(&job.source, root, revision));
+                    if let Some(cached) = cached {
+                        match cached.world_mesh(&std::sync::atomic::AtomicBool::new(false)) {
+                            Ok(mesh) => job.add_mesh(root, mesh, None),
+                            Err(error) => finish = Some(Err(error)),
+                        }
+                    } else {
+                        let resolution = job.source.iter().find(|object| object.uuid == root)
+                            .map_or(0, |object| object.gaussian_splats.resolution);
+                        let mesh_resolution = job.source.iter().find(|object| object.uuid == root)
+                            .map_or(0, |object| object.poisson_mesh.resolution);
+                        match WebJob::start(job.source.clone(), root, resolution, mesh_resolution, &self.egui) {
+                            Ok(worker) => job.worker = Some(GeometryWorker::Smooth(worker)),
+                            Err(error) => finish = Some(Err(error)),
+                        }
                     }
                 }
             }
         } else if job.pages.is_empty() {
             finish = Some(Err("There are no meshes to export".to_owned()));
+        } else if job.texture_index < job.pages.len() && job.pages[job.texture_index].colors.is_some() {
+            job.texture_index += 1;
         } else if job.texture_index < job.pages.len() {
             let Some(renderer) = self.renderer.as_mut() else {
                 self.mesh_export = None;

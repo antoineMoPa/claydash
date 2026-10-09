@@ -29,6 +29,7 @@ struct EncodedPage {
     count: usize,
     size: u32,
     png: Vec<u8>,
+    colors: Option<Arc<Vec<[f32; 4]>>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -152,7 +153,7 @@ pub fn run_poisson_encode_glb(pages: &str) -> Result<Vec<u8>, wasm_bindgen::JsVa
         let mesh = request.meshes.get(page.mesh)
             .ok_or_else(|| wasm_bindgen::JsValue::from_str("GLB page references a missing mesh"))?;
         Ok(super::textured_glb::Page { name: page.name, root: page.root, mesh: mesh.clone(),
-            first: page.first, count: page.count, size: page.size, png: page.png })
+            first: page.first, count: page.count, size: page.size, png: page.png, colors: page.colors })
     }).collect::<Result<_, wasm_bindgen::JsValue>>()?;
     super::textured_glb::encode_textured(&pages)
         .map_err(|error| wasm_bindgen::JsValue::from_str(&error))
@@ -228,7 +229,7 @@ impl WebBytesJob {
                 index
             });
             encoded_pages.push(EncodedPage { name: page.name.clone(), root: page.root,
-                mesh, first: page.first, count: page.count, size: page.size, png: page.png.clone() });
+                mesh, first: page.first, count: page.count, size: page.size, png: page.png.clone(), colors: page.colors.clone() });
         }
         let json = serde_json::to_string(&GlbRequest { meshes, pages: encoded_pages })
             .map_err(|error| error.to_string())?;

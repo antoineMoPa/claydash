@@ -215,18 +215,7 @@ impl ApplicationHandler<AppEvent> for App {
             attributes.with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0))
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let attributes = attributes.with_visible(
-            self.guide_screenshot.is_none() && {
-                #[cfg(unix)]
-                {
-                    !self.agent_headless
-                }
-                #[cfg(not(unix))]
-                {
-                    true
-                }
-            },
-        );
+        let attributes = attributes.with_visible(self.guide_screenshot.is_none());
         #[cfg(target_arch = "wasm32")]
         let attributes = attributes.with_append(true);
         let window = Arc::new(event_loop.create_window(attributes).expect("create window"));
@@ -301,12 +290,6 @@ impl ApplicationHandler<AppEvent> for App {
             if self.guide_screenshot.is_some() {
                 event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
             }
-            #[cfg(unix)]
-            if self.agent_headless {
-                event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
-                    std::time::Instant::now() + std::time::Duration::from_millis(16),
-                ));
-            }
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -321,7 +304,7 @@ impl ApplicationHandler<AppEvent> for App {
         self.window = Some(window);
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         if !self.benchmark && self.ui_benchmark.is_none() && self.guide_screenshot.is_none() {
-            match super::agent::listen(self.agent_proxy.as_ref().unwrap().clone()) {
+            match super::agent::listen(self.agent_proxy.clone()) {
                 Ok(receiver) => self.agent_requests = Some(receiver),
                 Err(error) => eprintln!("Claydash agent bridge unavailable: {error}"),
             }
@@ -625,17 +608,6 @@ impl ApplicationHandler<AppEvent> for App {
             event_loop.set_control_flow(if working {
                 winit::event_loop::ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(50))
             } else { winit::event_loop::ControlFlow::Wait });
-        }
-        #[cfg(all(not(target_arch = "wasm32"), unix))]
-        if self.agent_headless {
-            self.process_agent_requests();
-            if self.agent_capture.is_some() && self.renderer.is_some() {
-                self.redraw();
-            }
-            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
-                std::time::Instant::now() + std::time::Duration::from_millis(16),
-            ));
-            return;
         }
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         if self.agent_capture.is_some() {

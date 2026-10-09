@@ -5,9 +5,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use super::computation::{Computation, Stage};
 
-mod geometry;
+pub mod geometry;
 #[cfg(target_arch = "wasm32")]
-mod web_worker;
+pub mod web_worker;
 
 #[derive(Clone, Copy)]
 pub enum VoxelAction { Build(uuid::Uuid), Cancel(uuid::Uuid) }

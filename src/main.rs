@@ -1,5 +1,7 @@
 mod animation;
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
+mod cli;
 use claydash_engine::camera;
 mod commands;
 mod document;
@@ -21,11 +23,19 @@ mod web_input;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    #[cfg(unix)]
-    if app::agent::run_from_args() {
-        return;
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    match cli::parse(&args) {
+        Ok(cli::Launch::Help) => cli::print_help(),
+        Ok(cli::Launch::Desktop) => app::run(),
+        #[cfg(unix)]
+        Ok(cli::Launch::Agent) => {
+            app::agent::run_from_args();
+        }
+        Err(error) => {
+            eprintln!("{error}\nRun claydash --help for usage.");
+            std::process::exit(2);
+        }
     }
-    app::run();
 }
 
 #[cfg(target_arch = "wasm32")]

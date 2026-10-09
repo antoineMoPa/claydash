@@ -46,6 +46,9 @@ pub enum Request {
     SetView(ViewArgs),
     BuildPoissonMesh { id: uuid::Uuid },
     GetPoissonMeshStatus { id: uuid::Uuid },
+    ExportGlb(export::ExportGlbArgs),
+    GetGlbExportStatus { id: uuid::Uuid },
+    CancelGlbExport { id: uuid::Uuid },
     CaptureViewport(CaptureViewportArgs),
     CaptureOrthographic(CaptureOrthographicArgs),
     Undo,
@@ -229,6 +232,9 @@ pub struct ViewArgs {
 }
 
 fn socket_path() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("CLAYDASH_AGENT_SOCKET") {
+        return Ok(PathBuf::from(path));
+    }
     let home = std::env::var_os("HOME")
         .ok_or("HOME must be set to use the local Claydash agent bridge")?;
     Ok(PathBuf::from(home)
@@ -242,14 +248,17 @@ pub(super) fn cleanup_socket() {
     }
 }
 
-pub(super) fn listen(proxy: EventLoopProxy<AppEvent>) -> Result<Receiver<Inbound>, String> {
+pub(super) fn listen(proxy: Option<EventLoopProxy<AppEvent>>) -> Result<Receiver<Inbound>, String> {
     let path = socket_path()?;
     let directory = path
         .parent()
         .ok_or("agent socket has no parent directory")?;
     std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
-        .map_err(|error| error.to_string())?;
+    // A custom socket may live in an existing shared directory; never chmod it.
+    if std::env::var_os("CLAYDASH_AGENT_SOCKET").is_none() {
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())?;
+    }
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
             return Err(format!("another Claydash instance owns {}", path.display()));
@@ -282,7 +291,9 @@ pub(super) fn listen(proxy: EventLoopProxy<AppEvent>) -> Result<Receiver<Inbound
                     let (reply, response) = mpsc::channel();
                     tx.send(Inbound { request, reply })
                         .map_err(|_| "Claydash is closing".to_string())?;
-                    let _ = proxy.send_event(AppEvent::AgentRequest);
+                    if let Some(proxy) = proxy {
+                        let _ = proxy.send_event(AppEvent::AgentRequest);
+                    }
                     response
                         .recv_timeout(Duration::from_secs(115))
                         .map_err(|error| error.to_string())?
@@ -300,7 +311,7 @@ pub(super) fn listen(proxy: EventLoopProxy<AppEvent>) -> Result<Receiver<Inbound
 
 fn call_socket(request: Value) -> AgentResult {
     let mut stream = UnixStream::connect(socket_path()?)
-        .map_err(|_| "No native Claydash window is connected. Start Claydash first.".to_string())?;
+        .map_err(|_| "No Claydash instance is connected. Start claydash serve or the desktop app first.".to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(120)))
         .map_err(|error| error.to_string())?;
@@ -337,8 +348,23 @@ pub fn run_from_args() -> bool {
         return false;
     };
     match mode.as_str() {
-        "mcp" => {
-            run_mcp();
+        "serve" | "--headless" | "--agent-headless" | "mcp" => {
+            let mode = mode.as_str();
+            let remaining: Vec<_> = args.collect();
+            if mode == "mcp" && remaining.is_empty() {
+                run_mcp(call_socket);
+            } else {
+                let options = headless::Options::parse(mode, &remaining).unwrap_or_else(|error| {
+                    eprintln!("{error}");
+                    std::process::exit(2);
+                });
+                if let Some(options) = options {
+                    if let Err(error) = headless::run(options, mode == "mcp") {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             true
         }
         "agent" => {
@@ -346,6 +372,14 @@ pub fn run_from_args() -> bool {
                 eprintln!("usage: claydash agent <operation> [JSON arguments]");
                 std::process::exit(2);
             };
+            if matches!(op.as_str(), "--help" | "-h") {
+                if let Some(extra) = args.next() {
+                    eprintln!("unexpected argument: {extra}");
+                    std::process::exit(2);
+                }
+                println!("Usage: claydash agent <operation> [JSON arguments]\n\nExamples:\n  claydash agent GetState\n  claydash agent GetSchema\n  claydash agent CaptureViewport --output viewport.png\n\nUse GetSchema to discover operations, including ExportGlb,\nGetGlbExportStatus, and CancelGlbExport. Requires a running server or desktop app.");
+                return true;
+            }
             let remaining: Vec<_> = args.collect();
             if op == "CaptureViewport" && remaining.len() == 2 && remaining[0] == "--output" {
                 let path = &remaining[1];
@@ -446,6 +480,9 @@ impl App {
             Request::SetView(args) => self.agent_set_view(args),
             Request::BuildPoissonMesh { id } => self.agent_build_poisson_mesh(id),
             Request::GetPoissonMeshStatus { id } => self.agent_poisson_mesh_status(id),
+            Request::ExportGlb(args) => self.agent_export_glb(args),
+            Request::GetGlbExportStatus { id } => self.glb_export_status(id),
+            Request::CancelGlbExport { id } => self.cancel_glb_export(id),
             Request::CaptureViewport(args) => {
                 if self.agent_capture.is_some() || self.pending_render.is_some() || self.guide_screenshot.is_some()
                     || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
@@ -638,6 +675,8 @@ impl App {
 
 mod actions;
 mod capture;
+mod export;
+mod headless;
 mod mcp;
 #[cfg(test)]
 mod tests;

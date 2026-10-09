@@ -9,6 +9,7 @@ struct Request {
     source: Vec<SdfObject>,
     root: uuid::Uuid,
     resolution: u32,
+    world_space: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -41,8 +42,11 @@ pub fn run_voxel_worker(request: &str) -> String {
     let result = serde_json::from_str::<Request>(request)
         .map_err(|error| error.to_string())
         .and_then(|request| {
-            super::geometry::build(&request.source, request.root, request.resolution,
-                &AtomicU32::new(0), None)
+            let geometry = super::geometry::build(&request.source, request.root, request.resolution,
+                &AtomicU32::new(0), None)?;
+            if request.world_space {
+                geometry.into_world(&request.source, request.root, &std::sync::atomic::AtomicBool::new(false))
+            } else { Ok(geometry) }
         });
     serde_json::to_string(&Reply::Complete { result })
         .unwrap_or_else(|error| serde_json::to_string(&Reply::Error { message: error.to_string() })
@@ -60,6 +64,16 @@ pub struct WebJob {
 impl WebJob {
     pub fn start(source: Vec<SdfObject>, root: uuid::Uuid, resolution: u32,
             context: &egui::Context) -> Result<Self, String> {
+        Self::start_with_frame(source, root, resolution, false, context)
+    }
+
+    pub fn start_export(source: Vec<SdfObject>, root: uuid::Uuid, resolution: u32,
+        context: &egui::Context) -> Result<Self, String> {
+        Self::start_with_frame(source, root, resolution, true, context)
+    }
+
+    fn start_with_frame(source: Vec<SdfObject>, root: uuid::Uuid, resolution: u32,
+        world_space: bool, context: &egui::Context) -> Result<Self, String> {
         let options = web_sys::WorkerOptions::new();
         options.set_type(web_sys::WorkerType::Module);
         let worker = web_sys::Worker::new_with_options("./voxel-worker.js", &options)
@@ -90,7 +104,7 @@ impl WebJob {
             error_context.request_repaint();
         }) as Box<dyn FnMut(_)>);
         worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-        let request = serde_json::to_string(&Request { source, root, resolution })
+        let request = serde_json::to_string(&Request { source, root, resolution, world_space })
             .map_err(|error| error.to_string())?;
         let job = Self { worker, result, progress, _onmessage: onmessage, _onerror: onerror };
         job.worker.post_message(&wasm_bindgen::JsValue::from_str(&request))

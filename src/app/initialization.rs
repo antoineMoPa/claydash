@@ -368,6 +368,9 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             encoding: None,
             mesh_export: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            mesh_export_history: std::collections::VecDeque::new(),
+            mesh_export_options: None,
             #[cfg(target_arch = "wasm32")]
             pending_render: None,
             #[cfg(target_arch = "wasm32")]
@@ -383,8 +386,6 @@ impl App {
             }),
             #[cfg(not(target_arch = "wasm32"))]
             guide_capture_done: false,
-            #[cfg(all(not(target_arch = "wasm32"), unix))]
-            agent_headless: std::env::args().any(|argument| argument == "--agent-headless"),
             window_focused: true,
             window_occluded: false,
             #[cfg(not(target_arch = "wasm32"))]

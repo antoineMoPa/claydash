@@ -1,6 +1,6 @@
 use super::*;
 
-fn scene_render_versions(tree: &DataTree, capture_render: bool) -> [i32; 2] {
+pub(super) fn scene_render_versions(tree: &DataTree, capture_render: bool) -> [i32; 2] {
     let export_version = if capture_render { i32::MIN } else { 0 };
     // Material source and parameters both affect the cached viewport image.
     [
@@ -364,6 +364,7 @@ impl App {
                 interaction_guide,
                 render_progress,
             );
+            self.mesh_export_options_panel(ui);
             self.mesh_export_panel(ui);
         });
         let preview_requests = egui.data(|data| {

@@ -1,11 +1,13 @@
 # Local agents and Claydash
 
-The native Claydash window exposes its live scene and viewport through a local Unix socket. The
-same operations are available through a CLI and an MCP server, so Codex, Claude Code, and OpenCode
-can edit the scene you are looking at and inspect the rendered viewport. The browser build does not
-start this local bridge.
+Claydash exposes scene editing and rendered captures through a CLI and an MCP server on macOS
+and Linux. Connect to the desktop app, run a window-free server, or let an MCP client own a
+private headless session. The browser build does not start this local bridge.
 
 ## Start and connect
+
+Use `claydash --help` (or `cargo run --release -- --help`) for command usage. Unknown
+commands and options exit with an error instead of opening the desktop app.
 
 Build the native binary and start the window:
 
@@ -14,13 +16,38 @@ cargo build --release
 ./target/release/claydash
 ```
 
-For an agent-only session without a visible UI, start `claydash --agent-headless` instead. It
-keeps a hidden native GPU window so `capture_viewport` still renders images.
+For a server with no app window or desktop event loop:
 
-Use the **absolute path** to that binary in your agent configuration. Claydash creates
-`~/.claydash-agent/agent.sock` with owner-only permissions when the window starts. One native
-window owns the socket at a time. The MCP server and CLI connect to that window; they do not start
-another renderer.
+```sh
+./target/release/claydash serve
+# Optional initial document and capture dimensions (default: 640x480):
+./target/release/claydash serve --scene duck.claydash --size 1024x768
+```
+
+`serve` stays in the foreground until stopped (Ctrl-C). It uses the existing offscreen wgpu
+renderer, so captures and background optimization jobs still need a supported GPU adapter,
+but no display server is needed. `--headless` and `--agent-headless` are aliases for `serve`;
+They do not create a hidden window. Without `--scene`, headless sessions start with the same
+empty document and studio lighting as File → New.
+Edits stay in memory until explicitly saved with the `save` tool or `agent Save`.
+
+Use the **absolute path** to the binary in your agent configuration. The desktop app and
+`serve` create `~/.claydash-agent/agent.sock` with owner-only permissions. One instance owns
+a socket at a time. `claydash mcp` and `claydash agent` connect to that existing instance.
+To use another socket, set `CLAYDASH_AGENT_SOCKET` to the same absolute socket path in the
+server and clients. Use a private directory; custom parent-directory permissions are preserved.
+A stale socket left after termination is recovered on the next start.
+
+For a private session started and stopped by the MCP client, configure the command with:
+
+```sh
+/absolute/path/to/claydash mcp --headless
+```
+
+This uses the same MCP tools directly, without binding or connecting to the shared socket.
+It accepts `--scene` and `--size` too, and exits when stdin closes. Each process owns an
+independent scene. Stdout is reserved for MCP JSON-RPC; diagnostics go to stderr. In the
+configuration examples below, use `["mcp", "--headless"]` instead of `["mcp"]` for this mode.
 
 ### Codex
 
@@ -48,6 +75,48 @@ The configuration follows each client's current local MCP documentation:
 [Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
 [Claude Code](https://code.claude.com/docs/en/mcp), and
 [OpenCode](https://opencode.ai/v2/docs/mcp-servers).
+
+## GLB export
+
+The `export_glb` MCP tool starts a background export without a file dialog, in desktop,
+`serve`, and `mcp --headless` sessions. For example:
+
+```json
+{"path":"/absolute/path/model.glb","geometry":"voxels","voxel_resolution":32}
+```
+
+`geometry` accepts `current_representation` (default), `smooth`, or `voxels`:
+
+- `current_representation` keeps voxel objects at their saved resolution; other objects become
+  smooth Poisson meshes.
+- `smooth` exports Poisson meshes with baked material textures.
+- `voxels` uses the existing six-face capture, flat cube faces, and sampled vertex colors.
+  Only this mode accepts `voxel_resolution`, from 8 to 128 (default 32).
+
+An optional nonempty `object_ids` array selects objects or Boolean subtrees. When omitted,
+export uses the current selection, or the whole scene if nothing is selected. The export uses
+a snapshot of scene geometry, materials, and view taken when the job starts. It does not change
+selection or viewport representation. Only one export runs at a time.
+
+The output path is absolute **on the machine running Claydash**, and its parent directory must
+exist. Existing files are preserved unless `overwrite: true` is supplied. The completed file is
+published atomically.
+
+The response includes `id` and `status`. Call `get_glb_export_status` with `{"id":"<job UUID>"}`
+until status is `completed`, `failed` (with `error`), or `cancelled`. While `running`, the response
+includes `stage`, `object_name`, `index`, `total`, and optional per-stage `percent`. Call
+`cancel_glb_export` with the same id to cancel. If publication already finished, cancellation
+returns `completed`; a job reported as `cancelled` cannot later publish a file. Opening or
+replacing the scene also cancels pending exports. The most recent 32 terminal job results remain
+queryable until the Claydash process exits; keep a private MCP session open until its export finishes.
+
+The CLI exposes the same operations:
+
+```sh
+claydash agent ExportGlb '{"path":"/absolute/path/model.glb","geometry":"voxels","voxel_resolution":32}'
+claydash agent GetGlbExportStatus '{"id":"<job UUID>"}'
+claydash agent CancelGlbExport '{"id":"<job UUID>"}'
+```
 
 ## Agent workflow
 

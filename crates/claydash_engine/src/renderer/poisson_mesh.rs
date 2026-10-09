@@ -89,32 +89,37 @@ pub struct CachedExportMesh {
 
 impl CachedExportMesh {
     pub fn world_mesh(&self, cancel: &std::sync::atomic::AtomicBool) -> Result<geometry::Mesh, String> {
-        let mut mesh = (*self.mesh).clone();
-        let normal_pose = self.pose.inverse().transpose();
-        let reflected = self.pose.determinant() < 0.0;
-        let mut budget = super::cooperative_work::WorkerBudget::new();
-        for (index, point) in mesh.positions.iter_mut().enumerate() {
-            if index % 512 == 0 {
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) { return Err("Export cancelled".into()); }
-                budget.checkpoint();
-            }
-            *point = self.pose.transform_point3(*point);
-        }
-        for (index, normals) in mesh.normals.iter_mut().enumerate() {
-            if index % 512 == 0 {
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) { return Err("Export cancelled".into()); }
-                budget.checkpoint();
-            }
-            for normal in normals.iter_mut() {
-                *normal = normal_pose.transform_vector3(*normal).normalize_or_zero();
-            }
-            if reflected {
-                mesh.triangles[index].swap(1, 2);
-                normals.swap(1, 2);
-            }
-        }
-        Ok(mesh)
+        mesh_at_pose((*self.mesh).clone(), self.pose, cancel)
     }
+}
+
+/// Apply a component frame, preserving flat/smooth normals and reflected winding.
+pub(crate) fn mesh_at_pose(mut mesh: geometry::Mesh, pose: glam::Mat4,
+    cancel: &std::sync::atomic::AtomicBool) -> Result<geometry::Mesh, String> {
+    let normal_pose = pose.inverse().transpose();
+    let reflected = pose.determinant() < 0.0;
+    let mut budget = super::cooperative_work::WorkerBudget::new();
+    for (index, point) in mesh.positions.iter_mut().enumerate() {
+        if index % 512 == 0 {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) { return Err("Export cancelled".into()); }
+            budget.checkpoint();
+        }
+        *point = pose.transform_point3(*point);
+    }
+    for (index, normals) in mesh.normals.iter_mut().enumerate() {
+        if index % 512 == 0 {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) { return Err("Export cancelled".into()); }
+            budget.checkpoint();
+        }
+        for normal in normals.iter_mut() {
+            *normal = normal_pose.transform_vector3(*normal).normalize_or_zero();
+        }
+        if reflected {
+            mesh.triangles[index].swap(1, 2);
+            normals.swap(1, 2);
+        }
+    }
+    Ok(mesh)
 }
 
 impl Renderer {

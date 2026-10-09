@@ -11,8 +11,8 @@ const MODEL_ORGANIZATION: &str = concat!(
 
 pub(super) fn schema() -> Value {
     json!({
-        "version": 13,
-        "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "BuildPoissonMesh", "GetPoissonMeshStatus", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
+        "version": 14,
+        "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "variable_spaces": ["Local", "World"],
         "vector_binding_targets": ["Position", "GroupPosition", {"BezierPoint": 0}],
@@ -36,6 +36,7 @@ pub(super) fn schema() -> Value {
             "CreateObject accepts an optional position [x,y,z], full transform, shape params, and render_representation. ",
             "SetRenderRepresentation accepts an object or Boolean group root id and optional voxels settings {resolution:8..128}, default 32. Voxels automatically captures six box faces and renders surface samples as cubes; Recompute in Group optimizations refreshes the capture. ",
             "BuildPoissonMesh queues a cache build/recompute for an existing standalone object or Boolean root in PoissonMesh mode. GetPoissonMeshStatus reads queued/not_built/sampling/reconstructing/ready/failed; ready includes vertex and triangle counts, showing, available, and built resolutions. Caches are runtime-only and may be invalidated by source edits. ",
+            "ExportGlb starts an asynchronous GLB file export. path is absolute; geometry is current_representation (default), smooth, or voxels. Forced voxels accepts voxel_resolution 8..128, default 32. Current representation retains voxel roots and saved resolutions; other roots become smooth meshes. Optional object_ids selects objects/Boolean subtrees; otherwise current selection or whole scene is exported. The scene is snapshotted at start. Existing files require overwrite:true. Poll GetGlbExportStatus with the returned id for running/completed/failed/cancelled, or CancelGlbExport to cancel. The most recent 32 terminal results are retained until this process exits. Opening or replacing the document cancels pending exports. ",
             "ExactSdf uses the source; BoxDepthAtlas captures from six box faces; SphereDepthAtlas captures with radial rays; GaussianSplats uses layered box-face captures rasterized as hybrid splats. ",
             "Captures retain depth, base color, and the hit material. ",
             "Older documents with removed choices load as ExactSdf. ",
@@ -52,7 +53,7 @@ pub(super) fn schema() -> Value {
     })
 }
 
-pub(super) fn run_mcp() {
+pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -83,6 +84,9 @@ pub(super) fn run_mcp() {
                     "set_view" => "SetView",
                     "build_poisson_mesh" => "BuildPoissonMesh",
                     "get_poisson_mesh_status" => "GetPoissonMeshStatus",
+                    "export_glb" => "ExportGlb",
+                    "get_glb_export_status" => "GetGlbExportStatus",
+                    "cancel_glb_export" => "CancelGlbExport",
                     "capture_viewport" => "CaptureViewport",
                     "capture_orthographic" => "CaptureOrthographic",
                     "undo" => "Undo",
@@ -94,7 +98,7 @@ pub(super) fn run_mcp() {
                 if op.is_empty() {
                     Err(format!("unknown tool: {name}"))
                 } else {
-                    match call_socket(request_payload(op, arguments)) {
+                    match call(request_payload(op, arguments)) {
                         Ok(value)
                             if name == "capture_viewport" || name == "capture_orthographic" =>
                         {
@@ -185,6 +189,14 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         ("set_view", "Set the live viewport camera. position and target are [x,y,z]; projection_mode is Perspective or Orthographic.", json!({"type": "object", "properties": {"position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "target": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "up": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "projection_mode": {"enum": ["Perspective", "Orthographic"]}}, "required": ["position", "target"]})),
         ("build_poisson_mesh", "Queue a Poisson mesh cache build or recompute for a standalone object or Boolean root already set to PoissonMesh. Poll get_poisson_mesh_status for completion. Runtime caches are invalidated by source edits.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
         ("get_poisson_mesh_status", "Read Poisson cache progress and completion for a PoissonMesh root. Ready includes vertices, triangles, showing, available, and built sample/mesh resolutions.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
+        ("export_glb", "Start an asynchronous GLB export to an absolute path on the Claydash host. Returns a job id; poll get_glb_export_status. Geometry: current_representation preserves voxel roots/resolution and uses smooth meshes for other roots; smooth uses Poisson meshes; voxels uses surface cubes with sampled colors. Omit object_ids to use the current selection or whole scene. Captures a scene snapshot; existing files require overwrite:true. Works in desktop and headless sessions.", json!({"type":"object","properties":{
+            "path":{"type":"string","minLength":1,"description":"Absolute output file path; parent directory must exist."},
+            "geometry":{"enum":["current_representation","smooth","voxels"],"default":"current_representation"},
+            "voxel_resolution":{"type":"integer","minimum":8,"maximum":128,"description":"Only for geometry:voxels. Defaults to 32."},
+            "object_ids":{"type":"array","items":uuid,"minItems":1},
+            "overwrite":{"type":"boolean","default":false}},"required":["path"],"additionalProperties":false})),
+        ("get_glb_export_status", "Read GLB export status by job id: running (stage and per-stage progress), completed (file published), failed (error), or cancelled. Retains the most recent 32 terminal jobs for this process.", json!({"type":"object","properties":{"id":uuid},"required":["id"],"additionalProperties":false})),
+        ("cancel_glb_export", "Cancel a GLB export by job id. Returns cancelled, or the terminal result if already finished. A cancelled job cannot subsequently publish its file.", json!({"type":"object","properties":{"id":uuid},"required":["id"],"additionalProperties":false})),
         ("capture_viewport", "Render and return a PNG of the viewport. Pass object_ids to isolate groups. mode: simple_shading (default), full_material for material inspection, or outline for all primitive wires including hidden Boolean operands. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"object_ids": {"type": "array", "items": uuid, "minItems": 1}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("capture_orthographic", "Return one compact PNG with X, Y, Z orthographic views toward the origin. Optional object_ids isolate groups. mode: simple_shading (default), full_material, or outline for all primitive wires including hidden Boolean operands. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"object_ids": {"type": "array", "items": uuid, "minItems": 1}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 512}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("undo", "Undo the last scene edit.", empty.clone()),

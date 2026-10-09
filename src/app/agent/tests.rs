@@ -1047,3 +1047,104 @@ fn four_bar_mcp_materializes_clamped_outputs_and_rejects_invalid_edits_atomicall
     app.tree.undo();
     assert_eq!(model::scene_variables(&app.tree), state);
 }
+
+fn glb_request(app: &mut App, op: &str, args: Value) -> AgentResult {
+    let request = serde_json::from_value(request_payload(op, args)).map_err(|error| error.to_string())?;
+    let (reply, receiver) = mpsc::channel();
+    app.process_agent_request(Inbound { request, reply });
+    receiver.recv_timeout(Duration::from_secs(1)).unwrap()
+}
+
+#[test]
+fn glb_export_mcp_validates_arguments_and_cancellation_survives_document_changes() {
+    let mut app = App::new();
+    let path = std::env::temp_dir().join(format!("claydash-mcp-export-{}.glb", uuid::Uuid::new_v4()));
+    for patch in [json!({"path":"relative.glb"}), json!({"object_ids":[]}),
+        json!({"object_ids":[uuid::Uuid::new_v4()]}), json!({"geometry":"unknown"}),
+        json!({"geometry":"voxels","voxel_resolution":7}), json!({"geometry":"voxels","voxel_resolution":129}),
+        json!({"geometry":"smooth","voxel_resolution":32}), json!({"typo":true})] {
+        let mut args = json!({"path":path});
+        args.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+        assert!(glb_request(&mut app, "ExportGlb", args).is_err());
+        assert!(app.mesh_export.is_none());
+    }
+    std::fs::write(&path, b"existing file").unwrap();
+    assert!(glb_request(&mut app, "ExportGlb", json!({"path":path})).unwrap_err().contains("overwrite"));
+    let before = app.scene_revision();
+    let started = glb_request(&mut app, "ExportGlb", json!({"path":path,"geometry":"voxels","voxel_resolution":8,"overwrite":true})).unwrap();
+    let id = started["id"].clone();
+    assert_eq!(app.scene_revision(), before);
+    assert!(glb_request(&mut app, "ExportGlb", json!({"path":path,"overwrite":true})).unwrap_err().contains("in progress"));
+    assert!(glb_request(&mut app, "CancelGlbExport", json!({"id":uuid::Uuid::new_v4()})).is_err());
+    assert!(app.mesh_export.is_some());
+    app.replace_scene(crate::model::DataTree::default());
+    assert_eq!(glb_request(&mut app, "GetGlbExportStatus", json!({"id":id})).unwrap()["status"], "cancelled");
+    assert_eq!(glb_request(&mut app, "CancelGlbExport", json!({"id":id})).unwrap()["status"], "cancelled");
+    assert_eq!(std::fs::read(&path).unwrap(), b"existing file");
+    std::fs::remove_file(path).unwrap();
+    for name in ["export_glb", "get_glb_export_status", "cancel_glb_export"] {
+        assert!(mcp_tools().iter().any(|tool| tool["name"] == name));
+    }
+}
+
+#[test]
+fn glb_export_mcp_uses_selected_snapshot_and_retains_completion() {
+    let mut app = App::new();
+    let mut sphere = SdfObject::create_kind(PrimitiveKind::Sphere);
+    sphere.name = "Exported snapshot".into();
+    let other = SdfObject::create_kind(PrimitiveKind::Box);
+    model::set_objects(&mut app.tree, vec![sphere.clone(), other.clone()]);
+    model::set_selected(&mut app.tree, vec![other.uuid]);
+    let path = std::env::temp_dir().join(format!("claydash-mcp-snapshot-{}.glb", uuid::Uuid::new_v4()));
+    let started = glb_request(&mut app, "ExportGlb", json!({"path":path,"geometry":"voxels","voxel_resolution":8,"object_ids":[sphere.uuid]})).unwrap();
+    let id = started["id"].clone();
+    sphere.name = "Changed after export started".into();
+    model::set_objects(&mut app.tree, vec![sphere, other]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        app.poll_mesh_export();
+        let status = glb_request(&mut app, "GetGlbExportStatus", json!({"id":id})).unwrap();
+        if status["status"] != "running" { break status; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(status["status"], "completed", "{status}");
+    assert_eq!(glb_request(&mut app, "CancelGlbExport", json!({"id":id})).unwrap()["status"], "completed");
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let document: Value = serde_json::from_slice(&bytes[20..20 + length]).unwrap();
+    assert_eq!(document["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(document["nodes"][0]["name"], "Exported snapshot");
+    assert!(document["meshes"][0]["primitives"][0]["attributes"]["COLOR_0"].is_number());
+}
+
+#[test]
+fn glb_export_mcp_reports_write_failures_and_explicit_cancellation() {
+    let mut app = App::new();
+    let object = SdfObject::create_kind(PrimitiveKind::Sphere);
+    model::set_objects(&mut app.tree, vec![object]);
+    model::set_selected(&mut app.tree, vec![]);
+    let directory = std::env::temp_dir().join(format!("claydash-mcp-failure-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("output.glb");
+    let start = |app: &mut App| glb_request(app, "ExportGlb", json!({"path":path,"geometry":"voxels","voxel_resolution":8})).unwrap();
+    let cancelled = start(&mut app);
+    assert_eq!(glb_request(&mut app, "CancelGlbExport", json!({"id":cancelled["id"]})).unwrap()["status"], "cancelled");
+    let failed = start(&mut app);
+    std::fs::remove_dir(&directory).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        app.poll_mesh_export();
+        let status = glb_request(&mut app, "GetGlbExportStatus", json!({"id":failed["id"]})).unwrap();
+        if status["status"] != "running" {
+            assert_eq!(status["status"], "failed", "{status}");
+            assert!(!status["error"].as_str().unwrap().is_empty());
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!path.exists());
+    assert_eq!(glb_request(&mut app, "GetGlbExportStatus", json!({"id":cancelled["id"]})).unwrap()["status"], "cancelled");
+}

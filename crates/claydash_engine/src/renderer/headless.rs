@@ -132,11 +132,7 @@ impl Renderer {
             }
         })();
         if result.is_err() {
-            self.cancel_pending_capture();
-            // A delayed callback owns the old slots; it cannot poison a retry.
-            self.capture_result = Arc::new(std::sync::Mutex::new(None));
-            self.capture_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            self.capture_pending = false;
+            self.discard_pending_capture();
         }
         result
     }

@@ -506,6 +506,14 @@ impl Renderer {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Cancel and detach the readback so a timed-out client cannot block a retry.
+    pub fn discard_pending_capture(&mut self) {
+        self.cancel_pending_capture();
+        self.capture_result = Arc::new(std::sync::Mutex::new(None));
+        self.capture_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.capture_pending = false;
+    }
+
     pub fn take_capture(&mut self) -> Option<Result<CapturedFrame, String>> {
         let frame = self.capture_result.lock().unwrap().take();
         if frame.is_some() {
