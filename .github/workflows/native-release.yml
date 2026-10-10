@@ -69,13 +69,24 @@ jobs:
       - name: Check packaging and installers
         if: matrix.target != inputs.local_target
         run: python scripts/release/test_release.py
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.target != inputs.local_target && startsWith(matrix.runner, 'windows')
+        with:
+          arch: x64
       - name: Build and package
-        if: matrix.target != inputs.local_target
+        if: matrix.target != inputs.local_target && !startsWith(matrix.runner, 'windows')
         shell: bash
         env:
           RELEASE_TARGET: ${{ matrix.target }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: python scripts/release/release.py build "$RELEASE_TAG" "$RELEASE_TARGET"
+      - name: Build and package Windows
+        if: matrix.target != inputs.local_target && startsWith(matrix.runner, 'windows')
+        shell: pwsh
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: python scripts/release/release.py build $env:RELEASE_TAG $env:RELEASE_TARGET
       - uses: actions/upload-artifact@v4
         if: matrix.target != inputs.local_target
         with:

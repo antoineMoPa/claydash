@@ -60,7 +60,10 @@ def build_env():
     # RUSTFLAGS, or arbitrary build-time variables into the public executable.
     keys = ("PATH", "HOME", "TMPDIR", "TMP", "TEMP", "USERPROFILE", "SystemRoot",
             "SYSTEMROOT", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES",
-            "PROGRAMFILES(X86)", "windir", "NUMBER_OF_PROCESSORS", "RUSTUP_HOME", "CARGO_HOME")
+            "PROGRAMFILES(X86)", "windir", "NUMBER_OF_PROCESSORS", "RUSTUP_HOME", "CARGO_HOME",
+            # MSVC/Windows SDK compiler paths, initialized by msvc-dev-cmd.
+            "LIB", "LIBPATH", "INCLUDE", "VCToolsInstallDir", "VCINSTALLDIR",
+            "VSINSTALLDIR", "WindowsSdkDir", "WindowsSDKVersion", "UCRTVersion")
     return {key: os.environ[key] for key in keys if key in os.environ}
 
 
