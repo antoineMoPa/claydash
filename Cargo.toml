@@ -22,7 +22,7 @@ egui_command_palette = { path = "crates/egui_command_palette" }
 
 [package]
 name    = "claydash"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 
 [dependencies]
