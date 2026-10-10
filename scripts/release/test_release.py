@@ -104,6 +104,17 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn("CLAYDASH_AGENT_SOCKET", env)
         self.assertIn("PATH", env)
 
+    def test_windows_microsoft_linker_precedes_git_tools(self):
+        tools = self.root / "Visual Studio tools"
+        compiler = tools / "bin/Hostx64/x64"
+        compiler.mkdir(parents=True)
+        (compiler / "link.exe").write_bytes(b"test linker")
+        with patch.object(release.platform, "system", return_value="Windows"), \
+             patch.dict(os.environ, {"VCToolsInstallDir": str(tools), "PATH": "git-tools;rust-tools", "LIB": "sdk-libraries"}):
+            env = release.build_env()
+        self.assertEqual(env["PATH"], str(compiler) + ";git-tools;rust-tools")
+        self.assertEqual(env["LIB"], "sdk-libraries")
+
     def test_tag_must_match_package(self):
         with self.assertRaises(ValueError):
             release.check_tag("v0.2.0")

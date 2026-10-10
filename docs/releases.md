@@ -31,7 +31,10 @@ currently exist only on Unix platforms. Archives contain the executable and lice
 Requirements: Python 3.11+, Rust 1.97.1, Git, and authenticated GitHub CLI with
 permission to push and run Actions in `antoineMoPa/claydash`. Linux build hosts also
 need `build-essential nasm pkg-config libxcb1-dev libxkbcommon-dev libwayland-dev
-libgtk-3-dev`; Windows hosts need the Visual Studio C++ build tools.
+libgtk-3-dev`; Windows hosts need the Visual Studio C++ build tools. Initialize
+the x64 developer environment (Developer PowerShell for Visual Studio) before
+launching Git Bash or the Python publishing entry point on Windows. The build
+keeps MSVC/Windows SDK paths and puts Microsoft’s linker ahead of Git’s tools.
 
 Commit and push the setup first: `native-release.yml` must be on the default branch
 for GitHub to accept workflow dispatches. Then, from a clean tracking branch:
@@ -79,3 +82,16 @@ python3 scripts/release/release.py build v0.0.0 aarch64-apple-darwin
 The tag argument must match the package version. Artifacts go under
 `target/release-artifacts/<tag>/`. Run the offline packaging/installer checks with
 `python3 scripts/release/test_release.py`.
+
+## Testing the hosted builds
+
+Run builds and installer checks without a tag, draft, or release upload:
+
+```sh
+gh workflow run native-release.yml --repo antoineMoPa/claydash --ref main \
+  -f local_target=aarch64-apple-darwin -f build_only=true
+```
+
+This skips the locally tested macOS target and builds Linux x64/ARM64 and Windows
+x64. The archives remain downloadable as workflow artifacts; the release upload
+job is skipped. Omit `build_only` for the normal tagged publishing flow.

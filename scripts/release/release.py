@@ -60,8 +60,21 @@ def build_env():
     # RUSTFLAGS, or arbitrary build-time variables into the public executable.
     keys = ("PATH", "HOME", "TMPDIR", "TMP", "TEMP", "USERPROFILE", "SystemRoot",
             "SYSTEMROOT", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES",
-            "PROGRAMFILES(X86)", "windir", "NUMBER_OF_PROCESSORS", "RUSTUP_HOME", "CARGO_HOME")
-    return {key: os.environ[key] for key in keys if key in os.environ}
+            "PROGRAMFILES(X86)", "windir", "NUMBER_OF_PROCESSORS", "RUSTUP_HOME", "CARGO_HOME",
+            # MSVC/Windows SDK compiler paths, initialized by msvc-dev-cmd.
+            "LIB", "LIBPATH", "INCLUDE", "VCToolsInstallDir", "VCINSTALLDIR",
+            "VSINSTALLDIR", "WindowsSdkDir", "WindowsSDKVersion", "UCRTVersion")
+    env = {key: os.environ[key] for key in keys if key in os.environ}
+    if platform.system() == "Windows":
+        tools = env.get("VCToolsInstallDir")
+        if not tools:
+            raise ValueError("run Windows builds from Developer PowerShell for Visual Studio (x64)")
+        compiler_bin = Path(tools) / "bin" / "Hostx64" / "x64"
+        if not (compiler_bin / "link.exe").is_file():
+            raise ValueError(f"missing Microsoft linker: {compiler_bin / 'link.exe'}")
+        # Git Bash prepends its own link.exe. Put MSVC first even for local publishing.
+        env["PATH"] = str(compiler_bin) + ";" + env["PATH"]
+    return env
 
 
 def archive_name(target):
