@@ -7,3 +7,6 @@ claydash-ship
 # Keep only final guide WebP images in Git.
 tests/output/guide/*
 !tests/output/guide/*.webp
+
+# Release helper Python caches.
+scripts/release/__pycache__/

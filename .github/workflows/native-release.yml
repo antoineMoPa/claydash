@@ -1,0 +1,88 @@
+name: Native release
+run-name: Native release ${{ github.ref_name }} (${{ inputs.local_target }})
+on:
+  workflow_dispatch:
+    inputs:
+      local_target:
+        description: Target already built and uploaded by publishFlow.sh
+        required: true
+        type: choice
+        options:
+          - aarch64-apple-darwin
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-pc-windows-msvc
+permissions:
+  contents: read
+concurrency:
+  group: native-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        if: matrix.target != inputs.local_target
+        with:
+          persist-credentials: false
+      - name: Validate release tag
+        if: matrix.target != inputs.local_target
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo 'Run this workflow at a version tag'; exit 1; }
+      - uses: actions/setup-python@v5
+        if: matrix.target != inputs.local_target
+        with:
+          python-version: '3.12'
+      - name: Install Rust
+        if: matrix.target != inputs.local_target
+        shell: bash
+        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update && rustup default 1.97.1
+      - name: Install Linux build dependencies
+        if: matrix.target != inputs.local_target && startsWith(matrix.runner, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y build-essential nasm pkg-config libxcb1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev
+      - name: Check packaging and installers
+        if: matrix.target != inputs.local_target
+        run: python scripts/release/test_release.py
+      - name: Build and package
+        if: matrix.target != inputs.local_target
+        shell: bash
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: python scripts/release/release.py build "$GITHUB_REF_NAME" "$RELEASE_TARGET"
+      - uses: actions/upload-artifact@v4
+        if: matrix.target != inputs.local_target
+        with:
+          name: native-${{ matrix.target }}
+          path: target/release-artifacts/${{ github.ref_name }}/claydash-${{ matrix.target }}.*
+          if-no-files-found: error
+          retention-days: 7
+  upload:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - name: Upload to existing draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
+          gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
