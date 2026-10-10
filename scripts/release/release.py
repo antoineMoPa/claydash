@@ -64,7 +64,17 @@ def build_env():
             # MSVC/Windows SDK compiler paths, initialized by msvc-dev-cmd.
             "LIB", "LIBPATH", "INCLUDE", "VCToolsInstallDir", "VCINSTALLDIR",
             "VSINSTALLDIR", "WindowsSdkDir", "WindowsSDKVersion", "UCRTVersion")
-    return {key: os.environ[key] for key in keys if key in os.environ}
+    env = {key: os.environ[key] for key in keys if key in os.environ}
+    if platform.system() == "Windows":
+        tools = env.get("VCToolsInstallDir")
+        if not tools:
+            raise ValueError("run Windows builds from Developer PowerShell for Visual Studio (x64)")
+        compiler_bin = Path(tools) / "bin" / "Hostx64" / "x64"
+        if not (compiler_bin / "link.exe").is_file():
+            raise ValueError(f"missing Microsoft linker: {compiler_bin / 'link.exe'}")
+        # Git Bash prepends its own link.exe. Put MSVC first even for local publishing.
+        env["PATH"] = str(compiler_bin) + ";" + env["PATH"]
+    return env
 
 
 def archive_name(target):

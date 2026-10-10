@@ -31,7 +31,10 @@ currently exist only on Unix platforms. Archives contain the executable and lice
 Requirements: Python 3.11+, Rust 1.97.1, Git, and authenticated GitHub CLI with
 permission to push and run Actions in `antoineMoPa/claydash`. Linux build hosts also
 need `build-essential nasm pkg-config libxcb1-dev libxkbcommon-dev libwayland-dev
-libgtk-3-dev`; Windows hosts need the Visual Studio C++ build tools.
+libgtk-3-dev`; Windows hosts need the Visual Studio C++ build tools. Initialize
+the x64 developer environment (Developer PowerShell for Visual Studio) before
+launching Git Bash or the Python publishing entry point on Windows. The build
+keeps MSVC/Windows SDK paths and puts Microsoft’s linker ahead of Git’s tools.
 
 Commit and push the setup first: `native-release.yml` must be on the default branch
 for GitHub to accept workflow dispatches. Then, from a clean tracking branch:
