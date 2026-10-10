@@ -79,3 +79,16 @@ python3 scripts/release/release.py build v0.0.0 aarch64-apple-darwin
 The tag argument must match the package version. Artifacts go under
 `target/release-artifacts/<tag>/`. Run the offline packaging/installer checks with
 `python3 scripts/release/test_release.py`.
+
+## Testing the hosted builds
+
+Run builds and installer checks without a tag, draft, or release upload:
+
+```sh
+gh workflow run native-release.yml --repo antoineMoPa/claydash --ref main \
+  -f local_target=aarch64-apple-darwin -f build_only=true
+```
+
+This skips the locally tested macOS target and builds Linux x64/ARM64 and Windows
+x64. The archives remain downloadable as workflow artifacts; the release upload
+job is skipped. Omit `build_only` for the normal tagged publishing flow.

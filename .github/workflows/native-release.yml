@@ -3,6 +3,10 @@ run-name: Native release ${{ github.ref_name }} (${{ inputs.local_target }})
 on:
   workflow_dispatch:
     inputs:
+      build_only:
+        description: Test builds and installers without uploading a release
+        type: boolean
+        default: false
       local_target:
         description: Target already built and uploaded by publishFlow.sh
         required: true
@@ -37,15 +41,24 @@ jobs:
         if: matrix.target != inputs.local_target
         with:
           persist-credentials: false
-      - name: Validate release tag
-        if: matrix.target != inputs.local_target
-        shell: bash
-        run: |
-          [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo 'Run this workflow at a version tag'; exit 1; }
       - uses: actions/setup-python@v5
         if: matrix.target != inputs.local_target
         with:
           python-version: '3.12'
+      - name: Select build version
+        id: version
+        if: matrix.target != inputs.local_target
+        shell: bash
+        env:
+          BUILD_ONLY: ${{ inputs.build_only }}
+        run: |
+          if [[ "$BUILD_ONLY" == true ]]; then
+            tag=$(python3 -c 'import tomllib; print("v" + tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          else
+            [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo 'Run release mode at a version tag'; exit 1; }
+            tag=$GITHUB_REF_NAME
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Install Rust
         if: matrix.target != inputs.local_target
         shell: bash
@@ -61,15 +74,17 @@ jobs:
         shell: bash
         env:
           RELEASE_TARGET: ${{ matrix.target }}
-        run: python scripts/release/release.py build "$GITHUB_REF_NAME" "$RELEASE_TARGET"
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: python scripts/release/release.py build "$RELEASE_TAG" "$RELEASE_TARGET"
       - uses: actions/upload-artifact@v4
         if: matrix.target != inputs.local_target
         with:
           name: native-${{ matrix.target }}
-          path: target/release-artifacts/${{ github.ref_name }}/claydash-${{ matrix.target }}.*
+          path: target/release-artifacts/${{ steps.version.outputs.tag }}/claydash-${{ matrix.target }}.*
           if-no-files-found: error
           retention-days: 7
   upload:
+    if: ${{ !inputs.build_only }}
     needs: build
     runs-on: ubuntu-22.04
     permissions:
