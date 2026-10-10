@@ -40,10 +40,11 @@ Commit and push the setup first: `native-release.yml` must be on the default bra
 for GitHub to accept workflow dispatches. Then, from a clean tracking branch:
 
 ```sh
-scripts/publishFlow.sh 0.1.0
+scripts/publishFlow.sh
 ```
 
-The script updates only Claydash's package version and lockfile, builds and checks
+The script automatically increments the package version's minor component (for
+example, `0.4.7` becomes `0.5.0`), updates the lockfile, builds and checks
 `--help` locally, commits the version, and atomically pushes the branch and annotated
 tag. It creates a **draft**, uploads the local archive and installers, dispatches
 GitHub Actions at the exact tag, and waits for the other native platforms. The
@@ -63,7 +64,7 @@ A failed build/upload leaves the draft unpublished. If the tag and draft exist,
 check out the tag's exact commit with a clean worktree and retry:
 
 ```sh
-scripts/publishFlow.sh 0.1.0 --resume
+scripts/publishFlow.sh --resume
 ```
 
 This rebuilds the local target, replaces draft assets, reruns Actions, and verifies

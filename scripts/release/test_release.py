@@ -87,7 +87,7 @@ class ReleaseTests(unittest.TestCase):
              patch.object(release, "host_target", return_value=release.TARGETS[0]), \
              patch.object(release, "build"):
             with self.assertRaises(FileNotFoundError):
-                release.publish("0.1.0", resume=True)
+                release.publish(resume=True)
         self.assertTrue(any(c[:2] == ("workflow", "run") and f"local_target={release.TARGETS[0]}" in c for c in calls))
         self.assertFalse(any(c[:2] == ("release", "edit") for c in calls))
 
@@ -120,6 +120,14 @@ class ReleaseTests(unittest.TestCase):
             release.check_tag("v0.2.0")
         with self.assertRaises(ValueError):
             release.check_tag("../../private")
+
+    def test_next_release_version_bumps_minor_and_resets_patch(self):
+        self.assertEqual(release.next_release_version(), "0.2.0")
+        (self.root / "Cargo.toml").write_text('[package]\nname = "claydash"\nversion = "12.34.56"\n')
+        self.assertEqual(release.next_release_version(), "12.35.0")
+        (self.root / "Cargo.toml").write_text('[package]\nname = "claydash"\nversion = "development"\n')
+        with self.assertRaisesRegex(ValueError, "MAJOR.MINOR.PATCH"):
+            release.next_release_version()
 
     def serve(self):
         handler = functools.partial(QuietHandler, directory=str(self.output))

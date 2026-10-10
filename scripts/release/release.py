@@ -35,6 +35,15 @@ def version():
     return tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
 
 
+def next_release_version():
+    current = version()
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", current)
+    if match is None:
+        raise ValueError("Cargo.toml package version must be MAJOR.MINOR.PATCH")
+    major, minor, _patch = map(int, match.groups())
+    return f"{major}.{minor + 1}.0"
+
+
 def check_tag(tag):
     if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         raise ValueError("release tag must be vMAJOR.MINOR.PATCH")
@@ -151,15 +160,14 @@ def gh(*args, capture=False):
     return run("gh", *args, "--repo", REPO, capture=capture)
 
 
-def publish(new_version, resume):
-    if not re.fullmatch(r"\d+\.\d+\.\d+", new_version):
-        raise ValueError("version must be MAJOR.MINOR.PATCH")
-    tag = f"v{new_version}"
+def publish(resume):
     target = host_target()
     if run("git", "status", "--porcelain", capture=True):
         raise ValueError("commit your work first; publishing requires a clean worktree")
     run("gh", "auth", "status")
     if resume:
+        new_version = version()
+        tag = f"v{new_version}"
         check_tag(tag)
         if run("git", "rev-parse", f"{tag}^{{commit}}", capture=True) != run("git", "rev-parse", "HEAD", capture=True):
             raise ValueError("resume from the release tag's exact commit")
@@ -167,9 +175,9 @@ def publish(new_version, resume):
         if not release["isDraft"]:
             raise ValueError("resume requires an existing draft release")
     else:
-        current = tuple(map(int, version().split(".")))
-        if tuple(map(int, new_version.split("."))) <= current:
-            raise ValueError("choose a version greater than Cargo.toml's current version")
+        current = version()
+        new_version = next_release_version()
+        tag = f"v{new_version}"
         run("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}", capture=True)
         tags = run("git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}", capture=True)
         if tags or run("git", "tag", "--list", tag, capture=True):
@@ -239,7 +247,6 @@ def main():
     p = sub.add_parser("verify")
     p.add_argument("directory", type=Path)
     p = sub.add_parser("publish")
-    p.add_argument("version")
     p.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if args.command == "build":
@@ -249,7 +256,7 @@ def main():
     elif args.command == "verify":
         verify(args.directory)
     else:
-        publish(args.version, args.resume)
+        publish(args.resume)
 
 
 if __name__ == "__main__":
