@@ -66,6 +66,9 @@ impl Renderer {
         capacity: u32,
         features: SceneShaderFeatures,
     ) {
+        if self.node_count == 0 && self.mesh_vertex_count > 0 {
+            self.mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(&self.device, &self.pipeline_layout, self.render_format, features.bloom);
+        }
         if self.mesh_vertex_count > 0 {
             self.mesh_pipeline = poisson_material::create_pipeline(&self.device,
                 Some(&self.pipeline_layout), &self.shader_source, self.render_format,

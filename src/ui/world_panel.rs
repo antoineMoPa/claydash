@@ -27,6 +27,12 @@ pub(super) fn world_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
             ui.label(format!("Using exact shading: {reason} in this scene."));
         }
     }
+    ui.checkbox(&mut settings.bloom_enabled, "Neon bloom")
+        .on_hover_text("Adds a halo around materials with emission enabled.");
+    if settings.bloom_enabled {
+        ui.add(egui::Slider::new(&mut settings.bloom_strength, 0.0..=2.0).text("Bloom strength"));
+        ui.add(egui::Slider::new(&mut settings.bloom_radius, 4.0..=96.0).text("Bloom radius (px)"));
+    }
     ui.separator();
     ui.label(RichText::new("Sky & Sun").strong());
     ui.add_space(8.0);

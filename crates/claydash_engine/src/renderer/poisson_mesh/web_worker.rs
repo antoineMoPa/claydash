@@ -12,6 +12,8 @@ struct Request {
     mesh_resolution: u32,
     #[serde(default)]
     direct: bool,
+    #[serde(default)]
+    world_error: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -32,6 +34,7 @@ struct EncodedPage {
     size: u32,
     png: Vec<u8>,
     colors: Option<Arc<Vec<[f32; 4]>>>,
+    materials: Option<Arc<std::collections::BTreeMap<uuid::Uuid,crate::model::Material>>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -63,8 +66,8 @@ pub fn run_poisson_mesh_worker(request: &str) -> String {
         .map_err(|error| error.to_string())
         .and_then(|request| {
             if request.direct {
-                return super::super::direct_mesh::build(&request.source, request.root, request.mesh_resolution,
-                    &std::sync::atomic::AtomicBool::new(false), &AtomicU32::new(0));
+                return super::super::direct_mesh::build_with_error(&request.source, request.root, request.mesh_resolution,
+                    request.world_error.unwrap_or(0.032/request.mesh_resolution as f32), &std::sync::atomic::AtomicBool::new(false), &AtomicU32::new(0));
             }
             super::geometry::build(&request.source, request.root, request.resolution,
                 request.mesh_resolution,
@@ -92,6 +95,11 @@ impl WebJob {
 
     pub fn start_with_algorithm(source: Vec<SdfObject>, root: uuid::Uuid, resolution: u32,
         mesh_resolution: u32, algorithm: super::MeshAlgorithm, context: &egui::Context) -> Result<Self, String> {
+        Self::start_with_error(source, root, resolution, mesh_resolution, algorithm, None, context)
+    }
+
+    pub fn start_with_error(source: Vec<SdfObject>, root: uuid::Uuid, resolution: u32,
+        mesh_resolution: u32, algorithm: super::MeshAlgorithm, world_error: Option<f32>, context: &egui::Context) -> Result<Self,String> {
         let options = web_sys::WorkerOptions::new();
         options.set_type(web_sys::WorkerType::Module);
         let worker = web_sys::Worker::new_with_options("./poisson-mesh-worker.js", &options)
@@ -122,7 +130,7 @@ impl WebJob {
             error_context.request_repaint();
         }) as Box<dyn FnMut(_)>);
         worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-        let request = serde_json::to_string(&Request { source, root, resolution, mesh_resolution, direct: algorithm == super::MeshAlgorithm::Direct })
+        let request = serde_json::to_string(&Request { source, root, resolution, mesh_resolution, world_error, direct: algorithm == super::MeshAlgorithm::Direct })
             .map_err(|error| error.to_string())?;
         let job = Self { worker, result, progress, _onmessage: onmessage, _onerror: onerror };
         job.worker.post_message(&wasm_bindgen::JsValue::from_str(&request))
@@ -164,7 +172,7 @@ pub fn run_poisson_encode_glb(pages: &str) -> Result<Vec<u8>, wasm_bindgen::JsVa
         let mesh = request.meshes.get(page.mesh)
             .ok_or_else(|| wasm_bindgen::JsValue::from_str("GLB page references a missing mesh"))?;
         Ok(super::textured_glb::Page { name: page.name, root: page.root, mesh: mesh.clone(),
-            first: page.first, count: page.count, size: page.size, png: page.png, colors: page.colors })
+            first: page.first, count: page.count, size: page.size, png: page.png, materials: page.materials, colors: page.colors })
     }).collect::<Result<_, wasm_bindgen::JsValue>>()?;
     super::textured_glb::encode_textured(&pages)
         .map_err(|error| wasm_bindgen::JsValue::from_str(&error))
@@ -240,7 +248,7 @@ impl WebBytesJob {
                 index
             });
             encoded_pages.push(EncodedPage { name: page.name.clone(), root: page.root,
-                mesh, first: page.first, count: page.count, size: page.size, png: page.png.clone(), colors: page.colors.clone() });
+                mesh, first: page.first, count: page.count, size: page.size, png: page.png.clone(), materials: page.materials.clone(), colors: page.colors.clone() });
         }
         let json = serde_json::to_string(&GlbRequest { meshes, pages: encoded_pages })
             .map_err(|error| error.to_string())?;

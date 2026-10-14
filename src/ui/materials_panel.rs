@@ -341,6 +341,21 @@ pub(super) fn materials_panel(
             .count();
         ui.weak(format!("Linked material · {linked} object(s)"));
     }
+    let emission_before = (material.emission_color, material.emission_intensity);
+    ui.collapsing("Emission / neon", |ui| {
+        let mut color = material.emission_color.to_array();
+        ui.horizontal(|ui| {
+            ui.label("Emission color");
+            ui.color_edit_button_rgb(&mut color);
+        });
+        material.emission_color = glam::Vec3::from_array(color);
+        ui.add(egui::Slider::new(&mut material.emission_intensity, 0.0..=20.0).text("Intensity"))
+            .on_hover_text("Self-lit surface. World bloom controls the halo; emission does not light nearby objects.");
+        if ui.button("Neon from surface color").clicked() {
+            material.emission_color = material.color.truncate();
+            material.emission_intensity = 4.0;
+        }
+    });
     let mut keyframes = Vec::new();
     if material.kind == MaterialKind::Metal {
         ui.label("Metal tint");
@@ -360,7 +375,8 @@ pub(super) fn materials_panel(
             ui.color_edit_button_rgba_unmultiplied(&mut rgba)
         }
     });
-    let mut changed = color_response.changed();
+    let mut changed = color_response.changed()
+        || emission_before != (material.emission_color, material.emission_intensity);
     material.color = Vec4::from_array(rgba);
     if color_response.hovered() && ui.input(plain_i_pressed) {
         for object in scene
@@ -755,5 +771,55 @@ fn assign_material(
             object.material = material;
             object.color = material.color;
         }
+    }
+}
+
+#[cfg(test)]
+mod emission_ui_tests {
+    use super::*;
+
+    #[test]
+    fn neon_button_updates_selected_objects_and_the_shared_material() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let mut tree = DataTree::default();
+        let first = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let second = SdfObject::create_kind(PrimitiveKind::Box);
+        let first_id = first.uuid;
+        set_objects(&mut tree, vec![first, second.clone()]);
+        set_selected(&mut tree, vec![first_id, second.uuid]);
+        apply_material(&mut tree, Material::default());
+        set_selected(&mut tree, vec![first_id]);
+        let mut runtime = AnimationRuntime::default();
+        let frame = |events, tree: &mut DataTree, runtime: &mut AnimationRuntime| {
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(450.0, 2400.0))),
+                events, ..Default::default()
+            }, |ui| {
+                ui.set_width(380.0);
+                materials_panel(ui, tree, runtime);
+            });
+            output.textures_delta.clear();
+            output.shapes
+        };
+        frame(vec![], &mut tree, &mut runtime);
+        for label in ["Emission / neon", "Neon from surface color"] {
+            let shapes = frame(vec![], &mut tree, &mut runtime);
+            let position = shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos + text.galley.size() * 0.5),
+                _ => None,
+            }).unwrap_or_else(|| panic!("missing control: {label}"));
+            for pressed in [true, false] {
+                frame(vec![egui::Event::PointerMoved(position), egui::Event::PointerButton {
+                    pos: position, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+                }], &mut tree, &mut runtime);
+            }
+        }
+        for object in objects(&tree) {
+            assert_eq!(object.material.emission_intensity, 4.0);
+            assert_eq!(object.material.emission_color, object.color.truncate());
+        }
+        let assets = crate::model::material_assets(&tree);
+        assert!(assets.iter().any(|asset| asset.material.emission_intensity == 4.0));
     }
 }

@@ -50,7 +50,9 @@ impl PackedMaterials {
             material.reflectivity,
             material.opacity,
         ]);
-        self.params.push([material.refractive_index, 0.0, 0.0, 0.0]);
+        let emission = material.emission_color.max(Vec3::ZERO)
+            * material.emission_intensity.max(0.0).min(100.0);
+        self.params.push([material.refractive_index, emission.x, emission.y, emission.z]);
         match material.kind {
             MaterialKind::Wood => pack_wood(material, &mut self.params),
             MaterialKind::Fabric => pack_fabric(material, &mut self.params),
@@ -383,5 +385,18 @@ mod tests {
         let mut injected = MaterialAsset::custom("Injection".into());
         injected.wgsl = Some("return base; } @group(0) @binding(12) var<storage> extra: array<f32>; fn other() -> Surface { return base;".into());
         assert!(validate_custom_materials(&[injected]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod emission_tests {
+    use super::*;
+    #[test]
+    fn emission_uses_spare_optics_channels_without_growing_material_records() {
+        let material = Material { emission_color: Vec3::new(0.2, 0.5, 1.0), emission_intensity: 4.0, ..Default::default() };
+        let mut packed = PackedMaterials::default();
+        packed.insert(material);
+        assert_eq!(packed.headers[0].length, 2);
+        assert_eq!(packed.params[1], [material.refractive_index, 0.8, 2.0, 4.0]);
     }
 }

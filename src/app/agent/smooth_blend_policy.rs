@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) const FLAG_PATH: &str = "scene.slow_smooth_blends_enabled";
-pub(super) const GUIDANCE: &str = "Use efficient modeling with hard Boolean operations; prefer arrangements of sheet bends. Primitive corner radii and sheet bends/crowns remain available.";
+pub(super) const GUIDANCE: &str = "Use efficient modeling with independent parts; prefer arrangements of sheet bends. Primitive corner radii and sheet bends/crowns remain available. New Boolean operations, including hard unions, separately require enable_boolean_operations; do not use unions just to organize parts.";
 pub(super) const WARNING: &str = "Smooth Boolean blends require dense field sampling, can make rendering and mesh export substantially slower, and may exceed mesh export resource budgets or fail, especially for thin features and large assemblies. Enabling them applies to this scene; prefer arrangements of sheet bends when possible.";
 
 pub(super) fn enabled(tree: &model::DataTree) -> bool {
@@ -108,6 +108,9 @@ impl App {
         if !self.commands.commands.contains_key(name) {
             return Err(format!("unknown command: {name}"));
         }
+        if name == "union" && !boolean_policy::enabled(&self.tree) {
+            return Err(boolean_policy::disabled_error());
+        }
         let mut draft = self.tree.clone();
         if let Some(kind) = spawn_kind(name) {
             // start_grab snapshots, so automation defaults must be applied first.
@@ -139,6 +142,7 @@ impl App {
         // Undo/redo restore both geometry and its permission from scene snapshots.
         if name != "undo" && name != "redo" {
             validate_transition(&self.tree, &draft)?;
+            boolean_policy::validate_transition(&self.tree, &draft)?;
             draft.make_undo_redo_snapshot();
         }
         self.tree = draft;

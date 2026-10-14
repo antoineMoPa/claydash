@@ -28,6 +28,8 @@ fn objects(app: &App) -> Value {
 }
 
 fn create_pair(app: &mut App) -> [uuid::Uuid; 2] {
+    // These tests isolate the separate smooth-blend policy.
+    request(app, "EnableBooleanOperations", json!({})).unwrap();
     let result = apply(
         app,
         json!([

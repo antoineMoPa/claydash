@@ -42,6 +42,7 @@ pub enum Request {
     GetSchema,
     ListCommands,
     EnableSlowSmoothBlends,
+    EnableBooleanOperations,
     Apply(ApplyArgs),
     ExecuteCommand { name: String },
     SetView(ViewArgs),
@@ -337,7 +338,7 @@ fn call_socket(request: Value) -> AgentResult {
 
 fn request_payload(op: &str, args: Value) -> Value {
     let args = match op {
-        "GetState" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "Undo" | "Redo" => Value::Null,
+        "GetState" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "EnableBooleanOperations" | "Undo" | "Redo" => Value::Null,
         "CaptureViewport" | "CaptureOrthographic" if args.is_null() => json!({}),
         "Save" if args.is_null() => json!({}),
         _ => args,
@@ -456,6 +457,7 @@ impl App {
             &request,
             Request::Apply(_)
                 | Request::EnableSlowSmoothBlends
+                | Request::EnableBooleanOperations
                 | Request::ExecuteCommand { .. }
                 | Request::SetView(_)
                 | Request::BuildPoissonMesh { .. }
@@ -471,6 +473,7 @@ impl App {
             }).collect())),
             Request::Apply(args) => self.agent_apply(args),
             Request::EnableSlowSmoothBlends => self.agent_enable_slow_smooth_blends(),
+            Request::EnableBooleanOperations => self.agent_enable_boolean_operations(),
             Request::ExecuteCommand { name } => self.agent_execute_command(&name),
             Request::SetView(args) => self.agent_set_view(args),
             Request::BuildPoissonMesh { id } => self.agent_build_poisson_mesh(id),
@@ -626,6 +629,9 @@ impl App {
         Ok(json!({
             "revision": self.scene_revision(),
             "modeling_policy": {
+                "boolean_operations_enabled": boolean_policy::enabled(&self.tree),
+                "boolean_enable_command": "enable_boolean_operations",
+                "boolean_warning": boolean_policy::WARNING,
                 "slow_smooth_blends_enabled": smooth_blend_policy::enabled(&self.tree),
                 "guidance": smooth_blend_policy::GUIDANCE,
                 "enable_command": "enable_slow_smooth_blends",
@@ -685,6 +691,9 @@ mod mcp;
 mod tests;
 mod validation;
 mod smooth_blend_policy;
+mod boolean_policy;
+#[cfg(test)]
+mod boolean_policy_tests;
 #[cfg(test)]
 mod smooth_blend_tests;
 

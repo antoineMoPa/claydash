@@ -217,30 +217,43 @@ fn preview_respects_budget_and_never_exceeds_native_size() {
 }
 #[test]
 fn gpu_budget_recovers_from_expensive_views_without_vsync_feedback() {
-    assert!(adjusted_budget(INITIAL_PIXELS, 35.0, EDIT_TARGET_MS) < INITIAL_PIXELS);
-    assert!(adjusted_budget(INITIAL_PIXELS, 2.0, EDIT_TARGET_MS) > INITIAL_PIXELS);
+    assert!(adjusted_budget(INITIAL_PIXELS, 35.0, EDIT_TARGET_MS, TILE * TILE) < INITIAL_PIXELS);
+    assert!(adjusted_budget(INITIAL_PIXELS, 2.0, EDIT_TARGET_MS, TILE * TILE) > INITIAL_PIXELS);
     assert_eq!(
-        adjusted_budget(INITIAL_PIXELS, f64::NAN, EDIT_TARGET_MS),
+        adjusted_budget(INITIAL_PIXELS, f64::NAN, EDIT_TARGET_MS, TILE * TILE),
         INITIAL_PIXELS
     );
     assert_eq!(
-        adjusted_budget(TILE * TILE, 100.0, EDIT_TARGET_MS),
+        adjusted_budget(TILE * TILE, 100.0, EDIT_TARGET_MS, TILE * TILE),
         TILE * TILE
     );
     assert!(
-        adjusted_budget(INITIAL_PIXELS, 10.0, PLAYBACK_TARGET_MS)
-            > adjusted_budget(INITIAL_PIXELS, 10.0, EDIT_TARGET_MS)
+        adjusted_budget(INITIAL_PIXELS, 10.0, PLAYBACK_TARGET_MS, TILE * TILE)
+            > adjusted_budget(INITIAL_PIXELS, 10.0, EDIT_TARGET_MS, TILE * TILE)
     );
+}
+
+#[test]
+fn sparse_budget_can_shrink_below_a_tile_for_expensive_small_views() {
+    let phase_pixels = 160_u32.div_ceil(16) * 100_u32.div_ceil(16);
+    let mut budget = budget_after_sample(INITIAL_PIXELS, 16 * phase_pixels,
+        16 * phase_pixels, 60.0, EDIT_TARGET_MS, phase_pixels);
+    assert!(budget < TILE * TILE, "a capped phase batch must teach the budget");
+    for _ in 0..4 {
+        budget = budget_after_sample(budget, budget, budget, 60.0, EDIT_TARGET_MS, phase_pixels);
+    }
+    assert_eq!(budget, phase_pixels);
+    assert_eq!(adjusted_budget(budget, 60.0, EDIT_TARGET_MS, phase_pixels), phase_pixels);
 }
 
 #[test]
 fn final_partial_tile_keeps_the_budget_for_the_next_view() {
     let budget = 16 * 1024;
     assert_eq!(
-        budget_after_sample(budget, budget * 2, 288, 1.0, EDIT_TARGET_MS),
+        budget_after_sample(budget, budget * 2, 288, 1.0, EDIT_TARGET_MS, TILE * TILE),
         budget
     );
-    assert!(budget_after_sample(budget, budget * 2, budget * 2, 20.0, EDIT_TARGET_MS) < budget);
+    assert!(budget_after_sample(budget, budget * 2, budget * 2, 20.0, EDIT_TARGET_MS, TILE * TILE) < budget);
 }
 
 #[test]

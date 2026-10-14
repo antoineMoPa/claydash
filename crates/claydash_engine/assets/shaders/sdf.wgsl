@@ -2188,9 +2188,18 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
 
 // DEFERRED_GEOMETRY_MODULE
 
+var<private> bloom_emission: vec3<f32>;
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let far = camera.inverse_view_projection * vec4(input.clip, 1.0, 1.0);
-    let near = camera.inverse_view_projection * vec4(input.clip, 0.0, 1.0);
+    var clip = input.clip;
+    if !FAST_PREVIEW {
+        // Exact draws use native pixels. Reconstruct their centers directly
+        // so a full-screen triangle and sparse one-pixel quads generate the
+        // same rays, without different varying interpolation roundoff.
+        let size = vec2(f32(camera.world_mode.w), f32(camera.count.z));
+        clip = input.position.xy / size * vec2(2.0, -2.0) + vec2(-1.0, 1.0);
+    }
+    let far = camera.inverse_view_projection * vec4(clip, 1.0, 1.0);
+    let near = camera.inverse_view_projection * vec4(clip, 0.0, 1.0);
     let far_point = far.xyz / far.w;
     let near_point = near.xyz / near.w;
     let ray = select(normalize(far_point - camera.position.xyz), normalize(far_point - near_point), camera.count.w != 0u);
@@ -2262,7 +2271,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 } else {
                     reflected_normal = scene_normal(point, index);
                 }
-                reflected_color = surface_light(point, reflected_normal, -direction, objects[index],
+                let emitted = material_emission(point, -direction, objects[index]);
+                bloom_emission += reflection_weight * emitted * camera.position.w;
+                reflected_color = emitted + surface_light(point, reflected_normal, -direction, objects[index],
                     material_surface(point, reflected_normal, -direction, objects[index]), false);
             }
             radiance += reflection_weight * reflected_color;
@@ -2312,6 +2323,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                     radiance += throughput * surface_light(point, normal, -direction,
                         object, surface, false) * alpha;
                 }
+                let emitted = material_emission(point, -direction, object) * alpha;
+                radiance += throughput * emitted;
+                bloom_emission += throughput * emitted * camera.position.w;
                 throughput *= 1.0 - alpha;
                 if max(throughput.x, max(throughput.y, throughput.z)) < 0.01 { break; }
                 if excluded_splat_count < 12u {
@@ -2351,6 +2365,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                     surface.color = mix(surface.color, decal.rgb, decal.a);
                 }
                 let opacity = clamp(surface.opacity, 0.0, 1.0);
+                let emitted = material_emission(point, -direction, object) * opacity;
+                radiance += throughput * emitted;
+                bloom_emission += throughput * emitted * camera.position.w;
                 var preview_color = surface.color * shade;
                 if HAS_METAL_MATERIAL && surface.metal_response {
                     preview_color = surface_light(point, normal, -direction, object, surface, false);
@@ -2377,6 +2394,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
                 surface.ior = 1.0;
                 surface.metallic = 0.0;
             }
+            let emitted = material_emission(point, -direction, object) * clamp(surface.opacity, 0.0, 1.0);
+            radiance += throughput * emitted;
+            bloom_emission += throughput * emitted * camera.position.w;
             if HAS_METAL_MATERIAL && surface.metal_response {
                 let opacity = clamp(surface.opacity, 0.0, 1.0);
                 var metal_ao = 1.0;

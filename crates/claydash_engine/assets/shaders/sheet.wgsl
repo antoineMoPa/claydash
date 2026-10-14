@@ -115,6 +115,10 @@ fn sheet_strip_distance(point: vec3<f32>, object: Object) -> f32 {
             planar = max(planar, distance);
         }
         planar = max(max(planar, range.x - x), x - range.y) * factor;
+        // The signed extrusion distance is at least max(planar, -half),
+        // regardless of relief height. Avoid evaluating crowns and embosses
+        // in charts that cannot improve the current union distance.
+        if max(planar, -half) >= result { continue; }
         let q = vec2(planar, abs(depth - sheet_emboss_height(uv, object)) - half);
         result = min(result, length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0));
     }
@@ -146,6 +150,9 @@ fn sheet_directional_distance(point: vec3<f32>, object: Object) -> f32 {
         let left = remaining[size_stack];
         let constraint = constraints[size_stack];
         let scale = scales[size_stack];
+        // Each preimage contributes max(domain constraint, slab distance).
+        // A rejected chart also rejects every descendant of that chart.
+        if constraint >= result { continue; }
         if left == 0u {
             let uv = p.xy;
             let box = abs(uv) - size * 0.5;
@@ -162,6 +169,7 @@ fn sheet_directional_distance(point: vec3<f32>, object: Object) -> f32 {
                 }
                 planar = max(planar, distance);
             }
+            if max(constraint, max(planar, -header.x) * scale) >= result { continue; }
             let q = vec2(planar, abs(p.z - sheet_emboss_height(uv, object)) - header.x) * scale;
             result = min(result, max(constraint, length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0)));
         } else {

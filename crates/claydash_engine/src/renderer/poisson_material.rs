@@ -46,10 +46,12 @@ pub(super) fn create_pipeline(device: &wgpu::Device, layout: Option<&wgpu::Pipel
     scene: &str, format: wgpu::TextureFormat, capacity: u32,
     features: SceneShaderFeatures) -> wgpu::RenderPipeline {
     let source = source(scene, capacity);
+    let source = if features.bloom { super::bloom::scene_source(&source, "fs_poisson") } else { source };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Poisson source materials"), source: wgpu::ShaderSource::Wgsl(source.into()),
     });
     let constants = [
+        ("HAS_EMISSION", f64::from(features.emission)),
         ("HAS_WOOD_MATERIAL", f64::from(features.materials.wood)),
         ("HAS_BRICK_MATERIAL", f64::from(features.materials.brick)),
         ("HAS_FABRIC_MATERIAL", f64::from(features.materials.fabric)),
@@ -72,8 +74,7 @@ pub(super) fn create_pipeline(device: &wgpu::Device, layout: Option<&wgpu::Pipel
                 attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
             })], compilation_options: Default::default() },
         fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_poisson"),
-            targets: &[Some(wgpu::ColorTargetState { format,
-                blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
+            targets: &super::bloom::scene_targets(format, features.bloom),
             compilation_options: wgpu::PipelineCompilationOptions { constants: &constants,
                 ..Default::default() } }),
         primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },

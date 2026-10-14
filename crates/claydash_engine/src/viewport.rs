@@ -2,6 +2,7 @@
 //! UI rendering stays at native resolution throughout camera and object edits.
 use std::sync::{Arc, Mutex};
 
+mod bloom;
 mod encoding;
 
 const TILE: u32 = 32;
@@ -28,6 +29,7 @@ struct Targets {
     refined_depth: wgpu::TextureView,
     composite: wgpu::BindGroup,
     deferred: Option<DeferredBuffers>,
+    bloom: Option<bloom::BloomTargets>,
     preview_size: [u32; 2],
 }
 
@@ -173,11 +175,15 @@ pub struct Viewport {
     query_resolve: Option<wgpu::Buffer>,
     pipeline: wgpu::RenderPipeline,
     deferred_pipeline: wgpu::RenderPipeline,
+    deferred_emission_pipeline: Option<wgpu::RenderPipeline>,
+    deferred_bloom_pipeline: Option<wgpu::RenderPipeline>,
+    deferred_pipeline_layout: wgpu::PipelineLayout,
     deferred_layout: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     progress: wgpu::Buffer,
     format: wgpu::TextureFormat,
+    bloom: bloom::Bloom,
 }
 
 impl Viewport {
@@ -202,6 +208,17 @@ impl Viewport {
             entries: &[
                 texture_entry(0),
                 texture_entry(1),
+                texture_entry(4),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -222,9 +239,7 @@ impl Viewport {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("viewport composite"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../assets/shaders/viewport.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(bloom::composite_source().into()),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("viewport composite"),
@@ -338,7 +353,11 @@ impl Viewport {
             }),
             pipeline,
             deferred_pipeline,
+            deferred_emission_pipeline: None,
+            deferred_bloom_pipeline: None,
+            deferred_pipeline_layout,
             deferred_layout,
+            bloom: bloom::Bloom::new(device),
             layout,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("viewport upscale"),
@@ -453,6 +472,21 @@ impl Viewport {
         deferred: bool,
         interleaved: bool,
     ) -> Work {
+        if deferred && self.bloom.emission {
+            let pipeline = if self.bloom.enabled {
+                &mut self.deferred_bloom_pipeline
+            } else {
+                &mut self.deferred_emission_pipeline
+            };
+            pipeline.get_or_insert_with(|| {
+                bloom::deferred_pipeline(
+                    device,
+                    &self.deferred_pipeline_layout,
+                    self.format,
+                    self.bloom.enabled,
+                )
+            });
+        }
         if self.interleaved != interleaved {
             self.key = None;
         }
@@ -475,6 +509,7 @@ impl Viewport {
                     self.submitted_pixels,
                     ms,
                     self.target_ms,
+                    if interleaved { key.size[0].div_ceil(16) * key.size[1].div_ceil(16) } else { TILE * TILE },
                 );
             }
         }
@@ -483,7 +518,10 @@ impl Viewport {
             // Timestamp queries are optional in WebGPU. Without them, prevent
             // multi-frame GPU backlog by reducing the next batch conservatively.
             if self.query_set.is_none() && self.pending_frames == 2 && self.submitted_pixels > 0 {
-                self.pixel_budget = (self.pixel_budget / 2).max(TILE * TILE);
+                let minimum = if interleaved {
+                    key.size[0].div_ceil(16) * key.size[1].div_ceil(16)
+                } else { TILE * TILE };
+                self.pixel_budget = (self.pixel_budget / 2).max(minimum);
             }
             return Work::Cached;
         }
@@ -531,7 +569,9 @@ impl Viewport {
                 .as_ref()
                 .is_none_or(|previous| previous.size != key.size)
                 || self.targets.as_ref().is_none_or(|targets| {
-                    targets.preview_size != preview_size || targets.deferred.is_some() != deferred
+                    targets.preview_size != preview_size
+                        || targets.deferred.is_some() != deferred
+                        || targets.bloom.is_some() != self.bloom.enabled
                 });
             if recreate {
                 let texture = |size: [u32; 2], label| {
@@ -580,6 +620,10 @@ impl Viewport {
                     preview: DeferredTargets::new(device, &self.deferred_layout, preview_size),
                     native: None,
                 });
+                let bloom = self.bloom.enabled.then(|| {
+                    self.bloom
+                        .targets(device, &self.layout, &self.progress, key.size, preview_size)
+                });
                 let composite = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("viewport composite"),
                     layout: &self.layout,
@@ -600,6 +644,18 @@ impl Viewport {
                             binding: 3,
                             resource: self.progress.as_entire_binding(),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(
+                                bloom
+                                    .as_ref()
+                                    .map_or(&self.bloom.empty, |targets| &targets.result),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: self.bloom.uniform.as_entire_binding(),
+                        },
                     ],
                 });
                 self.targets = Some(Targets {
@@ -609,6 +665,7 @@ impl Viewport {
                     refined_depth,
                     composite,
                     deferred,
+                    bloom,
                     preview_size,
                 });
             }
@@ -695,6 +752,12 @@ impl Viewport {
         self.key.as_ref() == Some(key)
     }
 
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn benchmark_bloom_passes(&self, encoder: &mut wgpu::CommandEncoder) {
+        let targets = self.targets.as_ref().and_then(|targets| targets.bloom.as_ref()).expect("prepared bloom targets");
+        self.bloom.encode(encoder, targets, None);
+    }
+
     pub fn composite(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(
@@ -706,14 +769,14 @@ impl Viewport {
     }
 }
 
-fn adjusted_budget(previous: u32, milliseconds: f64, target_ms: f64) -> u32 {
+fn adjusted_budget(previous: u32, milliseconds: f64, target_ms: f64, minimum: u32) -> u32 {
     if !milliseconds.is_finite() || milliseconds <= 0.0 {
         return previous;
     }
     // React quickly to expensive views, grow cautiously, and cap the minimum
-    // batch at one tile. Timings come from the GPU, not the vsync interval.
+    // batch at one tile or one sparse phase. Timings come from the GPU.
     let ratio = (target_ms / milliseconds).max(0.25);
-    ((previous as f64 * ratio) as u32).clamp(TILE * TILE, 4 * 1024 * 1024)
+    ((previous as f64 * ratio) as u32).clamp(minimum.max(1).min(4 * 1024 * 1024), 4 * 1024 * 1024)
 }
 
 fn budget_after_sample(
@@ -722,6 +785,7 @@ fn budget_after_sample(
     rendered_pixels: u32,
     milliseconds: f64,
     target_ms: f64,
+    minimum: u32,
 ) -> u32 {
     // The final refinement batch can be just a few edge pixels. Its fixed GPU
     // overhead says nothing about the cost of a full batch, so retain the
@@ -729,7 +793,7 @@ fn budget_after_sample(
     if rendered_pixels < submitted_budget / 2 {
         return budget;
     }
-    adjusted_budget(rendered_pixels, milliseconds, target_ms).min(budget.saturating_mul(6) / 5)
+    adjusted_budget(rendered_pixels, milliseconds, target_ms, minimum).min(budget.saturating_mul(6) / 5)
 }
 
 fn preview_size(size: [u32; 2], budget: u32) -> [u32; 2] {

@@ -17,6 +17,7 @@ pub mod cooperative_work;
 pub mod computation;
 pub mod poisson_bake;
 pub mod post_processing;
+pub(crate) mod bloom;
 
 const MAX_OBJECTS: usize = 1024;
 // Scene components and eligible operand trees share the same storage buffer.
@@ -120,6 +121,8 @@ struct SceneShaderFeatures {
     primitives: PrimitiveFeatures,
     spatial: SpatialFeatures,
     flat_unions: bool,
+    bloom: bool,
+    emission: bool,
     neural_sdf: bool,
     neural_width: u32,
 }
@@ -141,7 +144,11 @@ impl SceneShaderFeatures {
     // Material thumbnails only draw an unmodified sphere. Enabling unrelated
     // geometry or material families can stall Chrome compiling unused code.
     fn for_material_previews(material: Material) -> Self {
-        Self::for_scene(&[material], &[])
+        let mut features = Self::for_scene(&[material], &[]);
+        // Thumbnail pipelines are cached by material family, including both
+        // emissive and non-emissive materials in the same family.
+        features.emission = true;
+        features
     }
 
     fn for_scene(materials: &[Material], objects: &[GpuObject]) -> Self {
@@ -151,6 +158,8 @@ impl SceneShaderFeatures {
             spatial: SpatialFeatures::for_objects(objects),
             neural_sdf: objects.iter().any(|object| object.meta[1] == 12),
             neural_width: 4,
+            bloom: false,
+            emission: materials.iter().any(|material| material.emits_light()),
             flat_unions: objects
                 .iter()
                 .any(|object| object.meta[3] == FLAT_UNION_ROOT),

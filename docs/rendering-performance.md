@@ -73,6 +73,56 @@ Reproduce with `--stress-benchmark-suite --benchmark-case=brick
 `--benchmark-case=preview`, and use `--stress-ui-benchmark --benchmark-edit
 --benchmark-case=brick --benchmark-size=640x360` for the editor loop.
 
+## Nested hard-union assemblies
+
+Pure hard-union assemblies are now flattened in the GPU copy before splitting
+into scene BVH leaves. Recomputed bounds keep each detached part tightly bounded.
+Independent convex parts can use analytic ray intervals; formed sheets no longer
+force unrelated primitives to march through the entire subassembly. The editable
+hierarchy remains intact. Subtraction/intersection, blends, mirrors, repetition
+and captured subtrees keep their existing safeguards and evaluation paths.
+Sheet inverse charts also skip relief evaluation when their domain or planar
+lower bound proves they cannot improve the current distance.
+
+Sparse adaptive feedback compares submitted pixels with the achievable batch
+(capped at 16 phases), rather than an arbitrarily larger requested budget. Its
+minimum is one sparse phase rather than one 32×32 tile. Otherwise small,
+expensive views continually ignore their GPU samples or stop adapting too early.
+Exact rays are reconstructed from native pixel centers so sparse quads and the
+full-screen triangle produce identical completed images.
+
+On Apple M1 / Metal, the saved 195-part Westfalia (56 sheets) at 160×100 measured
+279.6 ms per direct Exact frame before these changes and 96.7 ms afterward,
+about 2.9× faster. With the traversal/sheet changes alone, viewport motion p95
+was 64.2 ms and editing p95 was 62.0 ms. Corrected adaptive feedback reduced
+those to 19.0 ms and 13.7 ms. At 320×200 the final renderer measured 111.7 ms
+per direct frame, 17.3 ms motion p95 and 14.9 ms editing p95. Both completed
+progressive images matched their direct reference byte for byte. These are
+bounded headless measurements with a fixed overview camera, not native editor
+or full-size viewport measurements. Initial interaction batches can still be
+slower before timing feedback adapts.
+
+The old and new renderer need not produce identical pixels at intersecting
+parts: splitting components changes finite-difference normal neighborhoods and
+hit ordering. At 160×100, the flatten/split change affected 238 pixels with
+0.121/255 mean RGB difference; scene geometry and materials were not edited.
+Sheet pruning alone was byte-identical to the split-only image.
+
+Run the windowless example with a saved scene, keeping GPU runs sequential:
+
+```sh
+cargo run -p claydash_engine --example scene_benchmark -- \
+  --benchmark-scene=PATH --benchmark-size=160x100 --benchmark-progressive \
+  --benchmark-images=/tmp/claydash-profile
+```
+
+Optional `--camera-position=X,Y,Z` and `--camera-target=X,Y,Z` override the
+vehicle overview camera. `--benchmark-deferred` measures Deferred when supported;
+`--benchmark-fast-preview` measures Simple Shading. Image files are PPM.
+The convergence check allows up to 120 seconds after interaction stops,
+so its limit covers all 256 Exact phases and completion/pause frames even
+when a small viewport cycles through cached frames quickly.
+
 ## Material library previews
 
 Material spheres are requested by visible UI rectangles, after filtering and section expansion. Startup and closed sections generate no thumbnails. Requests are refreshed each frame, so scrolling away discards pending demand. The renderer produces at most one new sphere per frame and waits for GPU completion before starting another. Cached textures are reused when reopening sections; edited or deleted shared materials invalidate their own entries. WGSL source changes invalidate preview pipelines and textures.

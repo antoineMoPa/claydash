@@ -22,6 +22,7 @@ pub(super) struct ExportOptions {
     pub geometry: ExportGeometry,
     pub voxel_resolution: u32,
     pub direct_resolution: u32,
+    pub direct_error: Option<f32>,
 }
 
 impl Default for ExportOptions {
@@ -29,6 +30,7 @@ impl Default for ExportOptions {
         Self {
             geometry: ExportGeometry::default(),
             direct_resolution: crate::renderer::direct_mesh::DEFAULT_RESOLUTION,
+            direct_error: None,
             voxel_resolution: crate::model::VoxelSettings::default().resolution,
         }
     }
@@ -96,9 +98,13 @@ impl App {
                     ui.label("Voxel and direct mesh objects keep their saved representation and resolution. Other objects export as smooth meshes.");
                 }
                 ExportGeometry::Direct => {
-                    ui.label("Tessellate source geometry, mesh smooth blends and spatial modifiers, and bake materials.");
+                    ui.label("Adaptive source geometry; solid colors retain indexed PBR materials.");
+                    let mut error_mm=options.direct_error.unwrap_or(0.032/options.direct_resolution as f32)*1000.0;
+                    ui.horizontal(|ui| { ui.label("Maximum surface error (mm)");
+                        if ui.add(egui::DragValue::new(&mut error_mm).range(0.01..=100.0).speed(0.1)).changed() { options.direct_error=Some(error_mm/1000.0); }
+                    });
                     ui.horizontal(|ui| {
-                        ui.label("Tessellation resolution");
+                        ui.label("Field resolution");
                         ui.add(egui::DragValue::new(&mut options.direct_resolution).range(crate::renderer::direct_mesh::MIN_RESOLUTION..=crate::renderer::direct_mesh::MAX_RESOLUTION));
                     });
                 }

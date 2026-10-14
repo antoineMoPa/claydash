@@ -85,10 +85,19 @@ The `export_glb` MCP tool starts a background export without a file dialog, in d
 {"path":"/absolute/path/model.glb","geometry":"voxels","voxel_resolution":32}
 ```
 
-`geometry` accepts `current_representation` (default), `smooth`, or `voxels`:
+`geometry` accepts `current_representation` (default), `direct`, `smooth`, or `voxels`:
 
 - `current_representation` keeps voxel objects at their saved resolution; other objects become
-  smooth Poisson meshes.
+  their saved direct representation or smooth Poisson meshes.
+- `direct` tessellates native geometry. Optional `direct_resolution` (8–256, default 64)
+  controls field fallbacks; optional positive `direct_error` sets the adaptive surface-error
+  target in world-space scene units (default `0.032 / direct_resolution`). For meter-based
+  scenes, `0.0005` targets 0.5 mm. Rounded primitives, panels and lattice refinement adapt
+  to curvature and world scale; flat faces stay coarse. Solid materials use shared indexed
+  vertices and native metallic/roughness/emissive PBR, while procedural, image and blended
+  materials retain texture baking. The export dialog exposes the same tolerance in mm.
+  Panel triangulation uses constrained Delaunay connections and interior support points
+  to avoid long triangle fans around arcs while preserving cut boundaries and holes.
 - `smooth` exports Poisson meshes with baked material textures.
 - `voxels` uses the existing six-face capture, flat cube faces, and sampled vertex colors.
   Only this mode accepts `voxel_resolution`, from 8 to 128 (default 32).
@@ -126,14 +135,18 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
 3. Call `apply` with one or more typed actions. Pass `expected_revision` from `get_state` so an
    intervening scene edit causes a clear error. Actions in one call form one undo step. A failed
    call leaves the live scene untouched.
-   Try grouping related objects into named Boolean unions for better organization and to move,
-   rotate, or scale the whole model at once. For example, keep a sword's blade, guard, grip,
-   pommel, and decorations in one union named `Sword`. Use an existing component as the root,
-   rename it with `SetObjectName`, and attach the other components with `SetBoolean`, setting
-   `parent` to the root UUID, `operation` to `Union`, and `softness` to `0` to preserve sharp
-   edges. Components retain their materials and remain individually editable. Nested unions
-   can organize larger assemblies. To transform the complete union through MCP, update the
-   root's `group_transform` with `PutObject`.
+   Model with independent parts, native sheet cuts/bends/crowns and primitive corner radii.
+   Do not use Boolean unions just to organize parts. Shared vector variables with `Position`
+   bindings and per-part offsets let an assembly translate together; shared rigid frame bindings
+   let independent parts translate and rotate together without a Boolean tree.
+   Adding Boolean geometry is disabled by default, including hard unions, subtraction and
+   intersection. Only call `enable_boolean_operations` (`EnableBooleanOperations` in the CLI)
+   when the user explicitly requests Boolean geometry. New or enlarged positive Boolean
+   softness separately requires `enable_slow_smooth_blends`; enabling either permission does
+   not grant the other. Both permissions are saved with the scene and undoable; New resets
+   them, and `ReplaceScene` cannot grant them. Existing imported operations remain editable
+   and can be detached or removed without opt-in. `PutObject`, `ReplaceScene` and command
+   execution enforce the same policy as `SetBoolean`. Desktop modeling is unchanged.
 4. Call `set_view` if the camera needs to move, then `capture_viewport` to get a PNG image.
    The capture renders offscreen even when the native window is unfocused or on another macOS
    desktop. Pass `object_ids` to show only specific objects or Boolean groups and their surface

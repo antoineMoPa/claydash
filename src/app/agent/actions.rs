@@ -432,6 +432,8 @@ impl App {
                         smooth_blend_policy::FLAG_PATH,
                         model::ClaydashValue::Bool(smooth_blend_policy::enabled(&self.tree)),
                     );
+                    draft.set_path(boolean_policy::FLAG_PATH,
+                        model::ClaydashValue::Bool(boolean_policy::enabled(&self.tree)));
                     replace = true;
                 }
             }
@@ -454,6 +456,7 @@ impl App {
             validate_scene(&draft)?;
         }
         smooth_blend_policy::validate_transition(&self.tree, &draft)?;
+        boolean_policy::validate_transition(&self.tree, &draft)?;
         if replace {
             self.replace_scene(draft.get_tree("scene").ok_or("missing scene")?);
         } else {

@@ -2839,7 +2839,13 @@
                   0.61
                 ],
                 "efflorescence": 0.16
-              }
+              },
+              "emission_color": [
+                0.08,
+                0.75,
+                1.0
+              ],
+              "emission_intensity": 2.5
             },
             "material_id": null,
             "repetition": {
@@ -3746,7 +3752,13 @@
                   0.61
                 ],
                 "efflorescence": 0.16
-              }
+              },
+              "emission_color": [
+                0.08,
+                0.75,
+                1.0
+              ],
+              "emission_intensity": 2.5
             },
             "material_id": null,
             "repetition": {
@@ -5867,7 +5879,13 @@
                   0.61
                 ],
                 "efflorescence": 0.16
-              }
+              },
+              "emission_color": [
+                0.08,
+                0.75,
+                1.0
+              ],
+              "emission_intensity": 2.5
             },
             "material_id": null,
             "repetition": {
@@ -6774,7 +6792,13 @@
                   0.61
                 ],
                 "efflorescence": 0.16
-              }
+              },
+              "emission_color": [
+                0.08,
+                0.75,
+                1.0
+              ],
+              "emission_intensity": 2.5
             },
             "material_id": null,
             "repetition": {
@@ -9183,7 +9207,10 @@
           "azimuth": 0.0,
           "turbidity": 2.5,
           "sun_temperature": 5778.0,
-          "sun_intensity": 1.0
+          "sun_intensity": 1.0,
+          "bloom_enabled": true,
+          "bloom_strength": 0.35,
+          "bloom_radius": 18.0
         }
       }
     }

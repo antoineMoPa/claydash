@@ -13,6 +13,7 @@ pub struct Page {
     pub png: Vec<u8>,
     /// One linear RGBA color per mesh triangle; these pages skip texture baking.
     pub colors: Option<std::sync::Arc<Vec<[f32; 4]>>>,
+    pub materials: Option<std::sync::Arc<std::collections::BTreeMap<uuid::Uuid, crate::model::Material>>>,
 }
 pub fn page_size(count: usize) -> u32 {
     ((count as f32).sqrt().ceil() as u32 * TILE)
@@ -26,7 +27,7 @@ pub(crate) fn triangle_uv(index: usize, size: u32) -> [[f32; 2]; 3] {
     [[x + 2, y + 2], [x + 14, y + 2], [x + 2, y + 14]]
         .map(|p| [p[0] as f32 / size as f32, p[1] as f32 / size as f32])
 }
-fn buffer_view(data: &mut Vec<u8>, views: &mut Vec<Value>, bytes: &[u8]) -> usize {
+pub(super) fn buffer_view(data: &mut Vec<u8>, views: &mut Vec<Value>, bytes: &[u8]) -> usize {
     while data.len() % 4 != 0 {
         data.push(0);
     }
@@ -49,6 +50,13 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
     let mut textures = Vec::new();
     let mut materials = Vec::new();
     for page in pages {
+        if page.materials.is_some() {
+            if page.first.checked_add(page.count).is_none_or(|end|end>page.mesh.triangles.len()) { return Err("Invalid solid mesh range".into()); }
+            let primitives=super::solid_glb::append(page,&mut binary,&mut views,&mut accessors,&mut materials)?;
+            if let Some(&mesh)=object_meshes.get(&page.root) { meshes[mesh]["primitives"].as_array_mut().unwrap().extend(primitives); }
+            else { object_meshes.insert(page.root,meshes.len());nodes.push(json!({"name":page.name,"mesh":meshes.len()}));meshes.push(json!({"name":page.name,"primitives":primitives})); }
+            continue;
+        }
         if (page.colors.is_none() && page.png.is_empty())
             || page
                 .colors
@@ -159,7 +167,8 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
             meshes.push(json!({"name":page.name,"primitives":[primitive]}));
         }
     }
-    let mut document=serde_json::to_vec(&json!({"asset":{"version":"2.0","generator":"Claydash"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>()}],"nodes":nodes,"meshes":meshes,"materials":materials,"textures":textures,"images":images,"samplers":[{"magFilter":9729,"minFilter":9729,"wrapS":33071,"wrapT":33071}],"buffers":[{"byteLength":binary.len()}],"bufferViews":views,"accessors":accessors})).map_err(|e|e.to_string())?;
+    let extensions:Vec<_>=materials.iter().any(|m|m["extensions"]["KHR_materials_emissive_strength"].is_object()).then_some("KHR_materials_emissive_strength").into_iter().collect();
+    let mut document=serde_json::to_vec(&json!({"asset":{"version":"2.0","generator":"Claydash"},"extensionsUsed":extensions,"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>()}],"nodes":nodes,"meshes":meshes,"materials":materials,"textures":textures,"images":images,"samplers":[{"magFilter":9729,"minFilter":9729,"wrapS":33071,"wrapT":33071}],"buffers":[{"byteLength":binary.len()}],"bufferViews":views,"accessors":accessors})).map_err(|e|e.to_string())?;
     while document.len() % 4 != 0 {
         document.push(b' ');
     }
@@ -217,6 +226,7 @@ mod tests {
             size: 64,
             png: png_bytes,
             colors: None,
+            materials: None,
         }])
         .unwrap();
         if let Some(path) = std::env::var_os("CLAYDASH_TEXTURED_GLB_TEST_OUTPUT") {
@@ -304,6 +314,7 @@ mod voxel_tests {
             count,
             size: 64,
             png: Vec::new(),
+            materials: None,
             colors: Some(Arc::new(world.colors)),
         }])
         .unwrap();
@@ -376,6 +387,7 @@ mod voxel_tests {
             count: 1,
             size: 64,
             png: Vec::new(),
+            materials: None,
             colors: Some(Arc::new(vec![[0.1, 0.2, 0.3, 1.0]])),
         };
         let smooth = Page {
@@ -387,6 +399,7 @@ mod voxel_tests {
             size: 64,
             png,
             colors: None,
+            materials: None,
         };
         let (doc, _) = document(&encode_textured(&[colored, smooth]).unwrap());
         assert_eq!(doc["nodes"].as_array().unwrap().len(), 2);

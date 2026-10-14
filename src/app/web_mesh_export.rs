@@ -43,12 +43,13 @@ impl MeshExportJob {
     fn add_mesh(&mut self, root: uuid::Uuid, mesh: Mesh, colors: Option<Arc<Vec<[f32; 4]>>>) {
         let name = self.source.iter().find(|object| object.uuid == root)
             .map_or_else(|| "Mesh".to_owned(), |object| object.name.clone());
+        let materials=if colors.is_none() {crate::renderer::poisson_mesh::solid_glb::materials_for_mesh(&self.source,&mesh).map(Arc::new)}else{None};
         let mesh = Arc::new(mesh);
-        let page_triangles = if colors.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
+        let page_triangles = if colors.is_some() || materials.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
         for first in (0..mesh.triangles.len()).step_by(page_triangles) {
             let count = (mesh.triangles.len() - first).min(page_triangles);
             self.pages.push(Page { name: name.clone(), root, mesh: mesh.clone(), first, count,
-                size: if colors.is_some() { 64 } else { crate::renderer::poisson_mesh::textured_glb::page_size(count) }, png: Vec::new(), colors: colors.clone() });
+                size: if colors.is_some() { 64 } else { crate::renderer::poisson_mesh::textured_glb::page_size(count) }, png: Vec::new(), colors: colors.clone(), materials: materials.clone() });
         }
         self.index += 1;
         self.work.progress.store(0, Ordering::Relaxed);
@@ -122,7 +123,7 @@ impl App {
                     let kind = job.options.mesh_kind(object);
                     let cached = self.renderer.as_ref().and_then(|renderer| match kind {
                         MeshKind::Smooth => renderer.cached_mesh_for_export(&job.source, root, revision),
-                        MeshKind::Direct { resolution } if resolution == object.poisson_mesh.resolution =>
+                        MeshKind::Direct { resolution } if job.options.direct_error.is_none() && resolution == object.poisson_mesh.resolution =>
                             renderer.cached_direct_mesh_for_export(&job.source, root, revision),
                         _ => None,
                     });
@@ -140,7 +141,7 @@ impl App {
                             MeshKind::Direct { resolution } => (resolution, crate::renderer::poisson_mesh::MeshAlgorithm::Direct),
                             _ => (mesh_resolution, crate::renderer::poisson_mesh::MeshAlgorithm::Poisson),
                         };
-                        match WebJob::start_with_algorithm(job.source.clone(), root, resolution, mesh_resolution, algorithm, &self.egui) {
+                        match WebJob::start_with_error(job.source.clone(), root, resolution, mesh_resolution, algorithm, job.options.direct_error, &self.egui) {
                             Ok(worker) => job.worker = Some(GeometryWorker::Smooth(worker)),
                             Err(error) => finish = Some(Err(error)),
                         }
@@ -149,7 +150,7 @@ impl App {
             }
         } else if job.pages.is_empty() {
             finish = Some(Err("There are no meshes to export".to_owned()));
-        } else if job.texture_index < job.pages.len() && job.pages[job.texture_index].colors.is_some() {
+        } else if job.texture_index < job.pages.len() && (job.pages[job.texture_index].colors.is_some() || job.pages[job.texture_index].materials.is_some()) {
             job.texture_index += 1;
         } else if job.texture_index < job.pages.len() {
             let Some(renderer) = self.renderer.as_mut() else {

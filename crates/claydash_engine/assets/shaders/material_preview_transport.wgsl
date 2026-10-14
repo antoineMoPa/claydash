@@ -54,6 +54,7 @@
             let normal = select(-outward, outward, entering);
 
             var surface = material_surface(point, normal, -direction, object);
+            radiance += throughput * material_emission(point, -direction, object) * clamp(surface.opacity, 0.0, 1.0);
             let decal = material_stencil_color(point, normal, object);
             surface.color = mix(surface.color, decal.rgb, decal.a);
             if object.stencil_meta.w > 0.5 && object.stencil_meta.x > 0.5 && !metal_image_detail_enabled(object) {

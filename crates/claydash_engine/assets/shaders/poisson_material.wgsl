@@ -42,11 +42,14 @@ fn poisson_surface(point: vec3<f32>, normal: vec3<f32>, owner: u32) -> PoissonSu
     }
     return PoissonSurface(object, surface);
 }
+var<private> bloom_emission: vec3<f32>;
 fn poisson_shade(point: vec3<f32>, normal: vec3<f32>, owner: u32) -> vec4<f32> {
     let sampled = poisson_surface(point, normal, owner);
     let view = normalize(camera.position.xyz - point);
     let color = surface_light(point, normal, view, sampled.object, sampled.surface, false);
-    return vec4(max(color, vec3(0.0)) * camera.position.w, clamp(sampled.surface.opacity, 0.0, 1.0));
+    let emitted = material_emission(point, view, sampled.object);
+    bloom_emission = emitted * clamp(sampled.surface.opacity, 0.0, 1.0) * camera.position.w;
+    return vec4((max(color, vec3(0.0)) + emitted) * camera.position.w, clamp(sampled.surface.opacity, 0.0, 1.0));
 }
 @fragment fn fs_poisson(input: PoissonVertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let normal = normalize(select(-input.normal, input.normal, front));
@@ -60,7 +63,9 @@ fn poisson_shade(point: vec3<f32>, normal: vec3<f32>, owner: u32) -> vec4<f32> {
         let daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);
         var direct = select(0.75, camera.sun_direction.w * daylight, camera.world_mode.x == 1u);
         if camera.world_mode.x == 4u { direct = 0.12; }
-        return vec4(max(input.captured_color.rgb, vec3(0.0))
+        let emitted = material_emission(input.point, normalize(camera.position.xyz - input.point), objects[input.owner]);
+        bloom_emission = emitted * camera.position.w;
+        return vec4(emitted * camera.position.w + max(input.captured_color.rgb, vec3(0.0))
             * (ambient + direct * diffuse) * camera.position.w, 1.0);
     }
     return poisson_shade(input.point, normal, input.owner);

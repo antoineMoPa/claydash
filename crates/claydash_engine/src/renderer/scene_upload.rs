@@ -379,6 +379,11 @@ impl Renderer {
                 first = root + 1;
             }
             if pipeline_preparation == ScenePipelinePreparation::Viewport {
+                // Flatten pure hard-union assemblies before splitting them.
+                // Otherwise each nested subassembly remains a large BVH leaf,
+                // forcing sheets and nearby primitives to march together.
+                flatten_nested_hard_unions(&mut gpu_objects);
+                component_bounds = boolean_component_bounds(&gpu_objects, &bounds);
                 split_top_level_hard_unions(&mut gpu_objects, &eligible_roots,
                     &primitive_bounds, &mut component_bounds);
             }
@@ -560,7 +565,8 @@ impl Renderer {
             })
         });
         let has_splat_samples = !splat_samples.is_empty();
-        self.hybrid_enabled = self.use_bvh
+        let has_emission = materials.materials.iter().any(|material| material.emits_light());
+        self.hybrid_enabled = !has_emission && self.use_bvh
             && self.shader_source.contains("fn fs_depth")
             && supported_materials
             && supported_roots
@@ -617,6 +623,12 @@ impl Renderer {
         self.resize_lattice_atlas_for(lattice_atlas_uploads.len());
         let mut shader_features =
             SceneShaderFeatures::for_scene(&materials.materials, &gpu_objects);
+        shader_features.emission = has_emission;
+        shader_features.bloom = pipeline_preparation == ScenePipelinePreparation::Viewport
+            && has_emission && world.bloom_enabled && world.bloom_strength > 0.0;
+        if pipeline_preparation == ScenePipelinePreparation::Viewport {
+            self.viewport.set_bloom(shader_features.bloom, shader_features.emission);
+        }
         shader_features.neural_sdf |= prepared_scene
             .as_ref()
             .is_some_and(|prepared| !prepared.neural_fields.is_empty());

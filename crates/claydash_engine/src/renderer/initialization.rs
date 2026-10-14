@@ -411,6 +411,7 @@ impl Renderer {
             &device,
             &pipeline_layout,
             render_format,
+            false,
         );
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,

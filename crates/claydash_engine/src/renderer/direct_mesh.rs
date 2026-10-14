@@ -14,6 +14,10 @@ mod implicit;
 mod lattice;
 mod modifiers;
 mod primitives;
+mod quality;
+#[cfg(test)]
+mod quality_tests;
+pub use quality::TessellationQuality;
 mod sheet;
 
 pub(crate) fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
@@ -38,7 +42,14 @@ pub fn build(
     cancel: &AtomicBool,
     progress: &AtomicU32,
 ) -> Result<Mesh, String> {
+    build_with_error(scene, root, resolution, TessellationQuality::from_resolution(resolution).position_error, cancel, progress)
+}
+
+pub fn build_with_error(scene: &[SdfObject], root: Uuid, resolution: u32,
+    world_error: f32, cancel: &AtomicBool, progress: &AtomicU32) -> Result<Mesh, String> {
     check_cancel(cancel)?;
+    if !world_error.is_finite() || world_error <= 0.0 { return Err("Direct mesh error must be positive and finite".into()); }
+    let quality = TessellationQuality { position_error: world_error, ..TessellationQuality::from_resolution(resolution) };
     if !(MIN_RESOLUTION..=MAX_RESOLUTION).contains(&resolution) {
         return Err(format!(
             "Direct mesh resolution must be between {MIN_RESOLUTION} and {MAX_RESOLUTION}"
@@ -61,6 +72,7 @@ pub fn build(
         progress,
         &mut stack,
         &mut finished,
+        quality,
     )?;
     check_cancel(cancel)?;
     // Boolmesh carries source-face owners through union/intersection. Only new
@@ -95,6 +107,7 @@ fn subtree(
     progress: &AtomicU32,
     stack: &mut Vec<Uuid>,
     finished: &mut usize,
+    quality: TessellationQuality,
 ) -> Result<Mesh, String> {
     check_cancel(cancel)?;
     let object = &scene[index];
@@ -113,7 +126,7 @@ fn subtree(
         *finished += 1;
         return Ok(mesh);
     }
-    let mut mesh = primitives::build(scene, object, resolution, cancel)?;
+    let mut mesh = primitives::build_with_quality(scene, object, resolution, quality.local(scene, object), cancel)?;
     let matrix = crate::model::object_world_matrix(scene, object.uuid);
     if !matrix.is_finite() || matrix.determinant().abs() < 1e-12 {
         return Err(format!(
@@ -141,7 +154,7 @@ fn subtree(
             return Ok(mesh);
         }
     };
-    if let Err(_) = lattice::apply(scene, object, &mut mesh, resolution, cancel) {
+    if let Err(_) = lattice::apply_with_error(scene, object, &mut mesh, resolution, quality.position_error, cancel) {
         check_cancel(cancel)?;
         let mesh = field_subtree(scene, index, resolution, cancel, progress)?;
         stack.pop();
@@ -153,7 +166,7 @@ fn subtree(
         ((*finished * 99) / scene.len().max(1)).min(99) as u32,
     );
     for child in children {
-        let operand = subtree(scene, child, resolution, cancel, progress, stack, finished)?;
+        let operand = subtree(scene, child, resolution, cancel, progress, stack, finished, quality)?;
         check_cancel(cancel)?;
         report(progress, 100);
         mesh = match combine(&mesh, &operand, scene[child].operation, object.uuid) {
@@ -669,6 +682,8 @@ mod tests {
         let progress = AtomicU32::new(0);
         let source = primitives::build(&[left.clone()], &left, 16, &cancel).unwrap();
         let source_volume = volume(&source);
+        let mut inner=left.clone();inner.params=SdfParams::SphereParams(crate::model::SphereParams{radius:0.5});
+        let inner_volume=volume(&primitives::build(&[inner.clone()],&inner,16,&cancel).unwrap());
         for (offset, radius, operation, expected_empty, expected_volume) in [
             (3.0, 1.0, BooleanOperation::Intersect, true, 0.),
             (3.0, 1.0, BooleanOperation::Subtract, false, source_volume),
@@ -682,14 +697,14 @@ mod tests {
                 0.5,
                 BooleanOperation::Intersect,
                 false,
-                source_volume * 0.125,
+                inner_volume,
             ),
             (
                 0.0,
                 0.5,
                 BooleanOperation::Subtract,
                 false,
-                source_volume * 0.875,
+                source_volume - inner_volume,
             ),
         ] {
             let mut right = left.clone();

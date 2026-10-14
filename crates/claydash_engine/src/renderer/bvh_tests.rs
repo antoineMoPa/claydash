@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn nested_hard_assembly_splits_into_tight_primitive_leaves() {
+    let mut objects = vec![GpuObject::zeroed(); 19];
+    for child in &mut objects[..8] { child.meta[3] = 8; }
+    objects[8].meta[3] = 18;
+    for child in &mut objects[9..17] { child.meta[3] = 17; }
+    objects[17].meta[3] = 18;
+    objects[18].meta[3] = -1;
+    let bounds: Vec<_> = (0..19).map(|index| ObjectBound {
+        center: Vec3::new(index as f32 * 2.0, 0.0, 0.0),
+        half_extent: Vec3::splat(0.1), radius: 0.2, object_index: index as u32,
+    }).collect();
+    flatten_nested_hard_unions(&mut objects);
+    let mut components = boolean_component_bounds(&objects, &bounds);
+    assert_eq!(split_top_level_hard_unions(&mut objects, &[18].into_iter().collect(),
+        &bounds, &mut components), 1);
+    assert!(objects.iter().all(|object| object.meta[3] < 0));
+    for index in 0..objects.len() {
+        assert_eq!(components[index].unwrap().half_extent, bounds[index].half_extent);
+        assert_eq!(mark_component_evaluation(&mut objects, index, index), 1);
+    }
+}
+
+#[test]
 fn top_level_union_splits_nested_subtraction_into_independent_bvh_leaves() {
     let mut objects = vec![GpuObject::zeroed(); 11];
     objects[0].meta[3] = 2;

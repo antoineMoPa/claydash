@@ -64,6 +64,7 @@ impl Cage<'_> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn apply(
     scene: &[SdfObject],
     object: &SdfObject,
@@ -71,6 +72,10 @@ pub(super) fn apply(
     resolution: u32,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
+    apply_with_error(scene,object,mesh,resolution,0.032/resolution.max(8) as f32,cancel)
+}
+
+pub(super) fn apply_with_error(scene:&[SdfObject],object:&SdfObject,mesh:&mut Mesh,_resolution:u32,error:f32,cancel:&AtomicBool)->Result<(),String> {
     let mut ancestor = Some(object.uuid);
     let mut cage = None;
     for _ in 0..scene.len() {
@@ -101,20 +106,7 @@ pub(super) fn apply(
     if mesh.triangles.is_empty() {
         return Ok(());
     }
-    let (minimum, maximum) = mesh.positions.iter().fold(
-        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
-        |(min, max), point| {
-            let point = cage.inverse.transform_point3(*point);
-            (min.min(point), max.max(point))
-        },
-    );
-    let target = ((maximum - minimum).max_element() / resolution.max(8) as f32)
-        .min(
-            (cage.lattice.max - cage.lattice.min).min_element()
-                / (cage.lattice.resolution - 1) as f32
-                * 0.25,
-        )
-        .max(1e-5);
+    let target = error;
     refine(
         mesh,
         &cage,
@@ -189,9 +181,13 @@ fn refine(
                 check_cancel(cancel)?;
             }
             for (a, b) in [(a, b), (b, c), (c, a)] {
-                let pa = cage.inverse.transform_point3(mesh.positions[a as usize]);
-                let pb = cage.inverse.transform_point3(mesh.positions[b as usize]);
-                if pa.distance(pb) > target {
+                let pa=mesh.positions[a as usize];let pb=mesh.positions[b as usize];
+                let da=cage.deform(pa)?;let db=cage.deform(pb)?;
+                let split=[0.25,0.5,0.75].into_iter().any(|t| {
+                    let p=sheet_midpoint(object,matrix,pa.lerp(pb,t));
+                    cage.deform(p).map_or(true,|deformed|deformed.distance(da.lerp(db,t))>target)
+                });
+                if split {
                     midpoints.entry(edge(a, b)).or_insert(0);
                 }
             }

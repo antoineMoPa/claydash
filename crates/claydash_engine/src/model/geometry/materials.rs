@@ -221,6 +221,10 @@ pub struct Material {
     pub reflectivity: f32,
     pub refractive_index: f32,
     pub opacity: f32,
+    #[serde(default = "emission_white")]
+    pub emission_color: Vec3,
+    #[serde(default)]
+    pub emission_intensity: f32,
     #[serde(default)]
     pub wood: WoodSettings,
     #[serde(default)]
@@ -273,6 +277,8 @@ impl Default for Material {
             reflectivity: 0.04,
             refractive_index: 1.45,
             opacity: 1.0,
+            emission_color: Vec3::ONE,
+            emission_intensity: 0.0,
             wood: WoodSettings::default(),
             brick: BrickSettings::default(),
             fabric: FabricSettings::default(),
@@ -281,7 +287,13 @@ impl Default for Material {
     }
 }
 
+fn emission_white() -> Vec3 { Vec3::ONE }
+
 impl Material {
+    pub fn emits_light(self) -> bool {
+        self.emission_intensity > 0.0 && self.emission_color.max_element() > 0.0
+    }
+
     pub fn display_name(self) -> &'static str {
         match self.kind {
             MaterialKind::Wood => self.wood.species.label(),
@@ -362,5 +374,23 @@ impl Material {
             fabric: FabricSettings::preset(preset),
             ..Self::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod emission_tests {
+    use super::*;
+    #[test]
+    fn emission_round_trips_and_legacy_materials_stay_unlit() {
+        let material = Material { emission_color: Vec3::new(0.1, 0.7, 1.0), emission_intensity: 6.0, ..Default::default() };
+        let json = serde_json::to_value(material).unwrap();
+        assert_eq!(serde_json::from_value::<Material>(json.clone()).unwrap(), material);
+        let mut legacy = json;
+        legacy.as_object_mut().unwrap().remove("emission_color");
+        legacy.as_object_mut().unwrap().remove("emission_intensity");
+        let restored: Material = serde_json::from_value(legacy).unwrap();
+        assert!(!restored.emits_light());
+        assert_eq!(restored.emission_color, Vec3::ONE);
+        assert!(!Material { emission_color: Vec3::ZERO, emission_intensity: 10.0, ..Default::default() }.emits_light());
     }
 }

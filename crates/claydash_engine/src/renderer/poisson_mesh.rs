@@ -9,6 +9,7 @@ use wgpu::util::DeviceExt;
 pub mod geometry;
 pub mod glb;
 pub mod textured_glb;
+pub mod solid_glb;
 #[cfg(target_arch = "wasm32")]
 pub mod web_worker;
 

@@ -42,6 +42,30 @@ fn volume(mesh: &Mesh) -> f64 {
 }
 
 #[test]
+fn wheel_arch_samples_connect_locally_instead_of_forming_long_fans() {
+    let panel = SheetPanelParams {
+        size: Vec2::new(4.0, 2.0),
+        cuts: vec![SheetCut::Circle { center: Vec2::new(-1.0, -0.9), radius: 0.5 },
+                   SheetCut::Circle { center: Vec2::new(1.0, -0.9), radius: 0.5 }],
+        surface: Some(SheetSurface { heights: [0.0,0.0,0.0,0.0,0.04,0.04,0.04,0.04,0.04,0.04,0.04,0.04,0.0,0.0,0.0,0.0] }),
+        ..Default::default()
+    };
+    let mesh=export(&panel);
+    closed(&mesh);
+    let mut count=0;let mut slivers=0;
+    for face in &mesh.triangles {
+        let p=face.map(|i|mesh.positions[i as usize]);
+        // Exclude extrusion walls, whose thinness is intentional.
+        if (p[1]-p[0]).cross(p[2]-p[0]).z.abs()<1e-9 {continue;}
+        count+=1;
+        let lengths=[p[0].distance(p[1]),p[1].distance(p[2]),p[2].distance(p[0])];
+        if lengths.into_iter().fold(0.0,f32::max)/lengths.into_iter().fold(f32::INFINITY,f32::min)>8.0 {slivers+=1;}
+    }
+    assert!((slivers as f32 / count as f32) < 0.05,"{slivers}/{count} long thin faces");
+    assert!(mesh.triangles.len()<10_000,"{} triangles",mesh.triangles.len());
+}
+
+#[test]
 fn thin_blank_preserves_exact_thickness_and_stage() {
     let mut panel = SheetPanelParams {
         thickness: 0.00001,
@@ -262,12 +286,13 @@ fn parallel_bend_refinement_tracks_curvature_without_subdividing_flat_sheet() {
         DVec2::new(-1.0, 0.5),
     ];
     let mut faces = vec![[0, 1, 2], [0, 2, 3]];
-    let end = panel.bends[0].start + panel.bends[0].radius * panel.bends[0].angle;
+    let strips = panel.strips();
     refine(
         &mut material,
         &mut faces,
-        0.04,
-        Some(&[(0.4, end as f64)]),
+        &panel,
+        super::super::TessellationQuality::from_resolution(32),
+        Some(&strips),
         &AtomicBool::new(false),
     )
     .unwrap();

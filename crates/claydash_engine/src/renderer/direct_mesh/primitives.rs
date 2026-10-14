@@ -70,15 +70,21 @@ pub(super) fn build(
     resolution: u32,
     cancel: &AtomicBool,
 ) -> Result<Mesh, String> {
+    build_with_quality(scene, object, resolution,
+        super::TessellationQuality::from_resolution(resolution).local(scene, object), cancel)
+}
+
+pub(super) fn build_with_quality(scene: &[SdfObject], object: &SdfObject, resolution: u32,
+    quality: super::TessellationQuality, cancel: &AtomicBool) -> Result<Mesh, String> {
     check_cancel(cancel)?;
     let n = resolution.clamp(8, 256) as usize;
     let surface = match &object.params {
         SdfParams::SheetPanelParams(panel) => {
-            return sheet::build(panel, object.uuid, resolution, cancel)
+            return sheet::build_with_quality(panel, object.uuid, resolution, quality, cancel)
         }
         SdfParams::SphereParams(p) => {
             positive(p.radius, "Sphere radius")?;
-            sphere(p.radius, n)
+            sphere(p.radius, quality.circle_segments(p.radius))
         }
         SdfParams::BoxParams(p) => {
             if !p.box_q.is_finite() || p.box_q.min_element() <= 0.0 {
@@ -87,7 +93,7 @@ pub(super) fn build(
             rounded_box(
                 p.box_q,
                 p.corner_radius.max(0.0).min(p.box_q.min_element()),
-                n,
+                quality.circle_segments(p.corner_radius * 2.0).div_ceil(8).max(1),
             )
         }
         SdfParams::CylinderParams {
@@ -96,7 +102,7 @@ pub(super) fn build(
         } => {
             positive(*radius, "Cylinder radius")?;
             positive(*half_height, "Cylinder half height")?;
-            let outline = circle(*radius, n);
+            let outline = circle(*radius, quality.circle_segments(*radius));
             let mut surface = extrude(&outline, *half_height)?;
             for point in &mut surface.positions {
                 *point = Vec3::new(point.x, point.z, -point.y);
@@ -114,7 +120,7 @@ pub(super) fn build(
                         .into(),
                 );
             }
-            torus(*major_radius, *minor_radius, n)
+            torus(*major_radius, *minor_radius, quality.circle_segments(*major_radius + *minor_radius), quality.circle_segments(*minor_radius))
         }
         SdfParams::PolygonPrismParams(p) => {
             positive(p.half_depth, "Polygon half depth")?;
@@ -246,9 +252,8 @@ fn sphere(radius: f32, n: usize) -> Surface {
     }
     s
 }
-fn torus(major: f32, minor: f32, n: usize) -> Surface {
+fn torus(major: f32, minor: f32, n: usize, cross: usize) -> Surface {
     let mut s = Surface::default();
-    let cross = (n / 2).max(8);
     for i in 0..n {
         let u = std::f32::consts::TAU * i as f32 / n as f32;
         for j in 0..cross {
@@ -269,21 +274,28 @@ fn torus(major: f32, minor: f32, n: usize) -> Surface {
     s
 }
 fn rounded_box(extent: Vec3, radius: f32, n: usize) -> Surface {
-    let n = if radius > 0.0 { n } else { 1 };
+    // One quad covers each flat face; only the fillet/corner bands are sampled.
+    fn coordinates(extent: f32, radius: f32, steps: usize) -> Vec<f32> {
+        if radius == 0.0 { return vec![-extent, extent]; }
+        let inner = extent - radius;
+        let mut out = Vec::new();
+        for i in (0..=steps).rev() { out.push(-inner - radius * (std::f32::consts::FRAC_PI_4 * i as f32 / steps as f32).tan()); }
+        for i in 0..=steps { out.push(inner + radius * (std::f32::consts::FRAC_PI_4 * i as f32 / steps as f32).tan()); }
+        out.dedup(); out
+    }
+    let coords = [coordinates(extent.x, radius, n), coordinates(extent.y, radius, n), coordinates(extent.z, radius, n)];
     let mut s = Surface::default();
     let mut vertices = HashMap::new();
     for axis in 0..3 {
         for sign in [-1_i32, 1] {
-            let mut grid = vec![0; (n + 1) * (n + 1)];
-            for j in 0..=n {
-                for i in 0..=n {
-                    let mut key = [0_i32; 3];
-                    key[axis] = sign * n as i32;
-                    key[(axis + 1) % 3] = 2 * i as i32 - n as i32;
-                    key[(axis + 2) % 3] = 2 * j as i32 - n as i32;
+            let u = &coords[(axis + 1) % 3]; let v = &coords[(axis + 2) % 3];
+            let mut grid = vec![0; u.len() * v.len()];
+            for j in 0..v.len() {
+                for i in 0..u.len() {
+                    let mut p = Vec3::ZERO; p[axis] = sign as f32 * extent[axis];
+                    p[(axis + 1) % 3] = u[i]; p[(axis + 2) % 3] = v[j];
+                    let key = p.to_array().map(f32::to_bits);
                     let v = *vertices.entry(key).or_insert_with(|| {
-                        let p = Vec3::new(key[0] as f32, key[1] as f32, key[2] as f32) * extent
-                            / n as f32;
                         let inner = extent - Vec3::splat(radius);
                         let center = p.clamp(-inner, inner);
                         let delta = p - center;
@@ -293,15 +305,15 @@ fn rounded_box(extent: Vec3, radius: f32, n: usize) -> Surface {
                             p
                         })
                     });
-                    grid[j * (n + 1) + i] = v;
+                    grid[j * u.len() + i] = v;
                 }
             }
-            for j in 0..n {
-                for i in 0..n {
-                    let a = grid[j * (n + 1) + i];
-                    let b = grid[j * (n + 1) + i + 1];
-                    let c = grid[(j + 1) * (n + 1) + i];
-                    let d = grid[(j + 1) * (n + 1) + i + 1];
+            for j in 0..v.len()-1 {
+                for i in 0..u.len()-1 {
+                    let a = grid[j * u.len() + i];
+                    let b = grid[j * u.len() + i + 1];
+                    let c = grid[(j + 1) * u.len() + i];
+                    let d = grid[(j + 1) * u.len() + i + 1];
                     if sign > 0 {
                         s.quad(a, b, c, d);
                     } else {

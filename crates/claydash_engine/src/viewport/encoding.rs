@@ -28,6 +28,24 @@ impl Viewport {
             } else {
                 &targets.refined
             };
+            let emission_view = targets.bloom.as_ref().map(|bloom| {
+                if matches!(work, Work::Preview | Work::Relight { native: false }) {
+                    &bloom.preview
+                } else {
+                    &bloom.refined
+                }
+            });
+            let attachment = |view| wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            };
+            let attachments = [Some(attachment(view)), emission_view.map(attachment)];
+            let attachments = &attachments[..if emission_view.is_some() { 2 } else { 1 }];
             let depth_view = if matches!(work, Work::Preview | Work::Relight { native: false }) {
                 &targets.preview_depth
             } else {
@@ -107,13 +125,15 @@ impl Viewport {
                             }),
                             stencil_ops: None,
                         }),
-                        timestamp_writes: self.query_set.as_ref().map(|query_set| {
-                            wgpu::RenderPassTimestampWrites {
+                        timestamp_writes: self
+                            .query_set
+                            .as_ref()
+                            .filter(|_| targets.bloom.is_none())
+                            .map(|query_set| wgpu::RenderPassTimestampWrites {
                                 query_set,
                                 beginning_of_pass_write_index: Some(0),
                                 end_of_pass_write_index: None,
-                            }
-                        }),
+                            }),
                         ..Default::default()
                     });
                     if let Some(depth_pipeline) = hybrid.depth_pipeline {
@@ -132,30 +152,39 @@ impl Viewport {
                 {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("budgeted scene batch"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
+                        color_attachments: attachments,
                         timestamp_writes: self
                             .query_set
                             .as_ref()
-                            .filter(|_| hybrid.is_none() || matches!(work, Work::Relight { .. }))
+                            .filter(|_| {
+                                (hybrid.is_none() || matches!(work, Work::Relight { .. }))
+                                    && (deferred.is_none()
+                                        || matches!(work, Work::Relight { .. })
+                                        || targets.bloom.is_none())
+                            })
                             .map(|query_set| wgpu::RenderPassTimestampWrites {
                                 query_set,
                                 beginning_of_pass_write_index: (deferred.is_none()
                                     || matches!(work, Work::Relight { .. }))
                                 .then_some(0),
-                                end_of_pass_write_index: hybrid.is_none().then_some(1),
+                                end_of_pass_write_index: (hybrid.is_none()
+                                    && targets.bloom.is_none())
+                                .then_some(1),
                             }),
                         ..Default::default()
                     });
                     pass.set_pipeline(if deferred.is_some() {
-                        &self.deferred_pipeline
+                        if self.bloom.enabled {
+                            self.deferred_bloom_pipeline
+                                .as_ref()
+                                .expect("deferred bloom pipeline")
+                        } else if self.bloom.emission {
+                            self.deferred_emission_pipeline
+                                .as_ref()
+                                .expect("deferred emission pipeline")
+                        } else {
+                            &self.deferred_pipeline
+                        }
                     } else {
                         scene
                     });
@@ -177,15 +206,7 @@ impl Viewport {
                 if let Some(hybrid) = &hybrid {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Gaussian splat mesh batch"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
+                        color_attachments: attachments,
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                             view: depth_view,
                             depth_ops: Some(wgpu::Operations {
@@ -194,19 +215,23 @@ impl Viewport {
                             }),
                             stencil_ops: None,
                         }),
-                        timestamp_writes: self.query_set.as_ref().map(|query_set| {
-                            wgpu::RenderPassTimestampWrites {
+                        timestamp_writes: self
+                            .query_set
+                            .as_ref()
+                            .filter(|_| targets.bloom.is_none())
+                            .map(|query_set| wgpu::RenderPassTimestampWrites {
                                 query_set,
                                 beginning_of_pass_write_index: None,
-                                end_of_pass_write_index: Some(1),
-                            }
-                        }),
+                                end_of_pass_write_index: targets.bloom.is_none().then_some(1),
+                            }),
                         ..Default::default()
                     });
-                    pass.set_pipeline(hybrid.splat_pipeline);
-                    pass.set_bind_group(0, hybrid.splat_bind_group, &[]);
-                    pass.set_vertex_buffer(0, hybrid.splat_buffer.slice(..));
-                    draw_splat_work(&mut pass, shading_work, size, hybrid.splat_count);
+                    if hybrid.splat_count > 0 {
+                        pass.set_pipeline(hybrid.splat_pipeline);
+                        pass.set_bind_group(0, hybrid.splat_bind_group, &[]);
+                        pass.set_vertex_buffer(0, hybrid.splat_buffer.slice(..));
+                        draw_splat_work(&mut pass, shading_work, size, hybrid.splat_count);
+                    }
                     if hybrid.mesh_vertex_count > 0 {
                         pass.set_pipeline(hybrid.mesh_pipeline);
                         pass.set_bind_group(0, hybrid.mesh_bind_group, &[]);
@@ -233,6 +258,9 @@ impl Viewport {
         if work == Work::Cached {
             return None;
         }
+        if let Some(targets) = &targets.bloom {
+            self.bloom.encode(encoder, targets, self.query_set.as_ref());
+        }
         self.submitted_pixels = match work {
             Work::Preview => targets.preview_size[0] * targets.preview_size[1],
             Work::Refine { first, end } => (first..end)
@@ -249,7 +277,12 @@ impl Viewport {
             Work::Relight { .. } | Work::Cached => 0,
         };
         self.submitted_budget = match work {
-            Work::Refine { .. } | Work::Interleave { .. } => self.pixel_budget,
+            Work::Refine { .. } => self.pixel_budget,
+            // Sparse draws are capped at 16 phases. Compare their timing to
+            // that achievable batch, otherwise a small view looks like a
+            // final partial batch and its expensive samples are all ignored.
+            Work::Interleave { .. } => self.pixel_budget.min(
+                16 * size[0].div_ceil(16) * size[1].div_ceil(16)),
             Work::Preview => self.pixel_budget,
             Work::Relight { .. } | Work::Cached => 0,
         };
@@ -292,7 +325,6 @@ impl Viewport {
             queue.on_submitted_work_done(move || *timing.lock().unwrap() = Some(None));
         }
     }
-
 }
 
 fn draw_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2]) {

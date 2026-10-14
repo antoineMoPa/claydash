@@ -62,6 +62,10 @@ impl Renderer {
             self.splat_instances.len(),
             self.hybrid_enabled
         );
+        eprintln!("Traversal: {} scene BVH nodes, Boolean scratch {}",
+            self.node_count, if self.has_booleans {
+                self.boolean_pipeline.as_ref().map_or(1, |pipeline| pipeline.0)
+            } else { 1 });
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("SDF stress benchmark target"),
             size: wgpu::Extent3d {
@@ -242,6 +246,7 @@ impl Renderer {
         if std::env::args().any(|arg| arg == "--benchmark-progressive") {
             self.benchmark_viewport(camera, objects, selected, scene_versions, world, &target);
             let refined_image = self.benchmark_pixels(&target);
+            save_benchmark_image(&format!("{case}-refined"), &refined_image);
             let max_error = full_image
                 .iter()
                 .zip(&refined_image)
@@ -253,7 +258,6 @@ impl Renderer {
                 "refined viewport differs from full-resolution reference: max error {max_error}"
             );
             eprintln!("Refined image matches full-resolution reference (max channel error {max_error}/255)");
-            save_benchmark_image(&format!("{case}-refined"), &refined_image);
         }
     }
 
@@ -464,8 +468,18 @@ impl Renderer {
         let mut editing = Vec::new();
         let mut idle = Vec::new();
         let mut settled = false;
-        for frame in 0..(140 + self.config.width.div_ceil(32) * self.config.height.div_ceil(32)) {
+        let mut convergence_started = None;
+        // Exact refinement has 256 ordered sample phases, independent of the
+        // viewport's tile count. Completion callbacks and deliberate pauses
+        // can require many cached frames. Bound convergence by elapsed time,
+        // rather than a frame count that depends on the CPU's polling speed.
+        for frame in 0u32.. {
             let start = Instant::now();
+            if frame == 100 { convergence_started = Some(start); }
+            if let Some(started) = convergence_started {
+                assert!(started.elapsed() < Duration::from_secs(120),
+                    "viewport never converged to full resolution within 120 seconds");
+            }
             let angle = if frame < 60 {
                 (frame as f32 * 0.11).sin() * 0.3
             } else {

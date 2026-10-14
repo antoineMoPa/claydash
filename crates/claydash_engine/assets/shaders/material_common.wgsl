@@ -19,6 +19,12 @@ struct Surface {
     sheen: f32, fiber: vec3<f32>, figure: f32,
     tangent: vec3<f32>, anisotropy: f32, metal_response: bool,
 }
+override HAS_EMISSION: bool = true;
+fn material_emission(point: vec3<f32>, view: vec3<f32>, object: Object) -> vec3<f32> {
+    if !HAS_EMISSION { return vec3(0.0); }
+    let index = material_capture(point, view, object).index;
+    return material_params[material_headers[index].offset + 1u].yzw;
+}
 fn material_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: Object) -> Surface {
     let capture = material_capture(point, view, object);
     var material_object = object;

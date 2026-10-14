@@ -53919,7 +53919,13 @@
                 ],
                 "paint_roughness": 0.55,
                 "image_relief": 0.0
-              }
+              },
+              "emission_color": [
+                0.035,
+                0.87,
+                1.0
+              ],
+              "emission_intensity": 2.5
             },
             "material_id": null,
             "repetition": {
@@ -56020,7 +56026,13 @@
                 ],
                 "paint_roughness": 0.55,
                 "image_relief": 0.0
-              }
+              },
+              "emission_color": [
+                0.035,
+                0.87,
+                1.0
+              ],
+              "emission_intensity": 2.5
             },
             "material_id": null,
             "repetition": {
@@ -61163,7 +61175,13 @@
                 ],
                 "paint_roughness": 0.55,
                 "image_relief": 0.0
-              }
+              },
+              "emission_color": [
+                0.035,
+                0.87,
+                1.0
+              ],
+              "emission_intensity": 2.5
             },
             "material_id": null,
             "repetition": {
@@ -63264,7 +63282,13 @@
                 ],
                 "paint_roughness": 0.55,
                 "image_relief": 0.0
-              }
+              },
+              "emission_color": [
+                0.035,
+                0.87,
+                1.0
+              ],
+              "emission_intensity": 2.5
             },
             "material_id": null,
             "repetition": {
@@ -64833,6 +64857,16 @@
             }
           }
         ]
+      }
+    },
+    "world": {
+      "subtree": {},
+      "value": {
+        "World": {
+          "bloom_enabled": true,
+          "bloom_strength": 0.35,
+          "bloom_radius": 18.0
+        }
       }
     }
   },

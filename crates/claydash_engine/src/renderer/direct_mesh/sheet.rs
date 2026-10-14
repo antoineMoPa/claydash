@@ -7,6 +7,7 @@ use glam::DVec2;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
+mod triangulation;
 
 fn polygon(points: &[DVec2]) -> Polygon<f64> {
     Polygon::new(
@@ -27,12 +28,18 @@ fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn build(
     panel: &SheetPanelParams,
     owner: Uuid,
     resolution: u32,
     cancel: &AtomicBool,
 ) -> Result<Mesh, String> {
+    build_with_quality(panel, owner, resolution, super::TessellationQuality::from_resolution(resolution), cancel)
+}
+
+pub(super) fn build_with_quality(panel: &SheetPanelParams, owner: Uuid, _resolution: u32,
+    quality: super::TessellationQuality, cancel: &AtomicBool) -> Result<Mesh, String> {
     let mut budget = super::super::cooperative_work::WorkerBudget::new();
     check_cancel(cancel)?;
     panel.validate()?;
@@ -75,12 +82,13 @@ pub(super) fn build(
     let mut domain = MultiPolygon(vec![polygon(&outline)]);
     // Polygon booleans handle edge-crossing arches, overlapping holes, and
     // disconnected remaining islands with the same topology as interior holes.
-    let circle_segments = resolution.clamp(24, 256) as usize;
+
     if panel.stage != SheetStage::Blank {
         for cut in &panel.cuts {
             budget.checkpoint();
             check_cancel(cancel)?;
             if let SheetCut::Circle { center, radius } = cut {
+                let circle_segments = quality.circle_segments(*radius);
                 let center = center.as_dvec2();
                 let ring: Vec<_> = (0..circle_segments)
                     .map(|i| {
@@ -134,38 +142,9 @@ pub(super) fn build(
             faces.push(t);
         }
     }
+    triangulation::improve(&mut uv, &mut faces, true, cancel)?;
     if panel.stage == SheetStage::Formed && (panel.has_relief() || !panel.bends.is_empty()) {
-        let mut spacing = panel.size.max_element() as f64 / resolution.clamp(8, 256) as f64;
-        for bend in &panel.bends {
-            spacing = spacing.min(bend.radius as f64 * 0.2);
-        }
-        for relief in &panel.embosses {
-            let crate::model::SheetEmboss::Circle { transition, .. } = relief;
-            spacing = spacing.min(*transition as f64 / 3.0);
-        }
-        for path in &panel.path_embosses {
-            for station in &path.stations {
-                spacing = spacing.min(station.width as f64 / 3.0);
-            }
-        }
-        let curved_ranges = if !panel.has_relief() {
-            strips.as_ref().map(|strips| {
-                strips
-                    .iter()
-                    .filter(|strip| strip.radius != 0.0)
-                    .map(|strip| (strip.start as f64, strip.end as f64))
-                    .collect::<Vec<_>>()
-            })
-        } else {
-            None
-        };
-        refine(
-            &mut uv,
-            &mut faces,
-            spacing,
-            curved_ranges.as_deref(),
-            cancel,
-        )?;
+        refine(&mut uv, &mut faces, panel, quality, strips.as_deref(), cancel)?;
     }
     // Earcut can omit redundant collinear ring points. Compact before creating
     // the extrusion so every stored vertex belongs to its closed surface.
@@ -229,13 +208,14 @@ pub(super) fn build(
     Ok(Mesh::from_parts(positions, triangles, owners))
 }
 
-/// Split every long edge once per round, sharing the midpoint with all its
-/// incident faces. The subdivision templates introduce no T junctions.
+/// Split edges that miss the formed surface, sharing midpoint samples between
+/// incident faces. Reconnect their interiors without introducing T junctions.
 fn refine(
     points: &mut Vec<DVec2>,
     faces: &mut Vec<[u32; 3]>,
-    spacing: f64,
-    curved_ranges: Option<&[(f64, f64)]>,
+    panel: &SheetPanelParams,
+    quality: super::TessellationQuality,
+    strips: Option<&[crate::model::SheetStrip]>,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     let mut budget = super::super::cooperative_work::WorkerBudget::new();
@@ -244,27 +224,26 @@ fn refine(
         if faces.len() > 1_000_000 {
             return Err("sheet tessellation exceeds one million material faces; reduce mesh resolution or relief detail".into());
         }
+        // Reconnect adaptive samples instead of preserving the initial earcut fan.
+        // This also makes new diagonals participate in the surface-error check.
+        triangulation::improve(points, faces, false, cancel)?;
         let mut midpoints = BTreeMap::new();
         for (i, &[a, b, c]) in faces.iter().enumerate() {
             if i % 1024 == 0 {
                 budget.checkpoint();
                 check_cancel(cancel)?;
             }
+            let [pa, pb, pc] = [a,b,c].map(|i| points[i as usize]);
+            let feature_spacing=feature_spacing(panel,pa.min(pb).min(pc),pa.max(pb).max(pc));
+            let center = (pa + pb + pc) / 3.0;
+            let interior_error = [-panel.thickness*0.5, panel.thickness*0.5].into_iter().any(|depth| {
+                let map = |p| formed(panel, strips, p, depth);
+                map(center).distance((map(pa)+map(pb)+map(pc))/3.0) > quality.position_error
+            });
             for (a, b) in [(a, b), (b, c), (c, a)] {
                 let pa = points[a as usize];
                 let pb = points[b as usize];
-                // Parallel bends depend only on material X; Y is affine. Flat
-                // portions need no refinement, even when their triangles are long.
-                // Checking the entire edge interval catches edges crossing a bend
-                // with both endpoints outside it, including bend seam crossings.
-                let split = if let Some(ranges) = curved_ranges {
-                    (pa.x - pb.x).abs() > spacing
-                        && ranges
-                            .iter()
-                            .any(|&(start, end)| pa.x.max(pb.x) > start && pa.x.min(pb.x) < end)
-                } else {
-                    pa.distance_squared(pb) > spacing * spacing
-                };
+                let split = interior_error || feature_spacing.is_some_and(|spacing|pa.distance(pb)>spacing) || edge_needs_refinement(panel, strips, pa, pb, quality);
                 if split {
                     midpoints.entry(edge(a, b)).or_insert(0);
                 }
@@ -273,13 +252,27 @@ fn refine(
         if midpoints.is_empty() {
             return Ok(());
         }
+        let mut boundary_uses=BTreeMap::new();
+        for &[a,b,c] in faces.iter() { for (a,b) in [(a,b),(b,c),(c,a)] { *boundary_uses.entry(edge(a,b)).or_insert(0)+=1; } }
         for (index, (&(a, b), midpoint)) in midpoints.iter_mut().enumerate() {
             if index % 1024 == 0 {
                 budget.checkpoint();
                 check_cancel(cancel)?;
             }
             *midpoint = points.len() as u32;
-            points.push((points[a as usize] + points[b as usize]) * 0.5);
+            let pa=points[a as usize];let pb=points[b as usize];let mut point=(pa+pb)*0.5;
+            let straight=panel.cuts.iter().any(|cut| match cut {
+                SheetCut::Straight{from,to}=>{let from=from.as_dvec2();let d=to.as_dvec2()-from;d.perp_dot(pa-from).abs()<1e-10 && d.perp_dot(pb-from).abs()<1e-10}, _=>false
+            });
+            if boundary_uses.get(&edge(a,b))==Some(&1) && !straight {
+                for cut in &panel.cuts {if let SheetCut::Circle{center,radius}=cut {
+                    let center=center.as_dvec2();let r=*radius as f64;
+                    if (pa.distance(center)-r).abs()<1e-6 && (pb.distance(center)-r).abs()<1e-6 {
+                        let d=point-center;point=center+d*(r/d.length());break;
+                    }
+                }}
+            }
+            points.push(point);
         }
         let previous = std::mem::take(faces);
         for (index, [a, b, c]) in previous.into_iter().enumerate() {
@@ -305,6 +298,55 @@ fn refine(
         }
     }
     Err("sheet subdivision did not converge".into())
+}
+
+// Sampling alone can miss a small relief entirely inside a large initial triangle.
+// Only triangles intersecting its material support receive the feature-size guard.
+fn feature_spacing(panel:&SheetPanelParams,min:DVec2,max:DVec2)->Option<f64> {
+    let overlap=|lo:DVec2,hi:DVec2| min.x<=hi.x && max.x>=lo.x && min.y<=hi.y && max.y>=lo.y;
+    let mut spacing=f64::INFINITY;
+    for relief in &panel.embosses {let crate::model::SheetEmboss::Circle{center,radius,transition,..}=relief;
+        let center=center.as_dvec2();let span=DVec2::splat((*radius+*transition) as f64);
+        if overlap(center-span,center+span){spacing=spacing.min(*transition as f64/3.0);}
+    }
+    for path in &panel.path_embosses {for pair in path.stations.windows(2){
+        let a=pair[0].point.as_dvec2();let b=pair[1].point.as_dvec2();let width=pair[0].width.max(pair[1].width) as f64;
+        if overlap(a.min(b)-DVec2::splat(width),a.max(b)+DVec2::splat(width)) {spacing=spacing.min(pair[0].width.min(pair[1].width) as f64/3.0);}
+    }}
+    spacing.is_finite().then_some(spacing)
+}
+
+fn formed(panel: &SheetPanelParams, strips: Option<&[crate::model::SheetStrip]>, p: DVec2, depth: f32) -> glam::Vec3 {
+    let p = p.as_vec2().extend(depth);
+    match strips { Some(strips) => panel.form_point_with_strips(p, strips), None => panel.form_point(p) }
+}
+fn edge_needs_refinement(panel: &SheetPanelParams, strips: Option<&[crate::model::SheetStrip]>,
+    a: DVec2, b: DVec2, quality: super::TessellationQuality) -> bool {
+    for depth in [-panel.thickness*0.5, panel.thickness*0.5] {
+        let start=formed(panel,strips,a,depth); let end=formed(panel,strips,b,depth);
+        let mut previous=start; let mut direction=None;
+        for t in [0.125,0.25,0.5,0.75,0.875,1.0] {
+            let p=formed(panel,strips,a.lerp(b,t),depth);
+            if p.distance(start.lerp(end,t as f32)) > quality.position_error { return true; }
+            let d=p-previous;
+            if let Some(first) = direction {
+                let first: glam::Vec3=first;
+                let length=(d.length_squared()*first.length_squared()).sqrt();
+                if length>1e-12 && d.dot(first)<quality.normal_angle.cos()*length { return true; }
+            } else if d.length_squared()>1e-12 { direction=Some(d); }
+            previous=p;
+        }
+        // Include bend boundaries: a narrow bend can lie between uniform samples.
+        for bend in &panel.bends {
+            let axis=DVec2::new(bend.direction.cos() as f64,bend.direction.sin() as f64);
+            let da=a.dot(axis); let db=b.dot(axis);
+            for x in [bend.start, bend.start+bend.radius*bend.angle.abs()*0.5, bend.start+bend.radius*bend.angle.abs()] {
+                let t=(x as f64-da)/(db-da);
+                if t>0.0 && t<1.0 && formed(panel,strips,a.lerp(b,t),depth).distance(start.lerp(end,t as f32))>quality.position_error { return true; }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

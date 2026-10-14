@@ -2,10 +2,11 @@ use super::*;
 use wgpu::util::DeviceExt;
 
 pub(super) fn create_mesh_background_pipeline(device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+    layout: &wgpu::PipelineLayout, format: wgpu::TextureFormat, bloom: bool) -> wgpu::RenderPipeline {
     let source = [include_str!("../../assets/shaders/scene_abi.wgsl"),
         include_str!("../../assets/shaders/poisson_background.wgsl"),
         include_str!("../../assets/shaders/environment.wgsl")].join("\n");
+    let source = if bloom { super::bloom::scene_source(&format!("var<private> bloom_emission: vec3<f32>;\n{source}"), "fs_main") } else { source };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("mesh-only background"), source: wgpu::ShaderSource::Wgsl(source.into()),
     });
@@ -14,8 +15,7 @@ pub(super) fn create_mesh_background_pipeline(device: &wgpu::Device,
         vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"),
             buffers: &[], compilation_options: Default::default() },
         fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState { format, blend: None,
-                write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            targets: &super::bloom::scene_targets(format, bloom), compilation_options: Default::default() }),
         primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
         multiview_mask: None, cache: None,
     })

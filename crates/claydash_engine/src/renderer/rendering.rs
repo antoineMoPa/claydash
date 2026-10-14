@@ -174,6 +174,7 @@ impl Renderer {
         } else {
             crate::viewport::RenderingPath::Exact
         });
+        self.viewport.bloom_settings(&self.queue, world);
         let work = self.viewport.prepare(
             &self.device,
             view_key.clone(),

@@ -229,6 +229,9 @@ pub(super) fn scene_feature_constants(
     features: SceneShaderFeatures,
 ) -> Vec<(&'static str, f64)> {
     let mut constants = Vec::new();
+    if shader_source.contains("override HAS_EMISSION") {
+        constants.push(("HAS_EMISSION", f64::from(features.emission)));
+    }
     if shader_source.contains("override HAS_NEURAL_SDF") {
         constants.push(("HAS_NEURAL_SDF", f64::from(features.neural_sdf)));
     }
@@ -288,6 +291,11 @@ pub(super) fn create_scene_pipeline_for_materials(
         &specialized_shader_source(shader_source, capacity),
         features.neural_width,
     );
+    let source = if features.bloom {
+        super::bloom::scene_source(&source, "fs_main")
+    } else {
+        source
+    };
     let mut constants = Vec::new();
     if shader_source.contains("override USE_BVH") {
         constants.push(("USE_BVH", f64::from(use_bvh)));
@@ -321,11 +329,7 @@ pub(super) fn create_scene_pipeline_for_materials(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &super::bloom::scene_targets(format, features.bloom),
             compilation_options: wgpu::PipelineCompilationOptions {
                 constants: &constants,
                 ..Default::default()
@@ -403,6 +407,11 @@ pub(super) fn create_deferred_geometry_pipeline(
         &specialized_shader_source(shader_source, capacity),
         features.neural_width,
     );
+    let source = if features.emission {
+        super::bloom::geometry_source(&source)
+    } else {
+        source
+    };
     let mut constants = scene_feature_constants(shader_source, features);
     constants.extend_from_slice(&[
         ("USE_BVH", 1.0),

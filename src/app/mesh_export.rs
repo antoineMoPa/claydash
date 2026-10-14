@@ -129,7 +129,7 @@ impl App {
             let renderer = self.renderer.as_ref()?;
             let mesh = match options.mesh_kind(object) {
                 MeshKind::Smooth => renderer.cached_mesh_for_export(&source, *root, revision),
-                MeshKind::Direct { resolution } if resolution == object.poisson_mesh.resolution =>
+                MeshKind::Direct { resolution } if options.direct_error.is_none() && resolution == object.poisson_mesh.resolution =>
                     renderer.cached_direct_mesh_for_export(&source, *root, revision),
                 MeshKind::Direct { .. } | MeshKind::Voxels { .. } => None,
             };
@@ -176,8 +176,8 @@ impl App {
                         };
                         worker_progress.store(0, Ordering::Relaxed);
                         if let MeshKind::Direct { resolution } = options.mesh_kind(object) {
-                            crate::renderer::direct_mesh::build(&worker_source, *root, resolution,
-                                &worker_cancel, &worker_progress)
+                            crate::renderer::direct_mesh::build_with_error(&worker_source, *root, resolution,
+                                options.direct_error.unwrap_or(0.032/resolution as f32), &worker_cancel, &worker_progress)
                                 .map_err(|error| if worker_cancel.load(Ordering::Relaxed) {
                                     "Export cancelled".to_owned()
                                 } else { format!("{}: {error}", object.name) })?
@@ -218,14 +218,15 @@ impl App {
                 Ok(Ok(ExportResult::Meshes(objects))) => {
                     job.completed = None;
                     for (root, object, colors) in objects {
+                        let materials=if colors.is_none() { crate::renderer::poisson_mesh::solid_glb::materials_for_mesh(&job.source,&object.mesh).map(Arc::new) } else { None };
                         let mesh = Arc::new(object.mesh);
-                        let page_triangles = if colors.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
+                        let page_triangles = if colors.is_some() || materials.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
                         for first in (0..mesh.triangles.len()).step_by(page_triangles) {
                             let count = (mesh.triangles.len() - first).min(page_triangles);
                             job.pages.push(Page { name: object.name.clone(), root,
                                 mesh: mesh.clone(), first, count,
                                 size: if colors.is_some() { 64 } else { crate::renderer::poisson_mesh::textured_glb::page_size(count) },
-                                png: Vec::new(), colors: colors.clone() });
+                                png: Vec::new(), colors: colors.clone(), materials: materials.clone() });
                         }
                     }
                     if job.pages.is_empty() { finish = Some(Err("There are no meshes to export".into())); }
@@ -235,7 +236,7 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => finish = Some(Err("Export worker stopped unexpectedly".into())),
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
-        } else if job.texture_index < job.pages.len() && job.pages[job.texture_index].colors.is_some() {
+        } else if job.texture_index < job.pages.len() && (job.pages[job.texture_index].colors.is_some() || job.pages[job.texture_index].materials.is_some()) {
             job.texture_index += 1;
         } else if job.texture_index < job.pages.len() {
             *job.stage.lock().unwrap() = ExportStage::Baking { index: job.texture_index + 1,
