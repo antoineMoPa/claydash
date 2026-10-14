@@ -175,7 +175,8 @@ impl PackedModifiers {
 }
 
 pub(super) fn shader_source() -> String {
-    include_str!("../../assets/shaders/sdf.wgsl").replace(
+    include_str!("../../assets/shaders/sdf.wgsl").replace("// SHEET_MODULE",
+        include_str!("../../assets/shaders/sheet.wgsl")).replace(
         "// MODIFIER_MODULES",
         &[
             include_str!("../../assets/shaders/modifier_common.wgsl"),

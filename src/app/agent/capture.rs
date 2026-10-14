@@ -118,6 +118,35 @@ pub(super) fn orthographic_sheet(
     })
 }
 
+pub(super) fn capture_scene(
+    scene: &[SdfObject], requested: Option<&[uuid::Uuid]>, stage: Option<model::SheetStage>,
+) -> Result<Option<Vec<SdfObject>>, String> {
+    let mut objects = match requested {
+        Some(ids) => Some(capture_objects(scene, ids)?),
+        None if stage.is_some() => Some(scene.to_vec()),
+        None => None,
+    };
+    if let (Some(objects), Some(stage)) = (&mut objects, stage) {
+        // A recipe snapshot must use source geometry rather than saved formed captures.
+        let parents: HashMap<_, _> = objects.iter().map(|object| (object.uuid, object.boolean_parent)).collect();
+        let mut affected = HashSet::new();
+        for sheet in objects.iter().filter(|object| matches!(object.params, SdfParams::SheetPanelParams(_))) {
+            let mut cursor = Some(sheet.uuid);
+            while let Some(id) = cursor {
+                if !affected.insert(id) { break; }
+                cursor = parents.get(&id).copied().flatten();
+            }
+        }
+        for object in objects {
+            if affected.contains(&object.uuid) {
+                object.render_representation = GroupRenderRepresentation::ExactSdf;
+            }
+            if let SdfParams::SheetPanelParams(panel) = &mut object.params { panel.stage = stage; }
+        }
+    }
+    Ok(objects)
+}
+
 pub(super) fn capture_objects(
     scene: &[SdfObject],
     requested: &[uuid::Uuid],

@@ -3,6 +3,151 @@ use super::mcp::mcp_tools;
 use super::*;
 
 #[test]
+fn sheet_surface_path_and_persistent_seams_apply_and_reload_atomically() {
+    let mut app=App::new(); app.new_document();
+    let mut source:model::SheetPanelParams=serde_json::from_value(mcp::schema()["sheet_surface_example"]["SheetPanelParams"].clone()).unwrap();
+    let make=|params:model::SheetPanelParams,position| Action::CreateObject {
+        kind:PrimitiveKind::SheetPanel,name:None,position:Some(position),transform:None,
+        params:Some(SdfParams::SheetPanelParams(params)),render_representation:None,
+    };
+    let result=app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![make(source.clone(),[0.0,0.0,0.0])]}).unwrap();
+    let source_id:uuid::Uuid=serde_json::from_value(result["created_ids"][0].clone()).unwrap();
+    let target=model::SheetPanelParams {
+        size:source.size,thickness:source.thickness,
+        seam:Some(model::SheetSeam {source:source_id,source_edge:model::SheetEdge::MaxX,edge:model::SheetEdge::MinX,gap:0.005}),
+        ..Default::default()
+    };
+    let result=app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![make(target,[0.905,0.0,0.0])]}).unwrap();
+    let target_id:uuid::Uuid=serde_json::from_value(result["created_ids"][0].clone()).unwrap();
+    let check=|app:&App,source:&model::SheetPanelParams| {
+        let object=model::objects_ref(&app.tree).iter().find(|o|o.uuid==target_id).unwrap();
+        let SdfParams::SheetPanelParams(p)=&object.params else {panic!()};
+        for row in 0..4 {
+            let heights=&p.surface.as_ref().unwrap().heights;
+            let original=&source.surface.as_ref().unwrap().heights;
+            assert!((heights[row*4]-original[row*4+3]).abs()<1e-6);
+            assert!((heights[row*4+1]-heights[row*4]-(original[row*4+3]-original[row*4+2])).abs()<1e-6);
+        }
+    };
+    check(&app,&source);
+    // A compatible pair move is valid even when the target action comes first.
+    let source_transform=model::objects_ref(&app.tree).iter().find(|o|o.uuid==source_id).unwrap().transform;
+    let target_transform=model::objects_ref(&app.tree).iter().find(|o|o.uuid==target_id).unwrap().transform;
+    let mut moved_source=source_transform; moved_source.translation.x+=0.1;
+    let mut moved_target=target_transform; moved_target.translation.x+=0.1;
+    app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![
+        Action::SetObjectTransform {id:target_id,transform:moved_target},
+        Action::SetObjectTransform {id:source_id,transform:moved_source},
+    ]}).unwrap();
+    app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![
+        Action::SetObjectTransform {id:source_id,transform:source_transform},
+        Action::SetObjectTransform {id:target_id,transform:target_transform},
+    ]}).unwrap();
+    source.surface.as_mut().unwrap().heights[7]+=0.025;
+    app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![Action::SetObjectParams {id:source_id,params:SdfParams::SheetPanelParams(source.clone())}]}).unwrap();
+    check(&app,&source);
+    let before=serde_json::to_value(model::objects_ref(&app.tree)).unwrap(); let revision=app.scene_revision();
+    let mut invalid=source.clone(); invalid.path_embosses[0].stations[0].width=0.0;
+    let mut transform=model::objects_ref(&app.tree).iter().find(|o|o.uuid==target_id).unwrap().transform;
+    transform.translation.x+=0.01;
+    for actions in [
+        vec![Action::SetObjectParams {id:source_id,params:SdfParams::SheetPanelParams(invalid)}],
+        vec![Action::SetObjectTransform {id:target_id,transform}],
+        vec![Action::DeleteObject {id:source_id}],
+    ] {
+        assert!(app.agent_apply(ApplyArgs {expected_revision:None,actions}).is_err());
+        assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),before); assert_eq!(app.scene_revision(),revision);
+    }
+    for stage in [model::SheetStage::Blank,model::SheetStage::Cut,model::SheetStage::Formed] {
+        let snapshot=capture::capture_scene(model::objects_ref(&app.tree),Some(&[source_id,target_id]),Some(stage)).unwrap().unwrap();
+        for object in snapshot {let SdfParams::SheetPanelParams(p)=object.params else {panic!()};assert_eq!(p.stage,stage);assert!(p.surface.is_some());}
+    }
+    assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),before);
+    let saved=crate::document::serialize_scene(&app.tree).unwrap();
+    let mut restored=model::DataTree::default(); restored.set_tree("scene",crate::document::deserialize_scene(&saved).unwrap());
+    assert_eq!(serde_json::to_value(model::objects_ref(&restored)).unwrap(),before);
+    // Ordinary editor changes re-solve dependants and retain the last valid
+    // object state if a transform breaks the declared seam.
+    let mut objects=model::objects(&app.tree); let old=objects.clone();
+    objects.iter_mut().find(|o|o.uuid==target_id).unwrap().transform.translation.x+=0.1;
+    model::set_objects(&mut app.tree,objects); assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),serde_json::to_value(old).unwrap());
+    let variable_id=uuid::Uuid::new_v4();
+    let variables=model::SceneVariables {
+        vectors:vec![model::VectorVariable {id:variable_id,name:"Seam source position".into(),value:Vec3::ZERO,space:model::VariableSpace::Local}],
+        bindings:vec![model::VectorBinding {object:source_id,target:model::VectorBindingTarget::Position,variable:variable_id,offset:Vec3::ZERO}],
+        ..Default::default()
+    };
+    model::try_set_scene_variables(&mut app.tree,variables.clone()).unwrap();
+    let bound_before=serde_json::to_value(model::objects_ref(&app.tree)).unwrap();
+    let objects=model::objects(&app.tree).into_iter().filter(|o|o.uuid!=source_id).collect();
+    model::set_objects(&mut app.tree,objects);
+    assert_eq!(model::scene_variables(&app.tree),variables,"rejected deletion must retain bindings");
+    assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),bound_before);
+    let mut invalid_variables=variables.clone(); invalid_variables.vectors[0].value.x=0.1;
+    assert!(model::try_set_scene_variables(&mut app.tree,invalid_variables.clone()).is_err());
+    model::set_scene_variables(&mut app.tree,invalid_variables);
+    assert_eq!(model::scene_variables(&app.tree),variables);
+    assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),bound_before);
+    assert!(app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![Action::UpdateVectorVariable {
+        id:variable_id,name:None,value:Some(Vec3::X*0.1),space:None,
+    }]}).is_err());
+    assert_eq!(model::scene_variables(&app.tree),variables);
+    assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),bound_before);
+}
+
+#[test]
+fn sheet_mcp_edits_validate_atomically_and_capture_stages_do_not_mutate_scene() {
+    let mut app = App::new();
+    app.new_document();
+    let mut panel = model::SheetPanelParams::default();
+    panel.cuts.push(model::SheetCut::Circle { center: Vec2::ZERO, radius: 0.2 });
+    panel.embosses.push(model::SheetEmboss::Circle { center: Vec2::ZERO, radius: 0.2, depth: 0.025, transition: 0.1 });
+    panel.bends.push(model::SheetBend { direction: 0.0, start: -0.5, radius: 0.3, angle: 1.0 });
+    panel.bends.push(model::SheetBend { direction: std::f32::consts::FRAC_PI_2, start: -0.1, radius: 0.3, angle: -1.0 });
+    let result = app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::CreateObject {
+        kind: PrimitiveKind::SheetPanel, name: Some("Fender".into()),
+        position: None, transform: None, params: Some(SdfParams::SheetPanelParams(panel.clone())),
+        render_representation: None,
+    }] }).unwrap();
+    let id: uuid::Uuid = serde_json::from_value(result["created_ids"][0].clone()).unwrap();
+    let before = serde_json::to_value(model::objects_ref(&app.tree)).unwrap();
+    for stage in [model::SheetStage::Blank, model::SheetStage::Cut, model::SheetStage::Formed] {
+        let snapshot = capture::capture_scene(model::objects_ref(&app.tree), Some(&[id]), Some(stage)).unwrap().unwrap();
+        let SdfParams::SheetPanelParams(recipe) = &snapshot[0].params else { panic!("sheet recipe") };
+        assert_eq!(recipe.stage, stage);
+        assert_eq!(recipe.cuts.len(), 1);
+        assert_eq!(recipe.embosses.len(), 1);
+        assert_eq!(recipe.bends.len(), 2);
+        assert_eq!(recipe.bends[1].direction, std::f32::consts::FRAC_PI_2);
+    }
+    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    let mut invalid_emboss = panel.clone();
+    let model::SheetEmboss::Circle { transition, .. } = &mut invalid_emboss.embosses[0];
+    *transition = 0.0;
+    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectParams { id, params: SdfParams::SheetPanelParams(invalid_emboss) }] }).is_err());
+    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    let saved = crate::document::serialize_scene(&app.tree).unwrap();
+    let mut restored = model::DataTree::default();
+    restored.set_tree("scene", crate::document::deserialize_scene(&saved).unwrap());
+    assert_eq!(before, serde_json::to_value(model::objects_ref(&restored)).unwrap());
+    let schema = mcp::schema();
+    assert!(schema["sheet_emboss_example"]["SheetPanelParams"]["embosses"].is_array());
+    let mut singular = panel.clone();
+    singular.bends[1].angle = 1.0;
+    singular.bends[1].radius = 0.03;
+    let error = app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectParams { id, params: SdfParams::SheetPanelParams(singular) }] }).unwrap_err();
+    assert!(error.contains("radial clearance"));
+    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    let mut excessive = panel.clone();
+    excessive.bends.resize(5, panel.bends[0].clone());
+    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectParams { id, params: SdfParams::SheetPanelParams(excessive) }] }).is_err());
+    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    panel.bends[0].radius = 0.001;
+    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectParams { id, params: SdfParams::SheetPanelParams(panel) }] }).is_err());
+    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+}
+
+#[test]
 fn capture_modes_are_typed_and_override_legacy_refinement() {
     for op in ["CaptureViewport", "CaptureOrthographic"] {
         for (mode, expected) in [

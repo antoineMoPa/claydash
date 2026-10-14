@@ -59,6 +59,7 @@ pub enum Request {
 
 #[derive(Default, Deserialize)]
 pub struct CaptureViewportArgs {
+    pub sheet_stage: Option<model::SheetStage>,
     pub object_ids: Option<Vec<uuid::Uuid>>,
     pub refine: Option<bool>,
     pub mode: Option<CaptureMode>,
@@ -66,6 +67,7 @@ pub struct CaptureViewportArgs {
 
 #[derive(Default, Deserialize)]
 pub struct CaptureOrthographicArgs {
+    pub sheet_stage: Option<model::SheetStage>,
     pub object_ids: Option<Vec<uuid::Uuid>>,
     pub panel_size: Option<u32>,
     pub distance: Option<f32>,
@@ -488,7 +490,7 @@ impl App {
                     || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
                     Err("a render is already in progress".to_string())
                 } else {
-                    match args.object_ids.map(|ids| capture_objects(model::objects_ref(&self.tree), &ids)).transpose() {
+                    match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage) {
                         Ok(objects) => {
                             self.agent_capture = Some(AgentCapture {
                                 reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
@@ -516,7 +518,7 @@ impl App {
                     } else if !distance.is_finite() || !(0.1..=1000.0).contains(&distance) {
                         Err("distance must be between 0.1 and 1000".into())
                     } else {
-                        match args.object_ids.map(|ids| capture_objects(model::objects_ref(&self.tree), &ids)).transpose() {
+                        match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage) {
                             Ok(objects) => {
                                 self.agent_capture = Some(AgentCapture {
                                     reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
@@ -682,6 +684,7 @@ mod mcp;
 mod tests;
 mod validation;
 
+#[cfg(test)]
 use capture::capture_objects;
 pub use capture::{AgentCapture, CaptureView};
 use mcp::{run_mcp, schema};

@@ -14,6 +14,7 @@ pub(super) fn params_match(kind: PrimitiveKind, params: &SdfParams) -> bool {
             | (PrimitiveKind::BezierCurve, SdfParams::BezierCurveParams(_))
             | (PrimitiveKind::Text, SdfParams::TextParams(_))
             | (PrimitiveKind::Loft, SdfParams::LoftParams(_))
+            | (PrimitiveKind::SheetPanel, SdfParams::SheetPanelParams(_))
     )
 }
 
@@ -22,6 +23,8 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
     let assets = model::material_assets(tree);
     crate::renderer::validate_custom_materials(&assets)?;
     let objects = model::objects_ref(tree);
+    let mut seam_objects = objects.to_vec();
+    model::resolve_sheet_seams(&mut seam_objects)?;
     let mut ids = std::collections::HashSet::new();
     for object in objects {
         if object.material.kind == model::MaterialKind::Custom
@@ -53,6 +56,7 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
             sdf_consts::TYPE_POLYGON_PRISM => PrimitiveKind::PolygonPrism,
             sdf_consts::TYPE_BEZIER_CURVE => PrimitiveKind::BezierCurve,
             sdf_consts::TYPE_LOFT => PrimitiveKind::Loft,
+            sdf_consts::TYPE_SHEET_PANEL => PrimitiveKind::SheetPanel,
             sdf_consts::TYPE_TEXT => PrimitiveKind::Text,
             _ => return Err(format!("unknown primitive type on {}", object.uuid)),
         };
@@ -69,6 +73,9 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
             if !box_params.corner_radius.is_finite() || box_params.corner_radius < 0.0 {
                 return Err(format!("invalid box corner radius on {}", object.uuid));
             }
+        }
+        if let SdfParams::SheetPanelParams(panel) = &object.params {
+            panel.validate().map_err(|error| format!("{error} on {}", object.uuid))?;
         }
         if let SdfParams::LoftParams(loft) = &object.params {
             let profile_count = loft.profile_count();

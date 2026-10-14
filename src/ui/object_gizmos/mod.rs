@@ -403,6 +403,7 @@ impl UiState {
                     SdfParams::PolygonPrismParams(_)
                     | SdfParams::BezierCurveParams(_)
                     | SdfParams::LoftParams(_)
+                    | SdfParams::SheetPanelParams(_)
                     | SdfParams::TextParams(_) => {}
                 }
                 changed = true;

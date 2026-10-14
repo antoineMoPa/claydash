@@ -64,7 +64,7 @@ impl App {
                     created.push(object.uuid);
                     let mut objects = model::objects(&draft);
                     objects.push(object);
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                 }
                 Action::PutObject { object } => {
                     let mut objects = model::objects(&draft);
@@ -75,7 +75,7 @@ impl App {
                         return Err(format!("object {} does not exist", object.uuid));
                     };
                     *existing = object;
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                 }
                 Action::SetObjectName { id, name } => {
                     let mut objects = model::objects(&draft);
@@ -84,7 +84,7 @@ impl App {
                         .find(|object| object.uuid == id)
                         .ok_or_else(|| format!("object {id} does not exist"))?;
                     object.name = name;
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                 }
                 Action::SetObjectTransform { id, transform } => {
                     let mut objects = model::objects(&draft);
@@ -93,7 +93,7 @@ impl App {
                         .find(|object| object.uuid == id)
                         .ok_or_else(|| format!("object {id} does not exist"))?;
                     object.transform = transform;
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                 }
                 Action::SetObjectParams { id, params } => {
                     let mut objects = model::objects(&draft);
@@ -102,7 +102,7 @@ impl App {
                         .find(|object| object.uuid == id)
                         .ok_or_else(|| format!("object {id} does not exist"))?;
                     object.params = params;
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                 }
                 Action::SetRenderRepresentation {
                     id,
@@ -118,7 +118,7 @@ impl App {
                     if let Some(settings) = voxels {
                         object.voxels = settings;
                     }
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                 }
                 Action::SetBoolean {
                     id,
@@ -136,7 +136,7 @@ impl App {
                     if let Some(softness) = softness {
                         object.softness = softness;
                     }
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                 }
                 Action::DeleteObject { id } => {
                     let mut objects = model::objects(&draft);
@@ -148,7 +148,7 @@ impl App {
                     variables
                         .rigid_bindings
                         .retain(|binding| binding.object != id);
-                    model::set_scene_variables(&mut draft, variables);
+                    set_draft_variables(&mut draft, variables);
                     objects.retain(|object| object.uuid != id);
                     for object in &mut objects {
                         if object.boolean_parent == Some(id) {
@@ -156,7 +156,7 @@ impl App {
                             object.operation = BooleanOperation::Union;
                         }
                     }
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                     let selection = model::selected(&draft)
                         .into_iter()
                         .filter(|selected| *selected != id)
@@ -181,7 +181,7 @@ impl App {
                         space: space.unwrap_or(model::VariableSpace::World),
                     });
                     created_variables.push(id);
-                    model::set_scene_variables(&mut draft, variables);
+                    set_draft_variables(&mut draft, variables);
                 }
                 Action::UpdateVectorVariable {
                     id,
@@ -209,7 +209,7 @@ impl App {
                     if let Some(space) = space {
                         variable.space = space;
                     }
-                    model::set_scene_variables(&mut draft, variables);
+                    set_draft_variables(&mut draft, variables);
                 }
                 Action::DeleteVectorVariable { id } => {
                     let mut variables = model::scene_variables(&draft);
@@ -218,7 +218,7 @@ impl App {
                     }
                     variables.vectors.retain(|variable| variable.id != id);
                     model::remove_variable_references(&mut variables, id);
-                    model::set_scene_variables(&mut draft, variables);
+                    set_draft_variables(&mut draft, variables);
                 }
                 Action::SetVectorBinding {
                     object,
@@ -236,7 +236,7 @@ impl App {
                         variable,
                         offset,
                     });
-                    model::set_scene_variables(&mut draft, variables);
+                    set_draft_variables(&mut draft, variables);
                 }
                 Action::RemoveVectorBinding { object, target } => {
                     let mut variables = model::scene_variables(&draft);
@@ -247,7 +247,7 @@ impl App {
                     if old_len == variables.bindings.len() {
                         return Err(format!("binding on {object} {target:?} does not exist"));
                     }
-                    model::set_scene_variables(&mut draft, variables);
+                    set_draft_variables(&mut draft, variables);
                 }
                 Action::SetRigidBinding { binding } => {
                     let mut variables = model::scene_variables(&draft);
@@ -255,7 +255,7 @@ impl App {
                         .rigid_bindings
                         .retain(|old| old.object != binding.object || old.target != binding.target);
                     variables.rigid_bindings.push(binding);
-                    model::set_scene_variables(&mut draft, variables);
+                    set_draft_variables(&mut draft, variables);
                 }
                 Action::RemoveRigidBinding { object, target } => {
                     let mut variables = model::scene_variables(&draft);
@@ -268,10 +268,10 @@ impl App {
                             "rigid binding on {object} {target:?} does not exist"
                         ));
                     }
-                    model::set_scene_variables(&mut draft, variables);
+                    set_draft_variables(&mut draft, variables);
                 }
                 Action::SetVariables { variables } => {
-                    model::set_scene_variables(&mut draft, variables)
+                    set_draft_variables(&mut draft, variables)
                 }
                 Action::SetWorld { world } => {
                     draft.set_path("scene.world", model::ClaydashValue::World(world))
@@ -378,7 +378,7 @@ impl App {
                         object.material = asset.material;
                         object.color = asset.material.color;
                     }
-                    model::set_objects(&mut draft, objects);
+                    set_draft_objects(&mut draft, objects);
                 }
                 Action::SetCameras { cameras } => model::set_scene_cameras(&mut draft, cameras),
                 Action::SetAnimation { animation } => draft.set_path(
@@ -420,13 +420,21 @@ impl App {
                 }
             }
         }
+        let mut objects = model::objects(&draft);
+        model::apply_vector_bindings(&model::scene_variables(&draft), &mut objects);
+        model::resolve_sheet_seams(&mut objects)?;
+        set_draft_objects(&mut draft, objects);
         validate_scene(&draft)?;
         let variables = model::scene_variables(&draft);
         if !variables.bindings.is_empty()
             || !variables.rigid_bindings.is_empty()
             || !variables.four_bar_constraints.is_empty()
         {
-            model::set_scene_variables(&mut draft, variables);
+            set_draft_variables(&mut draft, variables);
+            let mut objects = model::objects(&draft);
+            model::apply_vector_bindings(&model::scene_variables(&draft), &mut objects);
+            model::resolve_sheet_seams(&mut objects)?;
+            set_draft_objects(&mut draft, objects);
             validate_scene(&draft)?;
         }
         if replace {
@@ -445,4 +453,18 @@ impl App {
             "created_post_process_pass_ids": created_post_process_passes}),
         )
     }
+}
+
+// MCP batches may create/transform both seam partners in either order. Resolve
+// dependencies once all actions exist, before the atomic transaction commits.
+fn set_draft_objects(tree: &mut model::DataTree, objects: Vec<SdfObject>) {
+    tree.set_path("scene.sdf_objects", model::ClaydashValue::VecSDFObject(objects));
+}
+
+fn set_draft_variables(tree: &mut model::DataTree, mut variables: model::SceneVariables) {
+    model::evaluate_derived_variables(&mut variables);
+    let mut objects=model::objects(tree);
+    model::apply_vector_bindings(&variables,&mut objects);
+    tree.set_path("scene.variables",model::ClaydashValue::SceneVariables(variables));
+    set_draft_objects(tree,objects);
 }

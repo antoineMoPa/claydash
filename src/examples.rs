@@ -15,6 +15,10 @@ pub const EXAMPLES: &[Example] = &[
         file: "concrete_tower.claydash",
     },
     Example {
+        title: "Flying sedan",
+        file: "flying_sedan.claydash",
+    },
+    Example {
         title: "Fusca",
         file: "fusca.claydash",
     },
@@ -141,6 +145,75 @@ pub fn open_guide() -> std::io::Result<()> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flying_sedan_preserves_native_panels_paint_and_assembly_on_save_open() {
+        use crate::model::{self, BooleanOperation, SdfParams, SheetCut, SheetStage};
+        let scene = crate::document::deserialize_scene(include_bytes!(
+            "../examples/flying_sedan.claydash"
+        ))
+        .expect("bundled flying sedan scene");
+        let mut tree = model::DataTree::default();
+        tree.set_tree("scene", scene);
+        let objects = model::objects(&tree);
+        assert_eq!(objects.len(), 349);
+        let roots: Vec<_> = objects.iter().filter(|o| o.boolean_parent.is_none()).collect();
+        assert_eq!(roots.len(), 1);
+        let root = roots[0];
+        assert_eq!(root.name, "Flying sedan");
+        assert_eq!(root.operation, BooleanOperation::Union);
+        assert_eq!(root.softness, 0.0);
+        let by_id: std::collections::HashMap<_, _> =
+            objects.iter().map(|o| (o.uuid, o)).collect();
+        assert_eq!(by_id.len(), objects.len());
+        for object in &objects {
+            let mut ancestor = object;
+            for _ in 0..objects.len() {
+                if ancestor.uuid == root.uuid {
+                    break;
+                }
+                ancestor = by_id[&ancestor.boolean_parent.expect("sedan part has a parent")];
+            }
+            assert_eq!(ancestor.uuid, root.uuid, "{} escaped the sedan", object.name);
+        }
+        let panels: Vec<_> = objects.iter().filter_map(|o| match &o.params {
+            SdfParams::SheetPanelParams(panel) => Some(panel),
+            _ => None,
+        }).collect();
+        assert_eq!(panels.len(), 184);
+        assert_eq!(panels.iter().filter(|p| !p.embosses.is_empty()).count(), 26);
+        assert_eq!(panels.iter().map(|p| p.embosses.len()).sum::<usize>(), 42);
+        assert!(panels.iter().all(|p| p.stage == SheetStage::Formed));
+        for side in ["RH", "LH"] {
+            let fender = objects.iter().find(|o| o.name == format!(
+                "{side} front fender | {side} front fender / nose stamped blank"
+            )).expect("native stamped front fender");
+            let SdfParams::SheetPanelParams(panel) = &fender.params else {
+                panic!("fender must remain a native sheet");
+            };
+            assert!(panel.cuts.iter().any(|cut| matches!(cut, SheetCut::Circle { .. })));
+            assert!(!panel.bends.is_empty());
+            assert!(!panel.embosses.is_empty());
+            assert_eq!(fender.material.color, glam::Vec4::new(0.115, 0.29, 0.52, 1.0));
+            assert_eq!(fender.color, fender.material.color);
+            assert_eq!(fender.material.roughness, 0.28);
+            assert_eq!(fender.material.metallic, 0.3);
+        }
+        let spindles: Vec<_> = objects.iter().filter(|o|
+            o.name.contains("hover fan / centre spindle")
+        ).collect();
+        assert_eq!(spindles.len(), 4);
+        assert!(spindles.iter().all(|o| (
+            model::object_world_matrix(&objects, o.uuid)
+                .transform_point3(glam::Vec3::ZERO).y - 0.4
+        ).abs() < 1e-6));
+        let bytes = crate::document::serialize_scene(&tree).unwrap();
+        let mut loaded = model::DataTree::default();
+        loaded.set_tree("scene", crate::document::deserialize_scene(&bytes).unwrap());
+        assert_eq!(serde_json::to_value(model::objects(&loaded)).unwrap(),
+            serde_json::to_value(&objects).unwrap(),
+            "Save/Open must retain every recipe, transform, material and parent link");
+    }
 
     #[test]
     fn suspension_keeps_rigid_arms_and_articulates_wheel_through_travel() {

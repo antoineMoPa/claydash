@@ -35,6 +35,7 @@ fn ambient_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 { return 1.0; }
         include_str!("../../assets/shaders/material_brick.wgsl"),
         include_str!("../../assets/shaders/material_diagnostic.wgsl"),
         custom,
+        include_str!("../../assets/shaders/sheet.wgsl"),
         include_str!("../../assets/shaders/poisson_owner.wgsl"),
         include_str!("../../assets/shaders/poisson_material.wgsl"),
     ].join("\n").replace("const POISSON_CSG_SIZE: u32 = 256u;",

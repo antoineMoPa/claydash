@@ -371,6 +371,8 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
         distance = bezier_extrusion_distance(local, object);
     } else if HAS_LOFTS && object.state.y == 7 {
         distance = loft_distance(local, object);
+    } else if object.state.y == 13 {
+        distance = sheet_distance(local, object);
     } else if HAS_TEXT && object.state.y == 11 {
         distance = text_distance(local, object);
     }

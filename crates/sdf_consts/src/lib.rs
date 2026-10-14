@@ -9,4 +9,6 @@ pub const TYPE_TORUS: i32 = 4;
 pub const TYPE_POLYGON_PRISM: i32 = 5;
 pub const TYPE_BEZIER_CURVE: i32 = 6;
 pub const TYPE_LOFT: i32 = 7;
+// 8–10 are GPU capture representations, 11 is text, 12 is neural SDF.
+pub const TYPE_SHEET_PANEL: i32 = 13;
 pub const TYPE_TEXT: i32 = 11;

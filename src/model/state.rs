@@ -337,6 +337,10 @@ pub fn set_objects(tree: &mut DataTree, mut value: Vec<SdfObject>) {
             .any(|object| object.uuid == binding.object)
             || value.iter().any(|object| object.uuid == binding.object)
     });
+    super::apply_vector_bindings(&variables, &mut value);
+    // Routine editor edits maintain every directed seam. Incompatible edits are
+    // rejected by retaining the previous objects; MCP has a fallible draft path.
+    if super::resolve_sheet_seams(&mut value).is_err() { return; }
     if variables.bindings.len() + variables.rigid_bindings.len() != previous_count
         || variables != super::scene_variables(tree)
     {
@@ -345,18 +349,18 @@ pub fn set_objects(tree: &mut DataTree, mut value: Vec<SdfObject>) {
             ClaydashValue::SceneVariables(variables.clone()),
         );
     }
-    super::apply_vector_bindings(&variables, &mut value);
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
 }
 
 pub fn set_objects_transient(tree: &mut DataTree, mut value: Vec<SdfObject>) {
     let mut variables = super::scene_variables(tree);
     super::evaluate_derived_variables(&mut variables);
+    super::apply_vector_bindings(&variables, &mut value);
+    if super::resolve_sheet_seams(&mut value).is_err() { return; }
     tree.set_transient_path(
         "scene.variables",
         ClaydashValue::SceneVariables(variables.clone()),
     );
-    super::apply_vector_bindings(&variables, &mut value);
     tree.set_transient_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
 }
 

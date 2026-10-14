@@ -39,6 +39,8 @@ pub fn raymarch_hit(origin: Vec3, direction: Vec3, objects: &[SdfObject]) -> Opt
     let march_factor = objects.iter().fold(0.8_f32, |factor, object| {
         if let crate::model::SdfParams::LoftParams(loft) = &object.params {
             factor.min(loft.march_factor())
+        } else if matches!(object.params, crate::model::SdfParams::SheetPanelParams(_)) {
+            factor.min(0.35)
         } else {
             factor
         }

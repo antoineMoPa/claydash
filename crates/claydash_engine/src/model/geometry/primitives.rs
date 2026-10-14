@@ -529,6 +529,7 @@ pub enum SdfParams {
     },
     PolygonPrismParams(PolygonPrismParams),
     LoftParams(LoftParams),
+    SheetPanelParams(super::SheetPanelParams),
     #[serde(alias = "BezierExtrusionParams")]
     BezierCurveParams(BezierCurveParams),
     TextParams(super::TextParams),

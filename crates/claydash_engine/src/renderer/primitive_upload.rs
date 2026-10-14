@@ -113,6 +113,68 @@ pub(super) fn pack_primitive(
                     * abs_scale.max_element(),
             )
         }
+        SdfParams::SheetPanelParams(ref panel) => {
+            let offset = polygon_points.len() as u32;
+            let directional = panel.uses_directional_forming() && panel.stage == crate::model::SheetStage::Formed;
+            let strips = if directional { Vec::new() } else { panel.strips() };
+            let count = if directional { panel.bends.len() } else { strips.len() };
+            let cuts = if panel.stage == crate::model::SheetStage::Blank { &[][..] } else { &panel.cuts[..] };
+            let mut push = |position| polygon_points.push(GpuPolygonPoint { position });
+            push(panel.size.to_array());
+            push([panel.thickness * 0.5, cuts.len() as f32]);
+            let embossed = panel.stage == crate::model::SheetStage::Formed;
+            push([if embossed { panel.embosses.len() as f32 } else { 0.0 }, if embossed { panel.emboss_metric_scale() } else { 1.0 }]);
+            push(if embossed { panel.embossed_depth_range().to_array() } else { [-panel.thickness * 0.5, panel.thickness * 0.5] });
+            if directional {
+                for (bend, scale) in panel.bends.iter().zip(panel.directional_scales()) {
+                    push([bend.start, bend.direction]);
+                    push([bend.radius, bend.angle]);
+                    push([scale, 0.0]);
+                }
+            }
+            for strip in &strips {
+                push([strip.start, strip.end]);
+                push(strip.origin.to_array());
+                push([strip.heading, strip.radius]);
+            }
+            for cut in cuts {
+                match cut {
+                    crate::model::SheetCut::Straight { from, to } => {
+                        push([0.0, 0.0]); push(from.to_array()); push(to.to_array());
+                    }
+                    crate::model::SheetCut::Circle { center, radius } => {
+                        push([1.0, *radius]); push(center.to_array()); push([0.0, 0.0]);
+                    }
+                }
+            }
+            if embossed {
+                for emboss in &panel.embosses {
+                    match emboss {
+                        crate::model::SheetEmboss::Circle { center, radius, depth, transition } => {
+                            push(center.to_array()); push([*radius, *depth]); push([*transition, 0.0]);
+                        }
+                    }
+                }
+            }
+            // Extension follows the unchanged legacy circular-relief records.
+            push([if embossed && panel.surface.is_some() { 1.0 } else { 0.0 }, if embossed { panel.path_embosses.len() as f32 } else { 0.0 }]);
+            if embossed {
+                if let Some(surface) = &panel.surface {
+                    for h in surface.heights.chunks_exact(2) { push([h[0], h[1]]); }
+                }
+                for path in &panel.path_embosses {
+                    push([path.stations.len() as f32, path.length()]);
+                    push([path.taper_start, path.taper_end]);
+                    for station in &path.stations {
+                        push(station.point.to_array());
+                        push([station.width, station.depth]);
+                        push([station.profile.blend_value(), 0.0]);
+                    }
+                }
+            }
+            ([f32::from_bits(offset), f32::from_bits(count as u32), if directional { 1.0 } else { 0.0 }, distance_scale],
+                panel.local_extent().length() * abs_scale.max_element())
+        }
         SdfParams::LoftParams(ref loft) => {
             let offset = polygon_points.len() as u32;
             let profile_count = loft.profile_count();
@@ -280,3 +342,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "sheet_gpu_tests.rs"]
+mod sheet_gpu_tests;

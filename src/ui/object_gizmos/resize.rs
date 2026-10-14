@@ -247,6 +247,7 @@ fn resize_handles_with_matrix_impl(
         SdfParams::PolygonPrismParams(_)
         | SdfParams::BezierCurveParams(_)
         | SdfParams::LoftParams(_)
+        | SdfParams::SheetPanelParams(_)
         | SdfParams::TextParams(_) => {}
     }
     handles

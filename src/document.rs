@@ -273,7 +273,9 @@ pub fn deserialize_scene(bytes: &[u8]) -> Result<ObservableKVTree<ClaydashValue>
                 repaired = true;
             }
         }
-        if repaired {
+        let has_seams = objects.iter().any(|o| matches!(&o.params, crate::model::SdfParams::SheetPanelParams(p) if p.seam.is_some()));
+        if has_seams { crate::model::resolve_sheet_seams(&mut objects)?; }
+        if repaired || has_seams {
             scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(objects));
         }
     }

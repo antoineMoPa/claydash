@@ -700,6 +700,7 @@ pub(super) fn params_editor(
                 .changed();
             depth_changed | softness_changed
         }
+        SdfParams::SheetPanelParams(_) => false,
         SdfParams::LoftParams(value) => {
             ui.label("Closed sections along local X");
             ui.weak("Profile Y/Z values scale with the section's half height and half width. Matching point numbers connect along the loft.");
