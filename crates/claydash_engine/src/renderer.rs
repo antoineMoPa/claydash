@@ -402,6 +402,7 @@ mod neural_sdf;
 pub use neural_jobs::NeuralStatus;
 mod hybrid_splats;
 pub mod poisson_mesh;
+pub mod direct_mesh;
 pub mod voxels;
 mod material_previews;
 mod modifier_gpu;

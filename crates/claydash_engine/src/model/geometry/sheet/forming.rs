@@ -283,31 +283,40 @@ impl SheetPanelParams {
         if self.stage != SheetStage::Formed {
             return point;
         }
-        point.z += self.emboss_height(point.truncate());
         if !self.uses_directional_forming() {
-            let strips = self.strips();
-            if let Some(strip) = strips
-                .iter()
-                .find(|strip| point.x <= strip.end)
-                .or_else(|| strips.last())
-            {
-                let neutral = strip.point(point.x);
-                let heading = strip.heading
-                    + if strip.radius == 0.0 {
-                        0.0
-                    } else {
-                        (point.x - strip.start) / strip.radius
-                    };
-                return Vec3::new(
-                    neutral.x - heading.sin() * point.z,
-                    point.y,
-                    neutral.y + heading.cos() * point.z,
-                );
-            }
-            return point;
+            return self.form_point_with_strips(point, &self.strips());
         }
+        point.z += self.emboss_height(point.truncate());
         for bend in &self.bends {
             point = bend.map_point(point);
+        }
+        point
+    }
+
+    /// Map a point with parallel strips cached from this panel's recipe/stage.
+    /// Batch tessellation callers avoid allocating the strip list per vertex.
+    pub(crate) fn form_point_with_strips(&self, mut point: Vec3, strips: &[SheetStrip]) -> Vec3 {
+        if self.stage != SheetStage::Formed {
+            return point;
+        }
+        point.z += self.emboss_height(point.truncate());
+        if let Some(strip) = strips
+            .iter()
+            .find(|strip| point.x <= strip.end)
+            .or_else(|| strips.last())
+        {
+            let neutral = strip.point(point.x);
+            let heading = strip.heading
+                + if strip.radius == 0.0 {
+                    0.0
+                } else {
+                    (point.x - strip.start) / strip.radius
+                };
+            return Vec3::new(
+                neutral.x - heading.sin() * point.z,
+                point.y,
+                neutral.y + heading.cos() * point.z,
+            );
         }
         point
     }

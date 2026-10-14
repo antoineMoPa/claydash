@@ -37,6 +37,9 @@ impl BuildProgress {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeshAlgorithm { Poisson, Direct }
+
 #[derive(Clone, Copy)]
 pub enum PoissonMeshAction {
     Build(uuid::Uuid),
@@ -60,6 +63,7 @@ struct Job {
     revision: i32,
     sample_resolution: u32,
     mesh_resolution: u32,
+    algorithm: MeshAlgorithm,
     baked_frame_inverse: glam::Mat4,
     work: Computation,
     #[cfg(not(target_arch = "wasm32"))]
@@ -75,6 +79,7 @@ struct Ready {
     revision: i32,
     sample_resolution: u32,
     mesh_resolution: u32,
+    algorithm: MeshAlgorithm,
     baked_frame_inverse: glam::Mat4,
     vertices: usize,
     triangles: usize,
@@ -124,7 +129,10 @@ pub(crate) fn mesh_at_pose(mut mesh: geometry::Mesh, pose: glam::Mat4,
 
 impl Renderer {
     pub fn cached_mesh_for_export(&self, source: &[SdfObject], root: uuid::Uuid, revision: i32) -> Option<CachedExportMesh> {
-        self.poisson_mesh.cached_for_export(source, root, revision)
+        self.poisson_mesh.cached_for_export(source, root, revision, MeshAlgorithm::Poisson)
+    }
+    pub fn cached_direct_mesh_for_export(&self, source: &[SdfObject], root: uuid::Uuid, revision: i32) -> Option<CachedExportMesh> {
+        self.poisson_mesh.cached_for_export(source, root, revision, MeshAlgorithm::Direct)
     }
 }
 
@@ -134,6 +142,7 @@ pub(super) struct PoissonMeshState {
     job: Option<Job>,
     ready: HashMap<uuid::Uuid, Ready>,
     failure: HashMap<uuid::Uuid, String>,
+    failure_sources: HashMap<uuid::Uuid, (i32, MeshAlgorithm)>,
 }
 
 impl PoissonMeshState {
@@ -145,19 +154,20 @@ impl PoissonMeshState {
         let cancel = work.cancel.clone();
         self.requests.push_back(root);
         self.job = Some(Job { root, component: root, revision: 1,
-            sample_resolution: 16, mesh_resolution: 16, baked_frame_inverse: glam::Mat4::IDENTITY,
+            sample_resolution: 16, mesh_resolution: 16, algorithm: MeshAlgorithm::Poisson, baked_frame_inverse: glam::Mat4::IDENTITY,
             work, receiver, invalidated: false });
         cancel
     }
 
     pub(super) fn is_busy(&self) -> bool { self.job.is_some() || !self.requests.is_empty() }
 
-    fn cached_for_export(&self, source: &[SdfObject], root: uuid::Uuid, revision: i32) -> Option<CachedExportMesh> {
+    fn cached_for_export(&self, source: &[SdfObject], root: uuid::Uuid, revision: i32, algorithm: MeshAlgorithm) -> Option<CachedExportMesh> {
         // A cached whole-component Boolean result cannot safely be sliced by
         // triangle owner to export an arbitrary selected child subtree.
         let object = source.iter().find(|object| object.uuid == root)?;
         let ready = self.ready.values().find(|ready| ready.component == root && ready.revision == revision
-            && ready.sample_resolution == object.gaussian_splats.resolution
+            && ready.algorithm == algorithm
+            && (algorithm == MeshAlgorithm::Direct || ready.sample_resolution == object.gaussian_splats.resolution)
             && ready.mesh_resolution == object.poisson_mesh.resolution)?;
         Some(CachedExportMesh { mesh: ready.mesh.clone(),
             pose: geometry::mesh_world_frame(source, root) * ready.baked_frame_inverse })
@@ -181,6 +191,7 @@ impl PoissonMeshState {
                     self.job.take(); // Drop signals cancellation; late results are discarded.
                 }
                 self.failure.remove(&root);
+                self.failure_sources.remove(&root);
                 false
             }
             PoissonMeshAction::Build(root) => {
@@ -188,6 +199,7 @@ impl PoissonMeshState {
                 self.requests.retain(|id| *id != root);
                 self.requests.push_back(root);
                 self.failure.remove(&root);
+                self.failure_sources.remove(&root);
                 // Scheduling background work does not change the displayed
                 // scene. Keep a ready mesh until its replacement arrives, and
                 // avoid re-uploading/recompiling the SDF fallback on a click.
@@ -210,7 +222,32 @@ impl PoissonMeshState {
         }
     }
 
+    pub fn reconcile_representation(&mut self, source: &[SdfObject]) -> bool {
+        let matches_mode = |root, algorithm| source.iter().find(|object| object.uuid == root)
+            .is_some_and(|object| match algorithm {
+                MeshAlgorithm::Poisson => object.render_representation == crate::model::GroupRenderRepresentation::PoissonMesh,
+                MeshAlgorithm::Direct => object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh,
+            });
+        self.failure.retain(|root, _| self.failure_sources.get(root)
+            .is_some_and(|(_, algorithm)| matches_mode(*root, *algorithm)));
+        self.failure_sources.retain(|root, _| self.failure.contains_key(root));
+        let count = self.ready.len();
+        self.ready.retain(|_, ready| matches_mode(ready.root, ready.algorithm));
+        let mut changed = count != self.ready.len();
+        if let Some(job) = self.job.as_mut().filter(|job| !job.invalidated && !matches_mode(job.root, job.algorithm)) {
+            job.invalidated = true;
+            job.work.cancel();
+            changed = true;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.job.as_ref().is_some_and(|job| job.invalidated) { self.job.take(); }
+        changed
+    }
+
     pub fn invalidate_for_revision(&mut self, revision: i32) -> bool {
+        self.failure.retain(|root, _| self.failure_sources.get(root)
+            .is_some_and(|(built_revision, _)| *built_revision == revision));
+        self.failure_sources.retain(|root, _| self.failure.contains_key(root));
         let original = self.ready.len();
         self.ready.retain(|_, ready| ready.revision == revision);
         if self.job.as_ref().is_some_and(|job| job.revision != revision && !job.invalidated) {
@@ -245,12 +282,13 @@ impl PoissonMeshState {
             if self.job.as_ref().is_some_and(|job| job.root == root) { self.job.take(); }
             self.ready.remove(&root);
             self.failure.remove(&root);
+            self.failure_sources.remove(&root);
         }
         active
     }
 
     pub fn start(&mut self, root: uuid::Uuid, component: uuid::Uuid, revision: i32,
-        source: Vec<SdfObject>, resolution: u32, mesh_resolution: u32,
+        source: Vec<SdfObject>, resolution: u32, mesh_resolution: u32, algorithm: MeshAlgorithm,
         cached: Option<Arc<super::box_depth_atlas::BoxDepthAtlas>>,
         #[cfg(target_arch = "wasm32")] context: &egui::Context,
     ) {
@@ -266,24 +304,28 @@ impl PoissonMeshState {
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
             super::cooperative_work::background_priority();
-            let result = std::panic::catch_unwind(|| geometry::build(&source, component, resolution,
-                mesh_resolution,
-                cached, &worker_progress, Some(&worker_cancel)))
-                .unwrap_or_else(|_| Err("Poisson reconstruction failed unexpectedly".into()));
+            let result = std::panic::catch_unwind(|| match algorithm {
+                MeshAlgorithm::Poisson => geometry::build(&source, component, resolution,
+                    mesh_resolution, cached, &worker_progress, Some(&worker_cancel)),
+                MeshAlgorithm::Direct => super::direct_mesh::build(&source, component, mesh_resolution,
+                    &worker_cancel, &worker_progress),
+            })
+                .unwrap_or_else(|_| Err("Mesh construction failed unexpectedly".into()));
             let _ = sender.send(result);
         });
         #[cfg(target_arch = "wasm32")]
-        let worker = match web_worker::WebJob::start(source, component, resolution, mesh_resolution, context) {
+        let worker = match web_worker::WebJob::start_with_algorithm(source, component, resolution, mesh_resolution, algorithm, context) {
             Ok(worker) => worker,
             Err(error) => {
                 self.failure.insert(root, error);
+                self.failure_sources.insert(root, (revision, algorithm));
                 return;
             }
         };
         #[cfg(target_arch = "wasm32")]
         let _ = cached;
         self.job = Some(Job { root, component, revision, sample_resolution: resolution,
-            mesh_resolution, baked_frame_inverse, work,
+            mesh_resolution, algorithm, baked_frame_inverse, work,
             #[cfg(not(target_arch = "wasm32"))]
             receiver,
             #[cfg(target_arch = "wasm32")]
@@ -301,7 +343,7 @@ impl PoissonMeshState {
         let result = match job.receiver.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return false,
-            Err(mpsc::TryRecvError::Disconnected) => Err("Poisson reconstruction worker stopped".into()),
+            Err(mpsc::TryRecvError::Disconnected) => Err("Mesh construction worker stopped".into()),
         };
         let job = self.job.take().unwrap();
         if job.invalidated || job.revision != revision { return false; }
@@ -310,15 +352,23 @@ impl PoissonMeshState {
                 self.ready.retain(|_, ready| ready.component != job.component);
                 self.ready.insert(job.root, Ready {
                     root: job.root, component: job.component, revision,
-                    sample_resolution: job.sample_resolution, mesh_resolution: job.mesh_resolution,
+                    sample_resolution: job.sample_resolution, mesh_resolution: job.mesh_resolution, algorithm: job.algorithm,
                     vertices: mesh.positions.len(),
                     baked_frame_inverse: job.baked_frame_inverse,
                     triangles: mesh.triangles.len(),
                     showing: true, mesh: Arc::new(mesh),
                 });
             }
-            Ok(_) => { self.failure.insert(job.root, "Poisson reconstruction returned an empty mesh".into()); }
-            Err(error) => { self.failure.insert(job.root, error); }
+            Ok(_) => {
+                if job.algorithm == MeshAlgorithm::Direct { self.ready.remove(&job.root); }
+                self.failure.insert(job.root, "Mesh construction returned an empty mesh".into());
+                self.failure_sources.insert(job.root, (revision, job.algorithm));
+            }
+            Err(error) => {
+                if job.algorithm == MeshAlgorithm::Direct { self.ready.remove(&job.root); }
+                self.failure.insert(job.root, error);
+                self.failure_sources.insert(job.root, (revision, job.algorithm));
+            }
         }
         true
     }
@@ -403,6 +453,162 @@ mod tests {
     }
 
     #[test]
+    fn direct_cache_keeps_algorithm_and_drops_on_mode_switch() {
+        let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+        let root = object.uuid;
+        let mut state = PoissonMeshState::default();
+        state.ready.insert(root, Ready {
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64,
+            algorithm: MeshAlgorithm::Direct, baked_frame_inverse: glam::Mat4::IDENTITY,
+            vertices: 3, triangles: 1, showing: true,
+            mesh: Arc::new(geometry::Mesh::from_parts(
+                vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root])),
+        });
+        assert!(state.cached_for_export(&[object.clone()], root, 7, MeshAlgorithm::Direct).is_some());
+        assert!(state.cached_for_export(&[object.clone()], root, 7, MeshAlgorithm::Poisson).is_none());
+        object.gaussian_splats.resolution = 96;
+        assert!(state.cached_for_export(&[object.clone()], root, 7, MeshAlgorithm::Direct).is_some(),
+            "direct construction does not depend on capture sample resolution");
+        assert!(!state.reconcile_representation(&[object.clone()]));
+        object.render_representation = crate::model::GroupRenderRepresentation::PoissonMesh;
+        assert!(state.reconcile_representation(&[object]));
+        assert!(state.shown_components().is_empty(), "a previous algorithm cannot hide the new source");
+    }
+
+    #[test]
+    fn direct_failure_restores_exact_source_and_invalidated_results_never_publish() {
+        let root = uuid::Uuid::new_v4();
+        let mut state = PoissonMeshState::default();
+        state.ready.insert(root, Ready {
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64,
+            algorithm: MeshAlgorithm::Direct, baked_frame_inverse: glam::Mat4::IDENTITY,
+            vertices: 3, triangles: 1, showing: true,
+            mesh: Arc::new(geometry::Mesh::from_parts(
+                vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root])),
+        });
+        let (sender, receiver) = mpsc::channel();
+        state.job = Some(Job {
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64,
+            algorithm: MeshAlgorithm::Direct, baked_frame_inverse: glam::Mat4::IDENTITY,
+            work: Computation::new(Stage::Sampling), receiver, invalidated: false,
+        });
+        sender.send(Err("unsupported source modifier".into())).unwrap();
+        assert!(state.poll(7));
+        assert!(state.shown_components().is_empty(), "failed direct builds show editable exact geometry");
+        assert_eq!(state.failure[&root], "unsupported source modifier");
+        let (sender, receiver) = mpsc::channel();
+        state.job = Some(Job {
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64,
+            algorithm: MeshAlgorithm::Direct, baked_frame_inverse: glam::Mat4::IDENTITY,
+            work: Computation::new(Stage::Sampling), receiver, invalidated: false,
+        });
+        assert!(state.invalidate_for_revision(8));
+        sender.send(Ok(geometry::Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root]))).unwrap();
+        assert!(!state.poll(8));
+        assert!(state.shown_components().is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter and native readback"]
+    fn direct_thin_cut_sheet_displays_mesh_and_preserves_the_hole() {
+        use crate::model::{GroupRenderRepresentation, PrimitiveKind, SdfParams, SheetPanelParams, SheetCut};
+        use std::time::{Duration, Instant};
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 192, height: 192, ..Default::default()
+        })).expect("headless direct mesh renderer");
+        let mut camera = Camera::new();
+        camera.position = Vec3::new(0.0, 0.0, 3.0);
+        camera.target = Vec3::ZERO;
+        let world = World { screen_space_ambient_occlusion: false, ..World::default() };
+        let background = renderer.render_offscreen(&camera, &[], world, &[], Duration::from_secs(60)).unwrap();
+        let mut sheet = SdfObject::create_kind(PrimitiveKind::SheetPanel);
+        sheet.render_representation = GroupRenderRepresentation::DirectMesh;
+        sheet.poisson_mesh.resolution = 16;
+        sheet.color = glam::Vec4::new(0.95, 0.1, 0.04, 1.0);
+        sheet.params = SdfParams::SheetPanelParams(SheetPanelParams {
+            size: glam::Vec2::new(1.4, 1.4), thickness: 0.002,
+            cuts: vec![SheetCut::Circle { center: glam::Vec2::ZERO, radius: 0.2 }],
+            ..Default::default()
+        });
+        let source = vec![sheet.clone()];
+        let context = egui::Context::default();
+        renderer.poisson_mesh.handle(PoissonMeshAction::Build(sheet.uuid));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            renderer.advance_computations(&camera, &source, &[], [1, 1], 0, world, &context, true);
+            assert!(renderer.poisson_mesh.failure.is_empty(), "direct sheet build failed");
+            if renderer.poisson_mesh.ready.contains_key(&sheet.uuid) { break; }
+            assert!(Instant::now() < deadline, "direct mesh optimization timeout");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(renderer.poisson_mesh.ready[&sheet.uuid].algorithm, MeshAlgorithm::Direct);
+        assert!(renderer.mesh_vertex_count > 0, "completed direct geometry uploads raster vertices");
+        let frame = renderer.render_offscreen(&camera, &source, world, &[], Duration::from_secs(60)).unwrap();
+        assert!(renderer.poisson_mesh.shown_components().contains(&sheet.uuid));
+        let center = (96 * 192 + 96) * 4;
+        assert!(frame.rgba[center..center + 3].iter().zip(&background.rgba[center..center + 3])
+            .all(|(a, b)| a.abs_diff(*b) <= 5), "the cut must expose the background");
+        let colored = frame.rgba.chunks_exact(4).filter(|pixel|
+            pixel[0] > pixel[1].saturating_add(20) && pixel[0] > pixel[2].saturating_add(20)).count();
+        assert!(colored > 200, "thin sheet raster mesh must remain visible: {colored}");
+        image::save_buffer("/tmp/claydash-direct-sheet-review.png", &frame.rgba,
+            frame.width, frame.height, image::ColorType::Rgba8).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter and native readback"]
+    fn direct_smooth_modifier_optimization_displays_closed_mesh() {
+        use crate::model::{GroupRenderRepresentation, PrimitiveKind};
+        use std::time::{Duration, Instant};
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 192, height: 192, ..Default::default()
+        })).expect("headless direct mesh renderer");
+        let mut camera = Camera::new();
+        camera.position = Vec3::new(0.0, 0.0, 3.0);
+        camera.target = Vec3::ZERO;
+        let world = World { screen_space_ambient_occlusion: false, ..World::default() };
+        let mut sheet = SdfObject::create_kind(PrimitiveKind::Sphere);
+        sheet.render_representation = GroupRenderRepresentation::DirectMesh;
+        sheet.poisson_mesh.resolution = 16;
+        sheet.softness = 0.12;
+        sheet.color = glam::Vec4::new(0.95, 0.1, 0.04, 1.0);
+        sheet.mirror = Some(crate::model::Mirror { axes: [true, false, false] });
+        sheet.repetition.enabled = true;
+        sheet.repetition.count = [2, 1, 1];
+        sheet.repetition.spacing = Vec3::new(0.7, 1.0, 1.0);
+        let mut cage = crate::model::Lattice::new(Vec3::splat(-2.0), Vec3::splat(2.0), 2);
+        cage.offsets.fill(Vec3::new(0.06, 0.08, 0.03));
+        sheet.lattice = Some(cage);
+        let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+        child.boolean_parent = Some(sheet.uuid);
+        child.transform.translation = Vec3::new(0.3, 0.1, 0.0);
+        child.transform.scale = Vec3::splat(0.65);
+        child.color = sheet.color;
+        let source = vec![sheet.clone(), child];
+        let context = egui::Context::default();
+        renderer.poisson_mesh.handle(PoissonMeshAction::Build(sheet.uuid));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            renderer.advance_computations(&camera, &source, &[], [1, 1], 0, world, &context, true);
+            assert!(renderer.poisson_mesh.failure.is_empty(), "direct smooth modifier build failed");
+            if renderer.poisson_mesh.ready.contains_key(&sheet.uuid) { break; }
+            assert!(Instant::now() < deadline, "direct mesh optimization timeout");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(renderer.poisson_mesh.ready[&sheet.uuid].algorithm, MeshAlgorithm::Direct);
+        assert!(renderer.mesh_vertex_count > 0, "completed direct geometry uploads raster vertices");
+        let frame = renderer.render_offscreen(&camera, &source, world, &[], Duration::from_secs(60)).unwrap();
+        assert!(renderer.poisson_mesh.shown_components().contains(&sheet.uuid));
+        let colored = frame.rgba.chunks_exact(4).filter(|pixel|
+            pixel[0] > pixel[1].saturating_add(20) && pixel[0] > pixel[2].saturating_add(20)).count();
+        assert!(colored > 200, "smooth modified raster mesh must remain visible: {colored}");
+        image::save_buffer("/tmp/claydash-direct-smooth-modifier-review.png", &frame.rgba,
+            frame.width, frame.height, image::ColorType::Rgba8).unwrap();
+    }
+
+    #[test]
     fn cached_mesh_selection_is_explicit() {
         let state = PoissonMeshState::default();
         assert!(state.shown_root().is_none());
@@ -413,7 +619,7 @@ mod tests {
         let mut state = PoissonMeshState::default();
         let root = uuid::Uuid::new_v4();
         state.ready.insert(root, Ready {
-            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, algorithm: MeshAlgorithm::Poisson, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
             showing: true,
             mesh: Arc::new(geometry::Mesh::from_parts(
                 vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root])),
@@ -431,7 +637,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         state.requests.clear();
         state.job = Some(Job {
-            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, algorithm: MeshAlgorithm::Poisson, baked_frame_inverse: glam::Mat4::IDENTITY,
             work: Computation::new(Stage::Sampling), receiver, invalidated: false,
         });
         state.job.as_ref().unwrap().work.progress.store(42, Ordering::Relaxed);
@@ -460,7 +666,7 @@ mod tests {
         let mut state = PoissonMeshState::default();
         let root = uuid::Uuid::new_v4();
         state.ready.insert(root, Ready {
-            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, algorithm: MeshAlgorithm::Poisson, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
             showing: true,
             mesh: Arc::new(geometry::Mesh::from_parts(
                 vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root])),
@@ -472,7 +678,7 @@ mod tests {
         let work = Computation::new(Stage::Sampling);
         let cancel = work.cancel.clone();
         state.job = Some(Job {
-            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, algorithm: MeshAlgorithm::Poisson, baked_frame_inverse: glam::Mat4::IDENTITY,
             work, receiver, invalidated: false,
         });
         assert!(!state.handle(PoissonMeshAction::Cancel(root)));
@@ -491,7 +697,7 @@ mod tests {
         let mut state = PoissonMeshState::default();
         let root = uuid::Uuid::new_v4();
         state.ready.insert(root, Ready {
-            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
+            root, component: root, revision: 7, sample_resolution: 64, mesh_resolution: 64, algorithm: MeshAlgorithm::Poisson, baked_frame_inverse: glam::Mat4::IDENTITY, vertices: 3, triangles: 1,
             showing: true,
             mesh: Arc::new(geometry::Mesh::from_parts(
                 vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![root])),
@@ -537,14 +743,14 @@ mod tests {
         let mesh = Arc::new(geometry::Mesh::from_parts(
             vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![id]));
         state.ready.insert(id, Ready {
-            root: id, component: id, revision: 7, sample_resolution: 64, mesh_resolution: 64, baked_frame_inverse: glam::Mat4::IDENTITY,
+            root: id, component: id, revision: 7, sample_resolution: 64, mesh_resolution: 64, algorithm: MeshAlgorithm::Poisson, baked_frame_inverse: glam::Mat4::IDENTITY,
             vertices: 3, triangles: 1, showing: false, mesh: mesh.clone(),
         });
         root.group_transform.translation = Vec3::new(3.0, 2.0, 1.0);
         root.group_transform.rotation = glam::Quat::from_rotation_y(0.7);
         root.group_transform.scale = Vec3::new(-2.0, 0.5, 1.5);
         let source = [root, child];
-        let cached = state.cached_for_export(&source, id, 7).unwrap();
+        let cached = state.cached_for_export(&source, id, 7, MeshAlgorithm::Poisson).unwrap();
         assert!(Arc::ptr_eq(&cached.mesh, &mesh), "export must share the already computed mesh");
         let result = cached.world_mesh(&std::sync::atomic::AtomicBool::new(false)).unwrap();
         let world = geometry::mesh_world_frame(&source, id);
@@ -554,13 +760,13 @@ mod tests {
         let face = result.triangle(0);
         assert!((face[1] - face[0]).cross(face[2] - face[0]).dot(result.normals[0][0]) > 0.0);
         assert!(cached.world_mesh(&std::sync::atomic::AtomicBool::new(true)).is_err());
-        assert!(state.cached_for_export(&source, id, 8).is_none());
-        assert!(state.cached_for_export(&source, child_id, 7).is_none());
+        assert!(state.cached_for_export(&source, id, 8, MeshAlgorithm::Poisson).is_none());
+        assert!(state.cached_for_export(&source, child_id, 7, MeshAlgorithm::Poisson).is_none());
         let mut changed = source.to_vec();
         changed[0].poisson_mesh.resolution = 96;
-        assert!(state.cached_for_export(&changed, id, 7).is_none());
+        assert!(state.cached_for_export(&changed, id, 7, MeshAlgorithm::Poisson).is_none());
         changed[0].poisson_mesh.resolution = 64;
         changed[0].gaussian_splats.resolution = 96;
-        assert!(state.cached_for_export(&changed, id, 7).is_none());
+        assert!(state.cached_for_export(&changed, id, 7, MeshAlgorithm::Poisson).is_none());
     }
 }

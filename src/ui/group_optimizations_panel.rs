@@ -76,8 +76,17 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
                     .speed(1.0));
             });
             poisson_mesh_controls(ui, target, scene[index].gaussian_splats.resolution,
-                scene[index].poisson_mesh.resolution);
+                scene[index].poisson_mesh.resolution, false);
         }
+    }
+    if selected_mode == crate::model::GroupRenderRepresentation::DirectMesh {
+        ui.horizontal(|ui| {
+            ui.label("Tessellation resolution").on_hover_text("Segments used to approximate curved source geometry. Mesh Boolean operations preserve source surfaces. Click Recompute to apply.");
+            ui.add(egui::DragValue::new(&mut scene[index].poisson_mesh.resolution)
+                .update_while_editing(false).range(crate::renderer::direct_mesh::MIN_RESOLUTION..=crate::renderer::direct_mesh::MAX_RESOLUTION));
+        });
+        poisson_mesh_controls(ui, target, scene[index].gaussian_splats.resolution,
+            scene[index].poisson_mesh.resolution, true);
     }
     if selected_mode == crate::model::GroupRenderRepresentation::Voxels {
         ui.horizontal(|ui| {
@@ -184,7 +193,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
             optimization_percent = Some(percent);
         }
     }
-    if selected_mode != crate::model::GroupRenderRepresentation::PoissonMesh {
+    if !matches!(selected_mode, crate::model::GroupRenderRepresentation::PoissonMesh | crate::model::GroupRenderRepresentation::DirectMesh) {
         optimization_remaining(ui, target, optimization_percent.is_some(),
             if selected_mode == crate::model::GroupRenderRepresentation::NeuralSdf { Stage::Training } else { Stage::Capture });
     }
@@ -242,12 +251,12 @@ fn voxel_controls(ui: &mut egui::Ui, target: uuid::Uuid, resolution: u32) {
 }
 
 fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid,
-    sample_resolution: u32, mesh_resolution: u32) {
+    sample_resolution: u32, mesh_resolution: u32, direct: bool) {
     use crate::renderer::poisson_mesh::{PoissonMeshAction, PoissonMeshStatus};
     let mut status = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, PoissonMeshStatus>>(
         egui::Id::new("poisson-mesh-status")))
         .and_then(|statuses| statuses.get(&target).cloned());
-    ui.label(RichText::new("Poisson mesh").strong());
+    ui.label(RichText::new(if direct { "Direct mesh" } else { "Poisson mesh" }).strong());
     let busy = matches!(status, Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing { .. }));
     let mut action = None;
     match computation_buttons(ui, busy) {
@@ -266,14 +275,14 @@ fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid,
     } else { Stage::Sampling };
     let active = matches!(status, Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing { .. }));
     match status {
-        Some(PoissonMeshStatus::Sampling { percent, .. }) => { ui.weak(format!("Capturing surface samples · {percent}%")); }
+        Some(PoissonMeshStatus::Sampling { percent, .. }) => { ui.weak(format!("{} · {percent}%", if direct { "Tessellating source" } else { "Capturing surface samples" })); }
         Some(PoissonMeshStatus::Reconstructing { percent }) => {
-            ui.weak(format!("Reconstructing mesh · {percent}%"));
+            ui.weak(format!("{} · {percent}%", if direct { "Finishing direct mesh" } else { "Reconstructing mesh" }));
         }
         Some(PoissonMeshStatus::Ready { vertices, triangles, showing, available,
             sample_resolution: built_sample_resolution, mesh_resolution: built_mesh_resolution }) => {
             ui.weak(format!("{vertices} vertices · {triangles} triangles"));
-            if sample_resolution != built_sample_resolution || mesh_resolution != built_mesh_resolution {
+            if (!direct && sample_resolution != built_sample_resolution) || mesh_resolution != built_mesh_resolution {
                 ui.weak("Settings changed. Click Recompute to apply.");
             }
             if available {
@@ -286,7 +295,7 @@ fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid,
             }
         }
         Some(PoissonMeshStatus::Failed(error)) => { ui.colored_label(ui.visuals().error_fg_color, error); }
-        None => { ui.weak("Click Recompute to build a mesh from the source surface."); }
+        None => { ui.weak(if direct { "Click Recompute to tessellate the editable source." } else { "Click Recompute to build a mesh from the source surface." }); }
     }
     optimization_remaining(ui, target, active, stage);
     if let Some(action) = action {

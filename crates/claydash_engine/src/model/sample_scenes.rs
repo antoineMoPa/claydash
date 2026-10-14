@@ -258,38 +258,51 @@ impl<'a> PreparedSubtreeSampler<'a> {
         }
         let mut lattices = Vec::new();
         let mut lattice_indices = std::collections::HashMap::new();
-        if scene[root].boolean_parent.is_none() {
-            for object in scene {
-                let mut ancestor = Some(object.uuid);
-                let mut belongs = false;
-                for _ in 0..scene.len() {
-                    let Some(id) = ancestor else { break };
-                    if id == scene[root].uuid {
-                        belongs = true;
-                        break;
-                    }
-                    ancestor = indices
-                        .get(&id)
-                        .and_then(|&index| scene[index].boolean_parent);
+        // Resolve source operands and external inlay hosts before preparing
+        // their nearest cages. Unrelated scene cages must not inflate bounds.
+        let mut sampled = vec![false; scene.len()];
+        let mut pending = vec![root];
+        while let Some(index) = pending.pop() {
+            if sampled[index] { continue; }
+            sampled[index] = true;
+            pending.extend(children[index].iter().copied());
+            if let Some(host) = scene[index].surface_inlay.and_then(|inlay| indices.get(&inlay.host)) {
+                pending.push(*host);
+            }
+        }
+        let mut relevant_cages = std::collections::HashSet::new();
+        for index in (0..scene.len()).filter(|&index| sampled[index]) {
+            let mut ancestor = Some(index);
+            for _ in 0..scene.len() {
+                let Some(candidate) = ancestor else { break };
+                let object = &scene[candidate];
+                if object.lattice.as_ref().is_some_and(|lattice| {
+                    let n = lattice.resolution as usize;
+                    (2..=9).contains(&n) && lattice.offsets.len() == n*n*n
+                }) {
+                    relevant_cages.insert(object.uuid);
+                    break;
                 }
-                if !belongs {
+                ancestor = object.boolean_parent.and_then(|id| indices.get(&id).copied());
+            }
+        }
+        for object in scene.iter().filter(|object| relevant_cages.contains(&object.uuid)) {
+            if let Some(lattice) = object.lattice.as_ref().filter(|lattice| {
+                let n = lattice.resolution as usize;
+                (2..=9).contains(&n) && lattice.offsets.len() == n * n * n
+            }) {
+                let offsets = lattice.effective_offsets();
+                if offsets.iter().all(|offset| *offset == Vec3::ZERO) {
                     continue;
                 }
-                if let Some(lattice) = object.lattice.as_ref().filter(|lattice| {
-                    let n = lattice.resolution as usize;
-                    (2..=9).contains(&n)
-                        && lattice.offsets.len() == n * n * n
-                        && lattice.offsets.iter().any(|offset| *offset != Vec3::ZERO)
-                }) {
-                    let forward = super::lattice_world_matrix(scene, object.uuid);
-                    lattice_indices.insert(object.uuid, lattices.len());
-                    lattices.push(PreparedSampleLattice {
-                        lattice,
-                        offsets: lattice.effective_offsets(),
-                        forward,
-                        inverse: forward.inverse(),
-                    });
-                }
+                let forward = super::lattice_world_matrix(scene, object.uuid);
+                lattice_indices.insert(object.uuid, lattices.len());
+                lattices.push(PreparedSampleLattice {
+                    lattice,
+                    offsets,
+                    forward,
+                    inverse: forward.inverse(),
+                });
             }
         }
         let nodes = scene

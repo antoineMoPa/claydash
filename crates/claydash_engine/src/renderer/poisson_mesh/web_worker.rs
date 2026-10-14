@@ -10,6 +10,8 @@ struct Request {
     root: uuid::Uuid,
     resolution: u32,
     mesh_resolution: u32,
+    #[serde(default)]
+    direct: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -48,7 +50,7 @@ thread_local! {
     static LAST_PROGRESS: Cell<Option<u32>> = const { Cell::new(None) };
 }
 
-pub(super) fn post_progress(percent: u32) {
+pub(crate) fn post_progress(percent: u32) {
     LAST_PROGRESS.with(|last| {
         if last.replace(Some(percent)) != Some(percent) { worker_progress(percent); }
     });
@@ -60,6 +62,10 @@ pub fn run_poisson_mesh_worker(request: &str) -> String {
     let result = serde_json::from_str::<Request>(request)
         .map_err(|error| error.to_string())
         .and_then(|request| {
+            if request.direct {
+                return super::super::direct_mesh::build(&request.source, request.root, request.mesh_resolution,
+                    &std::sync::atomic::AtomicBool::new(false), &AtomicU32::new(0));
+            }
             super::geometry::build(&request.source, request.root, request.resolution,
                 request.mesh_resolution,
                 None, &AtomicU32::new(0), None)
@@ -81,6 +87,11 @@ impl WebJob {
     pub fn start(source: Vec<SdfObject>, root: uuid::Uuid, resolution: u32,
         mesh_resolution: u32,
         context: &egui::Context) -> Result<Self, String> {
+        Self::start_with_algorithm(source, root, resolution, mesh_resolution, super::MeshAlgorithm::Poisson, context)
+    }
+
+    pub fn start_with_algorithm(source: Vec<SdfObject>, root: uuid::Uuid, resolution: u32,
+        mesh_resolution: u32, algorithm: super::MeshAlgorithm, context: &egui::Context) -> Result<Self, String> {
         let options = web_sys::WorkerOptions::new();
         options.set_type(web_sys::WorkerType::Module);
         let worker = web_sys::Worker::new_with_options("./poisson-mesh-worker.js", &options)
@@ -111,7 +122,7 @@ impl WebJob {
             error_context.request_repaint();
         }) as Box<dyn FnMut(_)>);
         worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-        let request = serde_json::to_string(&Request { source, root, resolution, mesh_resolution })
+        let request = serde_json::to_string(&Request { source, root, resolution, mesh_resolution, direct: algorithm == super::MeshAlgorithm::Direct })
             .map_err(|error| error.to_string())?;
         let job = Self { worker, result, progress, _onmessage: onmessage, _onerror: onerror };
         job.worker.post_message(&wasm_bindgen::JsValue::from_str(&request))

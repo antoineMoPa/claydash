@@ -6,12 +6,14 @@ pub(super) enum ExportGeometry {
     #[default]
     CurrentRepresentation,
     Smooth,
+    Direct,
     Voxels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MeshKind {
     Smooth,
+    Direct { resolution: u32 },
     Voxels { resolution: u32 },
 }
 
@@ -19,12 +21,14 @@ pub(super) enum MeshKind {
 pub(super) struct ExportOptions {
     pub geometry: ExportGeometry,
     pub voxel_resolution: u32,
+    pub direct_resolution: u32,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
         Self {
             geometry: ExportGeometry::default(),
+            direct_resolution: crate::renderer::direct_mesh::DEFAULT_RESOLUTION,
             voxel_resolution: crate::model::VoxelSettings::default().resolution,
         }
     }
@@ -33,6 +37,8 @@ impl Default for ExportOptions {
 impl ExportOptions {
     pub fn mesh_kind(self, object: &crate::model::SdfObject) -> MeshKind {
         match self.geometry {
+            ExportGeometry::Direct => MeshKind::Direct { resolution: self.direct_resolution },
+            ExportGeometry::CurrentRepresentation if object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh => MeshKind::Direct { resolution: object.poisson_mesh.resolution },
             ExportGeometry::Voxels => MeshKind::Voxels {
                 resolution: self.voxel_resolution,
             },
@@ -53,6 +59,7 @@ impl ExportGeometry {
     fn label(self) -> &'static str {
         match self {
             Self::CurrentRepresentation => "Current representation",
+            Self::Direct => "Direct mesh",
             Self::Smooth => "Smooth mesh (Poisson)",
             Self::Voxels => "Voxels",
         }
@@ -79,14 +86,21 @@ impl App {
                 ui.label("Geometry");
                 egui::ComboBox::from_id_salt("export-geometry")
                     .selected_text(options.geometry.label()).show_ui(ui, |ui| {
-                        for geometry in [ExportGeometry::CurrentRepresentation, ExportGeometry::Smooth, ExportGeometry::Voxels] {
+                        for geometry in [ExportGeometry::CurrentRepresentation, ExportGeometry::Smooth, ExportGeometry::Direct, ExportGeometry::Voxels] {
                             ui.selectable_value(&mut options.geometry, geometry, geometry.label());
                         }
                     });
             });
             match options.geometry {
                 ExportGeometry::CurrentRepresentation => {
-                    ui.label("Voxel objects keep their cubes and resolution. Other objects export as smooth meshes.");
+                    ui.label("Voxel and direct mesh objects keep their saved representation and resolution. Other objects export as smooth meshes.");
+                }
+                ExportGeometry::Direct => {
+                    ui.label("Tessellate source geometry, mesh smooth blends and spatial modifiers, and bake materials.");
+                    ui.horizontal(|ui| {
+                        ui.label("Tessellation resolution");
+                        ui.add(egui::DragValue::new(&mut options.direct_resolution).range(crate::renderer::direct_mesh::MIN_RESOLUTION..=crate::renderer::direct_mesh::MAX_RESOLUTION));
+                    });
                 }
                 ExportGeometry::Smooth => { ui.label("Reconstruct smooth surfaces with baked materials."); }
                 ExportGeometry::Voxels => {
@@ -130,6 +144,9 @@ mod tests {
         );
         options.geometry = ExportGeometry::Smooth;
         assert_eq!(options.mesh_kind(&object), MeshKind::Smooth);
+        options.geometry = ExportGeometry::Direct;
+        options.direct_resolution = 24;
+        assert_eq!(options.mesh_kind(&object), MeshKind::Direct { resolution: 24 });
         options.geometry = ExportGeometry::Voxels;
         options.voxel_resolution = 48;
         assert_eq!(
@@ -142,6 +159,8 @@ mod tests {
             object.render_representation = mode;
             let expected = if mode == crate::model::GroupRenderRepresentation::Voxels {
                 MeshKind::Voxels { resolution: 16 }
+            } else if mode == crate::model::GroupRenderRepresentation::DirectMesh {
+                MeshKind::Direct { resolution: object.poisson_mesh.resolution }
             } else {
                 MeshKind::Smooth
             };

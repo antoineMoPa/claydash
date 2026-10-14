@@ -11,6 +11,7 @@ pub enum GroupRenderRepresentation {
     SphereAccelerator,
     GaussianSplats,
     PoissonMesh,
+    DirectMesh,
     Voxels,
     NeuralSdf,
     #[default]
@@ -19,7 +20,7 @@ pub enum GroupRenderRepresentation {
 }
 
 impl GroupRenderRepresentation {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::ExactSdf,
         Self::BoxDepthAtlas,
         Self::SphereDepthAtlas,
@@ -27,6 +28,7 @@ impl GroupRenderRepresentation {
         Self::BoxAccelerator,
         Self::GaussianSplats,
         Self::PoissonMesh,
+        Self::DirectMesh,
         Self::Voxels,
         Self::NeuralSdf,
     ];
@@ -40,6 +42,7 @@ impl GroupRenderRepresentation {
             Self::SphereAccelerator => "Sphere accelerator",
             Self::GaussianSplats => "Gaussian splats",
             Self::PoissonMesh => "Mesh (Poisson)",
+            Self::DirectMesh => "Mesh (direct)",
             Self::Voxels => "Voxels",
             Self::NeuralSdf => "Neural SDF",
         }
@@ -63,6 +66,7 @@ impl GroupRenderRepresentation {
             }
             Self::Voxels => "Capture the containing Boolean component from six box faces and render tiny cubes. Bakes automatically.",
             Self::GaussianSplats => "Approximate the group with soft Gaussian surface samples.",
+            Self::DirectMesh => "Build a mesh from editable source geometry, including smooth blends and spatial modifiers. Click Recompute to build it.",
             Self::PoissonMesh => "Reconstruct a triangle mesh from implicit oriented surface samples. Click Recompute to build it.",
         }
     }
@@ -83,6 +87,7 @@ impl GroupRenderRepresentation {
                 "Fast splats for opaque solid scenes; other materials use ray composition. Thin details may be lost."
             }
             Self::Voxels => "A surface approximation; occluded surfaces and thin details may be missed.",
+            Self::DirectMesh => "Surface detail depends on the chosen resolution and available resources. If a build fails, the editable source stays visible.",
             Self::PoissonMesh => "Thin features may be lost at the chosen sampling resolution.",
         }
     }
@@ -650,4 +655,13 @@ mod voxel_settings_tests {
         }
         assert_eq!(serde_json::from_str::<GroupRenderRepresentation>("\"voxels\"").unwrap(), GroupRenderRepresentation::Voxels);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn direct_mesh_representation_persists_and_unknown_modes_keep_exact_source() {
+    let stored = serde_json::to_string(&GroupRenderRepresentation::DirectMesh).unwrap();
+    assert_eq!(stored, "\"direct_mesh\"");
+    assert_eq!(serde_json::from_str::<GroupRenderRepresentation>(&stored).unwrap(), GroupRenderRepresentation::DirectMesh);
+    assert_eq!(serde_json::from_str::<GroupRenderRepresentation>("\"future_mesh\"").unwrap(), GroupRenderRepresentation::ExactSdf);
 }

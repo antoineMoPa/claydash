@@ -41,6 +41,7 @@ pub enum Request {
     GetState,
     GetSchema,
     ListCommands,
+    EnableSlowSmoothBlends,
     Apply(ApplyArgs),
     ExecuteCommand { name: String },
     SetView(ViewArgs),
@@ -336,7 +337,7 @@ fn call_socket(request: Value) -> AgentResult {
 
 fn request_payload(op: &str, args: Value) -> Value {
     let args = match op {
-        "GetState" | "GetSchema" | "ListCommands" | "Undo" | "Redo" => Value::Null,
+        "GetState" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "Undo" | "Redo" => Value::Null,
         "CaptureViewport" | "CaptureOrthographic" if args.is_null() => json!({}),
         "Save" if args.is_null() => json!({}),
         _ => args,
@@ -454,6 +455,7 @@ impl App {
         let changes_view = matches!(
             &request,
             Request::Apply(_)
+                | Request::EnableSlowSmoothBlends
                 | Request::ExecuteCommand { .. }
                 | Request::SetView(_)
                 | Request::BuildPoissonMesh { .. }
@@ -468,17 +470,8 @@ impl App {
                 json!({"name": name, "title": command.title, "description": command.docs, "shortcut": command.shortcut})
             }).collect())),
             Request::Apply(args) => self.agent_apply(args),
-            Request::ExecuteCommand { name } => {
-                if !self.commands.commands.contains_key(&name) {
-                    Err(format!("unknown command: {name}"))
-                } else {
-                    commands::execute(&self.commands, &name, &mut self.tree);
-                    if name != "undo" && name != "redo" {
-                        self.tree.make_undo_redo_snapshot();
-                    }
-                    Ok(json!({"revision": self.scene_revision()}))
-                }
-            }
+            Request::EnableSlowSmoothBlends => self.agent_enable_slow_smooth_blends(),
+            Request::ExecuteCommand { name } => self.agent_execute_command(&name),
             Request::SetView(args) => self.agent_set_view(args),
             Request::BuildPoissonMesh { id } => self.agent_build_poisson_mesh(id),
             Request::GetPoissonMeshStatus { id } => self.agent_poisson_mesh_status(id),
@@ -573,8 +566,8 @@ impl App {
         if object.boolean_parent.is_some() {
             return Err("Poisson mesh cache requires a Boolean group root or standalone object".into());
         }
-        if object.render_representation != GroupRenderRepresentation::PoissonMesh {
-            return Err("set the root render_representation to PoissonMesh first".into());
+        if !matches!(object.render_representation, GroupRenderRepresentation::PoissonMesh | GroupRenderRepresentation::DirectMesh) {
+            return Err("set the root render_representation to PoissonMesh or DirectMesh first".into());
         }
         Ok(())
     }
@@ -605,11 +598,13 @@ impl App {
                 .and_then(|statuses| statuses.get(&id).cloned());
             (queued, status)
         });
+        let direct = model::objects_ref(&self.tree).iter().find(|object| object.uuid == id)
+            .is_some_and(|object| object.render_representation == GroupRenderRepresentation::DirectMesh);
         let mut result = if queued { json!({"status": "queued"}) } else {
             match status {
                 None => json!({"status": "not_built"}),
-                Some(PoissonMeshStatus::Sampling { percent }) => json!({"status": "sampling", "percent": percent}),
-                Some(PoissonMeshStatus::Reconstructing { percent }) => json!({"status": "reconstructing", "percent": percent}),
+                Some(PoissonMeshStatus::Sampling { percent }) => json!({"status": if direct { "tessellating" } else { "sampling" }, "percent": percent}),
+                Some(PoissonMeshStatus::Reconstructing { percent }) => json!({"status": if direct { "mesh_booleans" } else { "reconstructing" }, "percent": percent}),
                 Some(PoissonMeshStatus::Ready { vertices, triangles, showing, available, sample_resolution, mesh_resolution }) =>
                     json!({"status": "ready", "vertices": vertices, "triangles": triangles,
                         "showing": showing, "available": available, "sample_resolution": sample_resolution,
@@ -630,6 +625,12 @@ impl App {
         };
         Ok(json!({
             "revision": self.scene_revision(),
+            "modeling_policy": {
+                "slow_smooth_blends_enabled": smooth_blend_policy::enabled(&self.tree),
+                "guidance": smooth_blend_policy::GUIDANCE,
+                "enable_command": "enable_slow_smooth_blends",
+                "warning": smooth_blend_policy::WARNING,
+            },
             "viewport": self.renderer.as_ref().map(|renderer| renderer.viewport_diagnostics()),
             "full_material_rendering": commands::full_material_rendering(&self.tree),
             "outline_mode": commands::outline_mode(&self.tree),
@@ -683,6 +684,9 @@ mod mcp;
 #[cfg(test)]
 mod tests;
 mod validation;
+mod smooth_blend_policy;
+#[cfg(test)]
+mod smooth_blend_tests;
 
 #[cfg(test)]
 use capture::capture_objects;

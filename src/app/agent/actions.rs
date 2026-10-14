@@ -40,6 +40,7 @@ impl App {
                     render_representation,
                 } => {
                     let mut object = SdfObject::create_kind(kind);
+                    object.softness = 0.0;
                     object.material = model::picked_material(&draft);
                     object.material_id = model::picked_material_id(&draft);
                     object.color = object.material.color;
@@ -74,6 +75,12 @@ impl App {
                     else {
                         return Err(format!("object {} does not exist", object.uuid));
                     };
+                    if !smooth_blend_policy::enabled(&self.tree)
+                        && object.softness > 0.0
+                        && object.softness > existing.softness
+                    {
+                        return Err(smooth_blend_policy::disabled_error());
+                    }
                     *existing = object;
                     set_draft_objects(&mut draft, objects);
                 }
@@ -126,6 +133,11 @@ impl App {
                     operation,
                     softness,
                 } => {
+                    if !smooth_blend_policy::enabled(&self.tree)
+                        && softness.is_some_and(|value| value > 0.0)
+                    {
+                        return Err(smooth_blend_policy::disabled_error());
+                    }
                     let mut objects = model::objects(&draft);
                     let object = objects
                         .iter_mut()
@@ -416,6 +428,10 @@ impl App {
                     let bytes = serde_json::to_vec(&scene).map_err(|error| error.to_string())?;
                     let restored = document::deserialize_scene(&bytes)?;
                     draft.set_tree("scene", restored);
+                    draft.set_path(
+                        smooth_blend_policy::FLAG_PATH,
+                        model::ClaydashValue::Bool(smooth_blend_policy::enabled(&self.tree)),
+                    );
                     replace = true;
                 }
             }
@@ -437,6 +453,7 @@ impl App {
             set_draft_objects(&mut draft, objects);
             validate_scene(&draft)?;
         }
+        smooth_blend_policy::validate_transition(&self.tree, &draft)?;
         if replace {
             self.replace_scene(draft.get_tree("scene").ok_or("missing scene")?);
         } else {

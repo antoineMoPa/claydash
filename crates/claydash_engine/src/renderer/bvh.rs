@@ -157,7 +157,7 @@ pub(super) fn union_split_supports_source_mode(mode: crate::model::GroupRenderRe
     // Poisson selection does not replace geometry until a mesh is shown.
     // The caller separately excludes displayed mesh components. Keep the
     // exact fallback accelerated while uncomputed, hidden, or rebuilding.
-    matches!(mode, GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::PoissonMesh)
+    matches!(mode, GroupRenderRepresentation::ExactSdf | GroupRenderRepresentation::PoissonMesh | GroupRenderRepresentation::DirectMesh)
 }
 
 // A hard union at the scene root is the minimum of its own primitive and each

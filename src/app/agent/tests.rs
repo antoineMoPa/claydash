@@ -1207,7 +1207,9 @@ fn glb_export_mcp_validates_arguments_and_cancellation_survives_document_changes
     for patch in [json!({"path":"relative.glb"}), json!({"object_ids":[]}),
         json!({"object_ids":[uuid::Uuid::new_v4()]}), json!({"geometry":"unknown"}),
         json!({"geometry":"voxels","voxel_resolution":7}), json!({"geometry":"voxels","voxel_resolution":129}),
-        json!({"geometry":"smooth","voxel_resolution":32}), json!({"typo":true})] {
+        json!({"geometry":"smooth","voxel_resolution":32}),
+        json!({"geometry":"direct","direct_resolution":7}), json!({"geometry":"direct","direct_resolution":257}),
+        json!({"geometry":"smooth","direct_resolution":32}), json!({"typo":true})] {
         let mut args = json!({"path":path});
         args.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
         assert!(glb_request(&mut app, "ExportGlb", args).is_err());
@@ -1292,4 +1294,188 @@ fn glb_export_mcp_reports_write_failures_and_explicit_cancellation() {
     }
     assert!(!path.exists());
     assert_eq!(glb_request(&mut app, "GetGlbExportStatus", json!({"id":cancelled["id"]})).unwrap()["status"], "cancelled");
+}
+
+#[test]
+#[ignore = "requires a GPU adapter and native material readback"]
+fn direct_sheet_glb_export_bakes_materials_and_preserves_editable_source() {
+    let mut app = App::new();
+    let mut sheet = SdfObject::create_kind(PrimitiveKind::SheetPanel);
+    sheet.name = "Thin cut direct sheet".into();
+    let panel = model::SheetPanelParams {
+        size: Vec2::new(1.2, 0.8), thickness: 0.002,
+        cuts: vec![model::SheetCut::Circle { center: Vec2::ZERO, radius: 0.15 }],
+        ..Default::default()
+    };
+    sheet.params = SdfParams::SheetPanelParams(panel);
+    sheet.color = glam::Vec4::new(0.8, 0.1, 0.25, 1.0);
+    model::set_objects(&mut app.tree, vec![sheet.clone()]);
+    model::set_selected(&mut app.tree, vec![]);
+    let source = crate::document::serialize_scene(&app.tree).unwrap();
+    app.renderer = Some(pollster::block_on(crate::renderer::Renderer::new_headless(
+        crate::renderer::HeadlessOptions { width: 128, height: 128, ..Default::default() }
+    )).expect("headless direct export renderer"));
+    let path = std::env::temp_dir().join(format!("claydash-direct-sheet-export-{}.glb", uuid::Uuid::new_v4()));
+    let started = glb_request(&mut app, "ExportGlb", json!({
+        "path":path, "geometry":"direct", "direct_resolution":16, "object_ids":[sheet.uuid]
+    })).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    loop {
+        app.advance_background_computations();
+        let status = glb_request(&mut app, "GetGlbExportStatus", json!({"id":started["id"]})).unwrap();
+        if status["status"] != "running" {
+            assert_eq!(status["status"], "completed", "{status}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "direct GLB export timeout");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(crate::document::serialize_scene(&app.tree).unwrap(), source);
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(&bytes[..4], b"glTF");
+    let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let document: Value = serde_json::from_slice(&bytes[20..20 + length]).unwrap();
+    assert_eq!(document["nodes"][0]["name"], sheet.name);
+    assert!(!document["images"].as_array().unwrap().is_empty(), "direct meshes retain material texture baking");
+    for image in document["images"].as_array().unwrap() {
+        assert_eq!(image["mimeType"], "image/png");
+        assert!(image["bufferView"].is_number(), "material images are embedded in the GLB");
+    }
+    for mesh in document["meshes"].as_array().unwrap() {
+        for primitive in mesh["primitives"].as_array().unwrap() {
+            for attribute in ["POSITION", "NORMAL", "TEXCOORD_0"] {
+                let accessor = primitive["attributes"][attribute].as_u64().unwrap() as usize;
+                assert!(document["accessors"][accessor]["count"].as_u64().unwrap() > 0);
+            }
+            assert!(primitive["material"].is_number());
+            assert!(primitive["indices"].is_number());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter and native material readback"]
+fn direct_smooth_modified_glb_export_retains_materials_and_source() {
+    let mut app = App::new();
+    let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+    root.name = "Smooth repeated mirrored cage".into();
+    root.softness = 0.12;
+    root.mirror = Some(model::Mirror { axes: [true, false, false] });
+    root.repetition.enabled = true;
+    root.repetition.count = [2, 1, 1];
+    root.repetition.spacing = Vec3::new(1.1, 1.0, 1.0);
+    let mut cage = model::Lattice::new(Vec3::splat(-2.0), Vec3::splat(2.0), 2);
+    cage.offsets.fill(Vec3::new(0.04, 0.08, -0.02));
+    root.lattice = Some(cage);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+    child.boolean_parent = Some(root.uuid);
+    child.transform.translation = Vec3::new(0.3, 0.1, 0.0);
+    child.color = glam::Vec4::new(0.1, 0.6, 0.8, 1.0);
+    model::set_objects(&mut app.tree, vec![root.clone(), child]);
+    model::set_selected(&mut app.tree, vec![]);
+    let source = crate::document::serialize_scene(&app.tree).unwrap();
+    app.renderer = Some(pollster::block_on(crate::renderer::Renderer::new_headless(
+        crate::renderer::HeadlessOptions { width: 128, height: 128, ..Default::default() }
+    )).expect("headless direct modifier export renderer"));
+    let path = std::env::temp_dir().join(format!("claydash-direct-modifier-export-{}.glb", uuid::Uuid::new_v4()));
+    let started = glb_request(&mut app, "ExportGlb", json!({
+        "path":path, "geometry":"direct", "direct_resolution":16, "object_ids":[root.uuid]
+    })).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    loop {
+        app.advance_background_computations();
+        let status = glb_request(&mut app, "GetGlbExportStatus", json!({"id":started["id"]})).unwrap();
+        if status["status"] != "running" {
+            assert_eq!(status["status"], "completed", "{status}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "direct modifier GLB export timeout");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(crate::document::serialize_scene(&app.tree).unwrap(), source);
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(&bytes[..4], b"glTF");
+    let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let document: Value = serde_json::from_slice(&bytes[20..20 + length]).unwrap();
+    assert_eq!(document["nodes"][0]["name"], root.name);
+    assert!(!document["images"].as_array().unwrap().is_empty());
+    for mesh in document["meshes"].as_array().unwrap() {
+        for primitive in mesh["primitives"].as_array().unwrap() {
+            assert!(primitive["material"].is_number());
+            assert!(primitive["attributes"]["TEXCOORD_0"].is_number());
+            assert!(primitive["indices"].is_number());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter and native material readback"]
+fn direct_image_plane_glb_export_preserves_baked_alpha() {
+    let mut app = App::new();
+    let mut sheet = SdfObject::create_image_plane();
+    sheet.name = "Direct RGBA image plane".into();
+    let image = image::RgbaImage::from_raw(2, 2, vec![
+        255, 0, 0, 0, 0, 255, 0, 255,
+        0, 0, 255, 0, 255, 255, 0, 255,
+    ]).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    sheet.image_stencil = Some(model::ImageStencil::new("RGBA test".into(), png.into_inner(), true));
+    model::set_objects(&mut app.tree, vec![sheet.clone()]);
+    model::set_selected(&mut app.tree, vec![]);
+    let source = crate::document::serialize_scene(&app.tree).unwrap();
+    app.renderer = Some(pollster::block_on(crate::renderer::Renderer::new_headless(
+        crate::renderer::HeadlessOptions { width: 128, height: 128, ..Default::default() }
+    )).expect("headless direct export renderer"));
+    let path = std::env::temp_dir().join(format!("claydash-direct-image-export-{}.glb", uuid::Uuid::new_v4()));
+    let started = glb_request(&mut app, "ExportGlb", json!({
+        "path":path, "geometry":"direct", "direct_resolution":16, "object_ids":[sheet.uuid]
+    })).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    loop {
+        app.advance_background_computations();
+        let status = glb_request(&mut app, "GetGlbExportStatus", json!({"id":started["id"]})).unwrap();
+        if status["status"] != "running" {
+            assert_eq!(status["status"], "completed", "{status}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "direct GLB export timeout");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(crate::document::serialize_scene(&app.tree).unwrap(), source);
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(&bytes[..4], b"glTF");
+    let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let document: Value = serde_json::from_slice(&bytes[20..20 + length]).unwrap();
+    assert_eq!(document["nodes"][0]["name"], sheet.name);
+    assert!(!document["images"].as_array().unwrap().is_empty(), "direct meshes retain material texture baking");
+    assert!(document["materials"].as_array().unwrap().iter().any(|material| material["alphaMode"] == "BLEND"),
+        "image-plane alpha must select glTF blending");
+    let binary_offset = 20 + length + 8;
+    let mut found_transparency = false;
+    for image in document["images"].as_array().unwrap() {
+        let view = &document["bufferViews"][image["bufferView"].as_u64().unwrap() as usize];
+        let offset = binary_offset + view["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let size = view["byteLength"].as_u64().unwrap() as usize;
+        let baked = image::load_from_memory(&bytes[offset..offset + size]).unwrap().to_rgba8();
+        found_transparency |= baked.pixels().any(|pixel| pixel[3] < 255);
+    }
+    assert!(found_transparency, "embedded PNG must retain alpha");
+    for image in document["images"].as_array().unwrap() {
+        assert_eq!(image["mimeType"], "image/png");
+        assert!(image["bufferView"].is_number(), "material images are embedded in the GLB");
+    }
+    for mesh in document["meshes"].as_array().unwrap() {
+        for primitive in mesh["primitives"].as_array().unwrap() {
+            for attribute in ["POSITION", "NORMAL", "TEXCOORD_0"] {
+                let accessor = primitive["attributes"][attribute].as_u64().unwrap() as usize;
+                assert!(document["accessors"][accessor]["count"].as_u64().unwrap() > 0);
+            }
+            assert!(primitive["material"].is_number());
+            assert!(primitive["indices"].is_number());
+        }
+    }
 }

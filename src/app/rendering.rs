@@ -19,6 +19,8 @@ pub(super) fn mesh_source_revision(objects: &[crate::model::SdfObject]) -> i32 {
         id: uuid::Uuid,
         transform: Option<&'a crate::model::Transform>,
         group_transform: Option<&'a crate::model::Transform>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        direct_world_scale: Option<[glam::Vec3; 2]>,
         object_type: i32,
         params: &'a crate::model::SdfParams,
         operation: crate::model::BooleanOperation,
@@ -37,10 +39,22 @@ pub(super) fn mesh_source_revision(objects: &[crate::model::SdfObject]) -> i32 {
         .map(|object| object.uuid).collect();
     for object in objects {
         let independent_pose = independent.contains(&object.uuid);
+        // Native smooth radii and inlay shell widths are measured in world
+        // units. Their direct field mesh changes shape under global scaling,
+        // even when a rigid move can still reuse the local cached vertices.
+        let direct_world_scale = (independent_pose
+            && object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh
+            && objects.iter().any(|member| {
+                (member.surface_inlay.is_some() || (member.softness > 0.0
+                    && objects.iter().any(|child| child.boolean_parent == Some(member.uuid))))
+                    && mesh_component_contains(objects, object.uuid, member.uuid)
+            }))
+            .then_some([object.transform.scale, object.group_transform.scale]);
         let geometry = Geometry {
             id: object.uuid, transform: (!independent_pose
                 || !crate::renderer::poisson_mesh::geometry::mesh_uses_object_pose(objects, object.uuid)).then_some(&object.transform),
             group_transform: (!independent_pose).then_some(&object.group_transform),
+            direct_world_scale,
             object_type: object.object_type, params: &object.params,
             operation: object.operation, boolean_parent: object.boolean_parent,
             softness: object.softness, repetition: &object.repetition,
@@ -51,6 +65,16 @@ pub(super) fn mesh_source_revision(objects: &[crate::model::SdfObject]) -> i32 {
             .hash(&mut hasher);
     }
     hasher.finish() as i32
+}
+
+fn mesh_component_contains(objects: &[crate::model::SdfObject], root: uuid::Uuid, member: uuid::Uuid) -> bool {
+    let mut current = Some(member);
+    for _ in 0..objects.len() {
+        let Some(id) = current else { return false };
+        if id == root { return true; }
+        current = objects.iter().find(|object| object.uuid == id).and_then(|object| object.boolean_parent);
+    }
+    false
 }
 
 #[cfg(test)]
@@ -123,6 +147,56 @@ fn standalone_mesh_pose_reuses_shape_but_external_references_do_not() {
     let original = mesh_source_revision(&scene);
     scene[0].transform.translation.x += 1.0;
     assert_ne!(mesh_source_revision(&scene), original, "external inlay geometry depends on the relative pose");
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn direct_world_distance_modifiers_rebuild_on_scale_but_reuse_rigid_pose() {
+    for inlay in [false, true] {
+        let mut root = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        root.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+        root.softness = if inlay { 0.0 } else { 0.12 };
+        let mut child = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        child.boolean_parent = Some(root.uuid);
+        if inlay {
+            let mut host = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+            host.boolean_parent = Some(root.uuid);
+            child.surface_inlay = Some(crate::model::SurfaceInlay {
+                host: host.uuid, offset: 0.02, thickness: 0.03,
+            });
+            let mut objects = vec![root.clone(), child, host];
+            let revision = mesh_source_revision(&objects);
+            objects[0].group_transform.translation = glam::Vec3::new(2.0, -3.0, 4.0);
+            objects[0].group_transform.rotation = glam::Quat::from_rotation_y(0.8);
+            assert_eq!(mesh_source_revision(&objects), revision);
+            objects[0].group_transform.scale = glam::Vec3::splat(1.5);
+            assert_ne!(mesh_source_revision(&objects), revision, "world inlay shell width changes under global scale");
+        } else {
+            let mut objects = vec![root.clone(), child];
+            let revision = mesh_source_revision(&objects);
+            objects[0].group_transform.translation = glam::Vec3::new(2.0, -3.0, 4.0);
+            objects[0].group_transform.rotation = glam::Quat::from_rotation_y(0.8);
+            assert_eq!(mesh_source_revision(&objects), revision);
+            objects[0].group_transform.scale = glam::Vec3::new(1.2, 0.7, 2.0);
+            assert_ne!(mesh_source_revision(&objects), revision, "world blend radius changes under global scale");
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn direct_hard_geometry_and_poisson_still_reuse_global_scale() {
+    for representation in [crate::model::GroupRenderRepresentation::DirectMesh, crate::model::GroupRenderRepresentation::PoissonMesh] {
+        let mut root = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        root.render_representation = representation;
+        root.softness = 0.0;
+        let mut child = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        child.boolean_parent = Some(root.uuid);
+        let mut objects = vec![root, child];
+        let revision = mesh_source_revision(&objects);
+        objects[0].group_transform.scale = glam::Vec3::new(1.2, 0.7, 2.0);
+        assert_eq!(mesh_source_revision(&objects), revision);
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

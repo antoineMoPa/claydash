@@ -18,6 +18,7 @@ impl Renderer {
             for action in actions {
                 mesh_changed |= self.poisson_mesh.handle(action);
             }
+            mesh_changed |= self.poisson_mesh.reconcile_representation(objects);
             mesh_changed |= self.poisson_mesh.invalidate_for_revision(mesh_source_revision);
             mesh_changed |= self.poisson_mesh.poll(mesh_source_revision);
             if mesh_changed {
@@ -26,10 +27,11 @@ impl Renderer {
             }
             if let Some(requested) = self.poisson_mesh.next_request() {
                 if let Some(object) = objects.iter().find(|object| object.uuid == requested &&
-                    object.render_representation == crate::model::GroupRenderRepresentation::PoissonMesh) {
+                    matches!(object.render_representation, crate::model::GroupRenderRepresentation::PoissonMesh | crate::model::GroupRenderRepresentation::DirectMesh)) {
                     let component = super::poisson_mesh::geometry::containing_root(objects, requested);
                     self.poisson_mesh.start(requested, component, mesh_source_revision, objects.to_vec(),
-                        object.gaussian_splats.resolution, object.poisson_mesh.resolution, None,
+                        object.gaussian_splats.resolution, object.poisson_mesh.resolution,
+                        if object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh { super::poisson_mesh::MeshAlgorithm::Direct } else { super::poisson_mesh::MeshAlgorithm::Poisson }, None,
                         #[cfg(target_arch = "wasm32")]
                         egui);
                 } else {

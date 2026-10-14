@@ -1,6 +1,12 @@
 use super::*;
 
 const MODEL_ORGANIZATION: &str = concat!(
+    "For efficient modeling, prefer arrangements of sheet bends using native sheet cuts and bends, independent components, and hard Booleans with softness 0. ",
+    "Local built-in rounding such as primitive corner radii is allowed without smooth Boolean blends. ",
+    "Smooth Boolean blends are unavailable by default for new or enlarged blends; existing imported blends are retained. ",
+    "Call enable_slow_smooth_blends to explicitly opt this scene in only when needed: smooth blends require dense field sampling and can exceed export resource budgets. ",
+    "Opt-in persists in saved scenes; New resets it, and ReplaceScene does not grant opt-in. Enabling does not change existing geometry or automatically apply positive blends. ",
+    "Export geometry:'smooth' selects Poisson mesh export and does not enable Boolean blends. ",
     "Try grouping related objects into named Boolean unions for better organization and to move, rotate, or scale the whole model at once. ",
     "For example, keep a sword's blade, guard, grip, pommel, and decorations in one union named Sword. ",
     "Use an existing component as the root, rename it with SetObjectName, and attach the other components with SetBoolean (parent: root UUID, operation: Union). ",
@@ -11,13 +17,17 @@ const MODEL_ORGANIZATION: &str = concat!(
 
 pub(super) fn schema() -> Value {
     json!({
-        "version": 17,
-        "operations": ["GetState", "GetSchema", "ListCommands", "Apply", "ExecuteCommand", "SetView", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
+        "version": 18,
+        "operations": ["GetState", "GetSchema", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "variable_spaces": ["Local", "World"],
         "vector_binding_targets": ["Position", "GroupPosition", {"BezierPoint": 0}],
         "variables_example": {"vectors": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Anchor", "value": [0, 1, 0], "space": "World"}], "bindings": []},
-        "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| json!({"kind": kind, "example": SdfObject::create_kind(*kind)})).collect::<Vec<_>>(),
+        "primitive_kinds": PrimitiveKind::ALL.iter().map(|kind| {
+            let mut example = SdfObject::create_kind(*kind);
+            example.softness = 0.0;
+            json!({"kind": kind, "example": example})
+        }).collect::<Vec<_>>(),
         "sheet_emboss_example": {"SheetPanelParams": {
             "size": [0.9, 0.7], "thickness": 0.008,
             "cuts": [{"Circle": {"center": [0.0, -0.32], "radius": 0.28}}],
@@ -36,7 +46,7 @@ pub(super) fn schema() -> Value {
         "sheet_seam_example": {"source":"SOURCE_PANEL_UUID","source_edge":"MaxX","edge":"MinX","gap":0.005},
         "render_representations": GroupRenderRepresentation::ALL.iter().map(|mode| json!({"value": mode, "label": mode.label(), "description": mode.description(), "limitation": mode.limitation()})).collect::<Vec<_>>(),
         "notes": format!("{}{}", MODEL_ORGANIZATION, concat!(
-            "GetState returns complete typed objects, variables (vectors and bindings), and the raw .claydash scene document. ",
+            "GetState returns complete typed objects, variables (vectors and bindings), the scene smooth-blend opt-in flag, and the raw .claydash scene document. EnableSlowSmoothBlends explicitly opts the current scene in and returns a warning about dense field cost and export resource budgets. ",
             "CreateVectorVariable accepts name, value [x,y,z], optional id, and space (World by default). It returns created_variable_ids; supply an id to bind within the same Apply. ",
             "UpdateVectorVariable edits name/value/space. SetVectorBinding takes object, target (Position, GroupPosition, or {BezierPoint:index}), variable, and optional offset [x,y,z] defaulting to zero, replacing any link on that target. ",
             "SetRigidBinding takes binding {object,target:Object|Group,origin,aim,up:{WorldDirection:[x,y,z]}|{Point:uuid},local_origin,local_aim,local_up}; anchors are local points and referenced points require World space. It preserves geometry and scale, solving translation/rotation from a rigid frame. RemoveRigidBinding takes object and target and retains the current pose. Positive uniform parent scale is required. ",
@@ -51,8 +61,8 @@ pub(super) fn schema() -> Value {
             "CreatePostProcessPass returns its UUID in created_post_process_pass_ids. ",
             "CreateObject accepts an optional position [x,y,z], full transform, shape params, and render_representation. ",
             "SetRenderRepresentation accepts an object or Boolean group root id and optional voxels settings {resolution:8..128}, default 32. Voxels automatically captures six box faces and renders surface samples as cubes; Recompute in Group optimizations refreshes the capture. ",
-            "BuildPoissonMesh queues a cache build/recompute for an existing standalone object or Boolean root in PoissonMesh mode. GetPoissonMeshStatus reads queued/not_built/sampling/reconstructing/ready/failed; ready includes vertex and triangle counts, showing, available, and built resolutions. Caches are runtime-only and may be invalidated by source edits. ",
-            "ExportGlb starts an asynchronous GLB file export. path is absolute; geometry is current_representation (default), smooth, or voxels. Forced voxels accepts voxel_resolution 8..128, default 32. Current representation retains voxel roots and saved resolutions; other roots become smooth meshes. Optional object_ids selects objects/Boolean subtrees; otherwise current selection or whole scene is exported. The scene is snapshotted at start. Existing files require overwrite:true. Poll GetGlbExportStatus with the returned id for running/completed/failed/cancelled, or CancelGlbExport to cancel. The most recent 32 terminal results are retained until this process exits. Opening or replacing the document cancels pending exports. ",
+            "BuildPoissonMesh queues a cache build/recompute for an existing standalone object or Boolean root in PoissonMesh or DirectMesh mode. GetPoissonMeshStatus reads queued/not_built/sampling/reconstructing/ready/failed (direct builds use tessellating/mesh_booleans); ready includes vertex and triangle counts, showing, available, and built resolutions. Caches are runtime-only and may be invalidated by source edits. ",
+            "ExportGlb starts an asynchronous GLB file export. path is absolute; geometry is current_representation (default), smooth, direct, or voxels. Forced direct accepts direct_resolution 8..256, default 32. Forced voxels accepts voxel_resolution 8..128, default 32. Current representation retains voxel roots and saved resolutions; direct roots retain direct meshes and their saved resolution; other roots become smooth meshes. Optional object_ids selects objects/Boolean subtrees; otherwise current selection or whole scene is exported. The scene is snapshotted at start. Existing files require overwrite:true. Poll GetGlbExportStatus with the returned id for running/completed/failed/cancelled, or CancelGlbExport to cancel. The most recent 32 terminal results are retained until this process exits. Opening or replacing the document cancels pending exports. ",
             "ExactSdf uses the source; BoxDepthAtlas captures from six box faces; SphereDepthAtlas captures with radial rays; GaussianSplats uses layered box-face captures rasterized as hybrid splats. ",
             "Captures retain depth, base color, and the hit material. ",
             "Older documents with removed choices load as ExactSdf. ",
@@ -99,6 +109,7 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
                 let op = match name {
                     "get_state" => "GetState",
                     "get_schema" => "GetSchema",
+                    "enable_slow_smooth_blends" => "EnableSlowSmoothBlends",
                     "list_commands" => "ListCommands",
                     "apply" => "Apply",
                     "execute_command" => "ExecuteCommand",
@@ -152,6 +163,8 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
 
 pub(super) fn mcp_tools() -> Vec<Value> {
     let object = json!({"type": "object", "additionalProperties": true});
+    let softness = json!({"type": "number", "default": 0, "description": "Boolean softness defaults to 0 for hard operations. New or enlarged positive smooth blends require enable_slow_smooth_blends for the current scene; existing imported blends are retained. Local built-in primitive rounding is independent of Boolean softness."});
+    let sdf_object = json!({"type": "object", "properties": {"softness": softness}, "additionalProperties": true});
     let uuid = json!({"type": "string", "format": "uuid"});
     let representations = json!({
         "type": "string",
@@ -169,13 +182,13 @@ pub(super) fn mcp_tools() -> Vec<Value> {
     let four_bar = json!({"type":"object","properties":{"driver":uuid,"lower_pivot":uuid,"upper_pivot":uuid,"lower_joint":uuid,"upper_joint":uuid,"lower_length":{"type":"number","exclusiveMinimum":0},"upper_length":{"type":"number","exclusiveMinimum":0},"upright_length":{"type":"number","exclusiveMinimum":0},"driver_y_offset":{"type":"number"},"travel_min":{"type":"number"},"travel_max":{"type":"number"},"branch":{"enum":["Positive","Negative"]}},"required":["driver","lower_pivot","upper_pivot","lower_joint","upper_joint","lower_length","upper_length","upright_length","driver_y_offset","travel_min","travel_max","branch"]});
     let variables = json!({"type": "object", "properties": {"vectors": {"type": "array", "items": variable}, "bindings": {"type": "array", "items": binding}, "rigid_bindings":{"type":"array","items":rigid_binding}, "four_bar_constraints":{"type":"array","items":four_bar}}, "required": ["vectors", "bindings"]});
     let action = json!({"oneOf": [
-        {"type": "object", "properties": {"type": {"const": "CreateObject"}, "kind": {"enum": ["Sphere", "Box", "Cylinder", "Torus", "PolygonPrism", "BezierCurve", "Loft", "Text"]}, "name": {"type": "string"}, "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "transform": object, "params": object, "render_representation": representations}, "required": ["type", "kind"]},
-        {"type": "object", "properties": {"type": {"const": "PutObject"}, "object": object}, "required": ["type", "object"]},
+        {"type": "object", "properties": {"type": {"const": "CreateObject"}, "kind": {"enum": PrimitiveKind::ALL}, "name": {"type": "string"}, "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "transform": object, "params": object, "render_representation": representations}, "required": ["type", "kind"]},
+        {"type": "object", "properties": {"type": {"const": "PutObject"}, "object": sdf_object}, "required": ["type", "object"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectName"}, "id": uuid, "name": {"type": "string"}}, "required": ["type", "id", "name"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectTransform"}, "id": uuid, "transform": object}, "required": ["type", "id", "transform"]},
         {"type": "object", "properties": {"type": {"const": "SetObjectParams"}, "id": uuid, "params": object}, "required": ["type", "id", "params"]},
         {"type": "object", "properties": {"type": {"const": "SetRenderRepresentation"}, "id": uuid, "render_representation": representations, "voxels": {"type": "object", "properties": {"resolution": {"type": "integer", "minimum": 8, "maximum": 128}}, "additionalProperties": false}}, "required": ["type", "id", "render_representation"]},
-        {"type": "object", "properties": {"type": {"const": "SetBoolean"}, "id": uuid, "parent": {"type": ["string", "null"]}, "operation": {"enum": ["Union", "Subtract", "Intersect"]}, "softness": {"type": "number"}}, "required": ["type", "id", "parent", "operation"]},
+        {"type": "object", "properties": {"type": {"const": "SetBoolean"}, "id": uuid, "parent": {"type": ["string", "null"]}, "operation": {"enum": ["Union", "Subtract", "Intersect"]}, "softness": softness}, "required": ["type", "id", "parent", "operation"]},
         {"type": "object", "properties": {"type": {"const": "DeleteObject"}, "id": uuid}, "required": ["type", "id"]},
         {"type": "object", "properties": {"type": {"const": "CreateVectorVariable"}, "id": uuid, "name": {"type": "string"}, "value": vector, "space": space}, "required": ["type", "name", "value"]},
         {"type": "object", "properties": {"type": {"const": "UpdateVectorVariable"}, "id": uuid, "name": {"type": "string"}, "value": vector, "space": space}, "required": ["type", "id"]},
@@ -202,17 +215,19 @@ pub(super) fn mcp_tools() -> Vec<Value> {
     ]});
     let empty = json!({"type": "object", "properties": {}, "additionalProperties": false});
     [
-        ("get_state", "Read the full live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, and revision.", empty.clone()),
+        ("get_state", "Read the full live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene smooth-blend opt-in flag, and revision.", empty.clone()),
         ("get_schema", "Get action names and example serialized objects for each primitive type.", empty.clone()),
+        ("enable_slow_smooth_blends", "Explicitly enable new or enlarged smooth Boolean blends for this scene. Warning: dense field sampling can be slow and exceed export resource budgets; prefer arrangements of sheet bends, native sheet cuts/bends, independent components, hard Booleans with softness 0, and local built-in rounding. Enabling does not change existing geometry or automatically apply positive blends. Saved scenes retain opt-in; New resets it; ReplaceScene does not grant opt-in. Existing imported blends are retained. Export geometry:'smooth' does not enable Boolean blends.", empty.clone()),
         ("list_commands", "List Claydash's existing command palette commands.", empty.clone()),
-        ("apply", "Apply typed scene actions as one undoable transaction. Read get_schema first; include expected_revision from get_state.", json!({"type": "object", "properties": {"expected_revision": {"type": "integer"}, "actions": {"type": "array", "items": action, "minItems": 1}}, "required": ["actions"]})),
+        ("apply", "Apply typed scene actions as one undoable transaction. Read get_schema first; include expected_revision from get_state. For efficient modeling, prefer arrangements of sheet bends using native sheet cuts/bends, independent components, hard Booleans with softness 0, and local built-in rounding. Smooth Boolean blends are unavailable by default for new or enlarged blends; enable_slow_smooth_blends explicitly opts the scene in with a dense field cost/export resource budget warning. Existing imported blends are retained; ReplaceScene does not grant opt-in.", json!({"type": "object", "properties": {"expected_revision": {"type": "integer"}, "actions": {"type": "array", "items": action, "minItems": 1}}, "required": ["actions"]})),
         ("execute_command", "Run an existing Claydash command by name. Some commands start an interactive gesture.", json!({"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]})),
         ("set_view", "Set the live viewport camera. position and target are [x,y,z]; projection_mode is Perspective or Orthographic.", json!({"type": "object", "properties": {"position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "target": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "up": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "projection_mode": {"enum": ["Perspective", "Orthographic"]}}, "required": ["position", "target"]})),
-        ("build_poisson_mesh", "Queue a Poisson mesh cache build or recompute for a standalone object or Boolean root already set to PoissonMesh. Poll get_poisson_mesh_status for completion. Runtime caches are invalidated by source edits.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
-        ("get_poisson_mesh_status", "Read Poisson cache progress and completion for a PoissonMesh root. Ready includes vertices, triangles, showing, available, and built sample/mesh resolutions.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
-        ("export_glb", "Start an asynchronous GLB export to an absolute path on the Claydash host. Returns a job id; poll get_glb_export_status. Geometry: current_representation preserves voxel roots/resolution and uses smooth meshes for other roots; smooth uses Poisson meshes; voxels uses surface cubes with sampled colors. Omit object_ids to use the current selection or whole scene. Captures a scene snapshot; existing files require overwrite:true. Works in desktop and headless sessions.", json!({"type":"object","properties":{
+        ("build_poisson_mesh", "Queue a Poisson mesh cache build or recompute for a standalone object or Boolean root already set to PoissonMesh or DirectMesh. Poll get_poisson_mesh_status for completion. Runtime caches are invalidated by source edits.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
+        ("get_poisson_mesh_status", "Read mesh cache progress and completion (direct stages: tessellating/mesh_booleans) for a PoissonMesh or DirectMesh root. Ready includes vertices, triangles, showing, available, and built sample/mesh resolutions.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
+        ("export_glb", "Start an asynchronous GLB export to an absolute path on the Claydash host. Returns a job id; poll get_glb_export_status. Geometry: current_representation preserves voxel and direct roots/resolution and uses smooth meshes for other roots; smooth uses Poisson meshes and does not enable smooth Boolean blends; direct tessellates source geometry and meshes smooth blends, repetition, mirror, lattice and inlay with baked materials; voxels uses surface cubes with sampled colors. Omit object_ids to use the current selection or whole scene. Captures a scene snapshot; existing files require overwrite:true. Works in desktop and headless sessions.", json!({"type":"object","properties":{
             "path":{"type":"string","minLength":1,"description":"Absolute output file path; parent directory must exist."},
-            "geometry":{"enum":["current_representation","smooth","voxels"],"default":"current_representation"},
+            "geometry":{"enum":["current_representation","smooth","direct","voxels"],"default":"current_representation","description":"Mesh export representation. smooth selects Poisson meshing and does not enable smooth Boolean blends."},
+            "direct_resolution":{"type":"integer","minimum":8,"maximum":256,"description":"Only for geometry:direct. Defaults to 32."},
             "voxel_resolution":{"type":"integer","minimum":8,"maximum":128,"description":"Only for geometry:voxels. Defaults to 32."},
             "object_ids":{"type":"array","items":uuid,"minItems":1},
             "overwrite":{"type":"boolean","default":false}},"required":["path"],"additionalProperties":false})),

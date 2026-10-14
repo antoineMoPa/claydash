@@ -8,6 +8,7 @@ pub struct ExportGlbArgs {
     #[serde(default)]
     geometry: ExportGeometry,
     voxel_resolution: Option<u32>,
+    direct_resolution: Option<u32>,
     object_ids: Option<Vec<uuid::Uuid>>,
     #[serde(default)]
     overwrite: bool,
@@ -28,7 +29,16 @@ impl App {
                 return Err("voxel_resolution must be between 8 and 128".into());
             }
         }
+        if let Some(resolution) = args.direct_resolution {
+            if args.geometry != ExportGeometry::Direct {
+                return Err("direct_resolution is only available with geometry: direct".into());
+            }
+            if !(crate::renderer::direct_mesh::MIN_RESOLUTION..=crate::renderer::direct_mesh::MAX_RESOLUTION).contains(&resolution) {
+                return Err("direct_resolution must be between 8 and 256".into());
+            }
+        }
         let options = ExportOptions {
+            direct_resolution: args.direct_resolution.unwrap_or(crate::renderer::direct_mesh::DEFAULT_RESOLUTION),
             geometry: args.geometry,
             voxel_resolution: args
                 .voxel_resolution

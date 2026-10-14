@@ -58,10 +58,12 @@ impl MeshExportJob {
         if self.index < self.roots.len() {
             let name = self.source.iter().find(|object| object.uuid == self.roots[self.index])
                 .map_or("Mesh", |object| object.name.as_str());
+            let direct = self.source.iter().find(|object| object.uuid == self.roots[self.index])
+                .is_some_and(|object| matches!(self.options.mesh_kind(object), MeshKind::Direct { .. }));
             if let Some(worker) = &self.worker {
                 match BuildProgress::from_code(worker.progress()) {
-                    BuildProgress::Sampling(percent) => format!("Capturing {name} ({}/{}) · {percent}%", self.index + 1, self.roots.len()),
-                    BuildProgress::Reconstruction(percent) => format!("Reconstructing {name} ({}/{}) · {percent}%", self.index + 1, self.roots.len()),
+                    BuildProgress::Sampling(percent) => format!("{} {name} ({}/{}) · {percent}%", if direct { "Tessellating" } else { "Capturing" }, self.index + 1, self.roots.len()),
+                    BuildProgress::Reconstruction(percent) => format!("{} {name} ({}/{}) · {percent}%", if direct { "Finishing direct mesh for" } else { "Reconstructing" }, self.index + 1, self.roots.len()),
                     BuildProgress::Complete => format!("Preparing {name} ({}/{})", self.index + 1, self.roots.len()),
                 }
             } else { format!("Preparing {name} ({}/{})", self.index + 1, self.roots.len()) }
@@ -117,8 +119,13 @@ impl App {
                     }
                 } else {
                     let revision = super::rendering::mesh_source_revision(&job.source);
-                    let cached = self.renderer.as_ref().and_then(|renderer|
-                        renderer.cached_mesh_for_export(&job.source, root, revision));
+                    let kind = job.options.mesh_kind(object);
+                    let cached = self.renderer.as_ref().and_then(|renderer| match kind {
+                        MeshKind::Smooth => renderer.cached_mesh_for_export(&job.source, root, revision),
+                        MeshKind::Direct { resolution } if resolution == object.poisson_mesh.resolution =>
+                            renderer.cached_direct_mesh_for_export(&job.source, root, revision),
+                        _ => None,
+                    });
                     if let Some(cached) = cached {
                         match cached.world_mesh(&std::sync::atomic::AtomicBool::new(false)) {
                             Ok(mesh) => job.add_mesh(root, mesh, None),
@@ -129,7 +136,11 @@ impl App {
                             .map_or(0, |object| object.gaussian_splats.resolution);
                         let mesh_resolution = job.source.iter().find(|object| object.uuid == root)
                             .map_or(0, |object| object.poisson_mesh.resolution);
-                        match WebJob::start(job.source.clone(), root, resolution, mesh_resolution, &self.egui) {
+                        let (mesh_resolution, algorithm) = match kind {
+                            MeshKind::Direct { resolution } => (resolution, crate::renderer::poisson_mesh::MeshAlgorithm::Direct),
+                            _ => (mesh_resolution, crate::renderer::poisson_mesh::MeshAlgorithm::Poisson),
+                        };
+                        match WebJob::start_with_algorithm(job.source.clone(), root, resolution, mesh_resolution, algorithm, &self.egui) {
                             Ok(worker) => job.worker = Some(GeometryWorker::Smooth(worker)),
                             Err(error) => finish = Some(Err(error)),
                         }

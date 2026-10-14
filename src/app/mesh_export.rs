@@ -44,7 +44,7 @@ pub(super) struct MeshExportJob {
 
 enum ExportStage {
     PreparingMesh { name: String, index: usize, total: usize },
-    Capturing { name: String, index: usize, total: usize },
+    Capturing { name: String, index: usize, total: usize, direct: bool },
     Baking { index: usize, total: usize },
     Writing,
 }
@@ -68,10 +68,10 @@ impl App {
         if let Some(job) = self.mesh_export.as_ref().filter(|job| job.id == id) {
             let (stage, name, index, total, percent) = match &*job.stage.lock().unwrap() {
                 ExportStage::PreparingMesh { name, index, total } => ("preparing", Some(name.clone()), *index, *total, None),
-                ExportStage::Capturing { name, index, total } => {
+                ExportStage::Capturing { name, index, total, direct } => {
                     let (stage, percent) = match BuildProgress::from_code(job.work.progress.load(Ordering::Relaxed)) {
-                        BuildProgress::Sampling(p) => ("sampling", p),
-                        BuildProgress::Reconstruction(p) => ("reconstructing", p),
+                        BuildProgress::Sampling(p) => (if *direct { "tessellating" } else { "sampling" }, p),
+                        BuildProgress::Reconstruction(p) => (if *direct { "mesh_booleans" } else { "reconstructing" }, p),
                         BuildProgress::Complete => ("preparing", 100),
                     };
                     (stage, Some(name.clone()), *index, *total, Some(percent))
@@ -125,11 +125,18 @@ impl App {
         let id = uuid::Uuid::new_v4();
         let revision = super::rendering::mesh_source_revision(&source);
         let cached: std::collections::HashMap<_, _> = roots.iter().filter_map(|root| {
-            self.renderer.as_ref()?.cached_mesh_for_export(&source, *root, revision)
-                .map(|mesh| (*root, mesh))
+            let object = source.iter().find(|object| object.uuid == *root)?;
+            let renderer = self.renderer.as_ref()?;
+            let mesh = match options.mesh_kind(object) {
+                MeshKind::Smooth => renderer.cached_mesh_for_export(&source, *root, revision),
+                MeshKind::Direct { resolution } if resolution == object.poisson_mesh.resolution =>
+                    renderer.cached_direct_mesh_for_export(&source, *root, revision),
+                MeshKind::Direct { .. } | MeshKind::Voxels { .. } => None,
+            };
+            mesh.map(|mesh| (*root, mesh))
         }).collect();
         let stage = Arc::new(Mutex::new(ExportStage::Capturing {
-            name: "Preparing".into(), index: 0, total: roots.len(),
+            name: "Preparing".into(), index: 0, total: roots.len(), direct: false,
         }));
         let work = Computation::new(Stage::Sampling);
         let (sender, completed) = channel();
@@ -149,6 +156,7 @@ impl App {
                     let mesh = if let MeshKind::Voxels { resolution } = options.mesh_kind(object) {
                         *worker_stage.lock().unwrap() = ExportStage::Capturing {
                             name: object.name.clone(), index: index + 1, total: roots.len(),
+                            direct: matches!(options.mesh_kind(object), MeshKind::Direct { .. }),
                         };
                         worker_progress.store(0, Ordering::Relaxed);
                         let geometry = crate::renderer::voxels::geometry::build(
@@ -164,8 +172,16 @@ impl App {
                     } else {
                         *worker_stage.lock().unwrap() = ExportStage::Capturing {
                             name: object.name.clone(), index: index + 1, total: roots.len(),
+                            direct: matches!(options.mesh_kind(object), MeshKind::Direct { .. }),
                         };
                         worker_progress.store(0, Ordering::Relaxed);
+                        if let MeshKind::Direct { resolution } = options.mesh_kind(object) {
+                            crate::renderer::direct_mesh::build(&worker_source, *root, resolution,
+                                &worker_cancel, &worker_progress)
+                                .map_err(|error| if worker_cancel.load(Ordering::Relaxed) {
+                                    "Export cancelled".to_owned()
+                                } else { format!("{}: {error}", object.name) })?
+                        } else {
                         crate::renderer::poisson_mesh::geometry::build(
                             &worker_source, *root, object.gaussian_splats.resolution,
                             object.poisson_mesh.resolution,
@@ -173,6 +189,7 @@ impl App {
                             .map_err(|error| if worker_cancel.load(Ordering::Relaxed) {
                                 "Export cancelled".to_owned()
                             } else { format!("{}: {error}", object.name) })?
+                        }
                     };
                     if worker_cancel.load(Ordering::Relaxed) { return Err("Export cancelled".into()); }
                     objects.push((*root, crate::renderer::poisson_mesh::glb::ObjectMesh {
@@ -284,10 +301,10 @@ impl App {
         let Some(job) = &self.mesh_export else { return };
         let status = if job.work.cancel.load(Ordering::Relaxed) { "Cancelling…".to_owned() } else { match &*job.stage.lock().unwrap() {
             ExportStage::PreparingMesh { name, index, total } => format!("Preparing {name} ({index}/{total})"),
-            ExportStage::Capturing { name, index, total } => {
+            ExportStage::Capturing { name, index, total, direct } => {
                 match BuildProgress::from_code(job.work.progress.load(Ordering::Relaxed)) {
-                    BuildProgress::Sampling(percent) => format!("Capturing {name} ({index}/{total}) · {percent}%"),
-                    BuildProgress::Reconstruction(percent) => format!("Reconstructing {name} ({index}/{total}) · {percent}%"),
+                    BuildProgress::Sampling(percent) => format!("{} {name} ({index}/{total}) · {percent}%", if *direct { "Tessellating" } else { "Capturing" }),
+                    BuildProgress::Reconstruction(percent) => format!("{} {name} ({index}/{total}) · {percent}%", if *direct { "Finishing direct mesh for" } else { "Reconstructing" }),
                     BuildProgress::Complete => format!("Preparing {name} ({index}/{total})"),
                 }
             }

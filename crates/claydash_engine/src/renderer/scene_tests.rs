@@ -275,7 +275,7 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
                     assert!(prepared.sphere_depth_atlases.contains_key(&box_id));
                 }
                 GroupRenderRepresentation::ExactSdf
-                | GroupRenderRepresentation::PoissonMesh
+                | GroupRenderRepresentation::PoissonMesh | GroupRenderRepresentation::DirectMesh
                 | GroupRenderRepresentation::Voxels
                 | GroupRenderRepresentation::NeuralSdf
                 | GroupRenderRepresentation::SphereAccelerator
