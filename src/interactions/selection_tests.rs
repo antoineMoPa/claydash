@@ -641,6 +641,7 @@ fn suspended_navigation_releases_buttons_and_modifiers() {
     interactions.right_down = true;
     interactions.mouse_delta = Vec2::new(20.0, 10.0);
     interactions.right_pan_reference = Some(Vec3::ZERO);
+    assert!(interactions.camera_navigation_active());
 
     interactions.suspend_navigation();
 
@@ -648,6 +649,7 @@ fn suspended_navigation_releases_buttons_and_modifiers() {
     assert!(!interactions.right_down);
     assert_eq!(interactions.mouse_delta, Vec2::ZERO);
     assert!(interactions.right_pan_reference.is_none());
+    assert!(!interactions.camera_navigation_active());
 }
 
 #[test]
@@ -662,6 +664,7 @@ fn r_rotates_an_empty_view_in_place_and_escape_restores_it() {
     let initial = camera.clone();
 
     interaction.key_pressed(KeyCode::KeyR, false, &commands, &mut tree);
+    assert!(interaction.camera_navigation_active());
     interaction.update(&mut camera, &mut tree);
     interaction.cursor_moved(Vec2::new(400.0, 500.0), false);
     interaction.update(&mut camera, &mut tree);
@@ -678,6 +681,7 @@ fn r_rotates_an_empty_view_in_place_and_escape_restores_it() {
     interaction.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
     interaction.update(&mut camera, &mut tree);
     assert_eq!(camera.up, initial.up);
+    assert!(!interaction.camera_navigation_active());
 }
 
 #[test]
@@ -898,4 +902,87 @@ fn grab_moves_the_selection_with_the_cursor() {
     let movement = objects(&tree)[0].transform.translation;
     assert!(movement.length() > 0.01);
     assert!(movement.dot(camera.target - camera.position).abs() < 0.0001);
+}
+
+#[test]
+fn focus_interruption_finishes_modal_navigation() {
+    let mut interactions = InteractionState::default();
+    let mut tree = DataTree::default();
+    interactions.view_rotation_requested = true;
+    interactions.right_down = true;
+    tree.set_transient_path("editor.view_rotation", ClaydashValue::Bool(true));
+    interactions.interrupt_navigation(&mut tree);
+    assert!(!interactions.camera_navigation_active());
+    assert!(matches!(tree.get_path("editor.view_rotation"), ClaydashValue::Bool(false)));
+}
+
+#[test]
+fn modifier_state_releases_missed_control_keyup() {
+    let mut interactions = InteractionState::default();
+    interactions.keys.insert(KeyCode::ControlLeft);
+    interactions.keys.insert(KeyCode::ShiftRight);
+    assert!(interactions.camera_navigation_active());
+    interactions.release_inactive_modifiers(winit::keyboard::ModifiersState::SHIFT);
+    assert!(!interactions.camera_navigation_active());
+    assert!(interactions.keys.contains(&KeyCode::ShiftRight));
+}
+
+#[test]
+fn right_button_release_over_ui_ends_navigation() {
+    let mut interactions = InteractionState::default();
+    let camera = Camera::new();
+    let tree = DataTree::default();
+    interactions.set_right_button(true, false, &camera, &tree);
+    assert!(interactions.camera_navigation_active());
+    interactions.set_right_button(false, true, &camera, &tree);
+    assert!(!interactions.camera_navigation_active());
+}
+
+#[test]
+fn bounded_navigation_sequences_terminate_without_holding_refinement() {
+    // Exhaust all three-event prefixes from the real interaction handlers.
+    // Focus/occlusion terminate modal tools; cursor leave only terminates drags.
+    for sequence in 0..216 {
+        let mut interactions = InteractionState::default();
+        let mut tree = DataTree::default();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800.0, 600.0);
+        interactions.mouse_position = camera.viewport / 2.0;
+        let mut commands = Commands::new();
+        commands::register_all(&mut commands);
+        let mut code = sequence;
+        for _ in 0..3 {
+            match code % 6 {
+                0 => interactions.set_right_button(true, false, &camera, &tree),
+                1 => {
+                    interactions.keys.insert(KeyCode::ShiftLeft);
+                    interactions.pointer_down(&camera, &mut tree, None);
+                }
+                2 => { interactions.keys.insert(KeyCode::ControlLeft); }
+                3 => interactions.key_pressed(KeyCode::KeyR, false, &commands, &mut tree),
+                4 => {
+                    interactions.set_right_button(false, true, &camera, &tree);
+                    interactions.pointer_up(&camera, &mut tree);
+                    interactions.release_inactive_modifiers(winit::keyboard::ModifiersState::empty());
+                }
+                5 => {
+                    interactions.suspend_navigation();
+                    interactions.pointer_up(&camera, &mut tree);
+                }
+                _ => unreachable!(),
+            }
+            code /= 6;
+            interactions.cursor_moved(interactions.mouse_position + Vec2::new(5.0, 3.0), false);
+            interactions.update(&mut camera, &mut tree);
+        }
+        interactions.interrupt_navigation(&mut tree);
+        interactions.pointer_up(&camera, &mut tree);
+        interactions.update(&mut camera, &mut tree);
+        assert!(!interactions.viewport_interaction_active(false, &tree), "prefix {sequence}");
+        // Reenter, start a new pan, and release over UI: no stale state returns.
+        interactions.set_right_button(true, false, &camera, &tree);
+        assert!(interactions.viewport_interaction_active(true, &tree));
+        interactions.set_right_button(false, true, &camera, &tree);
+        assert!(!interactions.viewport_interaction_active(false, &tree), "reentry {sequence}");
+    }
 }

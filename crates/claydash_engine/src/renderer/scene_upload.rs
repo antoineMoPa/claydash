@@ -107,7 +107,9 @@ impl Renderer {
                 self.group_capture_bake = None;
                 self.group_compute_requests.remove(&root);
                 if capture.is_some() || source_revision != scene_versions[0] {
-                    self.uploaded_scene_versions = [i32::MIN; 2];
+                    // A finished bake changes the rendered representation
+                    // without changing the document's source revision.
+                    self.invalidate_scene();
                 }
                 if capture.is_some() {
                     if let (Some(capture), Some(object)) = (
@@ -209,6 +211,12 @@ impl Renderer {
             }
         }
         let scene_changed = document_changed || neural_changed;
+        if pipeline_preparation == ScenePipelinePreparation::Viewport && !neural_changed {
+            // Source replacement invalidates old throughput observations even
+            // if its physical submission is still in flight. Lighting-only
+            // edits retain deferred geometry for the relight path.
+            self.viewport.invalidate_source_version(scene_versions[0]);
+        }
         let capture_budget = self.capture_record_budget();
         #[cfg(not(target_arch = "wasm32"))]
         let pending_bakes: std::collections::HashSet<_> = source_objects
@@ -359,6 +367,9 @@ impl Renderer {
                 let source_supports_split = objects[first..=root].iter().all(|part| {
                     source_by_id.get(&part.uuid).is_some_and(|source| {
                         union_split_supports_source_mode(source.render_representation)
+                            || (source.render_representation == crate::model::GroupRenderRepresentation::GaussianSplats
+                                && prepared_scene.as_ref().is_none_or(|prepared|
+                                    !prepared.gaussian_splats.contains(&source.uuid)))
                     })
                 });
                 let used_as_inlay_host = source_objects.iter().any(|part| {
@@ -371,7 +382,10 @@ impl Renderer {
                 let contains_mesh = false;
                 if object.boolean_parent.is_none() && source_supports_split && !contains_mesh
                     && !used_as_inlay_host && object.mirror.is_none()
-                    && !object.repetition.enabled && object.lattice.is_none()
+                    // Cage transforms are already attached to every GPU
+                    // operand, and primitive bounds include cage displacement.
+                    // A hard min distributes over those deformed operands.
+                    && !object.repetition.enabled
                     && object.path_extrusion.is_none()
                 {
                     eligible_roots.insert(root);
@@ -464,7 +478,9 @@ impl Renderer {
             if objects[start..=root].iter().all(|object| {
                 object.mirror.is_none()
                     && object.path_extrusion.is_none()
-                    && object.lattice.is_none()
+                    // A detached deformed primitive has cage-expanded bounds
+                    // and its own conservative affine distance factor.
+                    && (object.lattice.is_none() || start == root)
                     && !object.repetition.enabled
             }) {
                 component_factors[root] = distance_bound_factors[start..=root]
@@ -500,6 +516,7 @@ impl Renderer {
                 node.metadata[2] = starts[node.metadata[0] as usize];
             }
         }
+        super::refinement_region::populate_ray_bounds(objects, scene_objects, &mut bvh, &starts, &gpu_objects);
         let scene_node_count = bvh.len() as u32;
         append_operand_bvhs(&mut bvh, &mut gpu_objects, &starts);
         if training_only {
@@ -519,6 +536,9 @@ impl Renderer {
             });
         }
         self.node_count = scene_node_count;
+        if pipeline_preparation == ScenePipelinePreparation::Viewport {
+            self.scene_bounds = super::refinement_region::retained_scene_bounds(&objects, scene_objects, &bvh[..scene_node_count as usize], &starts, &gpu_objects);
+        }
         debug_assert!(bvh.len() <= MAX_BVH_NODES);
         gpu_camera.count[1] = self.node_count;
         self.queue
@@ -609,8 +629,10 @@ impl Renderer {
                 });
             }
         }
-        self.initial_pixel_budget =
-            if (capacity > 1 && gpu_objects.len() > 256) || transmitted_instances > 1024 {
+        let initial_pixel_budget =
+            if (capacity > 1 && gpu_objects.len() > 256) || transmitted_instances > 1024
+                || (source_objects.len() > 64 && source_objects.iter()
+                    .any(|object| matches!(object.params, crate::model::SdfParams::SheetPanelParams(_)))) {
                 1024
             } else if (capacity > 1 && gpu_objects.len() > 64) || transmitted_instances > 256 {
                 4096
@@ -619,7 +641,10 @@ impl Renderer {
             } else {
                 48 * 1024
             };
-        self.viewport.set_initial_budget(self.initial_pixel_budget);
+        if pipeline_preparation == ScenePipelinePreparation::Viewport {
+            self.initial_pixel_budget = initial_pixel_budget;
+            self.viewport.set_initial_budget(initial_pixel_budget);
+        }
         self.resize_lattice_atlas_for(lattice_atlas_uploads.len());
         let mut shader_features =
             SceneShaderFeatures::for_scene(&materials.materials, &gpu_objects);
@@ -647,6 +672,8 @@ impl Renderer {
         // Thumbnail draws use their dedicated sphere pipeline. Uploading their
         // temporary objects must not compile viewport variants for every preset.
         if pipeline_preparation == ScenePipelinePreparation::Viewport {
+            shader_features.separate_contact &= self.use_bvh
+                && !(world.render_pipeline == crate::model::RenderPipelineMode::Deferred && self.deferred_supported);
             self.prepare_scene_pipelines(world, capacity, shader_features);
         }
         if !gpu_objects.is_empty() {

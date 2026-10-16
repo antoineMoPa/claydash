@@ -536,3 +536,62 @@ fn strong_directional_bends_and_singular_recipes_have_explicit_behavior() {
     p.bends[1].angle = 2.7;
     assert!(p.validate().unwrap_err().contains("radial clearance"));
 }
+
+#[test]
+fn retained_sheet_bounds_enclose_cut_bent_crowned_surfaces_at_every_stage() {
+    let mut panel = SheetPanelParams::default();
+    panel.size = Vec2::new(2.0, 1.5);
+    panel.cuts = vec![
+        SheetCut::Straight { from: Vec2::new(-0.2,1.0), to: Vec2::new(-0.2,-1.0) },
+        SheetCut::Straight { from: Vec2::new(0.4,-1.0), to: Vec2::new(0.4,1.0) },
+        SheetCut::Straight { from: Vec2::new(-1.0,-0.3), to: Vec2::new(1.0,-0.3) },
+        SheetCut::Straight { from: Vec2::new(1.0,0.25), to: Vec2::new(-1.0,0.25) },
+    ];
+    panel.bends.push(SheetBend { start:-0.8, direction:0.0, radius:0.3, angle:2.3 });
+    panel.surface=Some(SheetSurface { heights:[0.02;16] });
+    for stage in [SheetStage::Blank,SheetStage::Cut,SheetStage::Formed] {
+        panel.stage=stage;
+        let (low,high)=panel.clipped_local_bounds().unwrap();
+        if stage==SheetStage::Cut {
+            assert!((low.x+0.2).abs()<1e-5 && (high.x-0.4).abs()<1e-5);
+            assert!((low.y+0.3).abs()<1e-5 && (high.y-0.25).abs()<1e-5);
+        }
+        for i in 0..81 { for j in 0..61 {
+            let x=if stage==SheetStage::Blank { -1.0+i as f32/40.0 } else { -0.2+i as f32*0.6/80.0 };
+            let y=if stage==SheetStage::Blank { -0.75+j as f32/40.0 } else { -0.3+j as f32*0.55/60.0 };
+            for z in [-panel.thickness*0.5,panel.thickness*0.5] {
+                let point=panel.form_point(Vec3::new(x,y,z));
+                assert!(point.cmpge(low-Vec3::splat(1e-5)).all() && point.cmple(high+Vec3::splat(1e-5)).all(), "{stage:?}: {point:?} outside {low:?}..{high:?}");
+            }
+        } }
+    }
+}
+
+#[test]
+fn retained_ray_bounds_enclose_near_surface_field_values() {
+    for angle in [-2.3, 0.0, 2.3] {
+        let mut panel = SheetPanelParams::default();
+        panel.size = Vec2::new(2.0, 1.5);
+        panel.cuts = vec![
+            SheetCut::Straight { from: Vec2::new(-2.0,-0.02), to: Vec2::new(2.0,0.08) },
+            SheetCut::Straight { from: Vec2::new(2.0,0.10), to: Vec2::new(-2.0,0.0) },
+        ];
+        if angle != 0.0 { panel.bends.push(SheetBend { start:-0.8, direction:0.0, radius:0.3, angle }); }
+        panel.surface = Some(SheetSurface { heights:[0.02;16] });
+        let depth = panel.embossed_depth_range();
+        let metric = panel.strips().iter().filter(|s|s.radius!=0.0).map(|s| {
+            let r=s.radius;
+            (if r>0.0 { r-depth.y } else { r.abs()+depth.x })/r.abs()
+        }).fold(1.0_f32,f32::min);
+        let (low,high) = panel.clipped_local_bounds_with_margin(0.015/(metric*panel.emboss_metric_scale())).unwrap();
+        let mut hits = 0;
+        for ix in 0..100 { for iy in 0..50 { for iz in 0..80 {
+            let p = Vec3::new(-1.2+ix as f32*0.024,-0.14+iy as f32*0.008,-0.8+iz as f32*0.02);
+            if panel.distance(p) < 0.003 {
+                hits+=1;
+                assert!(p.cmpge(low).all() && p.cmple(high).all(), "{angle}: {p:?} outside {low:?}..{high:?}");
+            }
+        } } }
+        assert!(hits > 0);
+    }
+}

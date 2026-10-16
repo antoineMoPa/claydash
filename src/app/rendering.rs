@@ -1,5 +1,34 @@
 use super::*;
 
+fn select_recovery_view(tree: &mut DataTree) -> crate::model::ViewportMode {
+    use crate::model::ViewportMode;
+    let mode = match crate::model::viewport_mode(tree) {
+        ViewportMode::FullMaterial => ViewportMode::SimpleShading,
+        ViewportMode::SimpleShading | ViewportMode::Outline => ViewportMode::Outline,
+    };
+    tree.set_transient_path("editor.viewport_mode", ClaydashValue::ViewportMode(mode));
+    mode
+}
+
+#[cfg(test)]
+#[test]
+fn renderer_recovery_preserves_scene_and_selection() {
+    use crate::model::ViewportMode;
+    let mut tree = DataTree::default();
+    let object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    let id = object.uuid;
+    crate::model::set_objects(&mut tree, vec![object]);
+    crate::model::set_selected_exact(&mut tree, vec![id]);
+    let source = serde_json::to_value(crate::model::objects(&tree)).unwrap();
+    let revision = scene_render_versions(&tree, false);
+    assert_eq!(select_recovery_view(&mut tree), ViewportMode::SimpleShading);
+    assert_eq!(select_recovery_view(&mut tree), ViewportMode::Outline);
+    assert_eq!(select_recovery_view(&mut tree), ViewportMode::Outline);
+    assert_eq!(scene_render_versions(&tree, false), revision);
+    assert_eq!(serde_json::to_value(crate::model::objects(&tree)).unwrap(), source);
+    assert_eq!(commands::effective_selected_ids(&tree), vec![id]);
+}
+
 pub(super) fn scene_render_versions(tree: &DataTree, capture_render: bool) -> [i32; 2] {
     let export_version = if capture_render { i32::MIN } else { 0 };
     // Material source and parameters both affect the cached viewport image.
@@ -377,6 +406,41 @@ impl App {
         }
     }
 
+    fn recover_failed_renderer(&mut self, window: std::sync::Arc<winit::window::Window>) -> bool {
+        let Some(_fault) = self.renderer.as_ref().and_then(Renderer::gpu_fault) else { return false; };
+        self.cancel_render();
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        if let Some(capture) = self.agent_capture.take() { let _ = capture.reply.send(Err(_fault.to_owned())); }
+        let mut failed = self.renderer.take().unwrap();
+        let resources = failed.take_recovery_resources();
+        let source = crate::model::objects(&self.tree);
+        drop(failed);
+        select_recovery_view(&mut self.tree);
+        self.interactions.suspend_navigation();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut renderer = pollster::block_on(Renderer::new(window.clone(), self.use_bvh, false));
+            renderer.restore_recovery_resources(resources, &source);
+            let repaint = window.clone();
+            renderer.set_viewport_repaint_callback(move || repaint.request_redraw());
+            self.renderer = Some(renderer);
+            window.request_redraw();
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let sender = self.renderer_tx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut renderer = Renderer::new(window.clone(), true, false).await;
+                renderer.restore_recovery_resources(resources, &source);
+                let repaint = window.clone();
+                renderer.set_viewport_repaint_callback(move || repaint.request_redraw());
+                let _ = sender.send(renderer);
+                window.request_redraw();
+            });
+        }
+        true
+    }
+
     pub(super) fn redraw(&mut self) {
         #[cfg(target_arch = "wasm32")]
         self.process_web_document_messages();
@@ -386,6 +450,7 @@ impl App {
         let Some(window) = self.window.clone() else {
             return;
         };
+        if self.recover_failed_renderer(window.clone()) { return; }
         let Some(renderer) = &mut self.renderer else {
             return;
         };
@@ -406,12 +471,13 @@ impl App {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        let input = match &mut self.egui_state {
+        let mut input = match &mut self.egui_state {
             Some(egui_state) => egui_state.take_egui_input(&window),
             None => return,
         };
         #[cfg(target_arch = "wasm32")]
-        let input = self.egui_state.take(&window);
+        let mut input = self.egui_state.take(&window);
+        super::pointer_input::release_interrupted_pointer(&self.egui, &mut input);
         let egui = self.egui.clone();
         egui.data_mut(|data| {
             data.insert_temp(
@@ -557,9 +623,8 @@ impl App {
         let outline_capture = false;
         // Pointer gizmos and modal G/R/S transforms can pause between motion
         // events. Do not queue expensive refinement ahead of their next edit.
-        let interacting = !capture_render && (self.egui.input(|input| input.pointer.any_down())
-            || matches!(self.tree.get_path("editor.state"),
-                ClaydashValue::EditorState(state) if state != EditorState::Start));
+        let interacting = !capture_render && self.interactions.viewport_interaction_active(
+            self.egui.input(|input| input.pointer.any_down()), &self.tree);
         if let Some(renderer) = &mut self.renderer {
             // Selection is drawn by the editor gizmos. Keep the cached scene
             // image when only selection changes, avoiding a full refinement.
@@ -602,7 +667,15 @@ impl App {
                 self.web_loading_complete = true;
             }
             #[cfg(not(target_arch = "wasm32"))]
-            let _ = presented;
+            if let Some(benchmark) = &mut self.ui_benchmark {
+                if presented && benchmark.frames > 10 {
+                    let now = std::time::Instant::now();
+                    if let Some(previous) = benchmark.last_presented {
+                        benchmark.presented_samples.push(now.duration_since(previous).as_secs_f64() * 1000.0);
+                    }
+                    benchmark.last_presented = Some(now);
+                }
+            }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(result) = renderer.take_capture() {
                 #[cfg(unix)]

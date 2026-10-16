@@ -1,11 +1,14 @@
 use super::*;
 
 impl Renderer {
+    pub fn gpu_fault(&self) -> Option<&'static str> { self.viewport.gpu_fault() }
+    pub fn set_viewport_repaint_callback(&mut self, repaint: impl Fn() + Send + Sync + 'static) {
+        self.viewport.set_repaint_callback(repaint);
+    }
     #[cfg(all(not(target_arch = "wasm32"), unix))]
     pub fn viewport_diagnostics(&self) -> serde_json::Value {
         self.viewport.diagnostics()
     }
-    #[cfg(all(not(target_arch = "wasm32"), unix))]
     pub fn viewport_refined(&self) -> bool {
         self.viewport.is_refined()
     }
@@ -40,9 +43,23 @@ impl Renderer {
         };
         for (id, image_deltas) in output.textures_delta.set.drain() {
             for image_delta in image_deltas {
+                self.ui_textures.update(id, &image_delta);
                 self.egui_renderer
                     .update_texture(&self.device, &self.queue, id, &image_delta);
             }
+        }
+
+        // A surface has only a few drawable textures. Submitting cached UI
+        // frames behind slow scene work exhausts them and makes acquisition
+        // wait on the UI thread. Keep processing input, but submit no more
+        // presentation work until the existing scene fence has completed.
+        if self.viewport.gpu_work_pending(&self.device) {
+            self.free_textures(output);
+            return false;
+        }
+        if self.viewport.gpu_fault().is_some() {
+            self.free_textures(output);
+            return false;
         }
 
         let mut encoder = self
@@ -160,8 +177,20 @@ impl Renderer {
         let deferred = !mesh_only && world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported;
         let computing_optimization = self.has_pending_computations(egui);
-        let interleaved = refine && !computing_optimization && !interacting && !deferred && !self.hybrid_enabled && self.mesh_vertex_count == 0;
-        let viewport_refine = refine && !mesh_only;
+        // Interaction pauses a stable plan; it must not change the plan's
+        // representation and discard all progress on press/release events.
+        let interleaved = refine && !deferred && !self.hybrid_enabled && self.mesh_vertex_count == 0;
+        let rect = if interleaved && self.use_bvh {
+            refinement_region::projected_region(camera, self.scene_bounds, view_key.size)
+        } else { [0, 0, view_key.size[0], view_key.size[1]] };
+        self.viewport.set_refinement_region(if interleaved { rect } else { [0; 4] },
+            interleaved.then(|| self.mesh_background_pipeline.clone()));
+        self.queue.write_buffer(&self.camera_buffer, std::mem::offset_of!(GpuCamera, refinement_rect) as u64,
+            bytemuck::cast_slice(&rect));
+        // Simple shading still traces the source field. It needs the same
+        // bounded previews/native refinement as full materials on complex
+        // scenes; shading quality alone cannot make a full viewport cheap.
+        let viewport_refine = !mesh_only;
         self.viewport.set_playback_budget(animation_playback);
         self.viewport.set_interacting(interacting);
         self.viewport.set_refinement_paused(computing_optimization);
@@ -185,8 +214,10 @@ impl Renderer {
         if work != crate::viewport::Work::Cached {
             self.upload_splat_camera(camera, world);
         }
-        let quick_preview =
-            !interleaved && (matches!(work, crate::viewport::Work::Preview) || !refine);
+        let quick_preview = matches!(work, crate::viewport::Work::Preview)
+            || matches!(work, crate::viewport::Work::Interleave { first, .. }
+                if first < self.viewport.phase_samples())
+            || !refine;
         let scene_pipeline = if mesh_only {
             &self.mesh_background_pipeline
         } else if self.hybrid_enabled {
@@ -214,6 +245,7 @@ impl Renderer {
             }
         };
         let mesh_vertex_count = if self.mesh_is_visible() { self.mesh_vertex_count } else { 0 };
+        self.viewport.set_contact_active(!quick_preview && !deferred && !mesh_only);
         let readback = self.viewport.encode(
             &self.device,
             &self.queue,
@@ -519,7 +551,351 @@ impl Renderer {
         let frame = self.capture_result.lock().unwrap().take();
         if frame.is_some() {
             self.capture_pending = false;
+            if let Some(fault) = self.gpu_fault() { return Some(Err(fault.to_owned())); }
         }
         frame
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod scheduling_tests {
+    use super::*;
+
+    fn sampled_field(renderer: &Renderer, capacity: u32, features: SceneShaderFeatures) -> Vec<[f32; 4]> {
+        let source = specialized_shader_source(&renderer.shader_source, capacity);
+        let source = format!("{source}\n{}", r#"
+@fragment fn fs_navigation_field(input: VertexOutput) -> @location(0) vec4<f32> {
+    let index = u32(input.position.x) + 32u * u32(input.position.y);
+    let point = vec3(f32(index % 13u) * 0.4 - 2.4,
+        f32((index / 13u) % 13u) * 0.4 - 2.4, f32(index / 169u) * 0.5 - 1.2);
+    let field = scene_distance(point);
+    return vec4(field, 0.0, 1.0);
+}
+"#);
+        let shader = renderer.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("navigation field regression"), source: wgpu::ShaderSource::Wgsl(source.clone().into()),
+        });
+        let mut constants = scene_feature_constants(&source, features);
+        constants.extend_from_slice(&[("USE_BVH", 1.0), ("HAS_BOOLEANS", f64::from(capacity > 1))]);
+        let pipeline = renderer.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("navigation field regression"), layout: Some(&renderer.pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"),
+                buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_navigation_field"),
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba32Float,
+                    blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: wgpu::PipelineCompilationOptions { constants: &constants, ..Default::default() } }),
+            primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
+            multiview_mask: None, cache: None,
+        });
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("navigation field grid"),
+            size: wgpu::Extent3d { width: 32, height: 32, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let buffer = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("navigation field readback"), size: 32 * 32 * 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false,
+        });
+        let mut encoder = renderer.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view,
+                    resolve_target: None, depth_slice: None, ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store } })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &renderer.bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        encoder.copy_texture_to_buffer(target.as_image_copy(), wgpu::TexelCopyBufferInfo {
+            buffer: &buffer, layout: wgpu::TexelCopyBufferLayout {
+                offset: 0, bytes_per_row: Some(32 * 16), rows_per_image: None }
+        }, target.size());
+        renderer.queue.submit([encoder.finish()]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| { sender.send(result).unwrap(); });
+        renderer.device.poll(wgpu::PollType::Wait { submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(15)) }).unwrap();
+        receiver.recv().unwrap().unwrap();
+        let mapped = buffer.slice(..).get_mapped_range().unwrap();
+        let values = bytemuck::cast_slice(&mapped).to_vec();
+        drop(mapped);
+        buffer.unmap();
+        values
+    }
+
+    fn native_simple_pixels(renderer: &Renderer) -> Vec<u8> {
+        renderer.direct_reference_pixels(true)
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn deformed_splat_fallback_preserves_distance_field_and_source() {
+        use crate::model::{GroupRenderRepresentation, Lattice, PrimitiveKind};
+        let mut root = SdfObject::create_kind(PrimitiveKind::Sphere);
+        root.softness = 0.0;
+        root.render_representation = GroupRenderRepresentation::GaussianSplats;
+        let mut cage = Lattice::new(-Vec3::splat(2.5), Vec3::splat(2.5), 7);
+        for z in 0..7 { for y in 0..7 { for x in 0..7 {
+            let index = cage.index(x, y, z);
+            cage.offsets[index] = Vec3::new(0.12 * y as f32 / 6.0,
+                0.07 * (x as f32 / 6.0).sin(), 0.03 * z as f32 / 6.0);
+        } } }
+        root.lattice = Some(cage);
+        let mut scene = vec![root.clone()];
+        for index in 0..8 {
+            let mut part = SdfObject::create_kind(PrimitiveKind::Box);
+            part.boolean_parent = Some(root.uuid);
+            part.transform.translation = Vec3::new((index % 3) as f32 * 0.65 - 0.65,
+                (index / 3) as f32 * 0.6 - 0.6, 0.0);
+            if index == 0 { part.transform.scale = Vec3::new(0.7, 1.2, 0.85); }
+            scene.push(part);
+        }
+        let saved = serde_json::to_vec(&scene).unwrap();
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 65, height: 49, ..Default::default()
+        })).unwrap();
+        let mut camera = Camera::new();
+        camera.viewport = renderer.size();
+        let world = World::default();
+        // The material-preview upload retains the unsplit source component.
+        renderer.upload_scene_with_world_exposure(&camera, &scene, &[], [1, 1],
+            1.0, world, scene_upload::ScenePipelinePreparation::MaterialPreview);
+        assert!(renderer.has_booleans);
+        let mut features = SceneShaderFeatures::for_scene(&[root.material], &[]);
+        features.spatial.lattice = true;
+        features.flat_unions = true;
+        renderer.prepare_scene_pipelines(world, 2, features);
+        renderer.upload_splat_camera(&camera, world);
+        let reference = native_simple_pixels(&renderer);
+        let reference_field = sampled_field(&renderer, 2, features);
+        renderer.upload_scene_with_world(&camera, &scene, &[], [2, 2], world);
+        assert!(!renderer.has_booleans, "uncomputed splats must keep the exact fallback accelerated");
+        assert_eq!(renderer.node_count, 17);
+        renderer.upload_splat_camera(&camera, world);
+        let accelerated = native_simple_pixels(&renderer);
+        let header = b"P6\n65 49\n255\n".len();
+        let changed = reference[header..].chunks_exact(3).zip(accelerated[header..].chunks_exact(3))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3)).count();
+        // Different ray starts and finite-difference normals can affect a few
+        // contour/seam pixels. Check the underlying GPU field independently.
+        assert!(changed <= 16, "deformed union changed {changed}/3185 pixels");
+        features.flat_unions = false;
+        let accelerated_field = sampled_field(&renderer, 1, features);
+        for (expected, actual) in reference_field.iter().zip(&accelerated_field) {
+            assert!((expected[0] - actual[0]).abs() < 0.00002,
+                "deformed field changed: {expected:?} vs {actual:?}");
+        }
+        assert_eq!(serde_json::to_vec(&scene).unwrap(), saved);
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn simple_shading_moves_with_a_preview_and_finishes_at_native_resolution() {
+        use std::time::{Duration, Instant};
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 65, height: 49, ..Default::default()
+        })).unwrap();
+        let scene = vec![SdfObject::create_kind(crate::model::PrimitiveKind::Sphere)];
+        let world = World::default();
+        let mut camera = Camera::new();
+        camera.viewport = renderer.size();
+        renderer.upload_scene_with_world(&camera, &scene, &[], [1, 1], world);
+        renderer.upload_splat_camera(&camera, world);
+        let reference = native_simple_pixels(&renderer);
+        renderer.viewport.set_initial_budget(64);
+        let context = egui::Context::default();
+        let mut output = context.run_ui(egui::RawInput::default(), |_| {});
+        renderer.render(&camera, &scene, &[], [1, 1], 0, world, &[], &context,
+            &mut output, true, false, true, false, false, true, false, false);
+        assert!(renderer.preview_pixels() <= 256, "simple shading must honor the minimum useful motion budget");
+        assert!(!renderer.capture_pending, "exports must wait for native tiles");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let image = loop {
+            assert!(Instant::now() < deadline, "simple shading did not converge");
+            renderer.device.poll(wgpu::PollType::Wait {
+                submission_index: None, timeout: Some(Duration::from_secs(5))
+            }).unwrap();
+            if let Some(image) = renderer.take_capture() { break image.unwrap(); }
+            let mut output = context.run_ui(egui::RawInput::default(), |_| {});
+            renderer.render(&camera, &scene, &[], [1, 1], 0, world, &[], &context,
+                &mut output, true, false, true, false, false, false, false, false);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(renderer.viewport_refined());
+        let mut actual = b"P6\n65 49\n255\n".to_vec();
+        for pixel in image.rgba.chunks_exact(4) { actual.extend_from_slice(&pixel[..3]); }
+        assert_eq!(actual, reference, "native simple shading must retain its exact pixels");
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn partial_first_sparse_phase_keeps_preview_and_publishes_samples() {
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 65, height: 49, ..Default::default()
+        })).unwrap();
+        let mut camera = Camera::new();
+        camera.viewport = renderer.size();
+        let scene = vec![SdfObject::create_kind(crate::model::PrimitiveKind::Sphere)];
+        renderer.upload_scene_with_world(&camera, &scene, &[], [1, 1], World::default());
+        renderer.viewport.set_initial_budget(64);
+        let work = renderer.viewport.prepare(&renderer.device, crate::viewport::ViewKey {
+            matrix: (camera.projection() * camera.view()).to_cols_array_2d(),
+            position: camera.position.to_array(), projection: 0,
+            versions: [1, 1], size: [65, 49], refine: true,
+        }, true, false, true);
+        assert_eq!(work, crate::viewport::Work::Preview);
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("partial phase composite"),
+            size: wgpu::Extent3d { width: 65, height: 49, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: renderer.render_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let mut draw = |work| {
+            let mut encoder = renderer.device.create_command_encoder(&Default::default());
+            let quick = matches!(work, crate::viewport::Work::Preview)
+                || matches!(work, crate::viewport::Work::Interleave { first, .. } if first < 20);
+            let pipeline = if quick { &renderer.fast_pipeline } else { &renderer.pipeline };
+            let readback = renderer.viewport.encode(&renderer.device, &renderer.queue, &mut encoder,
+                work, pipeline, &renderer.bind_group, None, None);
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view, resolve_target: None, depth_slice: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    })], ..Default::default()
+                });
+                renderer.viewport.composite(&mut pass);
+            }
+            renderer.queue.submit([encoder.finish()]);
+            renderer.viewport.submitted(&renderer.queue, work, readback);
+            renderer.benchmark_pixels(&target)
+        };
+        let coarse = draw(work);
+        let preview = draw(crate::viewport::Work::Interleave { first: 0, end: 20 });
+        let header = b"P6\n65 49\n255\n".len();
+        let reconstructed = coarse[header..].chunks_exact(3)
+            .zip(preview[header..].chunks_exact(3)).filter(|(a, b)| a != b).count();
+        assert!(reconstructed > 20 * 16,
+            "coverage must improve the background between samples, not leave the tiny navigation preview");
+        let partial = draw(crate::viewport::Work::Interleave { first: 40, end: 40 + 13 });
+        let header = b"P6\n65 49\n255\n".len();
+        let mut changed = 0;
+        for (i, (before, after)) in preview[header..].chunks_exact(3)
+            .zip(partial[header..].chunks_exact(3)).enumerate() {
+            let (x, y) = (i % 65, i / 65);
+            let written = x % 16 == 8 && y % 16 == 8 && (y / 16) * 5 + x / 16 < 13;
+            if written { changed += usize::from(before != after); }
+            else { assert_eq!(before, after, "unwritten sample at {x},{y} must retain its preview"); }
+        }
+        assert!(changed > 0, "partial phases must publish completed native samples immediately");
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn repeated_navigation_pauses_keep_one_plan_and_finish_exactly() {
+        use std::time::{Duration, Instant};
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 65, height: 49, ..Default::default()
+        })).unwrap();
+        let mut camera = Camera::new();
+        camera.viewport = renderer.size();
+        let scene = vec![SdfObject::create_kind(crate::model::PrimitiveKind::Sphere)];
+        let context = egui::Context::default();
+        let mut generation = None;
+        for frame in 0..18 {
+            if frame < 6 { camera.pan(Vec2::new(2.0, 1.0)); }
+            let interacting = frame < 6 || frame % 2 == 1;
+            let mut output = context.run_ui(egui::RawInput::default(), |_| {});
+            renderer.render(&camera, &scene, &[], [17, 19], 0, World::default(), &[],
+                &context, &mut output, false, false, true, true, false, interacting, false, false);
+            renderer.device.poll(wgpu::PollType::Wait {
+                submission_index: None, timeout: Some(Duration::from_secs(5))
+            }).unwrap();
+            #[cfg(unix)]
+            if frame >= 6 {
+                let diagnostics = renderer.viewport.diagnostics();
+                assert_eq!(diagnostics["interleaved"], true);
+                let current = diagnostics["render_generation"].as_u64().unwrap();
+                if let Some(previous) = generation { assert_eq!(previous, current,
+                    "press/release must not replace a stable refinement plan"); }
+                generation = Some(current);
+            }
+            std::thread::sleep(Duration::from_millis(17));
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let actual = loop {
+            assert!(Instant::now() < deadline, "stable view must finish after navigation pauses");
+            let mut output = context.run_ui(egui::RawInput::default(), |_| {});
+            renderer.render(&camera, &scene, &[], [17, 19], 0, World::default(), &[],
+                &context, &mut output, true, false, true, true, false, false, false, false);
+            renderer.device.poll(wgpu::PollType::Wait {
+                submission_index: None, timeout: Some(Duration::from_secs(5))
+            }).unwrap();
+            if let Some(capture) = renderer.take_capture() { break capture.unwrap(); }
+            std::thread::sleep(Duration::from_millis(17));
+        };
+        assert!(renderer.viewport_refined());
+        let reference = renderer.render_offscreen(&camera, &scene, World::default(), &[], Duration::from_secs(10)).unwrap();
+        assert_eq!(actual.rgba, reference.rgba);
+        let mut actual_ppm = b"P6\n65 49\n255\n".to_vec();
+        for pixel in actual.rgba.chunks_exact(4) { actual_ppm.extend_from_slice(&pixel[..3]); }
+        assert_eq!(actual_ppm, renderer.direct_reference_pixels(false),
+            "finished native output must match a direct full-screen draw that bypasses the scheduler");
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn split_sparse_batches_match_the_completed_image() {
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 65, height: 49, ..Default::default()
+        })).expect("headless renderer");
+        let scene = vec![SdfObject::create_kind(crate::model::PrimitiveKind::Sphere)];
+        let camera = Camera::new();
+        let timeout = std::time::Duration::from_secs(30);
+        let reference = renderer.render_offscreen(&camera, &scene, World::default(), &[], timeout)
+            .expect("reference image");
+        // A phase covers 5 * 4 blocks; a three-pixel budget must stop inside it.
+        renderer.viewport.set_initial_budget(3);
+        let split = renderer.render_offscreen(&camera, &scene, World::default(), &[], timeout)
+            .expect("split sparse image");
+        assert_eq!(reference.rgba, split.rgba);
+
+        // A dropped encoder has no GPU fence. Its cursor must be rolled back
+        // and re-encoded, rather than leaving a phantom pending submission.
+        let mut camera = camera;
+        camera.viewport = renderer.size();
+        renderer.upload_scene_with_world(&camera, &scene, &[], [7, 7], World::default());
+        renderer.viewport.prepare(&renderer.device, crate::viewport::ViewKey {
+            matrix: (camera.projection() * camera.view()).to_cols_array_2d(),
+            position: camera.position.to_array(), projection: 0,
+            versions: [7, 7], size: [65, 49], refine: true,
+        }, true, false, true);
+        let mut encoder = renderer.device.create_command_encoder(&Default::default());
+        renderer.viewport.encode(&renderer.device, &renderer.queue, &mut encoder,
+            crate::viewport::Work::Interleave { first: 0, end: 257 * 5 * 4 },
+            &renderer.pipeline, &renderer.bind_group, None, None);
+        drop(encoder);
+        let context = egui::Context::default();
+        for _ in 0..3 {
+            let mut output = context.run_ui(egui::RawInput::default(), |_| {});
+            assert!(!renderer.render(&camera, &scene, &[], [7, 7], 0, World::default(), &[],
+                &context, &mut output, true, false, true, true, false, false, false, false));
+            renderer.device.poll(wgpu::PollType::Wait {
+                submission_index: None, timeout: Some(std::time::Duration::from_secs(5))
+            }).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(17));
+        }
+        #[cfg(unix)]
+        assert!(renderer.viewport.diagnostics()["completed"].as_u64().unwrap() > 0,
+            "dropping an encoder must not prevent subsequent refinement");
     }
 }

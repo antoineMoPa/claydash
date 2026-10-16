@@ -7,6 +7,7 @@ struct Camera {
     night_params: vec4<f32>, night_color: vec4<f32>,
     lighting_params: vec4<f32>,
     view_projection: mat4x4<f32>,
+    refinement_rect: vec4<u32>,
 }
 struct Object {
     state: vec4<i32>,

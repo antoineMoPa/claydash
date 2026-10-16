@@ -1,5 +1,5 @@
 // SCENE_ABI_MODULE
-struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
+struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32>, ray_min: vec4<f32>, ray_max: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> objects: array<Object>;
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
@@ -40,36 +40,36 @@ const FLAT_UNION_ROOT: i32 = -2;
 const FLAT_COMPONENT_ROOT: i32 = -3;
 
 struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) clip: vec2<f32> }
-@vertex fn vs_main(@builtin(vertex_index) index: u32,
-    @builtin(instance_index) instance: u32) -> VertexOutput {
-    var positions = array<vec2<f32>, 3>(vec2(-1.0, -3.0), vec2(3.0, 1.0), vec2(-1.0, 1.0));
+@vertex fn vs_main(@builtin(vertex_index) vertex: u32,
+    @builtin(instance_index) sample: u32) -> VertexOutput {
     var out: VertexOutput;
-    if (instance & 0x80000000u) != 0u {
-        let width = max(camera.world_mode.w, 1u);
-        let height = max(camera.count.z, 1u);
-        let blocks_per_row = (width + 15u) / 16u;
-        let sample = instance & 0x007fffffu;
-        let phase = (instance >> 23u) & 255u;
-        var offset = vec2<u32>(0u);
+    if vertex < 3u {
+        let positions = array<vec2<f32>, 3>(vec2(-1.0, -3.0), vec2(3.0, 1.0), vec2(-1.0, 1.0));
+        out.clip = positions[vertex];
+    } else {
+        // One native pixel per instance. The sample is a plain linear cursor;
+        // full-screen draws use vertices0..3 and sparse draws use3..9.
+        let full_size = vec2(camera.world_mode.w, camera.count.z);
+        let rect = select(vec4(0u,0u,full_size), camera.refinement_rect, all(camera.refinement_rect.zw > vec2(0u)));
+        let size = rect.zw;
+        let columns = (size.x + 15u) / 16u;
+        let cells = columns * ((size.y + 15u) / 16u);
+        let phase = sample / cells;
+        let cell = sample % cells;
+        var offset = vec2(0u);
         for (var bit = 0u; bit < 4u; bit++) {
             let digit = (phase >> (6u - 2u * bit)) & 3u;
             offset.x |= u32(digit == 1u || digit == 2u) << bit;
             offset.y |= u32(digit == 1u || digit == 3u) << bit;
         }
-        let pixel = vec2(sample % blocks_per_row, sample / blocks_per_row) * 16u + offset;
-        if pixel.x >= width || pixel.y >= height {
-            out.clip = vec2(2.0);
-        } else {
-            let corner = array<vec2<f32>, 6>(vec2(0.0, 0.0), vec2(1.0, 0.0),
-                vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
-            let screen = vec2<f32>(pixel) + corner[index];
-            out.clip = screen / vec2<f32>(f32(width), f32(height)) * vec2(2.0, -2.0)
-                + vec2(-1.0, 1.0);
+        let pixel = vec2(cell % columns, cell / columns) * 16u + offset;
+        if any(pixel >= size) { out.clip = vec2(2.0); }
+        else {
+            let corners = array<vec2<f32>,6>(vec2(0.0,0.0),vec2(1.0,0.0),vec2(0.0,1.0),
+                vec2(1.0,0.0),vec2(1.0,1.0),vec2(0.0,1.0));
+            out.clip = (vec2<f32>(pixel + rect.xy) + corners[vertex-3u]) / vec2<f32>(full_size) * vec2(2.0,-2.0) + vec2(-1.0,1.0);
         }
-        out.position = vec4(out.clip, 0.0, 1.0);
-        return out;
     }
-    out.clip = positions[index];
     out.position = vec4(out.clip, 0.0, 1.0);
     return out;
 }
@@ -989,7 +989,7 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
     } else if HAS_LOFTS && object.state.y == 7 {
         distance = loft_distance(local, object);
     } else if object.state.y == 13 {
-        distance = sheet_distance(local, object);
+        distance = sheet_distance(local, SheetData(bitcast<u32>(object.params.x), bitcast<u32>(object.params.y), u32(object.params.z == 1.0)));
     } else if HAS_TEXT && object.state.y == 11 {
         distance = text_distance(local, object);
     } else if HAS_NEURAL_SDF && object.state.y == 12 {
@@ -1268,11 +1268,13 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
                 if child_distance < closest.x { closest = vec2(child_distance, f32(i)); }
             }
             var node_index = parent.operand_tree.x;
-            while node_index < parent.operand_tree.y {
+            let traversal_end = min(parent.operand_tree.y, arrayLength(&bvh));
+            for (var visited = min(node_index, traversal_end); visited < traversal_end; visited++) {
+                if node_index >= traversal_end { break; }
                 let node = bvh[node_index];
                 let lower_bound = distance(parent_point, node.center_radius.xyz) - node.center_radius.w;
                 if lower_bound > closest.x {
-                    node_index = node.metadata.y;
+                    node_index = max(node_index + 1u, node.metadata.y);
                     continue;
                 }
                 if node.metadata.x != 0xffffffffu {
@@ -1348,9 +1350,12 @@ fn component_distance(point: vec3<f32>, start: u32, root: u32) -> vec2<f32> {
 }
 
 fn scene_distance_limit(point: vec3<f32>, limit: f32, stop_on_inside: bool, skip_splats: bool) -> vec2<f32> {
+    if !all(abs(point) < vec3(1e20)) { return vec2(limit, -1.0); }
     var closest = vec2(limit, 0.0);
     var node_index = 0u;
-    while node_index < camera.count.y {
+    let traversal_end = min(camera.count.y, arrayLength(&bvh));
+    for (var visited = 0u; visited < traversal_end; visited++) {
+        if node_index >= traversal_end { break; }
         let node = bvh[node_index];
         if skip_splats && node.metadata.x != 0xffffffffu
             && node.metadata.z == node.metadata.x
@@ -1380,7 +1385,7 @@ fn scene_distance_limit(point: vec3<f32>, limit: f32, stop_on_inside: bool, skip
                 if stop_on_inside && closest.x <= 0.0 { return closest; }
             }
             node_index += 1u;
-        } else { node_index = node.metadata.y; }
+        } else { node_index = max(node_index + 1u, node.metadata.y); }
     }
     return closest;
 }
@@ -1475,19 +1480,27 @@ fn scene_normal(point: vec3<f32>, index: u32) -> vec3<f32> {
     let b = vec3(-1.0, -1.0, 1.0);
     let c = vec3(-1.0, 1.0, -1.0);
     let d = vec3(1.0, 1.0, 1.0);
+    var gradient: vec3<f32>;
     if !HAS_BOOLEANS {
         let object = objects[index];
-        return normalize(a * object_distance(mirror_point(point + a * e, object), object)
+        gradient = a * object_distance(mirror_point(point + a * e, object), object)
             + b * object_distance(mirror_point(point + b * e, object), object)
             + c * object_distance(mirror_point(point + c * e, object), object)
-            + d * object_distance(mirror_point(point + d * e, object), object));
+            + d * object_distance(mirror_point(point + d * e, object), object);
+    } else {
+        gradient = a * component_distance(point + a * e, component.x, component.y).x
+            + b * component_distance(point + b * e, component.x, component.y).x
+            + c * component_distance(point + c * e, component.x, component.y).x
+            + d * component_distance(point + d * e, component.x, component.y).x;
     }
-    return normalize(
-        a * component_distance(point + a * e, objects[index].component.x, objects[index].component.y).x +
-        b * component_distance(point + b * e, objects[index].component.x, objects[index].component.y).x +
-        c * component_distance(point + c * e, objects[index].component.x, objects[index].component.y).x +
-        d * component_distance(point + d * e, objects[index].component.x, objects[index].component.y).x
-    );
+    let magnitude = length(gradient);
+    if magnitude > 1e-10 && magnitude < 1e20 { return gradient / magnitude; }
+    // A clipped thin sheet can have a flat finite-difference field within the
+    // hit tolerance. Never send an undefined normal into secondary ray work.
+    let facing = camera.position.xyz - point;
+    let reach = length(facing);
+    if reach > 1e-10 && reach < 1e20 { return facing / reach; }
+    return vec3(0.0, 1.0, 0.0);
 }
 
 // ENVIRONMENT_MODULE
@@ -1842,14 +1855,29 @@ fn depth_accelerator_component_distance(point: vec3<f32>, direction: vec3<f32>, 
 
 fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
     excluded_splats: array<u32, 12>, skip_splats: bool) -> vec3<f32> {
+    if !all(abs(origin) < vec3(1e20)) || !all(abs(direction) < vec3(2.0))
+        || dot(direction, direction) < 0.5 { return vec3(100.0, -1.0, -1.0); }
     neural_ray_direction = direction;
     var closest = 100.0;
     var owner = -1.0;
     var splat_offset = -1.0;
     let inverse_direction = vec3(1.0) / (select(vec3(-1.0), vec3(1.0), direction >= vec3(0.0)) * max(abs(direction), vec3(1e-20)));
     var node_index = 0u;
-    while node_index < camera.count.y {
+    let traversal_end = min(camera.count.y, arrayLength(&bvh));
+    for (var visited = 0u; visited < traversal_end; visited++) {
+        if node_index >= traversal_end { break; }
         let node = bvh[node_index];
+        if node.ray_min.w > 0.0 {
+            let a = (node.ray_min.xyz - origin) * inverse_direction;
+            let b = (node.ray_max.xyz - origin) * inverse_direction;
+            let lo = min(a, b);
+            let hi = max(a, b);
+            if max(0.0, max(lo.x, max(lo.y, lo.z))) > min(closest, min(hi.x, min(hi.y, hi.z))) {
+                node_index = max(node_index + 1u, node.metadata.y);
+                continue;
+            }
+        }
+        // Preserve the original march origin and tolerance for surviving rays.
         let first = (node.aabb_min.xyz - vec3(0.01) - origin) * inverse_direction;
         let second = (node.aabb_max.xyz + vec3(0.01) - origin) * inverse_direction;
         let entry = min(first, second);
@@ -1857,7 +1885,7 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
         let start = max(0.0, max(entry.x, max(entry.y, entry.z)));
         let end = min(closest, min(exit.x, min(exit.y, exit.z)));
         if start > end {
-            node_index = node.metadata.y;
+            node_index = max(node_index + 1u, node.metadata.y);
             continue;
         }
         if node.metadata.x != 0xffffffffu {
@@ -2044,10 +2072,12 @@ fn trace_objects(origin: vec3<f32>, direction: vec3<f32>, epsilon: f32,
 // distance query it prunes against zero from the first node and can exit early.
 fn containing_component(point: vec3<f32>) -> vec2<f32> {
     var node_index = 0u;
-    while node_index < camera.count.y {
+    let traversal_end = min(camera.count.y, arrayLength(&bvh));
+    for (var visited = 0u; visited < traversal_end; visited++) {
+        if node_index >= traversal_end { break; }
         let node = bvh[node_index];
         if any(point < node.aabb_min.xyz) || any(point > node.aabb_max.xyz) {
-            node_index = node.metadata.y;
+            node_index = max(node_index + 1u, node.metadata.y);
             continue;
         }
         if node.metadata.x != 0xffffffffu {
@@ -2068,6 +2098,8 @@ fn containing_component(point: vec3<f32>) -> vec2<f32> {
 // Reflections stay on the incident side; transmission crosses the surface.
 // The caller already knows which side contains the ray, avoiding a scene query.
 fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u32) -> vec3<f32> {
+    if !all(abs(origin) < vec3(1e20)) || !all(abs(direction) < vec3(2.0))
+        || dot(direction, direction) < 0.5 { return vec3(100.0, -1.0, -1.0); }
     neural_ray_direction = direction;
     if USE_BVH {
         if !inside { return trace_objects(origin, direction, 0.0015, empty_splat_exclusions(), false); }

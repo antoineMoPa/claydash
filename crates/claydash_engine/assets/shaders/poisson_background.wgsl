@@ -6,8 +6,10 @@ struct VertexOutput { @builtin(position) position:vec4<f32>, @location(0) clip:v
 }
 @fragment fn fs_main(input:VertexOutput)->@location(0) vec4<f32> {
     if camera.world_mode.x==3u { return vec4(0.0); }
-    let far=camera.inverse_view_projection*vec4(input.clip,1.0,1.0);
-    let near=camera.inverse_view_projection*vec4(input.clip,0.0,1.0);
+    let size=vec2(f32(camera.world_mode.w),f32(camera.count.z));
+    let clip=input.position.xy/size*vec2(2.0,-2.0)+vec2(-1.0,1.0);
+    let far=camera.inverse_view_projection*vec4(clip,1.0,1.0);
+    let near=camera.inverse_view_projection*vec4(clip,0.0,1.0);
     let ray=select(normalize(far.xyz/far.w-camera.position.xyz),normalize(far.xyz/far.w-near.xyz/near.w),camera.count.w!=0u);
     return vec4(background(ray),1.0);
 }

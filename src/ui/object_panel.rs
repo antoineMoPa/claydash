@@ -27,7 +27,11 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
         return;
     }
     if selection.len() != 1 {
-        ui.label("Select one object to edit it.");
+        if selection.is_empty() {
+            ui.label("Select one object to edit it.");
+        } else {
+            group_optimizations_panel(ui, tree);
+        }
         return;
     }
     let mut scene = objects(tree);

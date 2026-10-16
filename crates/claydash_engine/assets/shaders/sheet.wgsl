@@ -1,3 +1,6 @@
+// Small integer descriptor for the sheet evaluator. Passing the entire scene
+// Object through each nested relief query creates excessive private shader state.
+struct SheetData { offset: u32, count: u32, directional: u32 }
 fn sheet_cubic_basis(t: f32) -> vec4<f32> {
     let a = 1.0-t;
     return vec4(a*a*a, 3.0*t*a*a, 3.0*t*t*a, t*t*t);
@@ -7,14 +10,14 @@ fn sheet_taper(t: f32) -> f32 {
     return v*v*(3.0-2.0*v);
 }
 // Material-space height graph and relief; records follow the cut records.
-fn sheet_emboss_height(uv: vec2<f32>, object: Object) -> f32 {
-    let offset = bitcast<u32>(object.params.x);
-    let count = bitcast<u32>(object.params.y);
+fn sheet_emboss_height(uv: vec2<f32>, sheet: SheetData) -> f32 {
+    let offset = sheet.offset;
+    let count = sheet.count;
     let header = polygon_points[offset + 1u];
     let relief = polygon_points[offset + 2u];
     let emboss_offset = offset + 4u + (count + u32(header.y)) * 3u;
     var height = 0.0;
-    for (var i = 0u; i < u32(relief.x); i++) {
+    for (var i = 0u; i < min(u32(relief.x), 8u); i++) {
         let base = emboss_offset + i * 3u;
         let center = polygon_points[base];
         let circle = polygon_points[base + 1u];
@@ -33,20 +36,23 @@ fn sheet_emboss_height(uv: vec2<f32>, object: Object) -> f32 {
         let t = clamp(uv/polygon_points[offset]+vec2(0.5), vec2(0.0), vec2(1.0));
         let x = sheet_cubic_basis(t.x);
         let y = sheet_cubic_basis(t.y);
-        for (var j=0u; j<4u; j++) { for (var i=0u; i<4u; i++) {
-            let index = j*4u+i;
-            let pair = polygon_points[extension+index/2u];
-            height += pair[index%2u]*x[i]*y[j];
-        } }
+        // The patch has exactly sixteen controls. Keep this fixed-size tensor
+        // product explicit: nested dynamic indexing here is multiplied by
+        // every ray/normal/AO query in complex scene kernels.
+        let row0 = vec4(polygon_points[extension], polygon_points[extension + 1u]);
+        let row1 = vec4(polygon_points[extension + 2u], polygon_points[extension + 3u]);
+        let row2 = vec4(polygon_points[extension + 4u], polygon_points[extension + 5u]);
+        let row3 = vec4(polygon_points[extension + 6u], polygon_points[extension + 7u]);
+        height += dot(vec4(dot(row0, x), dot(row1, x), dot(row2, x), dot(row3, x)), y);
         extension += 8u;
     }
-    for (var path=0u; path<u32(feature.y); path++) {
+    for (var path=0u; path<min(u32(feature.y), 4u); path++) {
         let header = polygon_points[extension];
         let taper = polygon_points[extension+1u];
         let stations = extension+2u;
         var along = 0.0;
         var path_height = 0.0;
-        for (var i=0u; i+1u<u32(header.x); i++) {
+        for (var i=0u; i+1u<min(u32(header.x), 8u); i++) {
             let a = stations+i*3u;
             let b = a+3u;
             let start = polygon_points[a];
@@ -70,9 +76,9 @@ fn sheet_emboss_height(uv: vec2<f32>, object: Object) -> f32 {
 }
 
 // Shared analytic sheet evaluator; packed strips are compiled once per scene upload.
-fn sheet_strip_distance(point: vec3<f32>, object: Object) -> f32 {
-    let offset = bitcast<u32>(object.params.x);
-    let count = bitcast<u32>(object.params.y);
+fn sheet_strip_distance(point: vec3<f32>, sheet: SheetData) -> f32 {
+    let offset = sheet.offset;
+    let count = sheet.count;
     let size = polygon_points[offset];
     let header = polygon_points[offset + 1u];
     let half = header.x;
@@ -102,7 +108,12 @@ fn sheet_strip_distance(point: vec3<f32>, object: Object) -> f32 {
         let uv = vec2(x, point.y);
         let box = abs(uv) - size * 0.5;
         var planar = length(max(box, vec2(0.0))) + min(max(box.x, box.y), 0.0);
-        for (var j = 0u; j < u32(header.y); j++) {
+        // Cuts only increase this planar distance. Reject a chart against the
+        // current union before walking its cut records, as well as before
+        // evaluating relief. Curved panels can have many inverse charts.
+        let chart_bound = max(max(planar, range.x - x), x - range.y) * factor;
+        if max(chart_bound, -half) >= result { continue; }
+        for (var j = 0u; j < min(u32(header.y), 32u); j++) {
             let cut = cut_offset + j * 3u;
             let kind = polygon_points[cut];
             let a = polygon_points[cut + 1u];
@@ -119,7 +130,7 @@ fn sheet_strip_distance(point: vec3<f32>, object: Object) -> f32 {
         // regardless of relief height. Avoid evaluating crowns and embosses
         // in charts that cannot improve the current union distance.
         if max(planar, -half) >= result { continue; }
-        let q = vec2(planar, abs(depth - sheet_emboss_height(uv, object)) - half);
+        let q = vec2(planar, abs(depth - sheet_emboss_height(uv, sheet)) - half);
         result = min(result, length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0));
     }
     return result * polygon_points[offset + 2u].y;
@@ -127,9 +138,9 @@ fn sheet_strip_distance(point: vec3<f32>, object: Object) -> f32 {
 
 // Ordered spatial forming, with bounded DFS (four bends, three inverse charts).
 // This field represents the union of all preimages, including self overlaps.
-fn sheet_directional_distance(point: vec3<f32>, object: Object) -> f32 {
-    let offset = bitcast<u32>(object.params.x);
-    let count = bitcast<u32>(object.params.y);
+fn sheet_directional_distance(point: vec3<f32>, sheet: SheetData) -> f32 {
+    let offset = sheet.offset;
+    let count = sheet.count;
     let size = polygon_points[offset];
     let header = polygon_points[offset + 1u];
     let cut_offset = offset + 4u + count * 3u;
@@ -143,7 +154,8 @@ fn sheet_directional_distance(point: vec3<f32>, object: Object) -> f32 {
     scales[0] = 1.0;
     var size_stack = 1u;
     var result = 1e10;
-    loop {
+    // At most four bends, each with three inverse charts: 1+3+9+27+81.
+    for (var chart = 0u; chart < 121u; chart++) {
         if size_stack == 0u { break; }
         size_stack -= 1u;
         let p = positions[size_stack];
@@ -157,7 +169,7 @@ fn sheet_directional_distance(point: vec3<f32>, object: Object) -> f32 {
             let uv = p.xy;
             let box = abs(uv) - size * 0.5;
             var planar = length(max(box, vec2(0.0))) + min(max(box.x, box.y), 0.0);
-            for (var j = 0u; j < u32(header.y); j++) {
+            for (var j = 0u; j < min(u32(header.y), 32u); j++) {
                 let cut = cut_offset + j * 3u;
                 let kind = polygon_points[cut];
                 let a = polygon_points[cut + 1u];
@@ -170,7 +182,7 @@ fn sheet_directional_distance(point: vec3<f32>, object: Object) -> f32 {
                 planar = max(planar, distance);
             }
             if max(constraint, max(planar, -header.x) * scale) >= result { continue; }
-            let q = vec2(planar, abs(p.z - sheet_emboss_height(uv, object)) - header.x) * scale;
+            let q = vec2(planar, abs(p.z - sheet_emboss_height(uv, sheet)) - header.x) * scale;
             result = min(result, max(constraint, length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0)));
         } else {
             let base = offset + 4u + (left - 1u) * 3u;
@@ -217,7 +229,7 @@ fn sheet_directional_distance(point: vec3<f32>, object: Object) -> f32 {
     return result * polygon_points[offset + 2u].y;
 }
 
-fn sheet_distance(point: vec3<f32>, object: Object) -> f32 {
-    if object.params.z == 1.0 { return sheet_directional_distance(point, object); }
-    return sheet_strip_distance(point, object);
+fn sheet_distance(point: vec3<f32>, sheet: SheetData) -> f32 {
+    if sheet.directional != 0u { return sheet_directional_distance(point, sheet); }
+    return sheet_strip_distance(point, sheet);
 }

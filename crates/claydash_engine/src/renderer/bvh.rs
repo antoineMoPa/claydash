@@ -215,6 +215,8 @@ fn build_bvh_subtree(bounds: &mut [ObjectBound], nodes: &mut Vec<GpuBvhNode>) {
         metadata: [BVH_LEAF, 0, 0, 0],
         aabb_min: minimum.extend(0.0).to_array(),
         aabb_max: maximum.extend(0.0).to_array(),
+        ray_min: [0.0; 4],
+        ray_max: [0.0; 4],
     });
 
     if bounds.len() == 1 {

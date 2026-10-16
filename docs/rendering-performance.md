@@ -4,7 +4,9 @@ The renderer supports 1,024 objects, including Boolean operands. Repetition can 
 
 ## Current rendering path
 
-The UI stays at native resolution. In Full Material mode, Exact starts shading native pixels immediately in a 16×16 ordered pattern across the entire image. Each pass adds one sample per block, and the composite reconstructs nearby pixels from completed samples. There is no coarse preview pass. After 256 phases every native pixel is exact and the image is cached. The explicit Simple Shading and Outline modes keep their own quick rendering path. Deferred and hybrid views retain 32-pixel native-resolution tiles. GPU timestamps target 6 ms of scene work during editing and 12 ms during animation playback. At most one batch is in flight. Without timestamp support, completion feedback limits backlog. An unchanged transform must not update the scene revision: otherwise a held drag restarts refinement on every redraw.
+The UI stays at native resolution. Both Simple Shading and Full Material use bounded source-rendering batches. During navigation, the viewport displays a GPU-timed coarse preview; after navigation stops, it fills in native pixels and caches the completed image. Simple Shading uses native tiles with its fast shader. Stationary Full Material Exact first fills a quick coverage sample in each 16×16 cell, then shades scattered single native pixels in 256 ordered phases. Batches can stop inside a phase when a whole phase exceeds the measured budget. The compositor publishes every completed native sample, including partial phases, and smoothly reconstructs the background from completed samples. Missing samples retain the navigation preview; completed phase groups progressively improve the reconstructed background. Deferred and hybrid views use 32-pixel native tiles. GPU timestamps target 8 ms of scene work during editing and 12 ms during playback. Motion previews can shrink below the native tile size, down to a 256-pixel budget, while full-material sparse batches can stop after one pixel and the initial coverage pass keeps at least 64 samples per batch. Refinement submissions are spaced by at least 16 ms; completion polling does not add another idle frame. Native automatic refinement redraws are paced; input can request an immediate redraw.
+
+Only one scene batch is in flight. While its fence is unfinished, the renderer polls without waiting and defers additional presentation submissions before acquiring a surface drawable. This keeps cached UI frames from exhausting the drawable pool behind slow scene work. Without timestamp support, multi-frame completion feedback still lowers the next batch budget. A new view caps inherited throughput to its initial scene budget, so cheap background work cannot inflate a rotated view's first preview. Unchanged transforms must not update scene revisions, otherwise a held drag restarts refinement.
 
 The default duck uses Deferred. It traces primary-hit geometry into position, normal, albedo, and optics buffers, then resolves lighting, SSAO, SSR, and thin-surface refraction. Screen-space effects need neighboring geometry, so the preview is lit immediately but native refinement is published only after **all** native geometry tiles are ready. Lighting-only changes can reuse that geometry. A final native image matches a direct render **of the same pipeline**, while a moving preview has less spatial detail.
 
@@ -14,7 +16,7 @@ Deferred approximates Exact ray shading. Reflections and refraction can see only
 
 - Scene upload packs independent Boolean components in postorder and builds bounds and lookups once per scene revision. Shader variants include only material and primitive families present in the scene. Preserve those specialization keys when adding features.
 - BVH traversal limits primary-ray candidates. Convex primitives use exact local ray intervals; eligible two-operand smooth subtractions and flat hard unions have specialized distance paths. General SDF marching remains necessary for unsupported shapes, repetition, modifiers, and complex CSG.
-- Exact scene distance queries use transform-aware AABB lower bounds for eligible primitive components. Smooth Boolean blends reserve their maximum possible distance reduction; spatial modifiers and repetition retain the sphere bound. Independent convex polygon prisms clip rays to a rounded, local-space interval before SDF marching. Their SDF and shading are unchanged.
+- Exact scene distance queries use transform-aware AABB lower bounds for eligible primitive components. Smooth Boolean blends reserve their maximum possible distance reduction. Eligible independent cage-deformed primitives use displacement-expanded bounds and conservative affine distance factors; other spatial modifiers and repetition retain the sphere bound. Independent convex polygon prisms clip rays to a rounded, local-space interval before SDF marching. Their SDF and shading are unchanged.
 - Gaussian group captures are cached across rigid root translation and rotation. Geometry, scale, material, or modifier edits may rebake synchronously; unrelated edits can also invalidate the conservative whole-scene fingerprint. The raster splat path is limited to eligible opaque independent groups and has simpler lighting. See [group render optimizations](group-render-optimizations.md).
 - Neural SDFs are optional approximations trained on GPU. Benchmarks wait for training so they do not measure the temporary Exact fallback. Validate fit error and visible surfaces before using them for performance claims; larger networks can render slower than Exact.
 - Moving-object image ghosts would leave occlusion, shadows, and reflections stale. Full-resolution simple shading loses material detail. Prefer measuring the adaptive or deferred path before adding either shortcut.
@@ -85,8 +87,8 @@ Sheet inverse charts also skip relief evaluation when their domain or planar
 lower bound proves they cannot improve the current distance.
 
 Sparse adaptive feedback compares submitted pixels with the achievable batch
-(capped at 16 phases), rather than an arbitrarily larger requested budget. Its
-minimum is one sparse phase rather than one 32×32 tile. Otherwise small,
+(capped at 256 phases), rather than an arbitrarily larger requested budget. Its
+minimum is one native sample rather than one 32×32 tile. Otherwise small,
 expensive views continually ignore their GPU samples or stop adapting too early.
 Exact rays are reconstructed from native pixel centers so sparse quads and the
 full-screen triangle produce identical completed images.
@@ -120,7 +122,7 @@ Optional `--camera-position=X,Y,Z` and `--camera-target=X,Y,Z` override the
 vehicle overview camera. `--benchmark-deferred` measures Deferred when supported;
 `--benchmark-fast-preview` measures Simple Shading. Image files are PPM.
 The convergence check allows up to 120 seconds after interaction stops,
-so its limit covers all 256 Exact phases and completion/pause frames even
+so its limit covers the coverage pass, 256 Exact pixel phases and completion/pause frames even
 when a small viewport cycles through cached frames quickly.
 
 ## Material library previews
@@ -149,3 +151,38 @@ Direct illumination is independent of the ambient multiplier. Gaussian splats
 use the same hemisphere, and mesh preview bounce fill follows the multiplier
 instead of keeping an unconditional brightness floor. Specialized metal
 reflection and wood material responses retain their material-specific calibration.
+
+## Profiling navigation
+
+CPU-only saved-scene profiling reports pan-anchor queries, mesh revision work, and UI/tessellation while moving the camera:
+
+```sh
+cargo test --bin claydash profile_navigation_cpu -- --ignored --nocapture
+```
+
+A private, windowless GPU profile submits ten sequential panning frames per shading mode and reports CPU submission time, GPU completion time, timestamped scene time, and preview pixel count:
+
+```sh
+CLAYDASH_PROFILE_SIZE=1165x1448 cargo test -p claydash_engine --lib profile_navigation_gpu -- --ignored --nocapture --test-threads=1
+```
+
+The native editor loop can drive the real right-button pan interaction and report frame intervals:
+
+```sh
+cargo run --release -- --stress-ui-benchmark --benchmark-pan --benchmark-scene=examples/astra_car.claydash --benchmark-size=1600x1000
+```
+
+The native run opens its own temporary benchmark window and exits after 130 frames. It does not start the shared agent bridge or save scene changes.
+
+Both default to `examples/astra_car.claydash`; `CLAYDASH_PROFILE_SCENE` selects another saved scene. GPU-only `CLAYDASH_PROFILE_VARIANT=no_bloom` or `no_lattice` isolates those costs in the private profile copy. Those variants change the comparison scene and are diagnostic, not final performance claims. The profile does not open a window, use the live agent socket, or write the source scene.
+
+Astra's uncomputed Gaussian-splat choice falls back to exact geometry. Hard unions in that fallback can now use per-part scene-BVH culling even with a shared deformation cage: each uploaded operand retains its cage mapping, primitive bounds include maximum cage displacement, and nonuniform transforms retain conservative distance factors. Displayed splat proxies keep their capture boundaries. Smooth unions, root repetition/mirrors, inlay hosts, and active meshes retain their existing exclusions.
+
+Bloom follow-up: use `CLAYDASH_PROFILE_PIXELS=1024` to hold preview work constant when comparing `scene`, `no_bloom`, and `no_emission` variants. At 1165×1448 on M1, the matched 980-pixel Astra preview measured 8.54 ms GPU with bloom versus 7.96 ms without (simple), and 7.71 versus 6.92 ms (full moving preview). These are GPU completion times, not end-to-end interaction latency. Native UI benchmarks now also report actual presentation intervals; UI-loop intervals alone do not establish fresh-image cadence.
+
+With the final 8 ms target, the bounded native debug pan test at 1600×1000 measured actual presentation intervals of 16.744 ms median / 18.040 ms p95 over 118 intervals, with 1,184 median preview pixels. The earlier 4 ms target gave 56 preview pixels at comparable presentation cadence. These coarse moving previews finish at native detail after input stops.
+
+Westfalia successive-camera-turn repro: a live254-object scene at1165×1448 had Full Material enabled but an adaptive budget of one native sample, leaving the7×8 preview nearly unchanged. The initial quick coverage pass has a 64-sample batch floor, scattered native work has a one-pixel floor, and new camera previews retain at least the 256-pixel budget. Completed samples also reconstruct a smooth background that improves as refinement progresses. Transitioning from quick coverage to full materials discards cheap throughput feedback. A private snapshot recovered whole-view coverage within the75-frame (<4s including deliberate pauses) verification run; full native quality remains expensive. Final staged sparse output matches the direct native reference exactly in GPU regression tests.
+
+
+Progressive ownership, failure recovery and kernel decomposition are documented in [progressive-render-scheduler.md](progressive-render-scheduler.md). `CLAYDASH_PROFILE_STATIONARY=1 CLAYDASH_PROFILE_TURNS=6 CLAYDASH_PROFILE_ORBIT=1 CLAYDASH_PROFILE_FINISH=1` requires a saved scene to finish after orbiting. Set `CLAYDASH_PROFILE_IMAGE=/tmp/scene.ppm` to compare the completed source image with an independent raster-order reference and a subsequent white-clear probe. Keep complex-sheet runs small and sequential: a single large direct GPU draw can itself exceed the driver's limits. The small Westfalia six-orbit validation is 160×100, not the desktop viewport's full resolution.

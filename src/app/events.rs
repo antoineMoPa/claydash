@@ -286,6 +286,8 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 event_loop.exit();
             }
+            let repaint_window = window.clone();
+            renderer.set_viewport_repaint_callback(move || repaint_window.request_redraw());
             self.renderer = Some(renderer);
             if self.guide_screenshot.is_some() {
                 event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
@@ -331,6 +333,11 @@ impl ApplicationHandler<AppEvent> for App {
         let Some(window) = self.window.clone() else {
             return;
         };
+        // Input may repaint immediately even while background refinement is paced.
+        if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_)) {
+            window.request_redraw();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let egui_consumed = self
             .egui_state
@@ -357,16 +364,28 @@ impl ApplicationHandler<AppEvent> for App {
                 if focused {
                     window.request_redraw();
                 } else {
-                    self.interactions.suspend_navigation();
+                    self.interactions.interrupt_navigation(&mut self.tree);
+                    self.interactions.pointer_up(&self.camera, &mut self.tree);
                 }
             }
             WindowEvent::Occluded(occluded) => {
                 self.window_occluded = occluded;
-                if !occluded {
+                if occluded {
+                    self.interactions.interrupt_navigation(&mut self.tree);
+                    self.interactions.pointer_up(&self.camera, &mut self.tree);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(state) = &mut self.egui_state {
+                        state.egui_input_mut().events.push(egui::Event::PointerGone);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    self.egui_state.pointer_gone();
+                } else {
                     window.request_redraw();
                 }
             }
             WindowEvent::RedrawRequested => {
+                #[cfg(not(target_arch = "wasm32"))]
+                { self.next_refinement_redraw = std::time::Instant::now() + std::time::Duration::from_millis(16); }
                 #[cfg(all(not(target_arch = "wasm32"), unix))]
                 self.process_agent_requests();
                 #[cfg(not(target_arch = "wasm32"))]
@@ -414,6 +433,19 @@ impl ApplicationHandler<AppEvent> for App {
                     benchmark.last_frame = Some(now);
                     if benchmark.animation {
                         crate::animation::evaluate(&mut self.tree, (benchmark.frames % 30) as f32);
+                    } else if benchmark.pan_camera {
+                        if benchmark.frames == 0 {
+                            self.camera.position = glam::Vec3::new(-5.0, 3.0, 7.0);
+                            self.camera.target = glam::Vec3::ZERO;
+                        } else {
+                            let center = self.camera.viewport_origin + self.camera.viewport * 0.5;
+                            if benchmark.frames == 1 {
+                                self.interactions.cursor_moved(center, false);
+                                self.interactions.set_right_button(true, false, &self.camera, &self.tree);
+                            }
+                            let offset = (benchmark.frames as f32 * 0.08).sin() * 50.0;
+                            self.interactions.cursor_moved(center + Vec2::new(offset, offset * 0.25), false);
+                        }
                     } else if !benchmark.selection_click {
                         let angle = (benchmark.frames as f32 * 0.08).sin() * 0.3;
                         if benchmark.edit_objects {
@@ -452,6 +484,12 @@ impl ApplicationHandler<AppEvent> for App {
                             samples.len()
                         );
                         benchmark.preview_pixels.sort_unstable();
+                        benchmark.presented_samples.sort_by(f64::total_cmp);
+                        let presented = &benchmark.presented_samples;
+                        if !presented.is_empty() {
+                            eprintln!("Native presented updates: p50 {:.3} ms, p95 {:.3} ms, {} intervals",
+                                presented[presented.len() / 2], presented[(presented.len() - 1) * 95 / 100], presented.len());
+                        }
                         if !benchmark.preview_pixels.is_empty() {
                             eprintln!(
                                 "Median preview pixels: {}",
@@ -482,6 +520,17 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(size);
                 }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                // Releases outside the window are not guaranteed to arrive.
+                // Explicit modal tools remain active until confirmed/cancelled.
+                self.interactions.suspend_navigation();
+                self.interactions.pointer_up(&self.camera, &mut self.tree);
+                window.request_redraw();
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.interactions.release_inactive_modifiers(modifiers.state());
+                window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let position = Vec2::new(position.x as f32, position.y as f32);
@@ -642,6 +691,8 @@ impl ApplicationHandler<AppEvent> for App {
         if self.renderer.is_none() {
             if let Ok(mut renderer) = self.renderer_rx.try_recv() {
                 if let Some(window) = &self.window {
+                    let repaint_window = window.clone();
+                    renderer.set_viewport_repaint_callback(move || repaint_window.request_redraw());
                     if let Some(size) = web_canvas_size(window) {
                         renderer.resize(size);
                     }
@@ -672,7 +723,22 @@ impl ApplicationHandler<AppEvent> for App {
             let Some(window) = &self.window else {
                 return;
             };
+            #[cfg(not(target_arch = "wasm32"))]
+            if !guide_capture && !agent_redraw_pending
+                && self.renderer.as_ref().is_some_and(|renderer| !renderer.viewport_refined())
+                && std::time::Instant::now() < self.next_refinement_redraw {
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(self.next_refinement_redraw));
+                return;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
             window.request_redraw();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if ((!self.window_focused && !agent_redraw_pending) || self.window_occluded) && !guide_capture {
+            // Do not leave an expired refinement deadline spinning the event
+            // loop while background rendering is intentionally suspended.
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
         }
     }
 }

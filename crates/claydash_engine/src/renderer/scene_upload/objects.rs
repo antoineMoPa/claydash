@@ -301,9 +301,9 @@ impl Renderer {
                         | SdfParams::TorusParams { .. }
                         | SdfParams::PolygonPrismParams(_)
                         | SdfParams::TextParams(_)
-                ) && cage.is_none()
-                    && object.render_representation
-                        == crate::model::GroupRenderRepresentation::ExactSdf
+                ) && (object.render_representation == crate::model::GroupRenderRepresentation::ExactSdf
+                    || (object.render_representation == crate::model::GroupRenderRepresentation::GaussianSplats
+                        && !box_depth_metadata.contains_key(&object.uuid)))
                     && !matches!(
                         object.material.kind,
                         crate::model::MaterialKind::Brick | crate::model::MaterialKind::Fabric

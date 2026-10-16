@@ -16,7 +16,7 @@ pub(super) fn source(scene: &str, capacity: u32) -> String {
     [include_str!("../../assets/shaders/scene_abi.wgsl"),
         "@group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> objects: array<Object>;
-struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32> }
+struct BvhNode { center_radius: vec4<f32>, metadata: vec4<u32>, aabb_min: vec4<f32>, aabb_max: vec4<f32>, ray_min: vec4<f32>, ray_max: vec4<f32> }
 @group(0) @binding(2) var<storage, read> bvh: array<BvhNode>;
 @group(0) @binding(11) var image_atlas: texture_2d_array<f32>;
 @group(0) @binding(12) var image_sampler: sampler;

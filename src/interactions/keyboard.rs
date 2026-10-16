@@ -9,6 +9,26 @@ impl InteractionState {
         self.shift_pan = None;
     }
 
+    pub fn interrupt_navigation(&mut self, tree: &mut DataTree) {
+        self.suspend_navigation();
+        self.finish_view_rotation(tree);
+    }
+
+    pub fn release_inactive_modifiers(&mut self, modifiers: winit::keyboard::ModifiersState) {
+        for (active, keys) in [
+            (modifiers.control_key(), [KeyCode::ControlLeft, KeyCode::ControlRight]),
+            (modifiers.shift_key(), [KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+            (modifiers.alt_key(), [KeyCode::AltLeft, KeyCode::AltRight]),
+            (modifiers.super_key(), [KeyCode::SuperLeft, KeyCode::SuperRight]),
+        ] {
+            if !active {
+                for key in keys {
+                    self.keys.remove(&key);
+                }
+            }
+        }
+    }
+
     pub fn command_modifier_down(&self) -> bool {
         [
             KeyCode::ControlLeft,
@@ -20,6 +40,18 @@ impl InteractionState {
         ]
         .iter()
         .any(|key| self.keys.contains(key))
+    }
+
+    pub fn camera_navigation_active(&self) -> bool {
+        self.right_down || self.shift_pan.is_some() || self.view_rotation_active()
+            || self.keys.contains(&KeyCode::ControlLeft)
+            || self.keys.contains(&KeyCode::ControlRight)
+    }
+
+    pub fn viewport_interaction_active(&self, pointer_down: bool, tree: &DataTree) -> bool {
+        pointer_down || self.camera_navigation_active()
+            || matches!(tree.get_path("editor.state"),
+                ClaydashValue::EditorState(state) if state != EditorState::Start)
     }
 
     fn primary_modifier_down(&self) -> bool {

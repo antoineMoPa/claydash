@@ -279,9 +279,9 @@ impl Renderer {
                 .map(|binding| wgpu::BindGroupLayoutEntry {
                     binding,
                     visibility: if binding == 0 {
-                        wgpu::ShaderStages::VERTEX_FRAGMENT
+                        wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE
                     } else {
-                        wgpu::ShaderStages::FRAGMENT
+                        wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE
                     },
                     ty: wgpu::BindingType::Buffer {
                         ty: if binding == 0 {
@@ -297,7 +297,7 @@ impl Renderer {
                 .chain([
                     wgpu::BindGroupLayoutEntry {
                         binding: 9,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: (wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE),
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D3,
@@ -307,13 +307,13 @@ impl Renderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 10,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: (wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE),
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 11,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: (wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE),
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2Array,
@@ -323,13 +323,13 @@ impl Renderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 12,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: (wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE),
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 13,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: (wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE),
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
@@ -481,6 +481,7 @@ impl Renderer {
             pipeline_layout,
             use_bvh,
             node_count: 0,
+            scene_bounds: None,
             uploaded_object_count: 0,
             has_booleans: false,
             scene_pipeline_cache,
@@ -508,6 +509,7 @@ impl Renderer {
             #[cfg(not(target_arch = "wasm32"))]
             group_capture_bake: None,
             egui_renderer,
+            ui_textures: Default::default(),
             material_previews: Vec::new(),
             material_preview_pipelines: Vec::new(),
             material_preview_compiling: Arc::new(std::sync::atomic::AtomicBool::new(false)),

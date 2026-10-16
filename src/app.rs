@@ -4,7 +4,10 @@ use std::sync::Arc;
 pub(crate) mod agent;
 mod events;
 mod initialization;
+mod pointer_input;
 mod rendering;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod navigation_profile;
 mod mesh_export_options;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_export;
@@ -126,6 +129,8 @@ pub struct App {
     window_focused: bool,
     window_occluded: bool,
     #[cfg(not(target_arch = "wasm32"))]
+    next_refinement_redraw: std::time::Instant,
+    #[cfg(not(target_arch = "wasm32"))]
     use_bvh: bool,
     #[cfg(not(target_arch = "wasm32"))]
     benchmark: bool,
@@ -204,6 +209,7 @@ struct WebEncoding {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct UiBenchmark {
+    pan_camera: bool,
     edit_objects: bool,
     move_group: bool,
     animation: bool,
@@ -212,6 +218,8 @@ struct UiBenchmark {
     frames: usize,
     last_frame: Option<std::time::Instant>,
     samples: Vec<f64>,
+    presented_samples: Vec<f64>,
+    last_presented: Option<std::time::Instant>,
 }
 
 impl App {

@@ -38,6 +38,7 @@ pub fn parse(args: &[String]) -> Result<Launch, String> {
                 | "--benchmark-move-group"
                 | "--benchmark-animation"
                 | "--benchmark-selection-click"
+                | "--benchmark-pan"
                 | "--benchmark-group-workflow"
                 | "--benchmark-default-group-transitions"
                 | "--benchmark-deferred"

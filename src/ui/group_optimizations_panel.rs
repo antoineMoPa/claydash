@@ -5,6 +5,10 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     ui.separator();
     ui.label(RichText::new("Group optimizations").strong());
     let selection = selected(tree);
+    if selection.len() > 1 {
+        bulk_optimizations_panel(ui, tree, &selection);
+        return;
+    }
     if selection.len() != 1 {
         ui.weak("Select one object or Boolean group to explore a representation.");
         return;
@@ -211,6 +215,103 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     }
 }
 
+fn bulk_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree, selection: &[uuid::Uuid]) {
+    use crate::model::GroupRenderRepresentation;
+    use crate::renderer::poisson_mesh::PoissonMeshAction;
+    let mut scene = objects(tree);
+    let targets = bulk_optimization_targets(&scene, selection);
+    let Some(&first) = targets.first() else {
+        ui.weak("Select objects to explore a representation.");
+        return;
+    };
+    ui.label(format!("{} objects / groups selected", targets.len()));
+    let mode = scene[first].render_representation;
+    let shared_mode = targets.iter().all(|&index| scene[index].render_representation == mode);
+    let mut choice = None;
+    egui::ComboBox::from_id_salt(ui.auto_id_with("bulk-render-representation"))
+        .selected_text(if shared_mode { mode.label() } else { "Mixed" })
+        .show_ui(ui, |ui| {
+            for candidate in GroupRenderRepresentation::ALL {
+                if ui.selectable_label(shared_mode && mode == candidate, candidate.label())
+                    .on_hover_text(candidate.description()).clicked() {
+                    choice = Some(candidate);
+                }
+            }
+        });
+    let chosen_mode = choice.or(shared_mode.then_some(mode));
+    let mut resolution = scene[first].poisson_mesh.resolution;
+    let mut resolution_changed = false;
+    if chosen_mode == Some(GroupRenderRepresentation::DirectMesh) {
+        let shared_resolution = targets.iter().all(|&index| scene[index].poisson_mesh.resolution == resolution);
+        ui.horizontal(|ui| {
+            ui.label("Tessellation resolution");
+            resolution_changed = ui.add(egui::DragValue::new(&mut resolution)
+                .update_while_editing(false)
+                .range(crate::renderer::direct_mesh::MIN_RESOLUTION..=crate::renderer::direct_mesh::MAX_RESOLUTION)).changed();
+            if !shared_resolution && !resolution_changed { ui.weak("Mixed"); }
+        });
+    }
+    let changed = targets.iter().any(|&index|
+        choice.is_some_and(|mode| scene[index].render_representation != mode)
+            || (resolution_changed && scene[index].poisson_mesh.resolution != resolution));
+    if changed {
+        for &index in &targets {
+            if let Some(mode) = choice { scene[index].render_representation = mode; }
+            if resolution_changed { scene[index].poisson_mesh.resolution = resolution; }
+        }
+        set_objects(tree, scene.clone());
+        tree.make_undo_redo_snapshot();
+    }
+    if matches!(chosen_mode, Some(GroupRenderRepresentation::DirectMesh | GroupRenderRepresentation::PoissonMesh)) {
+        ui.weak("Recompute builds each selected object or Boolean group in turn.");
+        let action = ui.horizontal(|ui| {
+            if ui.button("Recompute all").clicked() { Some(true) }
+            else if ui.button("Cancel all").clicked() { Some(false) }
+            else { None }
+        }).inner;
+        if let Some(build) = action {
+            ui.ctx().data_mut(|data| {
+                let id = egui::Id::new("poisson-mesh-actions");
+                let mut actions = data.get_temp::<Vec<PoissonMeshAction>>(id).unwrap_or_default();
+                actions.extend(targets.iter().map(|&index| if build {
+                    PoissonMeshAction::Build(scene[index].uuid)
+                } else { PoissonMeshAction::Cancel(scene[index].uuid) }));
+                data.insert_temp(id, actions);
+            });
+            ui.ctx().request_repaint();
+        }
+        use crate::renderer::poisson_mesh::PoissonMeshStatus;
+        let statuses = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, PoissonMeshStatus>>(
+            egui::Id::new("poisson-mesh-status"))).unwrap_or_default();
+        let mut ready = 0;
+        let mut working = 0;
+        let mut failed = 0;
+        for &index in &targets {
+            match statuses.get(&scene[index].uuid) {
+                Some(PoissonMeshStatus::Ready { showing: true, .. }) => ready += 1,
+                Some(PoissonMeshStatus::Sampling { .. } | PoissonMeshStatus::Reconstructing { .. }) => working += 1,
+                Some(PoissonMeshStatus::Failed(_)) => failed += 1,
+                _ => {}
+            }
+        }
+        ui.weak(format!("{ready} meshes shown · {working} queued / building · {failed} failed"));
+    }
+}
+
+// A selected Boolean ancestor already represents its entire selected subtree.
+fn bulk_optimization_targets(scene: &[SdfObject], selection: &[uuid::Uuid]) -> Vec<usize> {
+    scene.iter().enumerate().filter_map(|(index, object)| {
+        if !selection.contains(&object.uuid) { return None; }
+        let mut parent = object.boolean_parent;
+        for _ in 0..scene.len() {
+            let Some(id) = parent else { break; };
+            if selection.contains(&id) { return None; }
+            parent = scene.iter().find(|object| object.uuid == id).and_then(|object| object.boolean_parent);
+        }
+        Some(index)
+    }).collect()
+}
+
 fn voxel_controls(ui: &mut egui::Ui, target: uuid::Uuid, resolution: u32) {
     use crate::renderer::voxels::{VoxelAction, VoxelStatus};
     let mut status = ui.ctx().data(|data| data.get_temp::<std::collections::HashMap<uuid::Uuid, VoxelStatus>>(
@@ -364,6 +465,77 @@ fn learning_rate_input(ui: &mut egui::Ui, value: &mut f32) -> egui::Response {
 #[cfg(test)]
 mod progress_tests {
     use super::*;
+
+    #[test]
+    fn bulk_selection_changes_representation_and_queues_all_meshes() {
+        use crate::model::{GroupRenderRepresentation, PrimitiveKind, SdfObject};
+        use crate::renderer::poisson_mesh::PoissonMeshAction;
+        let context = egui::Context::default();
+        let first = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let mut second = SdfObject::create_kind(PrimitiveKind::Box);
+        second.render_representation = GroupRenderRepresentation::Voxels;
+        second.poisson_mesh.resolution = 48;
+        let untouched = SdfObject::create_kind(PrimitiveKind::Sphere);
+        let selection = vec![first.uuid, second.uuid, uuid::Uuid::new_v4()];
+        let mut tree = DataTree::default();
+        set_objects(&mut tree, vec![first, second, untouched.clone()]);
+        crate::model::set_selected_exact(&mut tree, selection.clone());
+        tree.make_undo_redo_snapshot();
+        let frame = |tree: &mut DataTree, events| {
+            let mut output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 1000.0))),
+                events, ..Default::default()
+            }, |ui| object_panel(ui, tree, &mut AnimationRuntime::default()));
+            output.textures_delta.clear();
+            output
+        };
+        let click = |tree: &mut DataTree, output: &egui::FullOutput, label: &str| {
+            let position = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos + text.galley.size() * 0.5),
+                _ => None,
+            }).unwrap_or_else(|| panic!("missing {label}"));
+            for pressed in [true, false] {
+                frame(tree, vec![egui::Event::PointerMoved(position), egui::Event::PointerButton {
+                    pos: position, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+                }]);
+            }
+        };
+        let output = frame(&mut tree, vec![]);
+        click(&mut tree, &output, "Mixed");
+        let output = frame(&mut tree, vec![]);
+        click(&mut tree, &output, "Mesh (direct)");
+        let output = frame(&mut tree, vec![]);
+        let scene = objects(&tree);
+        assert!(scene[..2].iter().all(|object| object.render_representation == GroupRenderRepresentation::DirectMesh));
+        assert_eq!(scene[1].poisson_mesh.resolution, 48, "bulk mode changes preserve individual resolutions");
+        assert_eq!(scene[2].render_representation, untouched.render_representation);
+        assert_eq!(selected(&tree), selection);
+        let action_id = egui::Id::new("poisson-mesh-actions");
+        assert!(context.data(|data| data.get_temp::<Vec<PoissonMeshAction>>(action_id)).is_none());
+        click(&mut tree, &output, "Recompute all");
+        let actions = context.data(|data| data.get_temp::<Vec<PoissonMeshAction>>(action_id)).unwrap();
+        assert_eq!(actions.len(), 2);
+        for (action, object) in actions.iter().zip(&scene) {
+            assert!(matches!(action, PoissonMeshAction::Build(id) if *id == object.uuid));
+        }
+        tree.undo();
+        assert_eq!(objects(&tree)[0].render_representation, GroupRenderRepresentation::ExactSdf);
+        assert_eq!(objects(&tree)[1].render_representation, GroupRenderRepresentation::Voxels);
+    }
+
+    #[test]
+    fn bulk_targets_skip_selected_boolean_descendants_and_non_objects() {
+        let root = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        let mut child = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        child.boolean_parent = Some(root.uuid);
+        let mut leaf = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        leaf.boolean_parent = Some(child.uuid);
+        let independent = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        let selection = vec![root.uuid, child.uuid, leaf.uuid, independent.uuid, uuid::Uuid::new_v4()];
+        let scene = vec![root, child, leaf, independent];
+        assert_eq!(bulk_optimization_targets(&scene, &selection), vec![0, 3]);
+        assert_eq!(bulk_optimization_targets(&scene, &[scene[1].uuid, scene[2].uuid]), vec![1]);
+    }
 
     #[test]
     fn splat_panel_uses_the_shared_recompute_button_and_only_requests_on_click() {

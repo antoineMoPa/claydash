@@ -387,6 +387,8 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             guide_capture_done: false,
             window_focused: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            next_refinement_redraw: std::time::Instant::now(),
             window_occluded: false,
             #[cfg(not(target_arch = "wasm32"))]
             use_bvh: !brute_force_benchmark,
@@ -396,6 +398,7 @@ impl App {
             ui_benchmark: std::env::args()
                 .any(|arg| arg == "--stress-ui-benchmark")
                 .then(|| UiBenchmark {
+                    pan_camera: std::env::args().any(|arg| arg == "--benchmark-pan"),
                     edit_objects: std::env::args()
                         .any(|arg| arg == "--benchmark-edit" || arg == "--benchmark-move-group"),
                     move_group: std::env::args().any(|arg| arg == "--benchmark-move-group"),
@@ -406,6 +409,8 @@ impl App {
                     frames: 0,
                     last_frame: None,
                     samples: Vec::new(),
+                    presented_samples: Vec::new(),
+                    last_presented: None,
                 }),
             #[cfg(target_arch = "wasm32")]
             renderer_tx,

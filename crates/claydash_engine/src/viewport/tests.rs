@@ -1,4 +1,40 @@
 use super::*;
+
+#[test]
+fn sparse_refinement_visits_distributed_single_pixels_before_neighbours() {
+    let size = [64, 48];
+    let cells = sparse_phase_pixels(size);
+    for (phase, offset) in [(0, [0, 0]), (1, [8, 8]), (2, [8, 0]), (3, [0, 8])] {
+        let first = cells + phase * cells;
+        let rectangles: Vec<_> = encoding::sparse_draw_rects(size, first, first + cells).collect();
+        assert_eq!(rectangles.len(), cells as usize);
+        for (cell, [x, y, width, height]) in rectangles.into_iter().enumerate() {
+            assert_eq!([width, height], [1, 1]);
+            assert_eq!([x, y], [cell as u32 % 4 * 16 + offset[0], cell as u32 / 4 * 16 + offset[1]]);
+        }
+    }
+}
+
+#[test]
+fn sparse_batches_cover_every_native_pixel_once() {
+    for size in [[17, 31], [160, 100], [1165, 1448]] {
+        let samples = sparse_phase_pixels(size);
+        let total = sparse_sample_count(size);
+        for budget in [1, 37, 1024, 16 * samples] {
+            let mut visits = vec![0u8; (size[0] * size[1]) as usize];
+            for first in (samples..total).step_by(budget as usize) {
+                for [x, y, width, height] in encoding::sparse_draw_rects(size, first, (first + budget).min(total)) {
+                    for row in y..y + height { for column in x..x + width {
+                        visits[(row * size[0] + column) as usize] += 1;
+                    } }
+                }
+            }
+            assert!(visits.iter().all(|count| *count == 1));
+            assert_eq!(encoding::sparse_draw_rects(size, 0, samples).count(), samples as usize);
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn point_drag_previews_changes_without_queuing_native_refinement() {
@@ -30,16 +66,17 @@ fn point_drag_previews_changes_without_queuing_native_refinement() {
             // throughput after a point edit discarded the cached mesh.
             viewport.set_initial_budget(INITIAL_PIXELS);
             assert_eq!(viewport.pixel_budget, 1024 * 1024);
-            viewport.pending = true;
-            viewport.submitted_pixels = 1024 * 1024;
-            viewport.submitted_budget = 1024 * 1024;
+            viewport.scheduler.encoded(Work::Preview, Stage::Preview, 1024 * 1024, 1024 * 1024, EDIT_TARGET_MS);
+            let completion = viewport.scheduler.submitted(Work::Preview);
             viewport.set_rendering_path(if deferred { RenderingPath::Deferred } else { RenderingPath::Exact });
             assert_eq!(viewport.pixel_budget, INITIAL_PIXELS);
-            assert!(viewport.pending, "switching paths must preserve the GPU fence");
+            assert!(viewport.scheduler.busy(), "switching paths must preserve the GPU fence");
             assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Cached);
-            *viewport.timing.lock().unwrap() = Some(Some(0.1));
+            *completion.milliseconds.lock().unwrap() = Some(0.1);
+            completion.finish();
             assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Preview);
             assert_eq!(viewport.pixel_budget, INITIAL_PIXELS, "old mesh timings cannot inflate fallback work");
+            viewport.preview_ready = true;
             for _ in 0..3 {
                 assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Cached);
                 assert_eq!(viewport.completed, 0);
@@ -48,11 +85,12 @@ fn point_drag_previews_changes_without_queuing_native_refinement() {
                 }
                 key.versions[0] += 1;
                 assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Preview);
+                viewport.preview_ready = true;
             }
-            let learned_budget = viewport.pixel_budget;
+            let learned_budget = viewport.scheduler.budget(Stage::Preview, INITIAL_PIXELS);
             viewport.set_interacting(false);
             assert!(matches!(viewport.prepare(&device, key, true, deferred, false), Work::Refine { .. }));
-            assert_eq!(viewport.pixel_budget, learned_budget);
+            assert_eq!(viewport.scheduler.budget(Stage::Preview, INITIAL_PIXELS), learned_budget);
         }
     });
 }
@@ -82,25 +120,31 @@ fn mesh_only_view_renders_at_native_resolution_then_uses_cache() {
         };
         assert_eq!(viewport.prepare(&device, key.clone(), false, false, false), Work::Preview);
         assert_eq!(viewport.targets.as_ref().unwrap().preview_size, key.size);
+        assert!(!viewport.is_refined(), "allocating targets does not render an image");
+        viewport.preview_ready = true; // Model the native preview encoding.
         assert_eq!(viewport.prepare(&device, key.clone(), false, false, false), Work::Cached);
 
         // A different document can reuse every version and camera value.
         // It must still start fresh, even with a late previous GPU callback.
-        let old_timing = viewport.timing.clone();
-        viewport.pending = true;
+        viewport.scheduler.encoded(Work::Preview, Stage::Preview, 1024, 1024, EDIT_TARGET_MS);
+        let old = viewport.scheduler.submitted(Work::Preview);
         viewport.pixel_budget = TILE * TILE;
         viewport.completed = 7;
         viewport.reset_for_scene();
-        assert!(!viewport.pending);
+        assert!(viewport.scheduler.busy(), "document replacement must preserve the real GPU fence");
         assert!(viewport.targets.is_none());
         assert_eq!(viewport.completed, 0);
         assert_eq!(viewport.pixel_budget, INITIAL_PIXELS);
+        assert_eq!(viewport.prepare(&device, key.clone(), false, false, false), Work::Cached);
+        old.finish();
         assert_eq!(viewport.prepare(&device, key, false, false, false), Work::Preview);
-        viewport.pending = true;
-        *old_timing.lock().unwrap() = Some(Some(1000.0));
-        assert!(viewport.timing.lock().unwrap().is_none(),
-            "late completions from the old document cannot affect the new one");
-        assert!(viewport.pending);
+        viewport.scheduler.encoded(Work::Preview, Stage::Preview, 64, 64, EDIT_TARGET_MS);
+        let current = viewport.scheduler.submitted(Work::Preview);
+        *old.milliseconds.lock().unwrap() = Some(1000.0);
+        viewport.scheduler.retire(EDIT_TARGET_MS);
+        assert!(viewport.scheduler.busy(), "old document callbacks cannot release new work");
+        current.finish();
+
     });
 }
 #[test]
@@ -120,28 +164,53 @@ fn refinement_yields_but_camera_changes_do_not_wait() {
                 }, count: None,
             }],
         });
-        for interleaved in [false, true] {
+        for (size, interleaved) in [([1024, 1024], false), ([1024, 1024], true), ([2048, 1024], true)] {
             let mut viewport = Viewport::new(&device, wgpu::TextureFormat::Rgba8Unorm,
                 false, &layout);
+            viewport.set_initial_budget(4096);
             let mut key = ViewKey {
                 matrix: glam::Mat4::IDENTITY.to_cols_array_2d(), position: [0.0; 3],
-                projection: 0, versions: [1, 1], size: [1024, 1024], refine: true,
+                projection: 0, versions: [1, 1], size, refine: true,
             };
             assert_ne!(viewport.prepare(&device, key.clone(), true, false, interleaved), Work::Cached);
+            assert_eq!(viewport.interleaved, interleaved);
+            viewport.preview_ready = true;
             // Inject a generous deadline so the test does not depend on
             // wall-clock scheduling, and simulate its expiry explicitly.
             viewport.refinement_resume_at = Some(web_time::Instant::now() + std::time::Duration::from_secs(60));
             assert_eq!(viewport.prepare(&device, key.clone(), true, false, interleaved), Work::Cached);
+            // A cheap old angle must not inflate the next camera preview.
+            viewport.pixel_budget = 1024 * 1024;
             key.position[0] = 1.0;
             assert_ne!(viewport.prepare(&device, key.clone(), true, false, interleaved), Work::Cached);
+            assert_eq!(viewport.pixel_budget, 4096);
+            viewport.preview_ready = true;
             viewport.refinement_resume_at = Some(web_time::Instant::now() - REFINEMENT_PAUSE);
-            let work = viewport.prepare(&device, key, true, false, interleaved);
+            // Sparse work can be smaller than one whole viewport phase.
+            viewport.scheduler.set_budget(Stage::Coverage, 37);
+            let work = viewport.prepare(&device, key.clone(), true, false, interleaved);
             let pixels = match work {
                 Work::Refine { first, end } => (end - first) * TILE * TILE,
-                Work::Interleave { first, end } => (end - first) * 64 * 64,
+                Work::Interleave { first, end } => end - first,
                 other => panic!("expected refinement, got {other:?}"),
             };
-            assert!(pixels <= viewport.pixel_budget);
+            assert!(pixels <= viewport.pixel_budget.max(if interleaved { 64 } else { TILE * TILE }));
+            viewport.scheduler.encoded(work, if interleaved { Stage::Coverage } else { Stage::Tiles }, pixels, viewport.pixel_budget, EDIT_TARGET_MS);
+            let completion = viewport.scheduler.submitted(work);
+            assert!(viewport.gpu_work_pending(&device));
+            *completion.milliseconds.lock().unwrap() = Some(1.0);
+            completion.finish();
+            assert!(!viewport.gpu_work_pending(&device), "completed fence must unblock presentation");
+            let deadline = viewport.refinement_resume_at;
+            assert_ne!(viewport.prepare(&device, key, true, false, interleaved), Work::Cached,
+                "observing completion after the pacing interval must not add an idle frame");
+            assert_eq!(viewport.refinement_resume_at, deadline);
+            viewport.pixel_budget = 1;
+            let mut changed = viewport.key.clone().unwrap();
+            changed.position[0] += 1.0;
+            assert_eq!(viewport.prepare(&device, changed, true, false, interleaved), Work::Preview);
+            assert!(viewport.pixel_budget >= MIN_PREVIEW_PIXELS,
+                "native refinement must not leave the next camera preview at one pixel");
         }
     });
 }
@@ -235,15 +304,21 @@ fn gpu_budget_recovers_from_expensive_views_without_vsync_feedback() {
 
 #[test]
 fn sparse_budget_can_shrink_below_a_tile_for_expensive_small_views() {
+    assert_eq!(budget_after_sample(1, 1, 1, 60.0, EDIT_TARGET_MS, 16),
+        16, "growth limiting must honor a changed stage's minimum");
     let phase_pixels = 160_u32.div_ceil(16) * 100_u32.div_ceil(16);
     let mut budget = budget_after_sample(INITIAL_PIXELS, 16 * phase_pixels,
-        16 * phase_pixels, 60.0, EDIT_TARGET_MS, phase_pixels);
+        16 * phase_pixels, 60.0, EDIT_TARGET_MS, 1);
     assert!(budget < TILE * TILE, "a capped phase batch must teach the budget");
     for _ in 0..4 {
-        budget = budget_after_sample(budget, budget, budget, 60.0, EDIT_TARGET_MS, phase_pixels);
+        budget = budget_after_sample(budget, budget, budget, 60.0, EDIT_TARGET_MS, 1);
     }
-    assert_eq!(budget, phase_pixels);
-    assert_eq!(adjusted_budget(budget, 60.0, EDIT_TARGET_MS, phase_pixels), phase_pixels);
+    assert!(budget < phase_pixels, "a single sparse phase must not set the minimum batch size");
+    assert_eq!(adjusted_budget(1, 60.0, EDIT_TARGET_MS, 1), 1);
+    for budget in 1..5 {
+        assert!(budget_after_sample(budget, budget, budget, 0.01, EDIT_TARGET_MS, 1) > budget,
+            "rounding must not trap tiny sparse batches at their minimum");
+    }
 }
 
 #[test]
@@ -294,11 +369,13 @@ fn optimization_work_pauses_refinement_but_keeps_previews_and_resumes() {
             };
             viewport.set_refinement_paused(true);
             assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Preview);
+            viewport.preview_ready = true;
             for _ in 0..3 {
                 assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Cached);
                 assert_eq!(viewport.completed, 0);
                 key.versions[0] += 1;
                 assert_eq!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Preview);
+                viewport.preview_ready = true;
             }
             viewport.set_refinement_paused(false);
             assert!(matches!(viewport.prepare(&device, key.clone(), true, deferred, false), Work::Refine { .. }));

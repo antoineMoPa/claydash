@@ -395,6 +395,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
         }
         let end = nodes.len() as u32 + 1;
         nodes.push(GpuBvhNode {
+            ray_min: [0.0;4], ray_max: [0.0;4],
             center_radius: [0.0, 0.0, 0.0, 2.0],
             metadata: [2, end, 0, 0],
             aabb_min: [-0.4, -0.4, -1.4, 0.0],
@@ -402,6 +403,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
         });
         let box_end = nodes.len() as u32 + 1;
         nodes.push(GpuBvhNode {
+            ray_min: [0.0;4], ray_max: [0.0;4],
             center_radius: [0.0, 0.0, 0.0, 2.0],
             metadata: [2, box_end, 0, 0],
             aabb_min: [-0.4, -0.4, -1.4, 0.0],
@@ -409,6 +411,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
         });
         let recovery_end = nodes.len() as u32 + 1;
         nodes.push(GpuBvhNode {
+            ray_min: [0.0;4], ray_max: [0.0;4],
             center_radius: [0.0, 0.0, 0.0, 2.0],
             metadata: [2, recovery_end, 0, 0],
             aabb_min: [-0.4, -0.4, -1.4, 0.0],
@@ -416,6 +419,7 @@ fn test_rays(@builtin(global_invocation_id) id: vec3<u32>) {{
         });
         let neural_end = nodes.len() as u32 + 1;
         nodes.push(GpuBvhNode {
+            ray_min: [0.0;4], ray_max: [0.0;4],
             center_radius: [0.0, 0.0, 0.0, 2.0],
             metadata: [2, neural_end, 0, 0],
             aabb_min: [-0.8, -0.8, -1.4, 0.0],

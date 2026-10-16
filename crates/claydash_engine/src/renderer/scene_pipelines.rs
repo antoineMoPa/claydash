@@ -24,18 +24,42 @@ impl Renderer {
                 capacity,
                 fast,
                 hybrid,
-            } => create_scene_pipeline_for_materials(
-                &self.device,
-                &self.shader_source,
-                &self.pipeline_layout,
-                self.render_format,
-                self.use_bvh,
-                capacity,
-                false,
-                fast,
-                features,
-                hybrid,
-            ),
+            } => {
+                let contact_layout =
+                    (features.separate_contact && !fast).then(|| self.contact_transport_layout());
+                create_scene_pipeline_for_materials(
+                    &self.device,
+                    &if features.separate_contact && !fast {
+                        contact::transport_source(&self.shader_source)
+                    } else {
+                        self.shader_source.clone()
+                    },
+                    contact_layout.as_ref().unwrap_or(&self.pipeline_layout),
+                    self.render_format,
+                    self.use_bvh,
+                    capacity,
+                    false,
+                    fast,
+                    features,
+                    hybrid,
+                )
+            }
+            ScenePipelineKind::Contact { capacity, hybrid } => {
+                let mut contact_features = features;
+                contact_features.bloom = false;
+                create_scene_pipeline_for_materials(
+                    &self.device,
+                    &contact::probe_source(&self.shader_source),
+                    &self.pipeline_layout,
+                    wgpu::TextureFormat::R32Float,
+                    self.use_bvh,
+                    capacity,
+                    false,
+                    false,
+                    contact_features,
+                    hybrid,
+                )
+            }
             ScenePipelineKind::Deferred { capacity, hybrid } => create_deferred_geometry_pipeline(
                 &self.device,
                 &self.shader_source,
@@ -44,7 +68,10 @@ impl Renderer {
                 hybrid,
                 features,
             ),
-            ScenePipelineKind::HybridDepth { capacity, skip_splats } => create_hybrid_depth_pipeline(
+            ScenePipelineKind::HybridDepth {
+                capacity,
+                skip_splats,
+            } => create_hybrid_depth_pipeline(
                 &self.device,
                 &self.shader_source,
                 &self.pipeline_layout,
@@ -66,13 +93,35 @@ impl Renderer {
         capacity: u32,
         features: SceneShaderFeatures,
     ) {
-        if self.node_count == 0 && self.mesh_vertex_count > 0 {
-            self.mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(&self.device, &self.pipeline_layout, self.render_format, features.bloom);
+        let contact = if features.separate_contact {
+            Some(self.cached_scene_pipeline(
+                ScenePipelineKind::Contact {
+                    capacity,
+                    hybrid: self.hybrid_enabled,
+                },
+                features,
+            ))
+        } else {
+            None
+        };
+        self.viewport.set_contact_pipeline(contact);
+        {
+            self.mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(
+                &self.device,
+                &self.pipeline_layout,
+                self.render_format,
+                features.bloom,
+            );
         }
         if self.mesh_vertex_count > 0 {
-            self.mesh_pipeline = poisson_material::create_pipeline(&self.device,
-                Some(&self.pipeline_layout), &self.shader_source, self.render_format,
-                capacity, features);
+            self.mesh_pipeline = poisson_material::create_pipeline(
+                &self.device,
+                Some(&self.pipeline_layout),
+                &self.shader_source,
+                self.render_format,
+                capacity,
+                features,
+            );
         }
         if self.node_count == 0 && self.mesh_vertex_count > 0 {
             self.deferred_geometry_pipeline = None;
@@ -163,9 +212,15 @@ impl Renderer {
             self.hybrid_fast_pipeline = None;
         }
         self.hybrid_depth_pipeline = if self.hybrid_enabled || self.mesh_vertex_count > 0 {
-            Some(self.cached_scene_pipeline(ScenePipelineKind::HybridDepth {
-                capacity, skip_splats: self.hybrid_enabled,
-            }, features))
-        } else { None };
+            Some(self.cached_scene_pipeline(
+                ScenePipelineKind::HybridDepth {
+                    capacity,
+                    skip_splats: self.hybrid_enabled,
+                },
+                features,
+            ))
+        } else {
+            None
+        };
     }
 }

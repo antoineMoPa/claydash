@@ -1,4 +1,4 @@
-struct Progress { size_and_tiles: vec4<u32> }
+struct Progress { size_and_tiles: vec4<u32>, refinement_rect: vec4<u32> }
 fn refinement_phase(pixel: vec2<u32>) -> u32 {
     var phase = 0u;
     for (var bit = 0u; bit < 4u; bit++) {
@@ -20,32 +20,62 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
     out.uv = positions[index] * vec2(0.5, -0.5) + vec2(0.5);
     return out;
 }
+// Interpolate only completed samples. Missing corners retain the complete
+// navigation preview; stale texels from an earlier camera are never read.
+fn completed_sample(local: vec2<u32>, origin: vec2<u32>, columns: u32,
+    phase_pixels: u32, coverage: u32, samples: u32, fallback: vec4<f32>) -> vec4<f32> {
+    let cell = (local.y / 16u) * columns + local.x / 16u;
+    let phase = refinement_phase(local % 16u);
+    if phase * phase_pixels + cell < samples || (phase == 0u && cell < coverage) {
+        return textureLoad(refined, vec2<i32>(origin + local), 0);
+    }
+    return fallback;
+}
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let size = progress.size_and_tiles.xy;
     let pixel = min(vec2<u32>(input.uv * vec2<f32>(size)), size - vec2(1u));
     let tile_size = progress.size_and_tiles.z;
     if tile_size == 0u {
-        let completed = progress.size_and_tiles.w;
-        if completed == 0u { return vec4(0.0, 0.0, 0.0, 1.0); }
-        if completed == 256u || refinement_phase(pixel % 16u) < completed {
+        let rect = progress.refinement_rect;
+        let origin = rect.xy;
+        let extent = select(size, rect.zw, all(rect.zw > vec2(0u)));
+        if any(pixel < origin) || any(pixel >= origin + extent) {
             return textureLoad(refined, vec2<i32>(pixel), 0);
         }
-        let grid = select(select(16u, 8u, completed >= 4u),
-            select(4u, 2u, completed >= 64u), completed >= 16u);
-        let block = pixel / grid * grid;
-        var best = block;
-        var best_distance = 0xffffffffu;
-        for (var index = 0u; index < 4u; index++) {
-            let candidate = block + vec2(index & 1u, index >> 1u) * (grid / 2u);
-            if any(candidate >= size) || refinement_phase(candidate % 16u) >= completed { continue; }
-            let offset = vec2<i32>(candidate) - vec2<i32>(pixel);
-            let distance_squared = u32(dot(offset, offset));
-            if distance_squared < best_distance {
-                best_distance = distance_squared;
-                best = candidate;
-            }
+        let local = pixel - origin;
+        let columns = (extent.x + 15u) / 16u;
+        let phase_pixels = columns * ((extent.y + 15u) / 16u);
+        let coverage = min(progress.size_and_tiles.w, phase_pixels);
+        let samples = min(progress.size_and_tiles.w - coverage, 256u * phase_pixels);
+        let sample_index = (local.y / 16u) * columns + local.x / 16u;
+        let phase = refinement_phase(local % 16u);
+        if phase * phase_pixels + sample_index < samples {
+            return textureLoad(refined, vec2<i32>(pixel), 0);
         }
-        return textureLoad(refined, vec2<i32>(best), 0);
+        if phase == 0u && sample_index < coverage {
+            return textureLoad(refined, vec2<i32>(pixel), 0);
+        }
+        let coarse = textureSampleLevel(preview, filtering, input.uv, 0.0);
+        if coverage == 0u { return coarse; }
+        // Completed phase groups form progressively finer regular grids.
+        // Reconstruct a smooth background while exact scattered native pixels
+        // above stay untouched. This reuses work already done by the renderer.
+        var spacing = 16u;
+        if samples >= 64u * phase_pixels { spacing = 2u; }
+        else if samples >= 16u * phase_pixels { spacing = 4u; }
+        else if samples >= 4u * phase_pixels { spacing = 8u; }
+        let last = ((extent - vec2(1u)) / spacing) * spacing;
+        let lo = min((local / spacing) * spacing, last);
+        let hi = min(lo + vec2(spacing), last);
+        let blend = clamp(vec2<f32>(local - lo) / f32(spacing), vec2(0.0), vec2(1.0));
+        let a = completed_sample(lo, origin, columns, phase_pixels, coverage, samples, coarse);
+        let b = completed_sample(vec2(hi.x, lo.y), origin, columns, phase_pixels, coverage, samples, coarse);
+        let c = completed_sample(vec2(lo.x, hi.y), origin, columns, phase_pixels, coverage, samples, coarse);
+        let d = completed_sample(hi, origin, columns, phase_pixels, coverage, samples, coarse);
+        let top = mix(vec4(a.rgb * a.a, a.a), vec4(b.rgb * b.a, b.a), blend.x);
+        let bottom = mix(vec4(c.rgb * c.a, c.a), vec4(d.rgb * d.a, d.a), blend.x);
+        let color = mix(top, bottom, blend.y);
+        return vec4(color.rgb / max(color.a, 0.00001), color.a);
     }
     // Earlier per-pixel returns make implicit derivatives non-uniform. The
     // preview has one mip level, so explicitly sampling level zero is equivalent.

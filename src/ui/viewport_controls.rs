@@ -342,11 +342,11 @@ impl UiState {
                         ui,
                         egui::include_image!("../../assets/icons/lucide/aperture.svg"),
                         if commands::full_material_rendering(tree) {
-                            "Full material rendering on. Click for native resolution with simple shading"
+                            "Full material rendering on. Click for simple shading"
                         } else if commands::outline_mode(tree) {
                             "Outline mode on. Click for full material rendering"
                         } else {
-                            "Native resolution with simple shading. Click for full material rendering"
+                            "Simple shading: quick previews while moving, native resolution when idle. Click for full material rendering"
                         },
                         commands::full_material_rendering(tree),
                     )

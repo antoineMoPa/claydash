@@ -22,7 +22,53 @@ impl Viewport {
         let Some(size) = self.key.as_ref().map(|key| key.size) else {
             return None;
         };
+        let sparse_size = self.sparse_size(size);
+        let cells = sparse_phase_pixels(sparse_size);
+        if work == Work::Preview {
+            if let Some(background) = &self.native_background {
+                let emission = targets.bloom.as_ref().map(|bloom| &bloom.refined);
+                let attachment = |view| Some(wgpu::RenderPassColorAttachment {
+                    view, resolve_target: None, depth_slice: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                });
+                let attachments = [attachment(&targets.refined), emission.and_then(attachment)];
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("native empty-space background"),
+                    color_attachments: &attachments[..if emission.is_some() { 2 } else { 1 }],
+                    ..Default::default()
+                });
+                pass.set_pipeline(background);
+                pass.set_bind_group(0, scene_bind_group, &[]);
+                pass.draw(0..3,0..1);
+            }
+        }
         if work != Work::Cached {
+            let contact = targets.contact.as_ref().zip(self.contact_pipeline.as_ref())
+                .filter(|_| self.contact_active && deferred.is_none() && matches!(work, Work::Refine { .. } | Work::Interleave { .. }))
+                .filter(|_| !matches!(work, Work::Interleave { first, .. } if first < cells));
+            let timing = BatchTiming::new(
+                contact.is_some(), deferred.is_some(), hybrid.is_some(),
+                matches!(work, Work::Relight { .. }), targets.bloom.is_some(),
+            );
+            if let Some((target, pipeline)) = contact {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("bounded primary contact probes"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &target.view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    timestamp_writes: timing.writes(self.query_set.as_ref(), TimedPass::Contact),
+                    ..Default::default()
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, scene_bind_group, &[]);
+                draw_work(&mut pass, work, size, cells);
+            }
             let view = if matches!(work, Work::Preview | Work::Relight { native: false }) {
                 &targets.preview
             } else {
@@ -99,18 +145,12 @@ impl Viewport {
                         }),
                         stencil_ops: None,
                     }),
-                    timestamp_writes: self.query_set.as_ref().map(|query_set| {
-                        wgpu::RenderPassTimestampWrites {
-                            query_set,
-                            beginning_of_pass_write_index: Some(0),
-                            end_of_pass_write_index: None,
-                        }
-                    }),
+                    timestamp_writes: timing.writes(self.query_set.as_ref(), TimedPass::Geometry),
                     ..Default::default()
                 });
                 pass.set_pipeline(deferred.geometry_pipeline);
                 pass.set_bind_group(0, scene_bind_group, &[]);
-                draw_work(&mut pass, work, size);
+                draw_work(&mut pass, work, size, cells);
             }
             if deferred.is_none() {
                 if let Some(hybrid) = &hybrid {
@@ -125,21 +165,13 @@ impl Viewport {
                             }),
                             stencil_ops: None,
                         }),
-                        timestamp_writes: self
-                            .query_set
-                            .as_ref()
-                            .filter(|_| targets.bloom.is_none())
-                            .map(|query_set| wgpu::RenderPassTimestampWrites {
-                                query_set,
-                                beginning_of_pass_write_index: Some(0),
-                                end_of_pass_write_index: None,
-                            }),
+                        timestamp_writes: timing.writes(self.query_set.as_ref(), TimedPass::Depth),
                         ..Default::default()
                     });
                     if let Some(depth_pipeline) = hybrid.depth_pipeline {
                         pass.set_pipeline(depth_pipeline);
                         pass.set_bind_group(0, scene_bind_group, &[]);
-                        draw_work(&mut pass, work, size);
+                        draw_work(&mut pass, work, size, cells);
                     }
                 }
             }
@@ -153,24 +185,7 @@ impl Viewport {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("budgeted scene batch"),
                         color_attachments: attachments,
-                        timestamp_writes: self
-                            .query_set
-                            .as_ref()
-                            .filter(|_| {
-                                (hybrid.is_none() || matches!(work, Work::Relight { .. }))
-                                    && (deferred.is_none()
-                                        || matches!(work, Work::Relight { .. })
-                                        || targets.bloom.is_none())
-                            })
-                            .map(|query_set| wgpu::RenderPassTimestampWrites {
-                                query_set,
-                                beginning_of_pass_write_index: (deferred.is_none()
-                                    || matches!(work, Work::Relight { .. }))
-                                .then_some(0),
-                                end_of_pass_write_index: (hybrid.is_none()
-                                    && targets.bloom.is_none())
-                                .then_some(1),
-                            }),
+                        timestamp_writes: timing.writes(self.query_set.as_ref(), TimedPass::Shading),
                         ..Default::default()
                     });
                     pass.set_pipeline(if deferred.is_some() {
@@ -189,6 +204,9 @@ impl Viewport {
                         scene
                     });
                     pass.set_bind_group(0, scene_bind_group, &[]);
+                    if let Some((target, _)) = contact {
+                        pass.set_bind_group(1, &target.bind_group, &[]);
+                    }
                     if deferred.is_some() {
                         pass.set_bind_group(
                             1,
@@ -201,7 +219,7 @@ impl Viewport {
                             &[],
                         );
                     }
-                    draw_work(&mut pass, shading_work, size);
+                    draw_work(&mut pass, shading_work, size, cells);
                 }
                 if let Some(hybrid) = &hybrid {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -215,15 +233,7 @@ impl Viewport {
                             }),
                             stencil_ops: None,
                         }),
-                        timestamp_writes: self
-                            .query_set
-                            .as_ref()
-                            .filter(|_| targets.bloom.is_none())
-                            .map(|query_set| wgpu::RenderPassTimestampWrites {
-                                query_set,
-                                beginning_of_pass_write_index: None,
-                                end_of_pass_write_index: targets.bloom.is_none().then_some(1),
-                            }),
+                        timestamp_writes: timing.writes(self.query_set.as_ref(), TimedPass::Hybrid),
                         ..Default::default()
                     });
                     if hybrid.splat_count > 0 {
@@ -253,6 +263,8 @@ impl Viewport {
                 size[1],
                 if self.interleaved { 0 } else { TILE },
                 self.completed,
+                self.refinement_rect[0], self.refinement_rect[1],
+                sparse_size[0], sparse_size[1],
             ]),
         );
         if work == Work::Cached {
@@ -261,7 +273,14 @@ impl Viewport {
         if let Some(targets) = &targets.bloom {
             self.bloom.encode(encoder, targets, self.query_set.as_ref());
         }
-        self.submitted_pixels = match work {
+        let stage = match work {
+            Work::Preview => Stage::Preview,
+            Work::Interleave { first, .. } if first < cells => Stage::Coverage,
+            Work::Interleave { .. } => Stage::Sparse,
+            Work::Refine { .. } => Stage::Tiles,
+            Work::Relight { .. } | Work::Cached => Stage::Relight,
+        };
+        let pixels = match work {
             Work::Preview => targets.preview_size[0] * targets.preview_size[1],
             Work::Refine { first, end } => (first..end)
                 .map(|tile| {
@@ -269,65 +288,123 @@ impl Viewport {
                     rect[2] * rect[3]
                 })
                 .sum(),
-            Work::Interleave { first, end } => {
-                // Edge blocks have fewer than 256 native pixels; the
-                // padded estimate keeps the adaptive budget conservative.
-                (end - first) * size[0].div_ceil(16) * size[1].div_ceil(16)
-            }
+            Work::Interleave { first, end } => end - first,
             Work::Relight { .. } | Work::Cached => 0,
         };
-        self.submitted_budget = match work {
-            Work::Refine { .. } => self.pixel_budget,
-            // Sparse draws are capped at 16 phases. Compare their timing to
-            // that achievable batch, otherwise a small view looks like a
-            // final partial batch and its expensive samples are all ignored.
-            Work::Interleave { .. } => self.pixel_budget.min(
-                16 * size[0].div_ceil(16) * size[1].div_ceil(16)),
-            Work::Preview => self.pixel_budget,
-            Work::Relight { .. } | Work::Cached => 0,
-        };
-        self.pending = true;
+        self.scheduler
+            .encoded(work, stage, pixels, self.pixel_budget, self.target_ms);
+        if work == Work::Preview {
+            self.preview_ready = true;
+        }
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scene receipt and optional GPU timing"),
+            size: 24,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         if let (Some(query_set), Some(resolve)) = (&self.query_set, &self.query_resolve) {
-            let readback = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("viewport timestamp readback"),
-                size: 16,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
             encoder.resolve_query_set(query_set, 0..2, resolve, 0);
             encoder.copy_buffer_to_buffer(resolve, 0, &readback, 0, 16);
-            Some(readback)
-        } else {
-            None
         }
+        // This tail command must execute in the same command buffer as the
+        // draw. A later queue callback alone can hide a failed Metal buffer.
+        encoder.copy_buffer_to_buffer(&self.receipt_source, 0, &readback, 16, 8);
+        Some(readback)
     }
 
-    pub fn submitted(&self, queue: &wgpu::Queue, work: Work, readback: Option<wgpu::Buffer>) {
+    pub fn submitted(&mut self, queue: &wgpu::Queue, work: Work, readback: Option<wgpu::Buffer>) {
         if work == Work::Cached {
             return;
         }
-        let timing = self.timing.clone();
+        let completion = self.scheduler.submitted(work);
+        // Submission, not encoding or callback polling, starts the pacing clock.
+        self.refinement_resume_at = Some(web_time::Instant::now() + REFINEMENT_PAUSE);
         if let Some(buffer) = readback {
             let period = queue.get_timestamp_period() as f64;
+            let timestamps = self.query_set.is_some();
             let mapped = buffer.clone();
+            let observation = completion.clone();
             buffer
                 .slice(..)
                 .map_async(wgpu::MapMode::Read, move |result| {
                     let milliseconds = result.ok().and_then(|_| {
                         let view = mapped.slice(..).get_mapped_range().ok()?;
                         let values: &[u64] = bytemuck::cast_slice(&view);
-                        Some(values[1].saturating_sub(values[0]) as f64 * period / 1_000_000.0)
+                        observation.verify_receipt(values[2] == SUBMISSION_RECEIPT);
+                        timestamps.then(|| {
+                            values[1].saturating_sub(values[0]) as f64 * period / 1_000_000.0
+                        })
                     });
                     mapped.unmap();
-                    *timing.lock().unwrap() = Some(milliseconds);
+                    *observation.milliseconds.lock().unwrap() = milliseconds;
                 });
-        } else {
-            queue.on_submitted_work_done(move || *timing.lock().unwrap() = Some(None));
         }
+        let repaint = self.repaint.clone();
+        // A missing/failed/late timing map cannot block this independent fence.
+        queue.on_submitted_work_done(move || {
+            completion.finish_fence();
+            if let Some(repaint) = repaint {
+                repaint();
+            }
+        });
     }
 }
 
-fn draw_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2]) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimedPass { Contact, Geometry, Depth, Shading, Hybrid, Bloom }
+
+struct BatchTiming { first: TimedPass, last: TimedPass }
+impl BatchTiming {
+    fn new(contact: bool, deferred: bool, hybrid: bool, relight: bool, bloom: bool) -> Self {
+        let first = if contact { TimedPass::Contact }
+            else if deferred && !relight { TimedPass::Geometry }
+            else if hybrid && !deferred { TimedPass::Depth }
+            else { TimedPass::Shading };
+        // Bloom owns only the end. In particular mesh+bloom must still record
+        // the start in its depth pass instead of reusing a previous timestamp.
+        let last = if bloom { TimedPass::Bloom }
+            else if hybrid { TimedPass::Hybrid }
+            else { TimedPass::Shading };
+        Self { first, last }
+    }
+
+    fn writes<'a>(&self, query_set: Option<&'a wgpu::QuerySet>, pass: TimedPass)
+        -> Option<wgpu::RenderPassTimestampWrites<'a>> {
+        // wgpu rejects a descriptor with neither index. Intermediate passes
+        // must omit it when earlier/later passes own both timestamps.
+        query_set.filter(|_| pass == self.first || pass == self.last)
+            .map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: (pass == self.first).then_some(0),
+                end_of_pass_write_index: (pass == self.last).then_some(1),
+            })
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn every_render_path_times_its_first_and_last_executed_pass() {
+    for deferred in [false, true] { for hybrid in [false, true] {
+        for relight in [false, true] { for bloom in [false, true] {
+            for contact in [false, true] {
+                if contact && (deferred || relight) { continue; }
+                if relight && !deferred { continue; }
+                let mut passes = Vec::new();
+                if contact { passes.push(TimedPass::Contact); }
+                if deferred && !relight { passes.push(TimedPass::Geometry); }
+                if !deferred && hybrid { passes.push(TimedPass::Depth); }
+                passes.push(TimedPass::Shading);
+                if hybrid { passes.push(TimedPass::Hybrid); }
+                if bloom { passes.push(TimedPass::Bloom); }
+                let timing = BatchTiming::new(contact, deferred, hybrid, relight, bloom);
+                assert_eq!(timing.first, passes[0], "{passes:?}");
+                assert_eq!(timing.last, *passes.last().unwrap(), "{passes:?}");
+            }
+        } }
+    } }
+}
+
+fn draw_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], cells: u32) {
     match work {
         Work::Preview => pass.draw(0..3, 0..1),
         Work::Refine { first, end } => {
@@ -343,11 +420,10 @@ fn draw_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2]) {
             }
         }
         Work::Interleave { first, end } => {
-            let samples = size[0].div_ceil(16) * size[1].div_ceil(16);
-            for phase in first..end {
-                let start = 0x8000_0000 | (phase << 23);
-                pass.draw(0..6, start..start + samples);
-            }
+            let offset = if first < cells { 0 } else { cells };
+            let first = first - offset;
+            let end = end - offset;
+            pass.draw(3..9, first..end);
         }
         Work::Relight { .. } | Work::Cached => unreachable!(),
     }
@@ -391,4 +467,35 @@ fn draw_mesh_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], c
         Work::Interleave { .. } => unreachable!("hybrid mesh uses tiled refinement"),
         Work::Relight { .. } | Work::Cached => unreachable!(),
     }
+}
+
+// Phase/state lives on the CPU. Every logical native pixel can be split out;
+// each native draw is one pixel to bound the cost of divergent sheet lanes.
+#[cfg(test)]
+pub(super) fn sparse_draw_rects(
+    size: [u32; 2],
+    first: u32,
+    end: u32,
+) -> impl Iterator<Item = [u32; 4]> {
+    let cells = sparse_phase_pixels(size);
+    let columns = size[0].div_ceil(16);
+    let mut next = first;
+    std::iter::from_fn(move || loop {
+        if next >= end {
+            return None;
+        }
+        let native = next.saturating_sub(cells);
+        let phase = native / cells;
+        let cell = if next < cells { next } else { native % cells };
+        let mut offset = [0, 0];
+        for bit in 0..4 {
+            let digit = (phase >> (6 - 2 * bit)) & 3;
+            offset[0] |= u32::from(digit == 1 || digit == 2) << bit;
+            offset[1] |= u32::from(digit == 1 || digit == 3) << bit;
+        }
+        let x = cell % columns * 16 + offset[0];
+        let y = cell / columns * 16 + offset[1];
+        next += 1;
+        if x < size[0] && y < size[1] { return Some([x, y, 1, 1]); }
+    })
 }

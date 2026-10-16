@@ -8,6 +8,7 @@ pub(super) fn packed_camera(
     world: World,
 ) -> GpuCamera {
     GpuCamera {
+        refinement_rect: [0, 0, camera.viewport.x.max(1.0) as u32, camera.viewport.y.max(1.0) as u32],
         inverse_view_projection: (camera.projection() * camera.view())
             .inverse()
             .to_cols_array_2d(),

@@ -441,3 +441,63 @@ impl SheetPanelParams {
             }
     }
 }
+
+impl SheetPanelParams {
+    /// Conservative formed bounds of the retained blank. Circular holes cannot
+    /// enlarge it; straight half-plane cuts can substantially shrink it.
+    pub(crate) fn clipped_local_bounds(&self) -> Option<(Vec3, Vec3)> {
+        self.clipped_local_bounds_with_margin(0.0)
+    }
+
+    /// Enclose the retained inverse charts, including a material-space tolerance.
+    pub(crate) fn clipped_local_bounds_with_margin(&self, margin: f32) -> Option<(Vec3, Vec3)> {
+        if !margin.is_finite() || margin < 0.0 || self.validate().is_err() || (self.stage == SheetStage::Formed && self.uses_directional_forming()) { return None; }
+        let h = self.size.as_dvec2() * 0.5 + glam::DVec2::splat(margin as f64);
+        let mut polygon = vec![glam::DVec2::new(-h.x,-h.y),glam::DVec2::new(h.x,-h.y),glam::DVec2::new(h.x,h.y),glam::DVec2::new(-h.x,h.y)];
+        if self.stage != SheetStage::Blank {
+            for cut in &self.cuts {
+                if let SheetCut::Straight { from, to } = cut {
+                    let from = from.as_dvec2();
+                    let edge = to.as_dvec2() - from;
+                    let previous = std::mem::take(&mut polygon);
+                    for i in 0..previous.len() {
+                        let a=previous[i]; let b=previous[(i+1)%previous.len()];
+                        let padding=edge.length()*margin as f64;
+                        let da=edge.perp_dot(a-from)+padding; let db=edge.perp_dot(b-from)+padding;
+                        if da >= 0.0 { polygon.push(a); }
+                        if (da<0.0 && db>0.0)||(da>0.0 && db<0.0) { polygon.push(a+(b-a)*(da/(da-db))); }
+                    }
+                }
+            }
+        }
+        if polygon.len()<3 { return None; }
+        let low=polygon.iter().fold(glam::DVec2::splat(f64::INFINITY),|a,p| a.min(*p)).as_vec2();
+        let high=polygon.iter().fold(glam::DVec2::splat(f64::NEG_INFINITY),|a,p| a.max(*p)).as_vec2();
+        let depth=if self.stage==SheetStage::Formed { self.embossed_depth_range() } else { Vec2::new(-self.thickness*0.5,self.thickness*0.5) };
+        let depth=depth+Vec2::new(-margin,margin);
+        let mut minimum=Vec3::splat(f32::INFINITY); let mut maximum=Vec3::splat(f32::NEG_INFINITY);
+        for strip in self.strips() {
+            let start=(strip.start-margin).max(low.x); let end=(strip.end+margin).min(high.x);
+            if start>end { continue; }
+            let mut coordinates=vec![start,end];
+            if strip.radius!=0.0 {
+                let a=strip.heading+(start-strip.start)/strip.radius;
+                let b=strip.heading+(end-strip.start)/strip.radius;
+                let quarter=std::f32::consts::FRAC_PI_2;
+                for k in (a.min(b)/quarter).ceil() as i32..=(a.max(b)/quarter).floor() as i32 {
+                    coordinates.push(strip.start+strip.radius*(k as f32*quarter-strip.heading));
+                }
+            }
+            for x in coordinates {
+                let angle=strip.heading+if strip.radius==0.0 { 0.0 } else { (x-strip.start)/strip.radius };
+                let (s,c)=angle.sin_cos();
+                for d in [depth.x,depth.y] {
+                    let p=strip.point(x)+Vec2::new(-s,c)*d;
+                    minimum=minimum.min(Vec3::new(p.x,low.y,p.y));
+                    maximum=maximum.max(Vec3::new(p.x,high.y,p.y));
+                }
+            }
+        }
+        (minimum.is_finite() && maximum.is_finite()).then_some((minimum,maximum))
+    }
+}

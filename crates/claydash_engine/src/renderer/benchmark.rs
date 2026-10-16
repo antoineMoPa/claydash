@@ -2,6 +2,85 @@
 use super::*;
 
 impl Renderer {
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn direct_reference_pixels(&self, fast: bool) -> Vec<u8> {
+        self.reference_pixels(Some(fast))
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn clear_probe_pixels(&self) -> Vec<u8> {
+        self.reference_pixels(None)
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    fn reference_pixels(&self, shading: Option<bool>) -> Vec<u8> {
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("direct native source reference"),
+            size: wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: self.render_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        if shading == Some(false) {
+            if let Some(probes) = self.viewport.contact_pipeline() {
+                let contact = crate::viewport::ContactTarget::new(&self.device,
+                    self.viewport.contact_layout(), [self.config.width, self.config.height]);
+                let pipeline = if self.has_booleans { &self.boolean_pipeline.as_ref().unwrap().1 } else { &self.pipeline };
+                // Independent raster-order rectangles bypass the viewport's
+                // sparse plan, feedback, publication and scheduling state.
+                for y in 0..self.config.height {
+                    for x in 0..self.config.width {
+                        let mut encoder = self.device.create_command_encoder(&Default::default());
+                        for (pipeline, destination, cache) in [
+                            (probes, &contact.view, None),
+                            (pipeline, &view, Some(&contact.bind_group)),
+                        ] {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: destination, resolve_target: None, depth_slice: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                                })], ..Default::default()
+                            });
+                            pass.set_pipeline(pipeline);
+                            pass.set_bind_group(0, &self.bind_group, &[]);
+                            if let Some(cache) = cache { pass.set_bind_group(1, cache, &[]); }
+                            pass.set_scissor_rect(x, y, 1, 1);
+                            pass.draw(0..3, 0..1);
+                        }
+                        self.queue.submit([encoder.finish()]);
+                        self.device.poll(wgpu::PollType::Wait { submission_index: None,
+                            timeout: Some(std::time::Duration::from_secs(5)) }).unwrap();
+                    }
+                }
+                return self.benchmark_pixels(&target);
+            }
+        }
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view, resolve_target: None, depth_slice: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(if shading.is_some() { wgpu::Color::TRANSPARENT } else { wgpu::Color::WHITE }), store: wgpu::StoreOp::Store },
+                })], ..Default::default()
+            });
+            if let Some(fast) = shading {
+            let pipeline = match (self.has_booleans, fast) {
+                (true, true) => &self.fast_boolean_pipeline.as_ref().unwrap().1,
+                (true, false) => &self.boolean_pipeline.as_ref().unwrap().1,
+                (false, true) => &self.fast_pipeline,
+                (false, false) => &self.pipeline,
+            };
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.draw(0..3, 0..1);
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+        self.benchmark_pixels(&target)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn benchmark_scene(
         &mut self,
@@ -15,7 +94,7 @@ impl Renderer {
         use std::time::{Duration, Instant};
 
         let upload_started = Instant::now();
-        self.uploaded_scene_versions = [i32::MIN; 2];
+        self.invalidate_scene();
         // Explicitly simulate clicking Recompute for splat benchmark fixtures.
         for object in objects.iter().filter(|object| {
             object.render_representation == crate::model::GroupRenderRepresentation::GaussianSplats
@@ -110,11 +189,28 @@ impl Renderer {
         let depth_view = depth_target
             .as_ref()
             .map(|target| target.create_view(&Default::default()));
+        let fast = std::env::args().any(|arg| arg == "--benchmark-fast-preview");
+        let contact = (!fast).then(|| self.viewport.contact_pipeline()).flatten().map(|pipeline| {
+            (pipeline, crate::viewport::ContactTarget::new(&self.device,
+                self.viewport.contact_layout(), [self.config.width, self.config.height]))
+        });
         let draw_batch = |pass_count: usize| {
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             for _ in 0..pass_count {
+                if let Some((pipeline, contact)) = &contact {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("benchmark contact probes"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &contact.view, resolve_target: None, depth_slice: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        })], ..Default::default()
+                    });
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.draw(0..3, 0..1);
+                }
                 if let Some(depth_view) = &depth_view {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("benchmark SDF depth"),
@@ -150,7 +246,6 @@ impl Renderer {
                     })],
                     ..Default::default()
                 });
-                let fast = std::env::args().any(|arg| arg == "--benchmark-fast-preview");
                 pass.set_pipeline(if self.hybrid_enabled {
                     if fast {
                         self.hybrid_fast_pipeline
@@ -177,6 +272,7 @@ impl Renderer {
                     &self.pipeline
                 });
                 pass.set_bind_group(0, &self.bind_group, &[]);
+                if let Some((_, contact)) = &contact { pass.set_bind_group(1, &contact.bind_group, &[]); }
                 pass.draw(0..3, 0..1);
                 drop(pass);
                 if let Some(depth_view) = &depth_view {
@@ -384,7 +480,7 @@ impl Renderer {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn benchmark_pixels(&self, target: &wgpu::Texture) -> Vec<u8> {
+    pub(super) fn benchmark_pixels(&self, target: &wgpu::Texture) -> Vec<u8> {
         use std::time::Duration;
         let row_bytes = self.config.width * 4;
         let padded_row_bytes = row_bytes.div_ceil(256) * 256;
@@ -453,6 +549,7 @@ impl Renderer {
         target: &wgpu::Texture,
     ) {
         use std::time::{Duration, Instant};
+        let contact = self.viewport.contact_pipeline().cloned();
         self.viewport = crate::viewport::Viewport::new(
             &self.device,
             self.render_format,
@@ -462,6 +559,7 @@ impl Renderer {
             &self.bind_group_layout,
         );
         self.viewport.set_initial_budget(self.initial_pixel_budget);
+        self.viewport.set_contact_pipeline(contact);
         let view = target.create_view(&Default::default());
         let mut moving = Vec::new();
         let mut refining = Vec::new();
@@ -469,7 +567,7 @@ impl Renderer {
         let mut idle = Vec::new();
         let mut settled = false;
         let mut convergence_started = None;
-        // Exact refinement has 256 ordered sample phases, independent of the
+        // Exact refinement has a coverage pass and 16 ordered block phases, independent of the
         // viewport's tile count. Completion callbacks and deliberate pauses
         // can require many cached frames. Bound convergence by elapsed time,
         // rather than a frame count that depends on the CPU's polling speed.
@@ -549,7 +647,10 @@ impl Renderer {
                 !deferred && !self.hybrid_enabled,
             );
             let mut encoder = self.device.create_command_encoder(&Default::default());
-            let quick_preview = matches!(work, crate::viewport::Work::Preview);
+            let quick_preview = matches!(work, crate::viewport::Work::Preview)
+                || matches!(work, crate::viewport::Work::Interleave { first, .. }
+                    if first < self.viewport.phase_samples());
+            self.viewport.set_contact_active(!quick_preview && !deferred);
             let pipeline = if self.hybrid_enabled {
                 if quick_preview {
                     self.hybrid_fast_pipeline

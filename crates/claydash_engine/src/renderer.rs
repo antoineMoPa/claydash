@@ -11,6 +11,8 @@ use crate::{
 
 #[cfg(not(target_arch = "wasm32"))]
 mod benchmark;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod navigation_profile;
 mod outline_capture;
 mod poisson_material;
 pub mod cooperative_work;
@@ -125,6 +127,7 @@ struct SceneShaderFeatures {
     emission: bool,
     neural_sdf: bool,
     neural_width: u32,
+    separate_contact: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -132,6 +135,7 @@ enum ScenePipelineKind {
     Shaded { capacity: u32, fast: bool, hybrid: bool },
     Deferred { capacity: u32, hybrid: bool },
     HybridDepth { capacity: u32, skip_splats: bool },
+    Contact { capacity: u32, hybrid: bool },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -158,6 +162,7 @@ impl SceneShaderFeatures {
             spatial: SpatialFeatures::for_objects(objects),
             neural_sdf: objects.iter().any(|object| object.meta[1] == 12),
             neural_width: 4,
+            separate_contact: objects.iter().any(|object| object.meta[1] == 13),
             bloom: false,
             emission: materials.iter().any(|material| material.emits_light()),
             flat_unions: objects
@@ -190,6 +195,7 @@ struct GpuCamera {
     night_color: [f32; 4],
     lighting_params: [f32; 4],
     view_projection: [[f32; 4]; 4],
+    refinement_rect: [u32; 4],
 }
 
 #[repr(C)]
@@ -241,6 +247,9 @@ struct GpuBvhNode {
     metadata: [u32; 4],
     aabb_min: [f32; 4],
     aabb_max: [f32; 4],
+    // Ray-only surface bounds. Distance queries retain the original bounds.
+    ray_min: [f32; 4],
+    ray_max: [f32; 4],
 }
 
 #[repr(C)]
@@ -291,6 +300,7 @@ pub struct Renderer {
     pipeline_layout: wgpu::PipelineLayout,
     use_bvh: bool,
     node_count: u32,
+    scene_bounds: Option<([f32; 3], [f32; 3])>,
     uploaded_object_count: u32,
     has_booleans: bool,
     scene_pipeline_cache: std::collections::VecDeque<(ScenePipelineKey, wgpu::RenderPipeline)>,
@@ -318,6 +328,7 @@ pub struct Renderer {
     #[cfg(not(target_arch = "wasm32"))]
     group_capture_bake: Option<group_capture::CaptureBakeJob>,
     egui_renderer: egui_wgpu::Renderer,
+    ui_textures: recovery::TextureJournal,
     viewport: crate::viewport::Viewport,
     post_processing: post_processing::PostProcessor,
     initial_pixel_budget: u32,
@@ -423,6 +434,10 @@ mod scene_pipelines;
 mod scene_upload;
 mod splat_bvh;
 mod texture_cleanup;
+mod recovery;
+mod contact;
+mod refinement_region;
+pub use recovery::RendererRecovery;
 
 use box_depth_atlas::*;
 use bvh::*;
@@ -431,6 +446,9 @@ use sphere_depth_atlas::*;
 
 #[cfg(test)]
 mod scene_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod bvh_tests;

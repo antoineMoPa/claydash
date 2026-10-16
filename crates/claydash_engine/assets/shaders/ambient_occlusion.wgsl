@@ -2,6 +2,7 @@
 // Distances are in world units. Compare against the original surface's
 // expected distance to avoid treating the hit object itself as an occluder.
 fn ambient_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
+    if !all(abs(normal) < vec3(2.0)) || dot(normal, normal) < 0.000001 { return 1.0; }
     let reference = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(normal.y) > 0.8);
     let tangent = normalize(cross(reference, normal));
     let bitangent = cross(normal, tangent);
@@ -12,7 +13,7 @@ fn ambient_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
         let angle = f32(direction_index) * 0.78539816;
         let direction = normalize(normal * 0.75 + tangent * cos(angle) + bitangent * sin(angle));
         let reach = 0.10;
-        let expected = reach * dot(direction, normal);
+        let expected = max(reach * dot(direction, normal), 0.000001);
         // Distances beyond expected contribute zero occlusion. Once any
         // solid component contains the probe, the contribution is already one.
         // Splats are composited with alpha, so they are not solid occluders.
@@ -20,5 +21,5 @@ fn ambient_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
             point + normal * 0.008 + direction * reach, expected, true, true).x;
         occlusion += clamp((expected - distance_to_scene) / expected, 0.0, 1.0);
     }
-    return 1.0 - occlusion * 0.05;
+    return select(1.0, 1.0 - occlusion * 0.05, occlusion >= 0.0 && occlusion <= 8.0);
 }

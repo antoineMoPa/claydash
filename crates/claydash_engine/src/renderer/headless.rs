@@ -90,6 +90,7 @@ impl Renderer {
         // Explicit invalidation allows callers to mutate scene data directly.
         self.invalidate_scene();
         let result = (|| loop {
+            if let Some(fault) = self.gpu_fault() { return Err(fault.to_owned()); }
             let _remaining = deadline
                 .checked_duration_since(std::time::Instant::now())
                 .filter(|duration| !duration.is_zero())
@@ -127,6 +128,7 @@ impl Renderer {
                     timeout: Some(remaining),
                 })
                 .map_err(|error| format!("offscreen GPU progress: {error}"))?;
+            if let Some(fault) = self.gpu_fault() { return Err(fault.to_owned()); }
             if let Some(frame) = self.take_capture() {
                 return frame;
             }

@@ -136,13 +136,16 @@ struct GeometryOut {
             });
         }
         queue.submit([encoder.finish()]);
+        // This fixture supplies its own preview instead of encode(Preview).
+        viewport.preview_ready = true;
         let first = viewport.prepare(&device, key, true, true, false);
         assert_eq!(first, Work::Refine { first: 0, end: 1 });
         let mut encoder = device.create_command_encoder(&Default::default());
-        viewport.encode(&device, &queue, &mut encoder, first, &geometry,
+        let receipt = viewport.encode(&device, &queue, &mut encoder, first, &geometry,
             &scene_bind, None, Some(DeferredPass { geometry_pipeline: &geometry }));
         let (readback, output) = composite_pixels(&device, &viewport, &mut encoder);
         queue.submit([encoder.finish()]);
+        viewport.submitted(&queue, first, receipt);
         let completed = pixel(&device, &readback, [16, 16]);
         let unfinished = pixel(&device, &readback, [48, 16]);
         assert!(completed[2] > completed[0] + 30,
@@ -150,16 +153,75 @@ struct GeometryOut {
         assert!(unfinished[0] > unfinished[2] + 100,
             "unfinished deferred tile should retain red preview: {unfinished:?}");
         drop(output);
+        assert!(!viewport.gpu_work_pending(&device));
 
         let total = tile_count(SIZE);
         let mut encoder = device.create_command_encoder(&Default::default());
-        viewport.encode(&device, &queue, &mut encoder,
-            Work::Refine { first: 1, end: total }, &geometry,
+        let final_work = Work::Refine { first: 1, end: total };
+        let receipt = viewport.encode(&device, &queue, &mut encoder,
+            final_work, &geometry,
             &scene_bind, None, Some(DeferredPass { geometry_pipeline: &geometry }));
         let (readback, _output) = composite_pixels(&device, &viewport, &mut encoder);
         queue.submit([encoder.finish()]);
+        viewport.submitted(&queue, final_work, receipt);
         let final_tile = pixel(&device, &readback, [48, 16]);
         assert!(final_tile[2] > final_tile[0] + 30,
             "final deferred resolve should shade whole frame blue: {final_tile:?}");
+    });
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn sparse_background_reconstruction_uses_only_completed_offset_samples() {
+    pollster::block_on(async {
+        let adapter = wgpu::Instance::default().request_adapter(&Default::default())
+            .await.expect("GPU adapter");
+        let (device, queue) = adapter.request_device(&Default::default()).await.expect("GPU device");
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry { binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None }, count: None }],
+        });
+        let mut viewport = Viewport::new(&device, wgpu::TextureFormat::Rgba8Unorm, false, &layout);
+        viewport.refinement_rect = [7, 5, 35, 19];
+        let key = ViewKey { matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            position: [0.0, 0.0, 5.0], projection: 0, versions: [1, 1], size: SIZE, refine: true };
+        viewport.prepare(&device, key, true, false, true);
+        let targets = viewport.targets.as_ref().unwrap();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        // Blue native texels stand for stale/unpublished work until the cursor
+        // declares them complete. They must never leak into unavailable corners.
+        for (view, color) in [(&targets.preview, wgpu::Color::RED), (&targets.refined, wgpu::Color::BLUE)] {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view, resolve_target: None, depth_slice: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(color), store: wgpu::StoreOp::Store },
+                })], ..Default::default()
+            });
+        }
+        queue.submit([encoder.finish()]);
+        let capture = |completed| {
+            queue.write_buffer(&viewport.progress, 0, bytemuck::cast_slice(&[
+                SIZE[0], SIZE[1], 0, completed, 7, 5, 35, 19,
+            ]));
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let (readback, _) = composite_pixels(&device, &viewport, &mut encoder);
+            queue.submit([encoder.finish()]);
+            readback
+        };
+        let untouched = capture(0);
+        assert_eq!(pixel(&device, &untouched, [7, 5]), [255, 0, 0, 255]);
+        assert_eq!(pixel(&device, &untouched, [41, 23]), [255, 0, 0, 255]);
+        let partial = capture(1);
+        assert_eq!(pixel(&device, &partial, [7, 5]), [0, 0, 255, 255], "native sample stays exact");
+        let midpoint = pixel(&device, &partial, [15, 5]);
+        assert!(midpoint[0].abs_diff(128) <= 1 && midpoint[2].abs_diff(128) <= 1,
+            "completed corner must blend smoothly with the preview: {midpoint:?}");
+        assert_eq!(pixel(&device, &partial, [41, 23]), [255, 0, 0, 255], "missing corners retain preview");
+        let coverage = capture(6);
+        assert_eq!(pixel(&device, &coverage, [41, 23]), [0, 0, 255, 255], "nonmultiple edge uses last valid grid corner");
+        assert_eq!(pixel(&device, &coverage, [42, 24]), [0, 0, 255, 255], "outside region uses native background");
     });
 }

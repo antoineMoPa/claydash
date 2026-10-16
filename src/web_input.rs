@@ -22,6 +22,10 @@ impl Default for WebInput {
 }
 
 impl WebInput {
+    pub fn pointer_gone(&mut self) {
+        self.input.events.push(Event::PointerGone);
+    }
+
     pub fn take(&mut self, window: &Window) -> RawInput {
         let scale = window.scale_factor() as f32;
         let size = window.inner_size().to_logical::<f32>(window.scale_factor());

@@ -10,7 +10,7 @@ fn source() -> String {
 @group(0) @binding(3) var<storage, read_write> result: array<f32>;\n\
 {}\n\
 @compute @workgroup_size(64) fn check(@builtin(global_invocation_id) id: vec3<u32>) {{\n\
- if id.x < arrayLength(&samples) {{ result[id.x] = sheet_distance(samples[id.x].xyz, objects[0]); }}\n\
+ if id.x < arrayLength(&samples) {{ result[id.x] = sheet_distance(samples[id.x].xyz, SheetData(bitcast<u32>(objects[0].params.x), bitcast<u32>(objects[0].params.y), u32(objects[0].params.z == 1.0))); }}\n\
 }}", include_str!("../../assets/shaders/sheet.wgsl"))
 }
 

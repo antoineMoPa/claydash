@@ -372,7 +372,7 @@ fn primitive_distance(local: vec3<f32>, object: Object) -> f32 {
     } else if HAS_LOFTS && object.state.y == 7 {
         distance = loft_distance(local, object);
     } else if object.state.y == 13 {
-        distance = sheet_distance(local, object);
+        distance = sheet_distance(local, SheetData(bitcast<u32>(object.params.x), bitcast<u32>(object.params.y), u32(object.params.z == 1.0)));
     } else if HAS_TEXT && object.state.y == 11 {
         distance = text_distance(local, object);
     }
@@ -501,10 +501,12 @@ fn poisson_flat_union_owner(point: vec3<f32>, start: u32, root: u32,
     }
     if tree {
         var node_index = parent.operand_tree.x;
-        while node_index < parent.operand_tree.y {
+        let traversal_end = min(parent.operand_tree.y, arrayLength(&bvh));
+        for (var visited = min(node_index, traversal_end); visited < traversal_end; visited++) {
+            if node_index >= traversal_end { break; }
             let node = bvh[node_index];
             let lower_bound = distance(parent_point, node.center_radius.xyz) - node.center_radius.w;
-            if lower_bound > closest.x { node_index = node.metadata.y; continue; }
+            if lower_bound > closest.x { node_index = max(node_index + 1u, node.metadata.y); continue; }
             if node.metadata.x != 0xffffffffu {
                 let index = node.metadata.x;
                 let child = objects[index];
