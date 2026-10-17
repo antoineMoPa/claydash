@@ -1,6 +1,110 @@
 use super::*;
 
 impl UiState {
+    pub(super) fn draw_polygon_side_handle(
+        &mut self,
+        ui: &mut egui::Ui,
+        tree: &mut DataTree,
+        camera: &Camera,
+        face: crate::model::PolygonPrismFaceSelection,
+        blocker_count: usize,
+    ) {
+        let crate::model::PolygonPrismFace::Side { edge } = face.face else {
+            return;
+        };
+        let mut scene = objects(tree);
+        let matrix = crate::model::object_world_matrix(&scene, face.object);
+        let Some(object) = scene.iter().find(|object| object.uuid == face.object) else {
+            return;
+        };
+        let SdfParams::PolygonPrismParams(params) = &object.params else {
+            return;
+        };
+        let Some((midpoint, outward, _)) = crate::model::polygon_side_frame(&params.vertices, edge)
+        else {
+            return;
+        };
+        let world = matrix.transform_point3(midpoint.extend(0.0));
+        let direction = matrix.transform_vector3(outward.extend(0.0));
+        let scale = ui.ctx().pixels_per_point();
+        let (Some(center), Some(ahead)) = (
+            camera.project(world, scale),
+            camera.project(world + direction * 0.1, scale),
+        ) else {
+            return;
+        };
+        let mut projected_axis = (ahead - center) * 10.0;
+        if projected_axis.length_sq() < 4.0 {
+            let screen_up = camera.view().inverse().y_axis.truncate();
+            if let Some(fallback) = camera.project(world + screen_up * 0.1, scale) {
+                projected_axis = (fallback - center) * 10.0;
+            }
+        }
+        if projected_axis.length_sq() < 0.0001 {
+            return;
+        }
+        let id = egui::Id::new(("polygon-side-move", face.object, edge));
+        let captured = ui.ctx().is_being_dragged(id) || ui.ctx().drag_stopped_id() == Some(id);
+        let hit =
+            egui::Rect::from_center_size(center, egui::vec2(24.0, 24.0)).intersect(ui.clip_rect());
+        if !captured
+            && (hit.is_negative()
+                || self.regions[..blocker_count.min(self.regions.len())]
+                    .iter()
+                    .any(|rect| rect.contains(center)))
+        {
+            return;
+        }
+        self.regions.push(hit);
+        let response = ui
+            .interact(hit, id, egui::Sense::drag())
+            .on_hover_text("Drag to move this side face. Release to finish.");
+        let tip = center + projected_axis / projected_axis.length() * 28.0;
+        ui.painter()
+            .arrow(center, tip - center, Stroke::new(2.0, Color32::WHITE));
+        ui.painter().circle_filled(center, 5.0, Color32::WHITE);
+        if response.drag_started() {
+            self.polygon_side_drag = Some(PolygonSideDrag {
+                object: face.object,
+                edge,
+                initial_vertices: params.vertices.clone(),
+                outward,
+                projected_axis,
+                raw_amount: 0.0,
+            });
+        }
+        if response.dragged() {
+            if let Some(session) = self
+                .polygon_side_drag
+                .as_mut()
+                .filter(|session| session.object == face.object && session.edge == edge)
+            {
+                let delta = ui.input(|input| input.pointer.delta());
+                session.raw_amount +=
+                    delta.dot(session.projected_axis) / session.projected_axis.length_sq();
+                let mut vertices = session.initial_vertices.clone();
+                let endpoint = (edge + 1) % vertices.len();
+                vertices[edge] += session.outward * session.raw_amount;
+                vertices[endpoint] += session.outward * session.raw_amount;
+                if crate::ui::polygon_is_valid(&vertices) {
+                    if let Some(object) = scene.iter_mut().find(|object| object.uuid == face.object)
+                    {
+                        if let SdfParams::PolygonPrismParams(params) = &mut object.params {
+                            if params.vertices != vertices {
+                                params.vertices = vertices;
+                                set_objects(tree, scene);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if response.drag_stopped() {
+            self.polygon_side_drag = None;
+            tree.make_undo_redo_snapshot();
+        }
+    }
+
     pub(super) fn draw_polygon_cap_handle(
         &mut self,
         ui: &mut egui::Ui,

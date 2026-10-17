@@ -4,11 +4,16 @@ pub fn extrude_selected_face(tree: &mut DataTree) {
     if extend_selected_curve(tree) {
         return;
     }
-    if let Some(crate::model::ModelingFaceSelection::CylinderCap(face)) =
-        crate::model::selected_modeling_face(tree)
-    {
-        extrude_cylinder_cap(tree, face);
-        return;
+    match crate::model::selected_modeling_face(tree) {
+        Some(crate::model::ModelingFaceSelection::CylinderCap(face)) => {
+            extrude_cylinder_cap(tree, face);
+            return;
+        }
+        Some(crate::model::ModelingFaceSelection::PolygonPrism(face)) => {
+            extrude_polygon_cap(tree, face);
+            return;
+        }
+        _ => {}
     }
     let Some(face) = crate::model::selected_box_face(tree) else {
         return;
@@ -17,9 +22,6 @@ pub fn extrude_selected_face(tree: &mut DataTree) {
         return;
     }
     let mut scene = objects(tree);
-    if crate::model::has_boolean_children(&scene, face.object) {
-        return;
-    }
     let Some(source) = scene
         .iter()
         .find(|object| object.uuid == face.object)
@@ -123,9 +125,6 @@ pub(super) fn extrude_cylinder_cap(tree: &mut DataTree, face: crate::model::Cyli
         return;
     }
     let mut scene = objects(tree);
-    if crate::model::has_boolean_children(&scene, face.object) {
-        return;
-    }
     let Some(source) = scene
         .iter()
         .find(|object| object.uuid == face.object)
@@ -164,6 +163,147 @@ pub(super) fn extrude_cylinder_cap(tree: &mut DataTree, face: crate::model::Cyli
     tree.set_transient_path(
         "editor.extrusion_source_face",
         ClaydashValue::ModelingFaceSelection(crate::model::ModelingFaceSelection::CylinderCap(
+            face,
+        )),
+    );
+    tree.set_path(
+        "editor.state",
+        ClaydashValue::EditorState(EditorState::Extruding),
+    );
+}
+
+fn extrude_polygon_cap(tree: &mut DataTree, face: crate::model::PolygonPrismFaceSelection) {
+    let positive = match face.face {
+        crate::model::PolygonPrismFace::Cap { positive } => positive,
+        crate::model::PolygonPrismFace::Side { edge } => {
+            extrude_polygon_side(tree, face, edge);
+            return;
+        }
+    };
+    if !selected(tree).contains(&face.object) {
+        return;
+    }
+    let mut scene = objects(tree);
+    let Some(source) = scene
+        .iter()
+        .find(|object| object.uuid == face.object)
+        .cloned()
+    else {
+        return;
+    };
+    let crate::model::SdfParams::PolygonPrismParams(params) = &source.params else {
+        return;
+    };
+    let source_half_depth = params.half_depth;
+    let sign = if positive { 1.0 } else { -1.0 };
+    let offset = glam::Vec3::Z * (params.half_depth + EXTRUSION_INITIAL_HALF_EXTENT) * sign;
+    let mut extrusion = source.duplicate();
+    extrusion.name = format!("{} extrusion", source.display_name());
+    extrusion.transform.translation += source.transform.matrix().transform_vector3(offset);
+    let crate::model::SdfParams::PolygonPrismParams(extrusion_params) = &mut extrusion.params
+    else {
+        unreachable!()
+    };
+    extrusion_params.half_depth = EXTRUSION_INITIAL_HALF_EXTENT;
+    let extrusion_id = extrusion.uuid;
+    let split_voids: Vec<_> = scene
+        .iter()
+        .filter(|candidate| {
+            candidate.boolean_parent == Some(face.object) && candidate.name == "Face split void"
+        })
+        .filter_map(|candidate| {
+            let crate::model::SdfParams::PolygonPrismParams(void_params) = &candidate.params else {
+                return None;
+            };
+            let mut void = candidate.duplicate();
+            void.boolean_parent = Some(extrusion_id);
+            void.transform.translation += source.transform.matrix().transform_vector3(offset);
+            let crate::model::SdfParams::PolygonPrismParams(params) = &mut void.params else {
+                unreachable!()
+            };
+            params.half_depth =
+                EXTRUSION_INITIAL_HALF_EXTENT + (void_params.half_depth - source_half_depth);
+            Some(void)
+        })
+        .collect();
+    scene.push(extrusion);
+    scene.extend(split_voids.iter().cloned());
+    set_objects(tree, scene);
+    crate::model::set_selected_exact(tree, vec![extrusion_id]);
+    crate::model::set_selected_modeling_face(
+        tree,
+        Some(crate::model::ModelingFaceSelection::PolygonPrism(
+            crate::model::PolygonPrismFaceSelection {
+                object: extrusion_id,
+                face: crate::model::PolygonPrismFace::Cap { positive },
+            },
+        )),
+    );
+    tree.set_transient_path("editor.extrusion_object", ClaydashValue::Uuid(extrusion_id));
+    tree.set_transient_path(
+        "editor.extrusion_initial_children",
+        ClaydashValue::VecSDFObject(split_voids),
+    );
+    tree.set_transient_path(
+        "editor.extrusion_source_face",
+        ClaydashValue::ModelingFaceSelection(crate::model::ModelingFaceSelection::PolygonPrism(
+            face,
+        )),
+    );
+    tree.set_path(
+        "editor.state",
+        ClaydashValue::EditorState(EditorState::Extruding),
+    );
+}
+
+fn extrude_polygon_side(
+    tree: &mut DataTree,
+    face: crate::model::PolygonPrismFaceSelection,
+    edge: usize,
+) {
+    if !selected(tree).contains(&face.object) {
+        return;
+    }
+    let mut scene = objects(tree);
+    let Some(source) = scene
+        .iter()
+        .find(|object| object.uuid == face.object)
+        .cloned()
+    else {
+        return;
+    };
+    let crate::model::SdfParams::PolygonPrismParams(params) = &source.params else {
+        return;
+    };
+    let Some((_, outward, _)) = crate::model::polygon_side_frame(&params.vertices, edge) else {
+        return;
+    };
+    let a = params.vertices[edge];
+    let b = params.vertices[(edge + 1) % params.vertices.len()];
+    let offset = outward * (EXTRUSION_INITIAL_HALF_EXTENT * 2.0);
+    let mut extrusion = source.duplicate();
+    extrusion.name = format!("{} extrusion", source.display_name());
+    let crate::model::SdfParams::PolygonPrismParams(extended) = &mut extrusion.params else {
+        unreachable!()
+    };
+    extended.vertices = vec![a, b, b + offset, a + offset];
+    let extrusion_id = extrusion.uuid;
+    scene.push(extrusion);
+    set_objects(tree, scene);
+    crate::model::set_selected_exact(tree, vec![extrusion_id]);
+    crate::model::set_selected_modeling_face(
+        tree,
+        Some(crate::model::ModelingFaceSelection::PolygonPrism(
+            crate::model::PolygonPrismFaceSelection {
+                object: extrusion_id,
+                face: crate::model::PolygonPrismFace::Side { edge: 2 },
+            },
+        )),
+    );
+    tree.set_transient_path("editor.extrusion_object", ClaydashValue::Uuid(extrusion_id));
+    tree.set_transient_path(
+        "editor.extrusion_source_face",
+        ClaydashValue::ModelingFaceSelection(crate::model::ModelingFaceSelection::PolygonPrism(
             face,
         )),
     );

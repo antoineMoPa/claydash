@@ -16,6 +16,7 @@ pub(crate) mod scene_actions;
 mod scene_panel;
 mod secondary_panels;
 mod selection_tools;
+pub(crate) use selection_tools::polygon_is_valid;
 mod status_bar;
 mod variables;
 mod variable_gizmos;
@@ -171,6 +172,7 @@ pub struct UiState {
     lattice_drag: Option<object_gizmos::LatticeDrag>,
     bezier_drag: Option<object_gizmos::BezierDrag>,
     polygon_cap_drag: Option<PolygonCapDrag>,
+    polygon_side_drag: Option<PolygonSideDrag>,
     insert_keyframe_menu_position: Option<egui::Pos2>,
     #[cfg(target_arch = "wasm32")]
     web_save_name: Option<String>,
@@ -207,6 +209,7 @@ impl Default for UiState {
             lattice_drag: None,
             bezier_drag: None,
             polygon_cap_drag: None,
+            polygon_side_drag: None,
             insert_keyframe_menu_position: None,
             #[cfg(target_arch = "wasm32")]
             web_save_name: None,
@@ -492,6 +495,7 @@ impl UiState {
                 if let Some(active) = self.active_guide.or(interaction_guide) {
                     draw_active_guides(ui, camera, active);
                 }
+                self.draw_viewport_selection_label(ui, tree);
             });
         }
         self.draw_insert_keyframe_menu(viewport_ui.ctx(), tree);
@@ -560,6 +564,7 @@ impl UiState {
         self.lattice_drag = None;
         self.bezier_drag = None;
         self.polygon_cap_drag = None;
+        self.polygon_side_drag = None;
         self.insert_keyframe_menu_position = None;
     }
 
@@ -647,6 +652,15 @@ struct PolygonCapDrag {
     initial_transform: crate::model::Transform,
     initial_half_depth: f32,
     split_void: Option<(uuid::Uuid, crate::model::Transform, f32)>,
+    projected_axis: egui::Vec2,
+    raw_amount: f32,
+}
+
+struct PolygonSideDrag {
+    object: uuid::Uuid,
+    edge: usize,
+    initial_vertices: Vec<Vec2>,
+    outward: Vec2,
     projected_axis: egui::Vec2,
     raw_amount: f32,
 }

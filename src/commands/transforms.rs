@@ -44,9 +44,7 @@ pub fn start_grab(tree: &mut DataTree) {
     }
     if let Some(face) = crate::model::selected_modeling_face(tree) {
         let scene = objects(tree);
-        if selected(tree) == vec![face.object()]
-            && !crate::model::has_boolean_children(&scene, face.object())
-        {
+        if selected(tree) == vec![face.object()] {
             if let Some(object) = scene.iter().find(|object| object.uuid == face.object()) {
                 let supported = matches!(
                     (face, &object.params),
@@ -56,16 +54,32 @@ pub fn start_grab(tree: &mut DataTree) {
                     ) | (
                         crate::model::ModelingFaceSelection::CylinderCap(_),
                         crate::model::SdfParams::CylinderParams { .. }
+                    ) | (
+                        crate::model::ModelingFaceSelection::PolygonPrism(_),
+                        crate::model::SdfParams::PolygonPrismParams(_)
                     )
                 );
                 if supported {
+                    let mut initial = vec![object.clone()];
+                    if matches!(face, crate::model::ModelingFaceSelection::PolygonPrism(_)) {
+                        initial.extend(
+                            scene
+                                .iter()
+                                .filter(|candidate| {
+                                    candidate.boolean_parent == Some(face.object())
+                                        && candidate.name == "Face split void"
+                                })
+                                .cloned(),
+                        );
+                    }
                     tree.set_transient_path(
                         "editor.face_drag_initial_object",
-                        ClaydashValue::VecSDFObject(vec![object.clone()]),
+                        ClaydashValue::VecSDFObject(initial),
                     );
                     start_edit(tree, EditorState::DraggingFace);
                     return;
                 }
+                return;
             }
         }
     }
@@ -120,13 +134,13 @@ pub(super) fn cancel(tree: &mut DataTree) {
         if let ClaydashValue::VecSDFObject(initial) =
             tree.get_path("editor.curve_extension_initial")
         {
-            if let Some(initial) = initial.into_iter().next() {
-                let mut scene = objects(tree);
-                if let Some(object) = scene.iter_mut().find(|object| object.uuid == initial.uuid) {
-                    *object = initial;
-                    set_objects(tree, scene);
+            let mut scene = objects(tree);
+            for original in initial {
+                if let Some(object) = scene.iter_mut().find(|object| object.uuid == original.uuid) {
+                    *object = original;
                 }
             }
+            set_objects(tree, scene);
         }
         let previous = match tree.get_path("editor.curve_extension_source_point") {
             ClaydashValue::CurvePointSelection(point) => Some(point),
@@ -170,7 +184,7 @@ pub(super) fn cancel(tree: &mut DataTree) {
         if let ClaydashValue::Uuid(extrusion) = tree.get_path("editor.extrusion_object") {
             let scene = objects(tree)
                 .into_iter()
-                .filter(|object| object.uuid != extrusion)
+                .filter(|object| object.uuid != extrusion && object.boolean_parent != Some(extrusion))
                 .collect();
             set_objects(tree, scene);
         }
@@ -185,6 +199,7 @@ pub(super) fn cancel(tree: &mut DataTree) {
             crate::model::set_selected_modeling_face(tree, Some(face));
         }
         tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
+        tree.set_transient_path("editor.extrusion_initial_children", ClaydashValue::None);
         tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
         tree.set_path(
             "editor.state",
@@ -232,6 +247,7 @@ pub(crate) fn finish(tree: &mut DataTree) {
     tree.set_transient_path("editor.curve_extension_source_point", ClaydashValue::None);
     tree.set_transient_path("editor.face_drag_initial_object", ClaydashValue::None);
     tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
+    tree.set_transient_path("editor.extrusion_initial_children", ClaydashValue::None);
     tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
     tree.set_path(
         "editor.state",

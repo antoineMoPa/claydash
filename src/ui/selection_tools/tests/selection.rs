@@ -22,6 +22,27 @@ fn box_selection_shortcut_enters_mode_only_while_idle() {
 }
 
 #[test]
+fn face_cut_shortcut_needs_a_selected_face_and_idle_editor() {
+    let mut state = UiState::default();
+    let mut tree = DataTree::default();
+    assert!(!state.enter_face_cut_mode(&tree));
+    let cube = SdfObject::create(sdf_consts::TYPE_BOX);
+    crate::model::set_objects(&mut tree, vec![cube.clone()]);
+    crate::model::set_selected_exact(&mut tree, vec![cube.uuid]);
+    crate::model::set_selected_box_face(&mut tree, Some(crate::model::BoxFaceSelection {
+        object: cube.uuid,
+        axis: crate::model::VectorAxis::Z,
+        positive: true,
+    }));
+    assert!(state.enter_face_cut_mode(&tree));
+    assert!(state.selection_tools.face_cut_mode());
+    state.selection_tools.tool = SelectionTool::Select;
+    tree.set_path("editor.state", ClaydashValue::EditorState(EditorState::Grabbing));
+    assert!(!state.enter_face_cut_mode(&tree));
+    assert!(!state.selection_tools.face_cut_mode());
+}
+
+#[test]
 fn box_selection_shortcut_starts_at_the_current_pointer() {
     let mut state = UiState::default();
     let tree = DataTree::default();

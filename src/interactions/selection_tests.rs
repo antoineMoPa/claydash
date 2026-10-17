@@ -244,6 +244,7 @@ fn clicking_an_extruded_polygon_selects_its_face_even_inside_a_group() {
     for _ in 0..3 {
         InteractionState::select_at(&camera, &mut tree, camera.viewport / 2.0, None, false);
     }
+    assert!(matches!(tree.get_path("editor.polygon_edit_requested"), ClaydashValue::None));
     assert!(matches!(
         crate::model::selected_modeling_face(&tree),
         Some(crate::model::ModelingFaceSelection::PolygonPrism(face))
@@ -396,6 +397,153 @@ fn e_extrudes_the_selected_box_face() {
         tree.get_path("editor.state"),
         ClaydashValue::EditorState(EditorState::Start)
     ));
+}
+
+#[test]
+fn polygon_side_supports_extrude_and_move_like_a_box_face() {
+    let root = SdfObject::create(TYPE_BOX);
+    let mut prism = SdfObject::create_kind(crate::model::PrimitiveKind::PolygonPrism);
+    prism.boolean_parent = Some(root.uuid);
+    prism.operation = BooleanOperation::Subtract;
+    if let crate::model::SdfParams::PolygonPrismParams(params) = &mut prism.params {
+        params.vertices = vec![
+            Vec2::new(-0.2, -0.2), Vec2::new(0.2, -0.2),
+            Vec2::new(0.2, 0.2), Vec2::new(-0.2, 0.2),
+        ];
+    }
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![root, prism.clone()]);
+    crate::model::set_selected_exact(&mut tree, vec![prism.uuid]);
+    let side = crate::model::ModelingFaceSelection::PolygonPrism(
+        crate::model::PolygonPrismFaceSelection {
+            object: prism.uuid,
+            face: crate::model::PolygonPrismFace::Side { edge: 1 },
+        },
+    );
+    crate::model::set_selected_modeling_face(&mut tree, Some(side));
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut interactions = InteractionState {
+        mouse_position: camera.viewport / 2.0,
+        ..Default::default()
+    };
+
+    interactions.key_pressed(KeyCode::KeyE, false, &commands, &mut tree);
+    assert!(matches!(tree.get_path("editor.state"), ClaydashValue::EditorState(EditorState::Extruding)));
+    let extended_id = selected(&tree)[0];
+    assert_ne!(extended_id, prism.uuid);
+    interactions.update(&mut camera, &mut tree);
+    let axis = interactions.extrusion_session.as_ref().unwrap().projected_axis;
+    interactions.cursor_moved(interactions.mouse_position + axis.normalize() * 60.0, false);
+    interactions.update(&mut camera, &mut tree);
+    let extended = objects(&tree).into_iter().find(|object| object.uuid == extended_id).unwrap();
+    let crate::model::SdfParams::PolygonPrismParams(params) = extended.params else { panic!("expected prism") };
+    assert!(params.vertices[2].x > 0.22);
+
+    interactions.key_released(KeyCode::KeyE);
+    interactions.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
+    assert_eq!(objects(&tree).len(), 2);
+    assert_eq!(crate::model::selected_modeling_face(&tree), Some(side));
+    interactions.key_released(KeyCode::Escape);
+    interactions.key_pressed(KeyCode::KeyG, false, &commands, &mut tree);
+    assert!(matches!(tree.get_path("editor.state"), ClaydashValue::EditorState(EditorState::DraggingFace)));
+    interactions.update(&mut camera, &mut tree);
+    let axis = interactions.extrusion_session.as_ref().unwrap().projected_axis;
+    interactions.cursor_moved(interactions.mouse_position + axis.normalize() * 60.0, false);
+    interactions.update(&mut camera, &mut tree);
+    let moved = objects(&tree).into_iter().find(|object| object.uuid == prism.uuid).unwrap();
+    let crate::model::SdfParams::PolygonPrismParams(params) = moved.params else { panic!("expected prism") };
+    assert!(params.vertices[1].x > 0.2);
+}
+
+#[test]
+fn g_on_a_box_face_with_a_cut_moves_the_face() {
+    let box_object = SdfObject::create(TYPE_BOX);
+    let mut cutter = SdfObject::create(TYPE_SPHERE);
+    cutter.boolean_parent = Some(box_object.uuid);
+    cutter.operation = BooleanOperation::Subtract;
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![box_object.clone(), cutter]);
+    crate::model::set_selected_exact(&mut tree, vec![box_object.uuid]);
+    crate::model::set_selected_box_face(
+        &mut tree,
+        Some(crate::model::BoxFaceSelection {
+            object: box_object.uuid,
+            axis: crate::model::VectorAxis::Z,
+            positive: true,
+        }),
+    );
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut interactions = InteractionState::default();
+    interactions.key_pressed(KeyCode::KeyG, false, &commands, &mut tree);
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::DraggingFace)
+    ));
+}
+
+#[test]
+fn g_drags_a_cut_polygon_cap_and_escape_restores_it() {
+    let mut prism = SdfObject::create_kind(crate::model::PrimitiveKind::PolygonPrism);
+    prism.params = crate::model::SdfParams::PolygonPrismParams(crate::model::PolygonPrismParams {
+        vertices: vec![
+            Vec2::new(-0.2, -0.2),
+            Vec2::new(0.2, -0.2),
+            Vec2::new(0.0, 0.2),
+        ],
+        half_depth: 0.1,
+        edge_softness: 0.0,
+    });
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![prism.clone()]);
+    crate::model::set_selected_exact(&mut tree, vec![prism.uuid]);
+    crate::model::set_selected_modeling_face(
+        &mut tree,
+        Some(crate::model::ModelingFaceSelection::PolygonPrism(
+            crate::model::PolygonPrismFaceSelection {
+                object: prism.uuid,
+                face: crate::model::PolygonPrismFace::Cap { positive: true },
+            },
+        )),
+    );
+    let mut commands = Commands::new();
+    commands::register_all(&mut commands);
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(800.0, 600.0);
+    let mut interactions = InteractionState {
+        mouse_position: camera.viewport / 2.0,
+        ..Default::default()
+    };
+    interactions.key_pressed(KeyCode::KeyG, false, &commands, &mut tree);
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::DraggingFace)
+    ));
+    interactions.update(&mut camera, &mut tree);
+    let axis = interactions
+        .extrusion_session
+        .as_ref()
+        .unwrap()
+        .projected_axis;
+    interactions.cursor_moved(interactions.mouse_position + axis.normalize() * 80.0, false);
+    interactions.update(&mut camera, &mut tree);
+    let changed = &objects(&tree)[0];
+    let crate::model::SdfParams::PolygonPrismParams(params) = &changed.params else {
+        panic!("expected prism")
+    };
+    assert!(params.half_depth > 0.1);
+    assert!(changed.transform.translation != prism.transform.translation);
+    interactions.key_released(KeyCode::KeyG);
+    interactions.key_pressed(KeyCode::Escape, false, &commands, &mut tree);
+    let restored = &objects(&tree)[0];
+    let crate::model::SdfParams::PolygonPrismParams(params) = &restored.params else {
+        panic!("expected prism")
+    };
+    assert_eq!(params.half_depth, 0.1);
+    assert_eq!(restored.transform, prism.transform);
 }
 
 #[test]

@@ -37,6 +37,8 @@ struct ExtrusionSession {
     projected_axis: Vec2,
     initial_transform: crate::model::Transform,
     initial_half_extent: f32,
+    initial_side_vertices: Option<Vec<Vec2>>,
+    local_direction: Vec3,
     initial_face_center: Vec3,
     world_direction_per_unit: Vec3,
     guides: Vec<crate::guides::FaceGuide>,

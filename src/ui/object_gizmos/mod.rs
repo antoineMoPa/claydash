@@ -76,9 +76,13 @@ impl UiState {
                 && (face.object == selection[0]
                     || crate::ui::scene_actions::viewport_group_root(&scene, face.object)
                         == selection[0])
-                && matches!(face.face, crate::model::PolygonPrismFace::Cap { .. })
             {
-                self.draw_polygon_cap_handle(ui, tree, camera, face, blocker_count);
+                match face.face {
+                    crate::model::PolygonPrismFace::Cap { .. } =>
+                        self.draw_polygon_cap_handle(ui, tree, camera, face, blocker_count),
+                    crate::model::PolygonPrismFace::Side { .. } =>
+                        self.draw_polygon_side_handle(ui, tree, camera, face, blocker_count),
+                }
                 return;
             }
         }
@@ -174,7 +178,7 @@ impl UiState {
                 ))
             } else if matches!(&object.params, SdfParams::BoxParams(_)) {
                 response.on_hover_text(format!(
-                    "Click to select this face. Drag to resize {}. Hold Shift to resize from the center; Alt bypasses guides.",
+                    "Click to select this face. Drag its arrow to move the face along {}. Hold Shift to resize from the center; Alt bypasses guides.",
                     handle.label
                 ))
             } else {

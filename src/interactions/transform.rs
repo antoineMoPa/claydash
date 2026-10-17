@@ -52,8 +52,7 @@ impl InteractionState {
                     tree,
                     self.keys.contains(&KeyCode::ControlLeft)
                         || self.keys.contains(&KeyCode::ControlRight),
-                    self.keys.contains(&KeyCode::AltLeft)
-                        || self.keys.contains(&KeyCode::AltRight),
+                    self.keys.contains(&KeyCode::AltLeft) || self.keys.contains(&KeyCode::AltRight),
                 );
                 let pointer_moved =
                     self.mouse_position.distance(session.last_mouse_position) > 0.001;
@@ -352,7 +351,12 @@ impl InteractionState {
             crate::model::ModelingFaceSelection::CylinderCap(face) => {
                 (crate::model::VectorAxis::Y, face.positive)
             }
-            crate::model::ModelingFaceSelection::PolygonPrism(_) => return,
+            crate::model::ModelingFaceSelection::PolygonPrism(face) => match face.face {
+                crate::model::PolygonPrismFace::Cap { positive } => {
+                    (crate::model::VectorAxis::Z, positive)
+                }
+                crate::model::PolygonPrismFace::Side { .. } => (crate::model::VectorAxis::Z, true),
+            },
         };
         if self
             .extrusion_session
@@ -372,12 +376,74 @@ impl InteractionState {
                     crate::model::ModelingFaceSelection::CylinderCap(_),
                     crate::model::SdfParams::CylinderParams { half_height, .. },
                 ) => *half_height,
+                (
+                    crate::model::ModelingFaceSelection::PolygonPrism(_),
+                    crate::model::SdfParams::PolygonPrismParams(params),
+                ) => {
+                    if matches!(
+                        face,
+                        crate::model::ModelingFaceSelection::PolygonPrism(
+                            crate::model::PolygonPrismFaceSelection {
+                                face: crate::model::PolygonPrismFace::Side { .. },
+                                ..
+                            }
+                        )
+                    ) {
+                        0.0
+                    } else {
+                        params.half_depth
+                    }
+                }
                 _ => return,
             };
             let mut local_direction = Vec3::ZERO;
             local_direction[axis.index()] = if positive { 1.0 } else { -1.0 };
+            let initial_side_vertices = if let (
+                crate::model::ModelingFaceSelection::PolygonPrism(
+                    crate::model::PolygonPrismFaceSelection {
+                        face: crate::model::PolygonPrismFace::Side { edge },
+                        ..
+                    },
+                ),
+                crate::model::SdfParams::PolygonPrismParams(params),
+            ) = (face, &object.params)
+            {
+                let Some((_, outward, _)) =
+                    crate::model::polygon_side_frame(&params.vertices, edge)
+                else {
+                    return;
+                };
+                local_direction = outward.extend(0.0);
+                Some(params.vertices.clone())
+            } else {
+                None
+            };
             let matrix = crate::model::object_world_matrix(&scene, face.object());
-            let outer = matrix.transform_point3(local_direction * initial_half_extent);
+            let center_offset = match (face, &object.params) {
+                (
+                    crate::model::ModelingFaceSelection::PolygonPrism(
+                        crate::model::PolygonPrismFaceSelection {
+                            face: crate::model::PolygonPrismFace::Side { edge },
+                            ..
+                        },
+                    ),
+                    crate::model::SdfParams::PolygonPrismParams(params),
+                ) => {
+                    let Some((center, _, _)) =
+                        crate::model::polygon_side_frame(&params.vertices, edge)
+                    else {
+                        return;
+                    };
+                    center.extend(0.0)
+                }
+                (_, crate::model::SdfParams::PolygonPrismParams(params)) => {
+                    params.vertices.iter().copied().sum::<Vec2>().extend(0.0)
+                        / params.vertices.len().max(1) as f32
+                }
+                _ => Vec3::ZERO,
+            };
+            let outer =
+                matrix.transform_point3(center_offset + local_direction * initial_half_extent);
             let direction = matrix.transform_vector3(local_direction);
             let Some(center) = camera.project(outer, 1.0) else {
                 return;
@@ -411,6 +477,8 @@ impl InteractionState {
                 projected_axis,
                 initial_transform: object.transform,
                 initial_half_extent,
+                initial_side_vertices,
+                local_direction,
                 initial_face_center: outer,
                 world_direction_per_unit: direction,
                 guides,
@@ -449,6 +517,47 @@ impl InteractionState {
                 .dot(session.world_direction_per_unit / direction_length)
                 / direction_length;
         }
+        if let crate::model::ModelingFaceSelection::PolygonPrism(
+            crate::model::PolygonPrismFaceSelection {
+                face: crate::model::PolygonPrismFace::Side { edge },
+                ..
+            },
+        ) = face
+        {
+            let Some(initial) = session.initial_side_vertices.as_ref() else {
+                return;
+            };
+            if initial.is_empty() {
+                return;
+            }
+            let mut moved = initial.clone();
+            let endpoint = (edge + 1) % moved.len();
+            if mode == EditorState::Extruding {
+                let base = initial[1];
+                let width = (initial[2] - base).dot(session.local_direction.truncate());
+                amount = amount.max(-width + 0.001);
+            }
+            moved[edge] += session.local_direction.truncate() * amount;
+            moved[endpoint] += session.local_direction.truncate() * amount;
+            if !crate::ui::polygon_is_valid(&moved) {
+                return;
+            }
+            let mut scene = objects(tree);
+            let Some(object) = scene
+                .iter_mut()
+                .find(|object| object.uuid == session.object)
+            else {
+                return;
+            };
+            let crate::model::SdfParams::PolygonPrismParams(params) = &mut object.params else {
+                return;
+            };
+            if params.vertices != moved {
+                params.vertices = moved;
+                set_objects(tree, scene);
+            }
+            return;
+        }
         let half_extent = (session.initial_half_extent + amount * 0.5).max(0.01);
         let half_extent_delta = half_extent - session.initial_half_extent;
         let mut local_direction = Vec3::ZERO;
@@ -474,6 +583,13 @@ impl InteractionState {
                 *half_height = half_extent;
                 changed
             }
+            crate::model::SdfParams::PolygonPrismParams(params)
+                if session.axis == crate::model::VectorAxis::Z =>
+            {
+                let changed = params.half_depth != half_extent;
+                params.half_depth = half_extent;
+                changed
+            }
             _ => return,
         };
         object.transform = session.initial_transform;
@@ -481,7 +597,41 @@ impl InteractionState {
             .initial_transform
             .matrix()
             .transform_vector3(local_direction * half_extent_delta);
-        if extent_changed || object.transform != previous_transform {
+        let transform_changed = object.transform != previous_transform;
+        if matches!(face, crate::model::ModelingFaceSelection::PolygonPrism(_)) {
+            let initial_path = if mode == EditorState::Extruding {
+                "editor.extrusion_initial_children"
+            } else {
+                "editor.face_drag_initial_object"
+            };
+            let originals = match tree.get_path(initial_path) {
+                ClaydashValue::VecSDFObject(objects) => objects,
+                _ => Vec::new(),
+            };
+            for void in scene.iter_mut().filter(|candidate| {
+                candidate.boolean_parent == Some(session.object)
+                    && candidate.name == "Face split void"
+            }) {
+                if let Some(original) = originals
+                    .iter()
+                    .find(|candidate| candidate.uuid == void.uuid)
+                {
+                    if let (
+                        crate::model::SdfParams::PolygonPrismParams(params),
+                        crate::model::SdfParams::PolygonPrismParams(initial),
+                    ) = (&mut void.params, &original.params)
+                    {
+                        params.half_depth = (initial.half_depth + half_extent_delta).max(0.01);
+                        void.transform = original.transform;
+                        void.transform.translation += session
+                            .initial_transform
+                            .matrix()
+                            .transform_vector3(local_direction * half_extent_delta);
+                    }
+                }
+            }
+        }
+        if extent_changed || transform_changed {
             set_objects(tree, scene);
         }
     }

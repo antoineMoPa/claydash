@@ -255,6 +255,87 @@ fn extruding_a_box_face_creates_an_adjacent_selected_box() {
 }
 
 #[test]
+fn extruding_a_cube_face_still_works_after_a_boolean_cut() {
+    let cube = SdfObject::create(TYPE_BOX);
+    let mut cutter = SdfObject::create(TYPE_SPHERE);
+    cutter.boolean_parent = Some(cube.uuid);
+    cutter.operation = crate::model::BooleanOperation::Subtract;
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![cube.clone(), cutter]);
+    crate::model::set_selected_exact(&mut tree, vec![cube.uuid]);
+    crate::model::set_selected_box_face(
+        &mut tree,
+        Some(crate::model::BoxFaceSelection {
+            object: cube.uuid,
+            axis: crate::model::VectorAxis::Z,
+            positive: true,
+        }),
+    );
+
+    extrude_selected_face(&mut tree);
+
+    assert_eq!(objects(&tree).len(), 3);
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::Extruding)
+    ));
+    assert_ne!(selected(&tree), vec![cube.uuid]);
+}
+
+#[test]
+fn extruding_an_extracted_cap_keeps_its_shape_and_boolean_operation() {
+    let cube = SdfObject::create(TYPE_BOX);
+    let mut cut = SdfObject::create_kind(crate::model::PrimitiveKind::PolygonPrism);
+    cut.boolean_parent = Some(cube.uuid);
+    cut.operation = crate::model::BooleanOperation::Subtract;
+    let mut void = cut.duplicate();
+    void.boolean_parent = Some(cut.uuid);
+    void.name = "Face split void".into();
+    void.operation = crate::model::BooleanOperation::Subtract;
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![cube, cut.clone(), void]);
+    crate::model::set_selected_exact(&mut tree, vec![cut.uuid]);
+    crate::model::set_selected_modeling_face(
+        &mut tree,
+        Some(crate::model::ModelingFaceSelection::PolygonPrism(
+            crate::model::PolygonPrismFaceSelection {
+                object: cut.uuid,
+                face: crate::model::PolygonPrismFace::Cap { positive: false },
+            },
+        )),
+    );
+
+    extrude_selected_face(&mut tree);
+
+    let scene = objects(&tree);
+    assert_eq!(scene.len(), 5);
+    let extrusion = scene
+        .iter()
+        .find(|object| selected(&tree) == vec![object.uuid])
+        .unwrap();
+    assert_eq!(extrusion.boolean_parent, cut.boolean_parent);
+    assert_eq!(extrusion.operation, cut.operation);
+    let (
+        crate::model::SdfParams::PolygonPrismParams(source),
+        crate::model::SdfParams::PolygonPrismParams(extended),
+    ) = (&cut.params, &extrusion.params)
+    else {
+        panic!("expected polygon prisms")
+    };
+    assert_eq!(extended.vertices, source.vertices);
+    assert_eq!(extended.half_depth, EXTRUSION_INITIAL_HALF_EXTENT);
+    assert_eq!(selected(&tree), vec![extrusion.uuid]);
+    assert!(scene
+        .iter()
+        .any(|object| object.boolean_parent == Some(extrusion.uuid)
+            && object.name == "Face split void"));
+    assert!(matches!(
+        tree.get_path("editor.state"),
+        ClaydashValue::EditorState(EditorState::Extruding)
+    ));
+}
+
+#[test]
 fn extruding_the_bottom_cylinder_cap_creates_a_matching_adjacent_cylinder() {
     let mut tree = DataTree::default();
     let source = SdfObject::create(TYPE_CYLINDER);

@@ -27,6 +27,7 @@ enum FaceCutPhase {
         closed: bool,
         start_pointer: egui::Pos2,
         projected_axis: egui::Vec2,
+        last_depth: f32,
     },
 }
 
@@ -456,7 +457,7 @@ mod state;
 mod gizmo;
 
 mod face_cut;
-pub(in crate::ui) use face_cut::shape::polygon_is_valid;
+pub(crate) use face_cut::shape::polygon_is_valid;
 
 #[cfg(test)]
 mod tests;

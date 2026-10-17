@@ -379,12 +379,14 @@ impl UiState {
             && scene
                 .iter()
                 .any(|object| object.uuid == selection[0] && object.lattice.is_some());
-        let transform_targets =
-            if lattice_selected && crate::model::selected_variable(tree).is_none() {
-                Vec::new()
-            } else {
-                commands::transform_targets(tree)
-            };
+        let face_selected = crate::model::selected_modeling_face(tree).is_some();
+        let transform_targets = if (lattice_selected || face_selected)
+            && crate::model::selected_variable(tree).is_none()
+        {
+            Vec::new()
+        } else {
+            commands::transform_targets(tree)
+        };
         if !self.selection_tools.box_mode() && !transform_targets.is_empty() {
             let center = transform_targets
                 .iter()

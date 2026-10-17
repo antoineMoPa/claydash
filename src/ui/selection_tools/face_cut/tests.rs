@@ -349,12 +349,22 @@ fn finishing_a_split_with_a_void_selects_the_whole_prism_group() {
             closed: true,
             start_pointer: egui::Pos2::ZERO,
             projected_axis: egui::Vec2::X,
+            last_depth: FACE_CUT_INITIAL_DEPTH,
         },
     });
 
     state.finish_face_cut(&mut tree);
 
     assert_eq!(selected(&tree), vec![prism.uuid]);
+    assert_eq!(
+        crate::model::selected_modeling_face(&tree),
+        Some(crate::model::ModelingFaceSelection::PolygonPrism(
+            crate::model::PolygonPrismFaceSelection {
+                object: prism.uuid,
+                face: crate::model::PolygonPrismFace::Cap { positive: true },
+            }
+        ))
+    );
     assert_eq!(
         crate::model::selection_scope(&tree),
         crate::model::SelectionScope::Group

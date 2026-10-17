@@ -33,6 +33,22 @@ impl UiState {
         true
     }
 
+    pub fn enter_face_cut_mode(&mut self, tree: &DataTree) -> bool {
+        if self.selection_tools.active()
+            || scene_actions::pending_boolean(tree).is_some()
+            || polygon_editor::active(tree).is_some()
+            || crate::model::selected_modeling_face(tree).is_none()
+            || !matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::None | ClaydashValue::EditorState(EditorState::Start)
+            )
+        {
+            return false;
+        }
+        self.selection_tools.tool = SelectionTool::FaceCut;
+        true
+    }
+
     pub fn begin_box_selection(
         &mut self,
         tree: &DataTree,
@@ -111,7 +127,7 @@ impl UiState {
                             tools.push((
                                 SelectionTool::FaceCut,
                                 egui::include_image!("../../../assets/icons/lucide/scissors.svg"),
-                                "Draw a shape on the selected face",
+                                "Cut the selected face (K)",
                             ));
                         }
                         for (tool, source, tooltip) in tools {

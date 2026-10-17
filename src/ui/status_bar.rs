@@ -21,6 +21,47 @@ pub(crate) enum RenderProgress {
 }
 
 impl UiState {
+    fn selection_label(tree: &DataTree) -> Option<String> {
+        if let Some(face) = crate::model::selected_modeling_face(tree) {
+            let scene = crate::model::objects_ref(tree);
+            if scene.iter().any(|object| object.uuid == face.object()) {
+                return Some("Face".into());
+            }
+        }
+        let selection = crate::model::selected_ref(tree);
+        match selection.len() {
+            0 => None,
+            1 => crate::model::objects_ref(tree)
+                .iter()
+                .find(|object| object.uuid == selection[0])
+                .map(|object| object.name.clone()),
+            count => Some(format!("{count} objects")),
+        }
+    }
+
+    pub(super) fn draw_viewport_selection_label(&self, ui: &egui::Ui, tree: &DataTree) {
+        let Some(label) = Self::selection_label(tree) else {
+            return;
+        };
+        let rect = ui.clip_rect();
+        let galley = ui.painter().layout_no_wrap(
+            label,
+            egui::FontId::proportional(12.0),
+            Color32::WHITE,
+        );
+        let badge = egui::Rect::from_center_size(
+            egui::pos2(rect.center().x, rect.bottom() - 20.0),
+            galley.size() + egui::vec2(20.0, 10.0),
+        );
+        ui.painter()
+            .rect_filled(badge, 6.0, Color32::from_black_alpha(180));
+        ui.painter().galley(
+            badge.center() - galley.size() * 0.5,
+            galley,
+            Color32::WHITE,
+        );
+    }
+
     fn status_line(&self, tree: &DataTree) -> Option<(String, String)> {
         let snap_hint = if crate::model::snapping_enabled(tree, false, false) {
             "snapping on · Alt bypasses"
@@ -164,5 +205,37 @@ impl UiState {
             });
         cancel
             || (progress.is_some() && ui.ctx().input(|input| input.key_pressed(egui::Key::Escape)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_selection_prefers_face_and_counts_multiple_objects() {
+        let first = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        let second = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        let mut tree = DataTree::default();
+        crate::model::set_objects(&mut tree, vec![first.clone(), second.clone()]);
+        crate::model::set_selected_exact(&mut tree, vec![first.uuid]);
+        assert_eq!(
+            UiState::selection_label(&tree).as_deref(),
+            Some(first.name.as_str())
+        );
+        crate::model::set_selected_box_face(
+            &mut tree,
+            Some(crate::model::BoxFaceSelection {
+                object: first.uuid,
+                axis: crate::model::VectorAxis::Z,
+                positive: true,
+            }),
+        );
+        assert_eq!(UiState::selection_label(&tree).as_deref(), Some("Face"));
+        crate::model::set_selected(&mut tree, vec![first.uuid, second.uuid]);
+        assert_eq!(
+            UiState::selection_label(&tree).as_deref(),
+            Some("2 objects")
+        );
     }
 }

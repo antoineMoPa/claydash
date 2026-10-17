@@ -41,12 +41,26 @@ impl UiState {
         else {
             return;
         };
-        set_objects(tree, objects(tree));
+        let scene = objects(tree);
+        let positive = scene
+            .iter()
+            .find(|shape| shape.uuid == object)
+            .is_some_and(|shape| shape.operation != BooleanOperation::Subtract);
+        set_objects(tree, scene);
         if hole.is_some() {
             crate::model::set_selected(tree, vec![object]);
         } else {
             crate::model::set_selected_exact(tree, vec![object]);
         }
+        crate::model::set_selected_modeling_face(
+            tree,
+            Some(crate::model::ModelingFaceSelection::PolygonPrism(
+                crate::model::PolygonPrismFaceSelection {
+                    object,
+                    face: crate::model::PolygonPrismFace::Cap { positive },
+                },
+            )),
+        );
         tree.make_undo_redo_snapshot();
         self.selection_tools.tool = SelectionTool::Select;
     }
@@ -270,6 +284,7 @@ impl UiState {
                                 closed,
                                 start_pointer: pointer.unwrap(),
                                 projected_axis,
+                                last_depth: FACE_CUT_INITIAL_DEPTH,
                             };
                             just_entered_phase = true;
                         }
@@ -285,21 +300,27 @@ impl UiState {
             closed,
             start_pointer,
             projected_axis,
+            ref mut last_depth,
         } = draft.phase
         {
             if let Some(point) = pointer {
                 let depth = FACE_CUT_INITIAL_DEPTH
                     + (point - start_pointer).dot(projected_axis) / projected_axis.length_sq();
-                let mut preview = objects(tree);
-                preview
-                    .retain(|candidate| candidate.uuid != object && Some(candidate.uuid) != hole);
-                if let Some(regions) = split_regions(&preview, draft.face, &draft.vertices, closed)
-                {
-                    if let Some(shapes) =
-                        region_shapes(&preview, draft.face, &regions, region, depth, object, hole)
+                if (depth - *last_depth).abs() > 0.0001 {
+                    let mut preview = objects(tree);
+                    preview.retain(|candidate| {
+                        candidate.uuid != object && Some(candidate.uuid) != hole
+                    });
+                    if let Some(regions) =
+                        split_regions(&preview, draft.face, &draft.vertices, closed)
                     {
-                        preview.extend(shapes);
-                        crate::model::set_objects_transient(tree, preview);
+                        if let Some(shapes) = region_shapes(
+                            &preview, draft.face, &regions, region, depth, object, hole,
+                        ) {
+                            preview.extend(shapes);
+                            crate::model::set_objects_transient(tree, preview);
+                            *last_depth = depth;
+                        }
                     }
                 }
             }

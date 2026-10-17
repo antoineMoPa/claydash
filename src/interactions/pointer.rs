@@ -61,6 +61,7 @@ impl InteractionState {
                 ClaydashValue::EditorState(EditorState::Start),
             );
             tree.set_transient_path("editor.extrusion_object", ClaydashValue::None);
+            tree.set_transient_path("editor.extrusion_initial_children", ClaydashValue::None);
             tree.set_transient_path("editor.extrusion_source_face", ClaydashValue::None);
             tree.set_transient_path("editor.face_drag_initial_object", ClaydashValue::None);
             self.extrusion_session = None;
@@ -164,6 +165,7 @@ impl InteractionState {
                 && !was_exact_target
                 && scene.iter().any(|object| {
                     object.uuid == target.id
+                        && object.boolean_parent.is_none()
                         && matches!(
                             object.params,
                             crate::model::SdfParams::PolygonPrismParams(_)
