@@ -120,11 +120,14 @@ pub(super) fn orthographic_sheet(
 
 pub(super) fn capture_scene(
     scene: &[SdfObject], requested: Option<&[uuid::Uuid]>, stage: Option<model::SheetStage>,
+    isolation: CaptureIsolation,
 ) -> Result<Option<Vec<SdfObject>>, String> {
-    let mut objects = match requested {
-        Some(ids) => Some(capture_objects(scene, ids)?),
-        None if stage.is_some() => Some(scene.to_vec()),
-        None => None,
+    let mut objects = match (requested, isolation) {
+        (Some(ids), CaptureIsolation::Groups) => Some(capture_objects(scene, ids)?),
+        (Some(ids), CaptureIsolation::Parts) => Some(capture_parts(scene, ids)?),
+        (None, CaptureIsolation::Parts) => return Err("isolation: parts requires object_ids".into()),
+        (None, CaptureIsolation::Groups) if stage.is_some() => Some(scene.to_vec()),
+        (None, CaptureIsolation::Groups) => None,
     };
     if let (Some(objects), Some(stage)) = (&mut objects, stage) {
         // A recipe snapshot must use source geometry rather than saved formed captures.
@@ -145,6 +148,40 @@ pub(super) fn capture_scene(
         }
     }
     Ok(objects)
+}
+
+pub(super) fn capture_parts(
+    scene: &[SdfObject],
+    requested: &[uuid::Uuid],
+) -> Result<Vec<SdfObject>, String> {
+    if requested.is_empty() {
+        return Err("object_ids must contain at least one object".into());
+    }
+    let lookup: HashMap<_, _> = scene.iter().map(|object| (object.uuid, object)).collect();
+    let mut parts = Vec::new();
+    let mut seen = HashSet::new();
+    for id in requested {
+        let object = lookup.get(id).ok_or_else(|| format!("object not found: {id}"))?;
+        if !seen.insert(*id) {
+            continue;
+        }
+        if object.surface_inlay.is_some() {
+            return Err(format!("surface inlay {id} requires its host; use isolation: groups"));
+        }
+        let world_group = model::group_world_matrix(scene, *id);
+        let (scale, rotation, translation) = world_group.to_scale_rotation_translation();
+        let group_transform = Transform { scale, rotation, translation };
+        if !group_transform.matrix().abs_diff_eq(world_group, 1e-4) {
+            return Err(format!("part {id} has a sheared group transform that cannot be captured alone"));
+        }
+        let mut part = (*object).clone();
+        part.boolean_parent = None;
+        part.operation = BooleanOperation::Union;
+        part.group_transform = group_transform;
+        part.render_representation = GroupRenderRepresentation::ExactSdf;
+        parts.push(part);
+    }
+    Ok(parts)
 }
 
 pub(super) fn capture_objects(

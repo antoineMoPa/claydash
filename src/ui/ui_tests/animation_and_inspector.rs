@@ -1049,9 +1049,9 @@ fn operand_softness_is_editable_on_a_selected_nested_group_and_undoes() {
         ]);
     }
     assert!(objects(&tree)[1].softness > 0.1);
-    assert_eq!(objects(&tree)[2].softness, 0.05);
+    assert_eq!(objects(&tree)[2].softness, 0.0);
     undo_redo::undo(&mut tree);
-    assert_eq!(objects(&tree)[1].softness, 0.05);
+    assert_eq!(objects(&tree)[1].softness, 0.0);
 }
 
 #[test]

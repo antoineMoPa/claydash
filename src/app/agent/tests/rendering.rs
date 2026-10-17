@@ -54,6 +54,33 @@ fn capture_modes_are_typed_and_override_legacy_refinement() {
 }
 
 #[test]
+fn capture_isolation_is_typed_and_advertised_for_both_views() {
+    for (op, tool_name) in [
+        ("CaptureViewport", "capture_viewport"),
+        ("CaptureOrthographic", "capture_orthographic"),
+    ] {
+        for (option, expected) in [
+            ("groups", CaptureIsolation::Groups),
+            ("parts", CaptureIsolation::Parts),
+        ] {
+            let request = serde_json::from_value::<Request>(request_payload(
+                op, json!({"isolation": option, "object_ids": [uuid::Uuid::new_v4()]}),
+            )).unwrap();
+            let actual = match request {
+                Request::CaptureViewport(args) => args.isolation,
+                Request::CaptureOrthographic(args) => args.isolation,
+                _ => panic!("unexpected request"),
+            };
+            assert_eq!(actual, expected);
+        }
+        assert!(serde_json::from_value::<Request>(request_payload(op, json!({"isolation": "unknown"}))).is_err());
+        let tool = mcp_tools().into_iter().find(|tool| tool["name"] == tool_name).unwrap();
+        assert_eq!(tool["inputSchema"]["properties"]["isolation"]["enum"], json!(["groups", "parts"]));
+    }
+    assert_eq!(CaptureIsolation::default(), CaptureIsolation::Groups);
+}
+
+#[test]
 fn available_render_representations_are_authorable_by_agents() {
     let declared: Vec<Value> = schema()["render_representations"]
         .as_array()

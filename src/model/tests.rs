@@ -686,9 +686,9 @@ fn boolean_group_owns_the_softness_used_for_its_operands() {
 }
 
 #[test]
-fn new_objects_are_soft_but_old_documents_keep_their_geometry() {
+fn new_objects_and_old_documents_default_to_hard_edges() {
     let object = SdfObject::create_kind(PrimitiveKind::Sphere);
-    assert_eq!(object.softness, 0.05);
+    assert_eq!(object.softness, 0.0);
     let mut value = serde_json::to_value(&object).unwrap();
     value.as_object_mut().unwrap().remove("softness");
     let old: SdfObject = serde_json::from_value(value).unwrap();

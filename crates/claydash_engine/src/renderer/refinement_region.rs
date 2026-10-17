@@ -18,7 +18,9 @@ pub(super) fn projected_region(camera: &Camera, bounds: Option<([f32;3],[f32;3])
     } } }
     let start = (minimum.floor() - glam::Vec2::splat(2.0)).max(glam::Vec2::ZERO);
     let end = (maximum.ceil() + glam::Vec2::splat(2.0)).min(glam::Vec2::new(size[0] as f32,size[1] as f32));
-    if end.x <= start.x || end.y <= start.y { return full; }
+    // An object entirely outside the view has no SDF pixels to refine. Keep
+    // one harmless sample because zero extent means "unbounded" to the GPU.
+    if end.x <= start.x || end.y <= start.y { return [0, 0, 1, 1]; }
     [start.x as u32,start.y as u32,(end.x-start.x) as u32,(end.y-start.y) as u32]
 }
 
@@ -118,6 +120,15 @@ pub(super) fn populate_ray_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offscreen_source_does_not_request_full_viewport_raymarching() {
+        let mut camera = Camera::new();
+        camera.position = Vec3::new(0.0, 0.0, 3.0);
+        camera.target = Vec3::ZERO;
+        let rect = projected_region(&camera,
+            Some(([1000.0, -0.1, -0.1], [1001.0, 0.1, 0.1])), [160, 100]);
+        assert_eq!(rect, [0, 0, 1, 1]);
+    }
     #[test]
     fn trimmed_ray_bounds_do_not_replace_distance_bounds_or_modified_components() {
         let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::SheetPanel);

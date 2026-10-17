@@ -17,6 +17,17 @@ renderer does not gate this choice on modifiers or Boolean operations. Older
 documents that saved a removed choice now load as Exact SDF. Documents without
 a saved mode also default to Exact SDF.
 
+New objects created in the editor or through `CreateObject` choose Direct Mesh
+unless a representation is supplied explicitly. The renderer builds direct
+meshes in the background on first use and rebuilds them after geometry or
+tessellation-resolution changes. Exact SDF stays visible until a mesh is ready
+and remains the fallback if construction fails. **Recompute** retries a failed
+build; **Cancel** stops automatic retries until the source changes. Meshes use
+the source face colors with diffuse lighting; procedural material detail,
+transparency, and ray-traced reflections need Exact SDF. In mixed scenes the
+raymarch shaders trace only inside the projected bounds of the remaining SDF
+geometry, including when that geometry is outside the camera view.
+
 The box depth atlas marches inward rays from six faces of the group's bounding
 box. Each hit stores depth, base color, and the hit object's material. At render
 time the proxy follows the face nearest the viewer, marches through empty

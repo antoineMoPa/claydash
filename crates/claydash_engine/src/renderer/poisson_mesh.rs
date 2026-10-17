@@ -143,7 +143,9 @@ pub(super) struct PoissonMeshState {
     job: Option<Job>,
     ready: HashMap<uuid::Uuid, Ready>,
     failure: HashMap<uuid::Uuid, String>,
-    failure_sources: HashMap<uuid::Uuid, (i32, MeshAlgorithm)>,
+    failure_sources: HashMap<uuid::Uuid, (i32, MeshAlgorithm, u32)>,
+    cancelled: std::collections::HashSet<uuid::Uuid>,
+    last_revision: Option<i32>,
 }
 
 impl PoissonMeshState {
@@ -176,6 +178,25 @@ impl PoissonMeshState {
     pub fn next_request(&self) -> Option<uuid::Uuid> {
         self.job.is_none().then(|| self.requests.front().copied()).flatten()
     }
+    /// Direct meshes are a live representation: build on first use and again
+    /// after an edit. A failed source is left as exact SDF until it changes.
+    pub fn queue_missing_direct_meshes(&mut self, source: &[SdfObject], revision: i32) {
+        for object in source.iter().filter(|object| object.boolean_parent.is_none()
+            && object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh) {
+            let id = object.uuid;
+            if self.ready.get(&id).is_some_and(|ready| ready.revision == revision
+                && ready.mesh_resolution == object.poisson_mesh.resolution)
+                || self.job.as_ref().is_some_and(|job| job.root == id && job.revision == revision
+                    && job.mesh_resolution == object.poisson_mesh.resolution && !job.invalidated)
+                || self.requests.contains(&id) || self.cancelled.contains(&id)
+                || self.failure_sources.get(&id).is_some_and(|(failed_revision, algorithm, resolution)|
+                    *failed_revision == revision && *algorithm == MeshAlgorithm::Direct
+                        && *resolution == object.poisson_mesh.resolution) {
+                continue;
+            }
+            self.requests.push_back(id);
+        }
+    }
     pub fn shown_root(&self) -> Option<uuid::Uuid> {
         self.ready.values().find(|ready| ready.showing).map(|ready| ready.component)
     }
@@ -187,6 +208,7 @@ impl PoissonMeshState {
     pub fn handle(&mut self, action: PoissonMeshAction) -> bool {
         match action {
             PoissonMeshAction::Cancel(root) => {
+                self.cancelled.insert(root);
                 self.requests.retain(|id| *id != root);
                 if self.job.as_ref().is_some_and(|job| job.root == root) {
                     self.job.take(); // Drop signals cancellation; late results are discarded.
@@ -196,6 +218,7 @@ impl PoissonMeshState {
                 false
             }
             PoissonMeshAction::Build(root) => {
+                self.cancelled.remove(&root);
                 if self.job.as_ref().is_some_and(|job| job.root == root) { return false; }
                 self.requests.retain(|id| *id != root);
                 self.requests.push_back(root);
@@ -229,11 +252,18 @@ impl PoissonMeshState {
                 MeshAlgorithm::Poisson => object.render_representation == crate::model::GroupRenderRepresentation::PoissonMesh,
                 MeshAlgorithm::Direct => object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh,
             });
+        self.cancelled.retain(|root| source.iter().any(|object| object.uuid == *root
+            && object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh));
         self.failure.retain(|root, _| self.failure_sources.get(root)
-            .is_some_and(|(_, algorithm)| matches_mode(*root, *algorithm)));
+            .is_some_and(|(_, algorithm, resolution)| matches_mode(*root, *algorithm)
+                && source.iter().find(|object| object.uuid == *root)
+                    .is_some_and(|object| *algorithm != MeshAlgorithm::Direct
+                        || object.poisson_mesh.resolution == *resolution)));
         self.failure_sources.retain(|root, _| self.failure.contains_key(root));
         let count = self.ready.len();
-        self.ready.retain(|_, ready| matches_mode(ready.root, ready.algorithm));
+        self.ready.retain(|_, ready| matches_mode(ready.root, ready.algorithm)
+            && (ready.algorithm != MeshAlgorithm::Direct || source.iter().find(|object| object.uuid == ready.root)
+                .is_some_and(|object| object.poisson_mesh.resolution == ready.mesh_resolution)));
         let mut changed = count != self.ready.len();
         if let Some(job) = self.job.as_mut().filter(|job| !job.invalidated && !matches_mode(job.root, job.algorithm)) {
             job.invalidated = true;
@@ -246,8 +276,12 @@ impl PoissonMeshState {
     }
 
     pub fn invalidate_for_revision(&mut self, revision: i32) -> bool {
+        if self.last_revision != Some(revision) {
+            self.cancelled.clear();
+            self.last_revision = Some(revision);
+        }
         self.failure.retain(|root, _| self.failure_sources.get(root)
-            .is_some_and(|(built_revision, _)| *built_revision == revision));
+            .is_some_and(|(built_revision, _, _)| *built_revision == revision));
         self.failure_sources.retain(|root, _| self.failure.contains_key(root));
         let original = self.ready.len();
         self.ready.retain(|_, ready| ready.revision == revision);
@@ -269,6 +303,7 @@ impl PoissonMeshState {
     }
 
     pub fn clear_for_root(&mut self, root: uuid::Uuid) -> bool {
+        self.cancelled.remove(&root);
         let active = self.requests.iter().any(|id| *id == root)
             || self.job.as_ref().is_some_and(|job| job.root == root)
             || self.ready.contains_key(&root)
@@ -319,7 +354,7 @@ impl PoissonMeshState {
             Ok(worker) => worker,
             Err(error) => {
                 self.failure.insert(root, error);
-                self.failure_sources.insert(root, (revision, algorithm));
+                self.failure_sources.insert(root, (revision, algorithm, mesh_resolution));
                 return;
             }
         };
@@ -363,12 +398,12 @@ impl PoissonMeshState {
             Ok(_) => {
                 if job.algorithm == MeshAlgorithm::Direct { self.ready.remove(&job.root); }
                 self.failure.insert(job.root, "Mesh construction returned an empty mesh".into());
-                self.failure_sources.insert(job.root, (revision, job.algorithm));
+                self.failure_sources.insert(job.root, (revision, job.algorithm, job.mesh_resolution));
             }
             Err(error) => {
                 if job.algorithm == MeshAlgorithm::Direct { self.ready.remove(&job.root); }
                 self.failure.insert(job.root, error);
-                self.failure_sources.insert(job.root, (revision, job.algorithm));
+                self.failure_sources.insert(job.root, (revision, job.algorithm, job.mesh_resolution));
             }
         }
         true
@@ -376,7 +411,7 @@ impl PoissonMeshState {
 
     pub fn rebuild_buffer(&self, device: &wgpu::Device, source: &[SdfObject], buffer: &mut wgpu::Buffer, count: &mut u32, voxels: &super::voxels::VoxelState) {
         let owners: HashMap<_, _> = super::bvh::boolean_postorder(source).iter().enumerate()
-            .map(|(index, object)| (object.uuid, index as u32)).collect();
+            .map(|(index, object)| (object.uuid, (index as u32, object.color.to_array()))).collect();
         let capacity = self.ready.values().filter(|ready| ready.showing)
             .map(|ready| ready.mesh.triangles.len()).sum::<usize>() * 3;
         let mut vertices = Vec::with_capacity(capacity);
@@ -384,13 +419,13 @@ impl PoissonMeshState {
             let pose = geometry::mesh_world_frame(source, ready.component) * ready.baked_frame_inverse;
             let normal_pose = pose.inverse().transpose();
             for (triangle_index, triangle) in ready.mesh.triangles.iter().enumerate() {
-                let Some(&owner) = owners.get(&ready.mesh.owners[triangle_index]) else { continue; };
+                let Some(&(owner, color)) = owners.get(&ready.mesh.owners[triangle_index]) else { continue; };
                 let points = triangle.map(|index| pose.transform_point3(ready.mesh.positions[index as usize]));
                 for (corner, point) in points.into_iter().enumerate() {
                     let normal = normal_pose.transform_vector3(ready.mesh.normals[triangle_index][corner]);
                     vertices.push(super::hybrid_splats::GpuMeshVertex {
                         position: point.extend(1.0).to_array(), normal: normal.extend(owner as f32).to_array(),
-                        captured_color: [0.0; 4],
+                        captured_color: color,
                     });
                 }
             }
@@ -440,6 +475,36 @@ impl PoissonMeshState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_mesh_queues_once_and_retries_after_source_or_resolution_change() {
+        let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::SheetPanel);
+        object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+        let root = object.uuid;
+        let mut state = PoissonMeshState::default();
+        state.queue_missing_direct_meshes(&[object.clone()], 7);
+        state.queue_missing_direct_meshes(&[object.clone()], 7);
+        assert_eq!(state.requests.iter().copied().collect::<Vec<_>>(), vec![root]);
+        state.handle(PoissonMeshAction::Cancel(root));
+        state.queue_missing_direct_meshes(&[object.clone()], 7);
+        assert!(state.requests.is_empty(), "cancel must stop the automatic retry loop");
+        state.invalidate_for_revision(7);
+        state.queue_missing_direct_meshes(&[object.clone()], 7);
+        assert_eq!(state.next_request(), Some(root));
+        state.requests.clear();
+        state.failure.insert(root, "failed".into());
+        state.failure_sources.insert(root, (7, MeshAlgorithm::Direct, object.poisson_mesh.resolution));
+        state.queue_missing_direct_meshes(&[object.clone()], 7);
+        assert!(state.requests.is_empty(), "failed geometry should fall back to exact SDF");
+        object.poisson_mesh.resolution += 1;
+        state.reconcile_representation(&[object.clone()]);
+        state.queue_missing_direct_meshes(&[object.clone()], 7);
+        assert_eq!(state.next_request(), Some(root));
+        state.requests.clear();
+        state.invalidate_for_revision(8);
+        state.queue_missing_direct_meshes(&[object], 8);
+        assert_eq!(state.next_request(), Some(root));
+    }
 
     #[test]
     fn reconstruction_progress_has_its_own_percentage_and_stage() {

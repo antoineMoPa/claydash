@@ -522,6 +522,7 @@ fn create_point(tree: &mut DataTree) {
 
 pub fn spawn(tree: &mut DataTree, kind: i32) {
     let mut object = SdfObject::create(kind);
+    object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
     object.material = crate::model::picked_material(tree);
     object.material_id = crate::model::picked_material_id(tree);
     object.color = object.material.color;

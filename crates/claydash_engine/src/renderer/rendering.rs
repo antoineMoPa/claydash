@@ -184,13 +184,15 @@ impl Renderer {
         // Interaction pauses a stable plan; it must not change the plan's
         // representation and discard all progress on press/release events.
         let interleaved = refine && !deferred && !self.hybrid_enabled && self.mesh_vertex_count == 0;
-        let rect = if interleaved && self.use_bvh {
+        let local_sdf = self.mesh_vertex_count > 0 && self.uploaded_object_count > 0;
+        let rect = if (interleaved || local_sdf) && self.use_bvh {
             refinement_region::projected_region(camera, self.scene_bounds, view_key.size)
         } else { [0, 0, view_key.size[0], view_key.size[1]] };
         self.viewport.set_refinement_region(if interleaved { rect } else { [0; 4] },
             interleaved.then(|| self.mesh_background_pipeline.clone()));
+        let raymarch_rect = if (interleaved || local_sdf) && self.use_bvh { rect } else { [0; 4] };
         self.queue.write_buffer(&self.camera_buffer, std::mem::offset_of!(GpuCamera, refinement_rect) as u64,
-            bytemuck::cast_slice(&rect));
+            bytemuck::cast_slice(&raymarch_rect));
         // Simple shading still traces the source field. It needs the same
         // bounded previews/native refinement as full materials on complex
         // scenes; shading quality alone cannot make a full viewport cheap.

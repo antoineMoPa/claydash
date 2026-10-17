@@ -153,8 +153,13 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
    execution enforce the same policy as `SetBoolean`. Desktop modeling is unchanged.
 4. Call `set_view` if the camera needs to move, then `capture_viewport` to get a PNG image.
    The capture renders offscreen even when the native window is unfocused or on another macOS
-   desktop. Pass `object_ids` to show only specific objects or Boolean groups and their surface
-   inlays in that PNG. Captures use `mode: "simple_shading"` by default; use
+   desktop. Pass `object_ids` to show specific Boolean groups and their surface inlays.
+   To inspect individual primitives, pass `object_ids` with `isolation: "parts"`; this draws
+   only the named parts at their world positions, including hidden subtractive operands as
+   standalone solids. `isolation: "groups"` is the default. A surface inlay requires its host,
+   so capture it in groups mode. Parts whose parent transforms create shear cannot be detached
+   without changing their shape; the capture returns an error for those parts. Captures use
+   `mode: "simple_shading"` by default; use
    `mode: "full_material"` for close material inspection or `mode: "outline"` to see primitive
    wire guides for every captured object, including hidden Boolean operands. Outline PNGs contain
    the guides on a dark background, without editor controls or gizmos. The scene, selection, and
@@ -163,8 +168,8 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
    Repeat the edit and capture steps until the design looks right.
 5. Call `capture_orthographic` for one PNG with X (side), Y (top), and Z (front) orthographic views
    aimed at the origin. Each panel is 256 px square by default. `panel_size` accepts 96–512 px
-   and must fit inside the viewport; `distance` accepts 0.1–1000. It accepts the same `object_ids`
-   and `mode`/`refine` options.
+   and must fit inside the viewport; `distance` accepts 0.1–1000. It accepts the same `object_ids`,
+   `isolation`, and `mode`/`refine` options.
 6. Call `save` with a `.claydash` path, or use the current document path.
 
 For an imported Gaussian object, `get_gaussian_cloud` with `{"id":"<object UUID>","space":"world"}`

@@ -66,7 +66,7 @@ impl GroupRenderRepresentation {
             }
             Self::Voxels => "Capture the containing Boolean component from six box faces and render tiny cubes. Bakes automatically.",
             Self::GaussianSplats => "Approximate the group with soft Gaussian surface samples.",
-            Self::DirectMesh => "Build a mesh from editable source geometry, including smooth blends and spatial modifiers. Click Recompute to build it.",
+            Self::DirectMesh => "Automatically build and refresh a mesh from editable source geometry, including smooth blends and spatial modifiers.",
             Self::PoissonMesh => "Reconstruct a triangle mesh from implicit oriented surface samples. Click Recompute to build it.",
         }
     }

@@ -40,6 +40,8 @@ impl App {
                     render_representation,
                 } => {
                     let mut object = SdfObject::create_kind(kind);
+                    object.render_representation = render_representation
+                        .unwrap_or(model::GroupRenderRepresentation::DirectMesh);
                     object.softness = 0.0;
                     object.material = model::picked_material(&draft);
                     object.material_id = model::picked_material_id(&draft);
@@ -58,9 +60,6 @@ impl App {
                             return Err("params do not match primitive kind".to_string());
                         }
                         object.params = params;
-                    }
-                    if let Some(render_representation) = render_representation {
-                        object.render_representation = render_representation;
                     }
                     created.push(object.uuid);
                     let mut objects = model::objects(&draft);

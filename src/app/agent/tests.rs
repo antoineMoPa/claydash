@@ -62,7 +62,7 @@ fn sheet_surface_path_and_persistent_seams_apply_and_reload_atomically() {
         assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),before); assert_eq!(app.scene_revision(),revision);
     }
     for stage in [model::SheetStage::Blank,model::SheetStage::Cut,model::SheetStage::Formed] {
-        let snapshot=capture::capture_scene(model::objects_ref(&app.tree),Some(&[source_id,target_id]),Some(stage)).unwrap().unwrap();
+        let snapshot=capture::capture_scene(model::objects_ref(&app.tree),Some(&[source_id,target_id]),Some(stage),CaptureIsolation::Groups).unwrap().unwrap();
         for object in snapshot {let SdfParams::SheetPanelParams(p)=object.params else {panic!()};assert_eq!(p.stage,stage);assert!(p.surface.is_some());}
     }
     assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),before);
@@ -115,7 +115,7 @@ fn sheet_mcp_edits_validate_atomically_and_capture_stages_do_not_mutate_scene() 
     let id: uuid::Uuid = serde_json::from_value(result["created_ids"][0].clone()).unwrap();
     let before = serde_json::to_value(model::objects_ref(&app.tree)).unwrap();
     for stage in [model::SheetStage::Blank, model::SheetStage::Cut, model::SheetStage::Formed] {
-        let snapshot = capture::capture_scene(model::objects_ref(&app.tree), Some(&[id]), Some(stage)).unwrap().unwrap();
+        let snapshot = capture::capture_scene(model::objects_ref(&app.tree), Some(&[id]), Some(stage), CaptureIsolation::Groups).unwrap().unwrap();
         let SdfParams::SheetPanelParams(recipe) = &snapshot[0].params else { panic!("sheet recipe") };
         assert_eq!(recipe.stage, stage);
         assert_eq!(recipe.cuts.len(), 1);
@@ -223,6 +223,57 @@ fn isolated_capture_keeps_boolean_groups_and_hosted_inlays() {
     assert_eq!(ids, HashSet::from([root.uuid, cutter.uuid, inlay.uuid]));
     assert!(capture_objects(&scene, &[]).is_err());
     assert!(capture_objects(&scene, &[uuid::Uuid::nil()]).is_err());
+}
+
+#[test]
+fn part_capture_detaches_operands_without_moving_or_editing_them() {
+    let mut root = SdfObject::create_kind(PrimitiveKind::Box);
+    root.group_transform.translation = Vec3::new(2.0, 0.0, 0.0);
+    root.group_transform.rotation = glam::Quat::from_rotation_z(0.4);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    child.operation = BooleanOperation::Subtract;
+    child.group_transform.translation = Vec3::new(0.0, 1.0, 0.0);
+    child.transform.translation = Vec3::new(0.0, 0.0, 0.5);
+    child.render_representation = GroupRenderRepresentation::BoxDepthAtlas;
+    let mut unrelated = SdfObject::create_kind(PrimitiveKind::Box);
+    unrelated.transform.translation = Vec3::splat(9.0);
+    let scene = vec![root, child.clone(), unrelated];
+    let original = serde_json::to_value(&scene).unwrap();
+    let captured = capture::capture_scene(
+        &scene, Some(&[child.uuid, child.uuid]), None, CaptureIsolation::Parts,
+    ).unwrap().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].uuid, child.uuid);
+    assert_eq!(captured[0].boolean_parent, None);
+    assert_eq!(captured[0].operation, BooleanOperation::Union);
+    assert_eq!(captured[0].render_representation, GroupRenderRepresentation::ExactSdf);
+    assert!(model::object_world_matrix(&captured, child.uuid)
+        .abs_diff_eq(model::object_world_matrix(&scene, child.uuid), 1e-4));
+    assert_eq!(serde_json::to_value(&scene).unwrap(), original);
+    assert!(capture::capture_scene(&scene, None, None, CaptureIsolation::Parts).is_err());
+    assert!(capture::capture_scene(&scene, Some(&[]), None, CaptureIsolation::Parts).is_err());
+    assert!(capture::capture_scene(&scene, Some(&[uuid::Uuid::nil()]), None, CaptureIsolation::Parts).is_err());
+}
+
+#[test]
+fn part_capture_rejects_inlays_that_require_their_host() {
+    let host = SdfObject::create_kind(PrimitiveKind::Box);
+    let mut inlay = SdfObject::create_kind(PrimitiveKind::Box);
+    inlay.surface_inlay = Some(model::SurfaceInlay { host: host.uuid, offset: 0.01, thickness: 0.02 });
+    let error = capture::capture_parts(&[host, inlay.clone()], &[inlay.uuid]).err().unwrap();
+    assert!(error.contains("requires its host"), "{error}");
+}
+
+#[test]
+fn part_capture_rejects_sheared_parent_frames() {
+    let mut root = SdfObject::create_kind(PrimitiveKind::Box);
+    root.group_transform.scale = Vec3::new(2.0, 1.0, 1.0);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
+    child.boolean_parent = Some(root.uuid);
+    child.group_transform.rotation = glam::Quat::from_rotation_z(0.5);
+    let error = capture::capture_parts(&[root, child.clone()], &[child.uuid]).err().unwrap();
+    assert!(error.contains("sheared group transform"), "{error}");
 }
 
 #[test]

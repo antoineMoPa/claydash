@@ -384,7 +384,7 @@ impl SdfObject {
             name: kind.label().to_string(),
             operation: BooleanOperation::Union,
             boolean_parent: None,
-            softness: 0.05,
+            softness: 0.0,
             material,
             material_id: None,
             repetition: Repetition::default(),

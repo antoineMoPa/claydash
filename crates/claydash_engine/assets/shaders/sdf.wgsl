@@ -2204,7 +2204,16 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, inside: bool, initial_owner: u
 // MODIFIER_MODULES
 // MATERIAL_MODULES
 
+fn outside_raymarch_region(clip: vec2<f32>) -> bool {
+    let rect = camera.refinement_rect;
+    if any(rect.zw == vec2(0u)) { return false; }
+    let size = vec2(f32(camera.world_mode.w), f32(camera.count.z));
+    let pixel = (clip * vec2(0.5, -0.5) + vec2(0.5)) * size;
+    return any(pixel < vec2<f32>(rect.xy)) || any(pixel >= vec2<f32>(rect.xy + rect.zw));
+}
+
 @fragment fn fs_depth(input: VertexOutput) -> @builtin(frag_depth) f32 {
+    if outside_raymarch_region(input.clip) { return 1.0; }
     let far = camera.inverse_view_projection * vec4(input.clip, 1.0, 1.0);
     let near = camera.inverse_view_projection * vec4(input.clip, 0.0, 1.0);
     let far_point = far.xyz / far.w;
@@ -2236,6 +2245,10 @@ var<private> bloom_emission: vec3<f32>;
     let near_point = near.xyz / near.w;
     let ray = select(normalize(far_point - camera.position.xyz), normalize(far_point - near_point), camera.count.w != 0u);
     neural_ray_direction = ray;
+    if outside_raymarch_region(clip) {
+        if TRANSPARENT_BACKGROUND || camera.world_mode.x == 3u { return vec4(0.0); }
+        return vec4(background(ray), 1.0);
+    }
     let ray_origin = select(camera.position.xyz, near_point, camera.count.w != 0u);
     var point = ray_origin;
     var hit = false;

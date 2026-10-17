@@ -85,7 +85,7 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     }
     if selected_mode == crate::model::GroupRenderRepresentation::DirectMesh {
         ui.horizontal(|ui| {
-            ui.label("Tessellation resolution").on_hover_text("Segments used to approximate curved source geometry. Mesh Boolean operations preserve source surfaces. Click Recompute to apply.");
+            ui.label("Tessellation resolution").on_hover_text("Segments used to approximate curved source geometry. Mesh Boolean operations preserve source surfaces. Changes rebuild automatically.");
             ui.add(egui::DragValue::new(&mut scene[index].poisson_mesh.resolution)
                 .update_while_editing(false).range(crate::renderer::direct_mesh::MIN_RESOLUTION..=crate::renderer::direct_mesh::MAX_RESOLUTION));
         });
@@ -263,7 +263,9 @@ fn bulk_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree, selection: &
         tree.make_undo_redo_snapshot();
     }
     if matches!(chosen_mode, Some(GroupRenderRepresentation::DirectMesh | GroupRenderRepresentation::PoissonMesh)) {
-        ui.weak("Recompute builds each selected object or Boolean group in turn.");
+        ui.weak(if chosen_mode == Some(GroupRenderRepresentation::DirectMesh) {
+            "Direct meshes build automatically. Recompute retries selected objects."
+        } else { "Recompute builds each selected object or Boolean group in turn." });
         let action = ui.horizontal(|ui| {
             if ui.button("Recompute all").clicked() { Some(true) }
             else if ui.button("Cancel all").clicked() { Some(false) }
@@ -384,7 +386,7 @@ fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid,
             sample_resolution: built_sample_resolution, mesh_resolution: built_mesh_resolution }) => {
             ui.weak(format!("{vertices} vertices · {triangles} triangles"));
             if (!direct && sample_resolution != built_sample_resolution) || mesh_resolution != built_mesh_resolution {
-                ui.weak("Settings changed. Click Recompute to apply.");
+                ui.weak(if direct { "Settings changed. Rebuilding automatically." } else { "Settings changed. Click Recompute to apply." });
             }
             if available {
                 let label = if showing { "Show exact source" } else { "Show mesh" };
@@ -396,7 +398,7 @@ fn poisson_mesh_controls(ui: &mut egui::Ui, target: uuid::Uuid,
             }
         }
         Some(PoissonMeshStatus::Failed(error)) => { ui.colored_label(ui.visuals().error_fg_color, error); }
-        None => { ui.weak(if direct { "Click Recompute to tessellate the editable source." } else { "Click Recompute to build a mesh from the source surface." }); }
+        None => { ui.weak(if direct { "Tessellation starts automatically." } else { "Click Recompute to build a mesh from the source surface." }); }
     }
     optimization_remaining(ui, target, active, stage);
     if let Some(action) = action {

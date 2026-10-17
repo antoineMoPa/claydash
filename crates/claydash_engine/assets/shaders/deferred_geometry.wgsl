@@ -21,6 +21,10 @@ fn gbuffer_surface(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object:
 // One primary trace supplies every screen-space lighting input. Negative
 // reflectivity marks sky pixels without using a second hit-mask texture.
 @fragment fn fs_gbuffer(input: VertexOutput) -> GeometryOutput {
+    if outside_raymarch_region(input.clip) {
+        return GeometryOutput(vec4(0.0, 0.0, 0.0, -1.0), vec4(0.0),
+            vec4(0.0), vec4(1.0, 1.0, 0.0, 0.0), 1.0);
+    }
     let far = camera.inverse_view_projection * vec4(input.clip, 1.0, 1.0);
     let near = camera.inverse_view_projection * vec4(input.clip, 0.0, 1.0);
     let far_point = far.xyz / far.w;

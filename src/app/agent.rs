@@ -83,6 +83,8 @@ fn cloud_bounds(points: impl Iterator<Item = Vec3>) -> Option<Value> {
 pub struct CaptureViewportArgs {
     pub sheet_stage: Option<model::SheetStage>,
     pub object_ids: Option<Vec<uuid::Uuid>>,
+    #[serde(default)]
+    pub isolation: CaptureIsolation,
     pub refine: Option<bool>,
     pub mode: Option<CaptureMode>,
 }
@@ -91,10 +93,20 @@ pub struct CaptureViewportArgs {
 pub struct CaptureOrthographicArgs {
     pub sheet_stage: Option<model::SheetStage>,
     pub object_ids: Option<Vec<uuid::Uuid>>,
+    #[serde(default)]
+    pub isolation: CaptureIsolation,
     pub panel_size: Option<u32>,
     pub distance: Option<f32>,
     pub refine: Option<bool>,
     pub mode: Option<CaptureMode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureIsolation {
+    #[default]
+    Groups,
+    Parts,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -513,7 +525,7 @@ impl App {
                     || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
                     Err("a render is already in progress".to_string())
                 } else {
-                    match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage) {
+                    match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage, args.isolation) {
                         Ok(objects) => {
                             self.agent_capture = Some(AgentCapture {
                                 reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
@@ -541,7 +553,7 @@ impl App {
                     } else if !distance.is_finite() || !(0.1..=1000.0).contains(&distance) {
                         Err("distance must be between 0.1 and 1000".into())
                     } else {
-                        match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage) {
+                        match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage, args.isolation) {
                             Ok(objects) => {
                                 self.agent_capture = Some(AgentCapture {
                                     reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
