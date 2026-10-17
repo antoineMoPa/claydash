@@ -184,6 +184,8 @@ impl BooleanOperation {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SdfObject {
     pub uuid: uuid::Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_splats: Option<std::sync::Arc<crate::gaussian_ply::GaussianCloud>>,
     pub transform: Transform,
     pub group_transform: Transform,
     pub color: Vec4,
@@ -294,6 +296,7 @@ impl SdfObject {
         let material = Material::default();
         Self {
             uuid: uuid::Uuid::new_v4(),
+            imported_splats: None,
             transform: Transform::default(),
             group_transform: Transform::default(),
             render_representation: GroupRenderRepresentation::default(),
@@ -461,6 +464,8 @@ impl SdfObject {
         profile: Option<&[Vec2]>,
         text: Option<&PreparedText>,
     ) -> f32 {
+        // Imported radiance has no solid surface for Boolean or mesh queries.
+        if self.imported_splats.is_some() { return f32::INFINITY; }
         if repeat && self.repetition.enabled {
             if let RepetitionMode::Radial { axis, count, pivot } = self.repetition.mode {
                 let mut distance = f32::INFINITY;

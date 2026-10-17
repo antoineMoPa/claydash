@@ -162,7 +162,11 @@ impl Renderer {
                     ..Default::default()
                 })
             });
-        let mesh_only = self.mesh_vertex_count > 0 && self.uploaded_object_count == 0;
+        // Imported Gaussian assets and preview meshes are already raster data.
+        // With no SDF objects, tiled refinement would redraw every splat for
+        // each tile row and trace an empty field in the background pass.
+        let raster_only = self.uploaded_object_count == 0
+            && (self.mesh_vertex_count > 0 || !self.splat_instances.is_empty());
         let view_key = crate::viewport::ViewKey {
             matrix: (camera.projection() * camera.view()).to_cols_array_2d(),
             position: camera.position.to_array(),
@@ -172,9 +176,9 @@ impl Renderer {
                 camera.viewport.x.max(1.0) as u32,
                 camera.viewport.y.max(1.0) as u32,
             ],
-            refine: refine && !mesh_only,
+            refine: refine && !raster_only,
         };
-        let deferred = !mesh_only && world.render_pipeline == crate::model::RenderPipelineMode::Deferred
+        let deferred = !raster_only && world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported;
         let computing_optimization = self.has_pending_computations(egui);
         // Interaction pauses a stable plan; it must not change the plan's
@@ -190,11 +194,11 @@ impl Renderer {
         // Simple shading still traces the source field. It needs the same
         // bounded previews/native refinement as full materials on complex
         // scenes; shading quality alone cannot make a full viewport cheap.
-        let viewport_refine = !mesh_only;
+        let viewport_refine = !raster_only;
         self.viewport.set_playback_budget(animation_playback);
         self.viewport.set_interacting(interacting);
         self.viewport.set_refinement_paused(computing_optimization);
-        self.viewport.set_rendering_path(if mesh_only {
+        self.viewport.set_rendering_path(if raster_only {
             crate::viewport::RenderingPath::Mesh
         } else if deferred {
             crate::viewport::RenderingPath::Deferred
@@ -203,6 +207,7 @@ impl Renderer {
         } else {
             crate::viewport::RenderingPath::Exact
         });
+        self.viewport.set_progressive_hybrid_preview(!self.splat_instances.is_empty() && !raster_only);
         self.viewport.bloom_settings(&self.queue, world);
         let work = self.viewport.prepare(
             &self.device,
@@ -218,7 +223,7 @@ impl Renderer {
             || matches!(work, crate::viewport::Work::Interleave { first, .. }
                 if first < self.viewport.phase_samples())
             || !refine;
-        let scene_pipeline = if mesh_only {
+        let scene_pipeline = if raster_only {
             &self.mesh_background_pipeline
         } else if self.hybrid_enabled {
             if !quick_preview {
@@ -245,7 +250,7 @@ impl Renderer {
             }
         };
         let mesh_vertex_count = if self.mesh_is_visible() { self.mesh_vertex_count } else { 0 };
-        self.viewport.set_contact_active(!quick_preview && !deferred && !mesh_only);
+        self.viewport.set_contact_active(!quick_preview && !deferred && !raster_only);
         let readback = self.viewport.encode(
             &self.device,
             &self.queue,
@@ -253,8 +258,8 @@ impl Renderer {
             work,
             scene_pipeline,
             &self.bind_group,
-            (self.hybrid_depth_pipeline.is_some() || mesh_vertex_count > 0).then_some(crate::viewport::HybridPass {
-                depth_pipeline: if mesh_only { None } else { self.hybrid_depth_pipeline.as_ref() },
+            (self.hybrid_depth_pipeline.is_some() || mesh_vertex_count > 0 || !self.splat_instances.is_empty()).then_some(crate::viewport::HybridPass {
+                depth_pipeline: if raster_only { None } else { self.hybrid_depth_pipeline.as_ref() },
                 splat_pipeline: &self.splat_pipeline,
                 splat_bind_group: &self.splat_camera_bind_group,
                 splat_buffer: &self.splat_buffer,

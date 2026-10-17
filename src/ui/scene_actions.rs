@@ -159,6 +159,7 @@ pub(super) fn operand_roots(scene: &[SdfObject], ids: &[Uuid]) -> Vec<Uuid> {
 }
 
 pub(crate) fn can_attach(scene: &[SdfObject], target: Uuid, operands: &[Uuid]) -> bool {
+    if scene.iter().any(|o| o.imported_splats.is_some() && (o.uuid == target || operands.contains(&o.uuid))) { return false; }
     if operands.is_empty() || !scene.iter().any(|object| object.uuid == target) {
         return false;
     }
@@ -211,7 +212,7 @@ pub(super) fn add_operand(
     operation: BooleanOperation,
 ) {
     let mut scene = objects(tree);
-    if !scene.iter().any(|object| object.uuid == target) {
+    if !scene.iter().any(|object| object.uuid == target && object.imported_splats.is_none()) {
         return;
     }
     initialize_group_transform(&mut scene, target, &[]);

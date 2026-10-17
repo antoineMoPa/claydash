@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn splat_refinement_draws_each_tile_pixel_once_with_bounded_draws() {
+    for size in [[97, 73], [160, 100], [1165, 1448]] {
+        let total = tile_count(size);
+        for budget in [1, 7, 53, total] {
+            let mut visits = vec![0u8; (size[0] * size[1]) as usize];
+            for first in (0..total).step_by(budget as usize) {
+                let strips = encoding::splat_refine_scissors(size, first, (first + budget).min(total));
+                assert!(strips.len() <= 3);
+                for [x, y, width, height] in strips {
+                    for row in y..y + height {
+                        for column in x..x + width {
+                            visits[(row * size[0] + column) as usize] += 1;
+                        }
+                    }
+                }
+            }
+            assert!(visits.iter().all(|visits| *visits == 1), "size={size:?}, budget={budget}");
+        }
+    }
+}
+
+#[test]
 fn sparse_refinement_visits_distributed_single_pixels_before_neighbours() {
     let size = [64, 48];
     let cells = sparse_phase_pixels(size);
@@ -212,6 +234,46 @@ fn refinement_yields_but_camera_changes_do_not_wait() {
             assert!(viewport.pixel_budget >= MIN_PREVIEW_PIXELS,
                 "native refinement must not leave the next camera preview at one pixel");
         }
+    });
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn hybrid_refinement_improves_the_complete_preview_before_native_tiles() {
+    pollster::block_on(async {
+        let adapter = wgpu::Instance::default().request_adapter(&Default::default())
+            .await.expect("GPU adapter");
+        let (device, _) = adapter.request_device(&Default::default()).await.expect("GPU device");
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hybrid preview scheduling test"), entries: &[],
+        });
+        let mut viewport = Viewport::new(&device, wgpu::TextureFormat::Rgba8Unorm,
+            false, &layout);
+        viewport.set_rendering_path(RenderingPath::Hybrid);
+        viewport.set_progressive_hybrid_preview(true);
+        let key = ViewKey {
+            matrix: glam::Mat4::IDENTITY.to_cols_array_2d(), position: [0.0; 3],
+            projection: 0, versions: [1, 1], size: [1024, 1024], refine: true,
+        };
+        assert_eq!(viewport.prepare(&device, key.clone(), true, false, false), Work::Preview);
+        let first = viewport.targets.as_ref().unwrap().preview_size;
+        viewport.preview_ready = true;
+        viewport.set_refinement_paused(true);
+        assert_eq!(viewport.prepare(&device, key.clone(), true, false, false), Work::Cached);
+        viewport.set_refinement_paused(false);
+        assert_eq!(viewport.prepare(&device, key.clone(), true, false, false), Work::Preview);
+        let second = viewport.targets.as_ref().unwrap().preview_size;
+        assert!(second[0] > first[0] && second[1] > first[1]);
+        viewport.preview_ready = true;
+        assert_eq!(viewport.prepare(&device, key.clone(), true, false, false), Work::Preview);
+        let third = viewport.targets.as_ref().unwrap().preview_size;
+        assert!(third[0] > second[0] && third[1] > second[1]);
+        viewport.preview_ready = true;
+        assert!(matches!(viewport.prepare(&device, key.clone(), true, false, false), Work::Refine { .. }));
+        let mut changed = key;
+        changed.position[0] = 1.0;
+        assert_eq!(viewport.prepare(&device, changed, true, false, false), Work::Preview);
+        assert_eq!(viewport.preview_step, 0);
     });
 }
 #[test]

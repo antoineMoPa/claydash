@@ -129,10 +129,14 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
 
 ## Agent workflow
 
-1. Call `get_schema` for primitive examples and the action names.
-2. Call `get_state` for the live objects, world, materials, cameras, animation, selection, full
-   `.claydash` document, and `revision`.
-3. Call `apply` with one or more typed actions. Pass `expected_revision` from `get_state` so an
+1. Call `get_scene_summary` for the revision, object IDs, names, transforms, selection, camera,
+   and imported Gaussian counts and bounds. It omits embedded splat bytes. Call `get_state` when
+   you need the complete typed scene and `.claydash` document for a round trip.
+2. Call `get_action_schema` with `{"action":"CreateObject","primitive":"SheetPanel"}` to
+   inspect a single tagged action, panel params, and bend fields. `apply` actions use a `type`
+   field, such as `{"type":"CreateObject","kind":"SheetPanel"}`. `get_schema` remains available
+   for all primitive examples and action names.
+3. Call `apply` with one or more typed actions. Pass `expected_revision` from `get_scene_summary` so an
    intervening scene edit causes a clear error. Actions in one call form one undo step. A failed
    call leaves the live scene untouched.
    Model with independent parts, native sheet cuts/bends/crowns and primitive corner radii.
@@ -158,9 +162,16 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
    `refine: false` selects simple shading; an explicit `mode` takes precedence over `refine`.
    Repeat the edit and capture steps until the design looks right.
 5. Call `capture_orthographic` for one PNG with X (side), Y (top), and Z (front) orthographic views
-   aimed at the origin. Each panel is 256 px square by default. It accepts the same `object_ids`
-   and `mode`/`refine` options, plus optional `panel_size` and camera `distance`.
+   aimed at the origin. Each panel is 256 px square by default. `panel_size` accepts 96–512 px
+   and must fit inside the viewport; `distance` accepts 0.1–1000. It accepts the same `object_ids`
+   and `mode`/`refine` options.
 6. Call `save` with a `.claydash` path, or use the current document path.
+
+For an imported Gaussian object, `get_gaussian_cloud` with `{"id":"<object UUID>","space":"world"}`
+returns exact center-position bounds, per-axis 2nd/50th/98th percentiles, and up to 256
+deterministic position/color/opacity samples (32 by default). Use `"space":"object"` for local
+coordinates. Bounds and percentiles describe Gaussian centers, not the full ellipsoid support.
+The tool does not return the embedded asset bytes.
 
 The viewport's top-right aperture button toggles full material rendering; the scan button or `Z`
 toggles outlines. These live editor modes are mutually exclusive. Export renders always use
@@ -253,3 +264,30 @@ as base64.
 
 The bridge only accepts connections on the local socket, never a network port. File operations run
 with the same local user permissions as the native Claydash process.
+
+## Import Gaussian PLY assets
+
+Use **File → Import → Gaussian PLY…** on desktop or in the browser. For MCP, call
+`import_gaussian_ply` with `{"path":"/absolute/path/scan.ply"}`. The CLI equivalent is:
+
+```sh
+claydash agent ImportGaussianPly '{"path":"/absolute/path/scan.ply"}'
+```
+
+Import adds and selects one asset, returns its `id` and scene `revision`, and supports
+Undo/Redo. Use the regular transform tools or `SetObjectTransform` to position it.
+Saving automatically packs the Gaussian floats into a versioned binary payload inside
+`.claydash`; the source PLY is never needed to reopen the project.
+
+Supported inputs are standard Graphdeco Gaussian PLY files, in ASCII, binary little-endian,
+or binary big-endian form, with up to 2,000,000 Gaussians per asset. Required properties are
+`x/y/z`, `scale_0..2` (log scale), `rot_0..3` (w/x/y/z), `opacity` (logit), and `f_dc_0..2`.
+Other scalar properties are accepted; degree 1–3 `f_rest_*` coefficients are retained.
+Ordinary mesh/point-cloud PLY files and compressed vendor-specific layouts are rejected.
+
+The viewport renders oriented anisotropic Gaussians with their baked base color and opacity.
+Higher-order view-dependent color coefficients are preserved, but are not currently evaluated.
+Assets support picking and object transforms, not solid Boolean operations, material edits,
+or GLB mesh export. Save a `.claydash` project to retain the splats.
+
+Property mapping follows the [Graphdeco Gaussian model format](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/scene/gaussian_model.py).

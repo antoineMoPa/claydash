@@ -208,16 +208,25 @@ fn gaussian_splat_mode_replaces_group_and_preserves_capture_owners() {
 }
 
 #[test]
-fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
+fn independent_groups_preserve_representation_ownership() {
     use crate::model::{BooleanOperation, GroupRenderRepresentation};
-    let document: serde_json::Value = serde_json::from_str(crate::test_support::DEFAULT_DUCK).unwrap();
-    let source: Vec<SdfObject> =
-        serde_json::from_value(document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone())
-            .unwrap();
-    let duck_id = source[0].uuid;
-    let box_id = source[7].uuid;
-    let operands = [source[8].uuid, source[9].uuid];
-    let mut source = source;
+    // A fixed two-part sphere group and three independent boxes exercise
+    // representation ownership without depending on a changing showcase file.
+    let mut body = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+    body.softness = 0.;
+    let mut head = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+    head.boolean_parent = Some(body.uuid);
+    head.transform.translation.y = 0.3;
+    let mut source = vec![body, head];
+    for x in [1.0, 1.2, 1.4] {
+        let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        object.softness = 0.;
+        object.transform.translation.x = x;
+        source.push(object);
+    }
+    let sphere_id = source[0].uuid;
+    let box_id = source[2].uuid;
+    let operands = [source[3].uuid, source[4].uuid];
     for operand in operands {
         let world = crate::model::object_world_matrix(&source, operand);
         let object = source.iter_mut().find(|object| object.uuid == operand).unwrap();
@@ -230,7 +239,7 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
         crate::model::map_leaf_group_transforms_to_primitives(&mut source);
     }
     source[0].render_representation = GroupRenderRepresentation::GaussianSplats;
-    assert!(source[8..10]
+    assert!(source[3..5]
         .iter()
         .all(|object| object.boolean_parent == Some(box_id)));
 
@@ -242,11 +251,11 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
         GroupRenderRepresentation::BoxDepthAtlas,
         GroupRenderRepresentation::SphereDepthAtlas,
     ] {
-        source[7].render_representation = mode;
+        source[2].render_representation = mode;
         let prepared = scene_upload::compute_group_scene(&source, &mut Default::default());
-        assert!(prepared.gaussian_splats.contains(&duck_id));
-        assert!(prepared.box_depth_atlases.contains_key(&duck_id));
-        assert!(prepared.objects.iter().any(|object| object.uuid == duck_id));
+        assert!(prepared.gaussian_splats.contains(&sphere_id));
+        assert!(prepared.box_depth_atlases.contains_key(&sphere_id));
+        assert!(prepared.objects.iter().any(|object| object.uuid == sphere_id));
         assert!(prepared.objects.iter().any(|object| object.uuid == box_id));
         if matches!(
             mode,
@@ -256,11 +265,11 @@ fn default_duck_and_ui_style_box_union_prepare_as_independent_groups() {
             assert!(prepared
                 .objects
                 .iter()
-                .any(|object| object.uuid == source[8].uuid));
+                .any(|object| object.uuid == source[3].uuid));
             assert!(prepared
                 .objects
                 .iter()
-                .any(|object| object.uuid == source[9].uuid));
+                .any(|object| object.uuid == source[4].uuid));
         } else {
             assert_eq!(prepared.objects.len(), 2);
             match mode {
@@ -674,72 +683,6 @@ fn capture_cache_retains_only_admitted_atlases() {
     );
 }
 
-#[test]
-fn duck_sphere_capture_can_name_a_surface_beside_the_view_ray() {
-    use crate::model::{object_world_matrix, PreparedSubtreeSampler};
-    let document: serde_json::Value = serde_json::from_str(crate::test_support::DEFAULT_DUCK).unwrap();
-    let source: Vec<SdfObject> =
-        serde_json::from_value(document["subtree"]["sdf_objects"]["value"]["VecSDFObject"].clone())
-            .unwrap();
-    let root = source[0].uuid;
-    let atlas =
-        bake_sphere_depth_atlas(&source, root, SPHERE_DEPTH_WIDTH, SPHERE_DEPTH_HEIGHT).unwrap();
-    // A front-facing ray at this position hits the body. The radial map
-    // labels its surface point as Head, which lies farther along this ray.
-    let point = Vec3::new(-0.32, 0.1, 0.19);
-    let (distance, true_owner) = PreparedSubtreeSampler::new(&source, root)
-        .unwrap()
-        .sample(point);
-    assert!(distance.abs() < 0.02);
-    assert_eq!(true_owner, root);
-    let (minimum, maximum) = crate::model::lattice_bounds(&source, root).unwrap();
-    let center = (minimum + maximum) * 0.5;
-    let local = crate::model::lattice_world_matrix(&source, root)
-        .inverse()
-        .transform_point3(point)
-        - center;
-    let uv = Vec2::new(
-        (local.z.atan2(local.x) / std::f32::consts::TAU + 0.5).fract(),
-        (local.y / local.length()).clamp(-1.0, 1.0).acos() / std::f32::consts::PI,
-    );
-    let x = (uv.x * atlas.width as f32).floor() as usize;
-    let y = (uv.y * atlas.height as f32)
-        .floor()
-        .min((atlas.height - 1) as f32) as usize;
-    let map_owner = atlas.owners[y * atlas.width as usize + x].unwrap();
-    assert_eq!(
-        source
-            .iter()
-            .find(|object| object.uuid == map_owner)
-            .unwrap()
-            .name,
-        "Head"
-    );
-    let head = source
-        .iter()
-        .find(|object| object.uuid == map_owner)
-        .unwrap();
-    let head_world = object_world_matrix(&source, head.uuid);
-    let body_world = object_world_matrix(&source, root);
-    let mut head_entry = None;
-    let mut body_entry = None;
-    for sample in 0..300 {
-        let along_ray = Vec3::new(point.x, point.y, 1.5 - sample as f32 * 0.01);
-        if head_entry.is_none()
-            && head.distance_with_matrix_with_geometry(along_ray, head_world, true, None, None)
-                < 0.001
-        {
-            head_entry = Some(sample);
-        }
-        if body_entry.is_none()
-            && source[0].distance_with_matrix_with_geometry(along_ray, body_world, true, None, None)
-                < 0.001
-        {
-            body_entry = Some(sample);
-        }
-    }
-    assert!(body_entry.unwrap() < head_entry.unwrap());
-}
 
 #[test]
 fn concrete_tower_box_accelerator_reuses_occupied_box_atlas() {

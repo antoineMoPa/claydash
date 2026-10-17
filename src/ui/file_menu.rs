@@ -76,6 +76,12 @@ pub(super) fn draw_file_menu(
                     action = Some(FileMenuAction::SaveAs);
                     ui.close();
                 }
+                ui.menu_button("Import", |ui| {
+                    if ui.button("Gaussian PLY…").on_hover_text("Import a Gaussian splat asset; saving embeds it in the project").clicked() {
+                        action = Some(FileMenuAction::ImportGaussianPly);
+                        ui.close();
+                    }
+                });
                 ui.menu_button("Export", |ui| {
                     if ui.button("Glb…").on_hover_text("Export the selected objects or Boolean subtrees; export the whole scene when nothing is selected.").clicked() {
                         action = Some(FileMenuAction::ExportGlb);

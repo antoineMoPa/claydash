@@ -27,6 +27,72 @@ fn finish(renderer: &mut Renderer, context: &egui::Context, camera: &Camera,
 }
 
 #[test]
+#[cfg(unix)]
+#[ignore = "requires a GPU adapter"]
+fn gaussian_only_view_uses_one_native_raster_batch() {
+    let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+        width: 97, height: 73, ..Default::default()
+    })).unwrap();
+    let context = egui::Context::default();
+    let mut camera = Camera::new();
+    camera.viewport = renderer.size();
+    camera.position = glam::Vec3::new(0.0, 0.0, 4.0);
+    camera.target = glam::Vec3::ZERO;
+    let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    object.imported_splats = Some(std::sync::Arc::new(crate::gaussian_ply::GaussianCloud {
+        splats: vec![crate::gaussian_ply::Gaussian {
+            position: glam::Vec3::ZERO, scale: glam::Vec3::splat(0.35),
+            rotation: glam::Quat::IDENTITY, color: [1.0, 0.0, 0.0],
+            opacity: 0.9, sh_rest: Vec::new(),
+        }],
+    }));
+    let scene = [object];
+    frame(&mut renderer, &context, &camera, &scene, World::default(), false, false);
+    let diagnostics = renderer.viewport.diagnostics();
+    assert_eq!(renderer.uploaded_object_count, 0);
+    assert_eq!(diagnostics["preview_size"], serde_json::json!([97, 73]));
+    assert_eq!(diagnostics["completed"], 0);
+    assert_eq!(diagnostics["submitted_batches"], 1);
+    let image = finish(&mut renderer, &context, &camera, &scene, World::default());
+    assert!(image.chunks_exact(4).any(|pixel| pixel[0] > pixel[1].saturating_add(30)));
+    assert_eq!(renderer.viewport.diagnostics()["submitted_batches"], 1,
+        "static raster scene should not schedule SDF refinement");
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires a GPU adapter"]
+fn gaussian_and_sdf_refinement_converges_with_visible_splats() {
+    let options = HeadlessOptions { width: 97, height: 73, ..Default::default() };
+    let mut renderer = pollster::block_on(Renderer::new_headless(options)).unwrap();
+    let context = egui::Context::default();
+    let mut camera = Camera::new();
+    camera.viewport = renderer.size();
+    camera.position = glam::Vec3::new(0.0, 0.0, 4.0);
+    camera.target = glam::Vec3::ZERO;
+    let mut cloud = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    cloud.imported_splats = Some(std::sync::Arc::new(crate::gaussian_ply::GaussianCloud {
+        splats: vec![crate::gaussian_ply::Gaussian {
+            position: glam::Vec3::new(0.4, 0.0, 0.0), scale: glam::Vec3::splat(0.45),
+            rotation: glam::Quat::IDENTITY, color: [1.0, 0.0, 0.0],
+            opacity: 0.8, sh_rest: Vec::new(),
+        }],
+    }));
+    let sphere = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+    let scene = [sphere, cloud];
+    renderer.upload_scene_with_world(&camera, &scene, &[], [7, 7], World::default());
+    renderer.viewport.set_initial_budget(64);
+    frame(&mut renderer, &context, &camera, &scene, World::default(), false, false);
+    assert_eq!(renderer.uploaded_object_count, 1);
+    assert!(renderer.viewport.diagnostics()["preview_size"][0].as_u64().unwrap() < 97);
+    let actual = finish(&mut renderer, &context, &camera, &scene, World::default());
+    let red_pixels = actual.chunks_exact(4)
+        .filter(|pixel| pixel[0] > pixel[1].saturating_add(20)
+            && pixel[0] > pixel[2].saturating_add(20)).count();
+    assert!(red_pixels > 100, "Gaussian disappeared from mixed scene: {red_pixels} red pixels");
+}
+
+#[test]
 #[ignore = "requires a GPU adapter"]
 fn second_document_same_revisions_pans_and_bloom_match_fresh_renderer() {
     let options = HeadlessOptions { width: 65, height: 49, ..Default::default() };
@@ -136,4 +202,48 @@ fn material_thumbnail_buffer_restore_preserves_native_refinement() {
     renderer.invalidate_scene();
     assert!(renderer.viewport.diagnostics()["render_generation"].as_u64().unwrap()
         > edited["render_generation"].as_u64().unwrap());
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn imported_gaussian_ply_renders_without_proxy_and_follows_transform() {
+    let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+        width: 65, height: 49, ..Default::default()
+    })).unwrap();
+    let mut camera = Camera::new();
+    camera.viewport = renderer.size();
+    camera.position = Vec3::new(0., 0., 4.);
+    camera.target = Vec3::ZERO;
+    let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    object.imported_splats = Some(std::sync::Arc::new(crate::gaussian_ply::GaussianCloud {
+        splats: vec![crate::gaussian_ply::Gaussian { position: Vec3::ZERO,
+            scale: Vec3::new(0.5, 0.1, 0.1), rotation: glam::Quat::IDENTITY,
+            color: [1., 0., 0.], opacity: 0.9, sh_rest: vec![] }],
+    }));
+    let world = World::default();
+    let blank = renderer.render_offscreen(&camera, &[], world, &[], Duration::from_secs(30)).unwrap();
+    let rendered = renderer.render_offscreen(&camera, &[object.clone()], world, &[], Duration::from_secs(30)).unwrap();
+    assert!(renderer.hybrid_enabled);
+    assert_eq!(renderer.uploaded_object_count, 0, "asset must not render a proxy box");
+    assert_eq!(renderer.splat_instances.len(), 1);
+    assert_ne!(blank.rgba, rendered.rgba, "Gaussian must be visible");
+    let red_pixels = rendered.rgba.chunks_exact(4).filter(|p| p[0] > p[1].saturating_add(30) && p[0] > p[2].saturating_add(30)).count();
+    assert!(red_pixels > 10, "expected red Gaussian, got {red_pixels} red pixels");
+    object.transform.translation.x = 1.;
+    let moved = renderer.render_offscreen(&camera, &[object], world, &[], Duration::from_secs(30)).unwrap();
+    assert_ne!(rendered.rgba, moved.rgba);
+    let mut source = SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+    source.transform.translation.x = -0.7;
+    source.material.emission_intensity = 2.;
+    source.material.emission_color = Vec3::new(0., 0., 1.);
+    let world = World { bloom_enabled: true, ..world };
+    let mut asset = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    asset.imported_splats = Some(std::sync::Arc::new(crate::gaussian_ply::GaussianCloud {
+        splats: vec![crate::gaussian_ply::Gaussian { position: Vec3::new(0.5,0.,0.),
+            scale: Vec3::new(0.1,0.4,0.1), rotation: glam::Quat::from_rotation_z(0.7),
+            color: [1.,0.,0.], opacity: 0.9, sh_rest: vec![] }],
+    }));
+    let mixed = renderer.render_offscreen(&camera, &[source, asset], world, &[], Duration::from_secs(30)).unwrap();
+    assert_ne!(mixed.rgba, blank.rgba);
+    assert!(renderer.gpu_fault().is_none());
 }

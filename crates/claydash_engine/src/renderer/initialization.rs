@@ -471,6 +471,8 @@ impl Renderer {
             splat_camera_buffer,
             splat_camera_bind_group,
             splat_instances: Vec::new(),
+            splat_sort_camera: None,
+            splat_buffer_dirty: true,
             splat_buffer,
             splat_buffer_capacity: 1,
             hybrid_enabled: false,

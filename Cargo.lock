@@ -346,6 +346,7 @@ dependencies = [
 name = "claydash_engine"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "boolmesh",
  "bytemuck",
  "earcutr",

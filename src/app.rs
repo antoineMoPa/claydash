@@ -65,6 +65,7 @@ use crate::document;
 
 #[cfg(target_arch = "wasm32")]
 enum WebDocumentMessage {
+    ImportedSplats { request: u64, name: String, bytes: Vec<u8> },
     Opened {
         request: u64,
         name: std::path::PathBuf,
@@ -262,6 +263,27 @@ impl App {
         self.ui.reset_animation(&self.tree);
     }
 
+    fn import_gaussian_ply(&mut self, name: &str, bytes: &[u8]) -> Result<uuid::Uuid, String> {
+        let cloud = claydash_engine::gaussian_ply::read(bytes)?;
+        let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        object.name = name.to_owned();
+        object.imported_splats = Some(std::sync::Arc::new(cloud));
+        let id = object.uuid;
+        let mut objects = crate::model::objects(&self.tree);
+        objects.push(object);
+        self.tree.make_undo_redo_snapshot();
+        crate::model::set_objects(&mut self.tree, objects);
+        crate::model::set_selected_exact(&mut self.tree, vec![id]);
+        Ok(id)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn import_gaussian_path(&mut self, path: &std::path::Path) -> Result<uuid::Uuid, String> {
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        let name = path.file_stem().unwrap_or_default().to_string_lossy();
+        self.import_gaussian_ply(&name, &bytes)
+    }
+
     fn clear_scene(&mut self) {
         self.cancel_document_work();
         self.tree.make_undo_redo_snapshot();
@@ -359,6 +381,11 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_file_action(&mut self, action: FileMenuAction) {
         match action {
+            FileMenuAction::ImportGaussianPly => {
+                if let Some(path) = rfd::FileDialog::new().add_filter("Gaussian PLY", &["ply"]).pick_file() {
+                    if let Err(error) = self.import_gaussian_path(&path) { self.document.set_error("import Gaussian PLY", error); }
+                }
+            }
             FileMenuAction::New => self.new_document(),
             FileMenuAction::Clear => self.clear_scene(),
             FileMenuAction::Open => {
@@ -462,6 +489,18 @@ impl App {
         }
         let request = self.document_request;
         match action {
+            FileMenuAction::ImportGaussianPly => {
+                let tx = self.document_tx.clone();
+                let ctx = self.egui.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Some(file) = rfd::AsyncFileDialog::new().add_filter("Gaussian PLY", &["ply"]).pick_file().await {
+                        let name = file.file_name();
+                        let bytes = file.read().await;
+                        let _ = tx.send(WebDocumentMessage::ImportedSplats { request, name, bytes });
+                        ctx.request_repaint();
+                    }
+                });
+            }
             FileMenuAction::ExportGlb => self.request_mesh_export(),
             FileMenuAction::Guide => crate::examples::open_guide(),
             FileMenuAction::OpenExample(example) => {
@@ -598,6 +637,13 @@ impl App {
     fn process_web_document_messages(&mut self) {
         while let Ok(message) = self.document_rx.try_recv() {
             match message {
+                WebDocumentMessage::ImportedSplats { request, name, bytes } => {
+                    if request == self.document_request {
+                        if let Err(error) = self.import_gaussian_ply(&name, &bytes) {
+                            self.document.set_error("import Gaussian PLY", error);
+                        }
+                    }
+                }
                 WebDocumentMessage::Opened {
                     request,
                     name,

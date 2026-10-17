@@ -88,6 +88,11 @@ impl App {
             self.document.set_error("export Glb", "Select an object or add objects to the scene");
             return;
         }
+        let components = roots.iter().copied().collect();
+        if source.iter().any(|o| o.imported_splats.is_some() && crate::renderer::poisson_mesh::geometry::belongs_to_component(&source, o.uuid, &components)) {
+            self.document.set_error("export Glb", "Gaussian assets cannot be exported as solid GLB meshes; save the project to retain them");
+            return;
+        }
         self.mesh_export = Some(MeshExportJob { source, roots, index: 0, worker: None, options,
             pages: Vec::new(), texture_index: 0, texture: None,
             png_job: None, glb_job: None, work: Computation::new(Stage::Sampling),

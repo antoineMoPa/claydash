@@ -986,3 +986,24 @@ fn bounded_navigation_sequences_terminate_without_holding_refinement() {
         assert!(!interactions.viewport_interaction_active(false, &tree), "reentry {sequence}");
     }
 }
+
+#[test]
+fn clicking_cube_deselects_surrounding_splat_asset() {
+    let mut camera = Camera::new();
+    camera.viewport = Vec2::new(640., 480.);
+    camera.position = Vec3::new(0., 0., 4.);
+    camera.target = Vec3::ZERO;
+    let cube = SdfObject::create(TYPE_BOX);
+    let mut asset = SdfObject::create(TYPE_BOX);
+    asset.imported_splats = Some(std::sync::Arc::new(claydash_engine::gaussian_ply::GaussianCloud {
+        splats: vec![claydash_engine::gaussian_ply::Gaussian {
+            position: Vec3::new(0., 0., -4.), scale: Vec3::splat(10.),
+            rotation: glam::Quat::IDENTITY, color: [1.; 3], opacity: 1., sh_rest: vec![],
+        }],
+    }));
+    let mut tree = DataTree::default();
+    set_objects(&mut tree, vec![cube.clone(), asset.clone()]);
+    set_selected(&mut tree, vec![asset.uuid]);
+    InteractionState::select_at(&camera, &mut tree, camera.viewport * 0.5, None, false);
+    assert_eq!(selected(&tree), vec![cube.uuid]);
+}

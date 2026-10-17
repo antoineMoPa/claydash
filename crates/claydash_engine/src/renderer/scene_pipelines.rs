@@ -93,6 +93,25 @@ impl Renderer {
         capacity: u32,
         features: SceneShaderFeatures,
     ) {
+        let raster_only = self.node_count == 0
+            && (self.mesh_vertex_count > 0 || !self.splat_instances.is_empty());
+        if raster_only {
+            self.viewport.set_contact_pipeline(None);
+            self.mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(
+                &self.device, &self.pipeline_layout, self.render_format, features.bloom,
+            );
+            if self.mesh_vertex_count > 0 {
+                self.mesh_pipeline = poisson_material::create_pipeline(
+                    &self.device, Some(&self.pipeline_layout), &self.shader_source,
+                    self.render_format, capacity, features,
+                );
+            }
+            self.deferred_geometry_pipeline = None;
+            self.hybrid_depth_pipeline = None;
+            self.hybrid_pipeline = None;
+            self.hybrid_fast_pipeline = None;
+            return;
+        }
         let contact = if features.separate_contact {
             Some(self.cached_scene_pipeline(
                 ScenePipelineKind::Contact {
@@ -122,13 +141,6 @@ impl Renderer {
                 capacity,
                 features,
             );
-        }
-        if self.node_count == 0 && self.mesh_vertex_count > 0 {
-            self.deferred_geometry_pipeline = None;
-            self.hybrid_depth_pipeline = None;
-            self.hybrid_pipeline = None;
-            self.hybrid_fast_pipeline = None;
-            return;
         }
         if world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported

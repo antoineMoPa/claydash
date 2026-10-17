@@ -433,3 +433,67 @@ fn invalid_text_edit_is_atomic_and_valid_text_is_undoable() {
     app.tree.undo();
     assert_eq!(model::objects_ref(&app.tree).len(), before);
 }
+
+#[test]
+fn imported_gaussian_ply_is_embedded_undoable_and_failure_is_atomic() {
+    let mut app = App::new();
+    app.new_document();
+    let names = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
+    let ply = format!("ply\nformat ascii 1.0\nelement vertex 1\n{}end_header\n0 0 0 -2 -3 -4 1 0 0 0 1 0 0 3\n", names.map(|n| format!("property float {n}\n")).join(""));
+    let path = std::env::temp_dir().join(format!("claydash-{}.ply", uuid::Uuid::new_v4()));
+    std::fs::write(&path, ply).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.process_agent_request(Inbound { request: Request::ImportGaussianPly { path: path.clone() }, reply: tx });
+    let response = rx.recv().unwrap().unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let id: uuid::Uuid = serde_json::from_value(response["id"].clone()).unwrap();
+    assert_eq!(model::selected(&app.tree), vec![id]);
+    let saved = document::serialize_scene(&app.tree).unwrap();
+    assert!(app.import_gaussian_ply("bad", b"bad").is_err());
+    assert_eq!(saved, document::serialize_scene(&app.tree).unwrap());
+    app.tree.undo();
+    assert!(!model::objects(&app.tree).iter().any(|o| o.uuid == id));
+    app.tree.redo();
+    assert!(model::objects(&app.tree).iter().any(|o| o.uuid == id));
+    let scene = document::deserialize_scene(&saved).unwrap();
+    app.replace_scene(scene);
+    let object = model::objects(&app.tree).into_iter().find(|o| o.uuid == id).unwrap();
+    assert_eq!(object.imported_splats.unwrap().splats.len(), 1);
+}
+
+#[test]
+fn compact_gaussian_queries_preserve_revision_and_transform_positions() {
+    let mut app = App::new();
+    app.new_document();
+    let names = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
+    let ply = format!("ply\nformat ascii 1.0\nelement vertex 3\n{}end_header\n-1 0 0 -2 -2 -2 1 0 0 0 1 0 0 3\n0 1 0 -2 -2 -2 1 0 0 0 0 1 0 3\n1 2 0 -2 -2 -2 1 0 0 0 0 0 1 3\n", names.map(|name| format!("property float {name}\n")).join(""));
+    let id = app.import_gaussian_ply("sample", ply.as_bytes()).unwrap();
+    let mut transform = model::objects_ref(&app.tree).iter().find(|object| object.uuid == id).unwrap().transform;
+    transform.translation = Vec3::new(10.0, 0.0, 0.0);
+    app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectTransform { id, transform }] }).unwrap();
+    let summary = app.agent_scene_summary().unwrap();
+    assert_eq!(summary["revision"], app.scene_revision());
+    let entry = summary["objects"].as_array().unwrap().iter().find(|entry| entry["id"] == json!(id)).unwrap();
+    assert_eq!(entry["imported_gaussian"]["count"], 3);
+    assert_eq!(entry["imported_gaussian"]["world_bounds"]["min"], json!([9.0, 0.0, 0.0]));
+    assert!(!summary.to_string().contains("gaussian-f32-le-v1"));
+    let local = app.agent_gaussian_cloud(id, Some(CloudSpace::Object), Some(2)).unwrap();
+    let world = app.agent_gaussian_cloud(id, Some(CloudSpace::World), Some(2)).unwrap();
+    assert_eq!(local["percentiles"]["p50"], json!([0.0, 1.0, 0.0]));
+    assert_eq!(world["percentiles"]["p50"], json!([10.0, 1.0, 0.0]));
+    assert_eq!(world["samples"].as_array().unwrap().len(), 2);
+    assert!(app.agent_gaussian_cloud(id, None, Some(257)).is_err());
+}
+
+#[test]
+fn targeted_action_schema_shows_tag_and_sheet_bends() {
+    let result = mcp::action_schema("CreateObject", Some(PrimitiveKind::SheetPanel)).unwrap();
+    assert_eq!(result["action"]["properties"]["type"]["const"], "CreateObject");
+    assert_eq!(result["sheet_bend"]["example"]["direction"], 0.0);
+    assert!(result["params_example"]["SheetPanelParams"].is_object());
+    assert!(serde_json::from_value::<Request>(request_payload("Apply", result["apply_example"].clone())).is_ok());
+    assert!(mcp::action_schema("MissingAction", None).is_err());
+    let orthographic = mcp::mcp_tools().into_iter().find(|tool| tool["name"] == "capture_orthographic").unwrap();
+    assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["minimum"], 96);
+    assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["maximum"], 512);
+}

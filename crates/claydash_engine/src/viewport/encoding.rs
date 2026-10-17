@@ -224,7 +224,9 @@ impl Viewport {
                 if let Some(hybrid) = &hybrid {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Gaussian splat mesh batch"),
-                        color_attachments: attachments,
+                        // Radiance assets use the color target; preserve the
+                        // separately accumulated scene emission for bloom.
+                        color_attachments: &attachments[..1],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                             view: depth_view,
                             depth_ops: Some(wgpu::Operations {
@@ -433,20 +435,35 @@ fn draw_splat_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], 
     match work {
         Work::Preview => pass.draw(0..6, 0..count),
         Work::Refine { first, end } => {
-            let columns = size[0].div_ceil(TILE);
-            let mut tile = first;
-            while tile < end {
-                let row_end = ((tile / columns + 1) * columns).min(end);
-                let [x, y, _, height] = tile_rect(size, tile);
-                let last = tile_rect(size, row_end - 1);
-                pass.set_scissor_rect(x, y, last[0] + last[2] - x, height);
+            // A batch can span many rows. Drawing all splats once per row
+            // repeats expensive covariance projection for every instance.
+            // At most three disjoint rectangles cover the exact tile range.
+            for [x, y, width, height] in splat_refine_scissors(size, first, end) {
+                pass.set_scissor_rect(x, y, width, height);
                 pass.draw(0..6, 0..count);
-                tile = row_end;
             }
         }
         Work::Interleave { .. } => unreachable!("hybrid splats use tiled refinement"),
         Work::Relight { .. } | Work::Cached => unreachable!(),
     }
+}
+
+pub(super) fn splat_refine_scissors(size: [u32; 2], first: u32, end: u32) -> Vec<[u32; 4]> {
+    if first >= end { return Vec::new(); }
+    let columns = size[0].div_ceil(TILE);
+    let [first_x, first_y, _, first_height] = tile_rect(size, first);
+    let [last_x, last_y, last_width, last_height] = tile_rect(size, end - 1);
+    if first_y == last_y {
+        return vec![[first_x, first_y, last_x + last_width - first_x, first_height]];
+    }
+    let mut strips = vec![[first_x, first_y, size[0] - first_x, first_height]];
+    let middle_y = first_y + first_height;
+    if middle_y < last_y {
+        strips.push([0, middle_y, size[0], last_y - middle_y]);
+    }
+    strips.push([0, last_y, last_x + last_width, last_height]);
+    debug_assert!(first / columns < (end - 1) / columns);
+    strips
 }
 
 fn draw_mesh_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], count: u32) {

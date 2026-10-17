@@ -62,7 +62,11 @@ impl Renderer {
         world: World,
         pipeline_preparation: ScenePipelinePreparation,
     ) -> Option<PackedTrainingScene> {
-        let source_objects = &objects[..objects.len().min(MAX_OBJECTS)];
+        let all_objects = objects;
+        let sdf_objects = objects.iter().any(|o| o.imported_splats.is_some()).then(||
+            objects.iter().filter(|o| o.imported_splats.is_none()).cloned().collect::<Vec<_>>());
+        let source_objects = sdf_objects.as_deref().unwrap_or(objects);
+        let source_objects = &source_objects[..source_objects.len().min(MAX_OBJECTS)];
         let training_only = pipeline_preparation == ScenePipelinePreparation::NeuralTraining;
         let manage_scene_jobs = pipeline_preparation == ScenePipelinePreparation::Viewport;
         #[cfg(not(target_arch = "wasm32"))]
@@ -591,7 +595,9 @@ impl Renderer {
             && supported_materials
             && supported_roots
             && (has_splat_samples || self.mesh_is_visible());
+        self.hybrid_enabled |= all_objects.iter().any(|o| o.imported_splats.is_some());
         self.splat_instances.clear();
+        self.splat_buffer_dirty = true;
         if self.hybrid_enabled {
             let matrices: std::collections::HashMap<_, _> = splat_samples
                 .iter()
@@ -626,6 +632,23 @@ impl Renderer {
                         materials.materials[material_index as usize].opacity,
                     ],
                     normal: world_normal.extend(0.0).to_array(),
+                    axes: [[0.; 4]; 3],
+                });
+            }
+        }
+        // Imported Gaussians have their own covariance and baked radiance. They
+        // are not SDF proxies and must never enter the source geometry BVH.
+        for object in all_objects {
+            let Some(cloud) = &object.imported_splats else { continue; };
+            let matrix = crate::model::object_world_matrix(all_objects, object.uuid);
+            for splat in &cloud.splats {
+                let basis = glam::Mat3::from_quat(splat.rotation);
+                let axes = [basis.x_axis * splat.scale.x, basis.y_axis * splat.scale.y, basis.z_axis * splat.scale.z]
+                    .map(|axis| matrix.transform_vector3(axis).extend(0.).to_array());
+                self.splat_instances.push(GpuSplat {
+                    center_radius: matrix.transform_point3(splat.position).extend(0.).to_array(),
+                    color_opacity: [splat.color[0], splat.color[1], splat.color[2], splat.opacity],
+                    normal: [0., 1., 0., 1.], axes,
                 });
             }
         }

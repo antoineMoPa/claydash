@@ -93,6 +93,9 @@ pub(super) fn create_splat_resources(
                         offset: 32,
                         shader_location: 2,
                     },
+                    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 48, shader_location: 3 },
+                    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 64, shader_location: 4 },
+                    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 80, shader_location: 5 },
                 ],
             })],
             compilation_options: Default::default(),
@@ -217,6 +220,10 @@ impl Renderer {
             .write_buffer(&self.splat_camera_buffer, 0, bytemuck::bytes_of(&data));
         // Back to front alpha composition preserves overlapping layers.
         let forward = camera.target - camera.position;
+        if !self.splat_buffer_dirty
+            && self.splat_sort_camera == Some((camera.position, forward)) {
+            return;
+        }
         self.splat_instances.sort_by(|a, b| {
             let a_depth = (Vec3::from_array(a.center_radius[..3].try_into().unwrap())
                 - camera.position)
@@ -239,6 +246,8 @@ impl Renderer {
         if !bytes.is_empty() {
             self.queue.write_buffer(&self.splat_buffer, 0, bytes);
         }
+        self.splat_sort_camera = Some((camera.position, forward));
+        self.splat_buffer_dirty = false;
     }
 }
 

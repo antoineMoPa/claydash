@@ -160,7 +160,9 @@ impl Renderer {
             view_formats: &[],
         });
         let view = target.create_view(&Default::default());
-        if world.render_pipeline == crate::model::RenderPipelineMode::Deferred
+        let raster_only = self.uploaded_object_count == 0
+            && (self.mesh_vertex_count > 0 || !self.splat_instances.is_empty());
+        if !raster_only && world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported
         {
             self.benchmark_deferred(
@@ -225,13 +227,11 @@ impl Renderer {
                         }),
                         ..Default::default()
                     });
-                    pass.set_pipeline(
-                        self.hybrid_depth_pipeline
-                            .as_ref()
-                            .expect("hybrid depth pipeline"),
-                    );
-                    pass.set_bind_group(0, &self.bind_group, &[]);
-                    pass.draw(0..3, 0..1);
+                    if let Some(depth_pipeline) = &self.hybrid_depth_pipeline {
+                        pass.set_pipeline(depth_pipeline);
+                        pass.set_bind_group(0, &self.bind_group, &[]);
+                        pass.draw(0..3, 0..1);
+                    }
                 }
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("SDF stress benchmark draw"),
@@ -246,7 +246,9 @@ impl Renderer {
                     })],
                     ..Default::default()
                 });
-                pass.set_pipeline(if self.hybrid_enabled {
+                pass.set_pipeline(if raster_only {
+                    &self.mesh_background_pipeline
+                } else if self.hybrid_enabled {
                     if fast {
                         self.hybrid_fast_pipeline
                             .as_ref()
@@ -630,7 +632,9 @@ impl Renderer {
                 world,
             );
             self.upload_splat_camera(&current, world);
-            let deferred = world.render_pipeline == crate::model::RenderPipelineMode::Deferred
+            let raster_only = self.uploaded_object_count == 0
+                && (self.mesh_vertex_count > 0 || !self.splat_instances.is_empty());
+            let deferred = !raster_only && world.render_pipeline == crate::model::RenderPipelineMode::Deferred
                 && self.deferred_supported;
             let work = self.viewport.prepare(
                 &self.device,
@@ -640,18 +644,20 @@ impl Renderer {
                     projection: u32::from(current.projection_mode == ProjectionMode::Orthographic),
                     versions: frame_versions,
                     size: [self.config.width, self.config.height],
-                    refine: true,
+                    refine: !raster_only,
                 },
-                true,
+                !raster_only,
                 deferred,
-                !deferred && !self.hybrid_enabled,
+                !raster_only && !deferred && !self.hybrid_enabled,
             );
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let quick_preview = matches!(work, crate::viewport::Work::Preview)
                 || matches!(work, crate::viewport::Work::Interleave { first, .. }
                     if first < self.viewport.phase_samples());
-            self.viewport.set_contact_active(!quick_preview && !deferred);
-            let pipeline = if self.hybrid_enabled {
+            self.viewport.set_contact_active(!quick_preview && !deferred && !raster_only);
+            let pipeline = if raster_only {
+                &self.mesh_background_pipeline
+            } else if self.hybrid_enabled {
                 if quick_preview {
                     self.hybrid_fast_pipeline
                         .as_ref()
@@ -680,11 +686,8 @@ impl Renderer {
                 work,
                 pipeline,
                 &self.bind_group,
-                self.hybrid_enabled.then(|| crate::viewport::HybridPass {
-                    depth_pipeline: Some(self
-                        .hybrid_depth_pipeline
-                        .as_ref()
-                        .expect("hybrid depth pipeline")),
+                (self.hybrid_enabled || mesh_vertex_count > 0).then(|| crate::viewport::HybridPass {
+                    depth_pipeline: self.hybrid_depth_pipeline.as_ref(),
                     splat_pipeline: &self.splat_pipeline,
                     splat_bind_group: &self.splat_camera_bind_group,
                     splat_buffer: &self.splat_buffer,

@@ -51,7 +51,13 @@ fn guide_face_scene() -> Vec<crate::model::SdfObject> {
 
 impl App {
     pub fn new() -> Self {
-        let scene = serde_json::from_str(duck::DEFAULT_DUCK).expect("parse default scene");
+        let mut scene = DataTree::default();
+        scene.set_path(
+            "sdf_objects",
+            ClaydashValue::VecSDFObject(vec![crate::model::SdfObject::create_kind(
+                crate::model::PrimitiveKind::Box,
+            )]),
+        );
         #[allow(unused_mut)]
         let mut tree = data_tree_with_scene(scene);
 
@@ -92,9 +98,7 @@ impl App {
                 );
             }
         }
-        let mut camera = Camera::new();
-        // Open the default duck at the front-facing view chosen for its scene.
-        camera.position = glam::Vec3::new(0.0, 0.0, 7.673_228_3);
+        let camera = Camera::new();
         #[cfg(not(target_arch = "wasm32"))]
         let camera = if benchmark || std::env::args().any(|arg| arg == "--stress-ui-benchmark") {
             let mut camera = camera;
@@ -445,10 +449,20 @@ pub(super) fn data_tree_with_scene(scene: DataTree) -> DataTree {
 
 #[cfg(test)]
 #[test]
-fn startup_view_matches_the_default_scene_front_view() {
+fn startup_scene_contains_only_the_default_cube() {
     let app = App::new();
+    let objects = crate::model::objects(&app.tree);
+    assert_eq!(objects.len(), 1);
+    let mut expected = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    expected.uuid = objects[0].uuid;
+    assert_eq!(
+        serde_json::to_value(&objects[0]).unwrap(),
+        serde_json::to_value(expected).unwrap()
+    );
+    assert!(crate::model::scene_cameras(&app.tree).is_empty());
+    assert!(crate::model::active_camera_id(&app.tree).is_none());
     let camera = &app.camera;
-    assert_eq!(camera.position, glam::Vec3::new(0.0, 0.0, 7.673_228_3));
+    assert_eq!(camera.position, Camera::new().position);
     assert_eq!(camera.target, glam::Vec3::ZERO);
     assert_eq!(camera.up, glam::Vec3::Y);
     assert_eq!(

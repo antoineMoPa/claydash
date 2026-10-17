@@ -14,8 +14,8 @@ const MODEL_ORGANIZATION: &str = concat!(
 
 pub(super) fn schema() -> Value {
     json!({
-        "version": 19,
-        "operations": ["GetState", "GetSchema", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
+        "version": 20,
+        "operations": ["GetState", "GetSceneSummary", "GetSchema", "GetActionSchema", "GetGaussianCloud", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open"],
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "variable_spaces": ["Local", "World"],
         "vector_binding_targets": ["Position", "GroupPosition", {"BezierPoint": 0}],
@@ -105,7 +105,10 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
                 let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                 let op = match name {
                     "get_state" => "GetState",
+                    "get_scene_summary" => "GetSceneSummary",
                     "get_schema" => "GetSchema",
+                    "get_action_schema" => "GetActionSchema",
+                    "get_gaussian_cloud" => "GetGaussianCloud",
                     "enable_slow_smooth_blends" => "EnableSlowSmoothBlends",
                     "enable_boolean_operations" => "EnableBooleanOperations",
                     "list_commands" => "ListCommands",
@@ -123,6 +126,7 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
                     "redo" => "Redo",
                     "save" => "Save",
                     "open" => "Open",
+                    "import_gaussian_ply" => "ImportGaussianPly",
                     _ => "",
                 };
                 if op.is_empty() {
@@ -214,10 +218,14 @@ pub(super) fn mcp_tools() -> Vec<Value> {
     let empty = json!({"type": "object", "properties": {}, "additionalProperties": false});
     [
         ("get_state", "Read the full live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene Boolean and smooth-blend opt-in flags, and revision.", empty.clone()),
+        ("get_scene_summary", "Read scene revision, object IDs/names/transforms, selection, camera and Gaussian counts and bounds without embedded splat bytes.", empty.clone()),
         ("get_schema", "Get action names and example serialized objects for each primitive type.", empty.clone()),
+        ("get_action_schema", "Get one tagged Apply action schema. Pass primitive for its serialized params example; SheetPanel includes bend fields and a compact example.", json!({"type":"object","properties":{"action":{"type":"string","description":"Action name such as CreateObject or SetObjectParams."},"primitive":{"enum":PrimitiveKind::ALL}},"required":["action"],"additionalProperties":false})),
+        ("get_gaussian_cloud", "Get exact bounds, per-axis 2nd/50th/98th position percentiles and deterministic spatial/color samples for one imported Gaussian object. Coordinates are object-local by default or transformed to world. Does not return embedded bytes.", json!({"type":"object","properties":{"id":uuid,"space":{"enum":["object","world"],"default":"object"},"sample_count":{"type":"integer","minimum":0,"maximum":256,"default":32}},"required":["id"],"additionalProperties":false})),
         ("enable_slow_smooth_blends", "Explicitly enable new or enlarged smooth Boolean blends for this scene. Warning: dense field sampling can be slow and exceed export resource budgets; prefer arrangements of sheet bends, native sheet cuts/bends, independent components, and local built-in rounding. New Boolean geometry, including hard unions, requires enable_boolean_operations and an explicit user request; do not use unions for organization. Enabling does not change existing geometry or automatically apply positive blends. Saved scenes retain opt-in; New resets it; ReplaceScene does not grant opt-in. Existing imported blends are retained. Export geometry:'smooth' does not enable Boolean blends.", empty.clone()),
         ("enable_boolean_operations", "Allow new Boolean unions, subtraction and intersection for this scene only when the user explicitly requests Boolean geometry. Disabled by default because nested operations add render and mesh-export work. Prefer independent parts, native sheet cuts/bends/crowns and primitive corner radii; use shared transform bindings for assemblies. This does not enable smooth blends, change geometry, or replace existing operations. Saved scenes retain opt-in; New resets it; ReplaceScene cannot grant it. Existing imported Boolean geometry can be edited or detached while disabled.", empty.clone()),
         ("list_commands", "List Claydash's existing command palette commands.", empty.clone()),
+        ("import_gaussian_ply", "Import a local Graphdeco Gaussian PLY as one selected, undoable asset. Supports ASCII and binary PLY, up to 2,000,000 Gaussians per asset. The project automatically embeds all Gaussian data on Save; no source file is needed afterward. Viewport displays DC color; higher spherical harmonics are preserved. Returns id and revision.", json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})),
         ("apply", "Apply typed scene actions as one undoable transaction. Read get_schema first; include expected_revision from get_state. For efficient modeling, prefer arrangements of sheet bends using native sheet cuts/bends, independent components, and local built-in rounding. New Boolean geometry, including hard unions, requires enable_boolean_operations and an explicit user request; do not use unions for organization. Smooth Boolean blends are unavailable by default for new or enlarged blends; enable_slow_smooth_blends explicitly opts the scene in with a dense field cost/export resource budget warning. Existing imported blends are retained; ReplaceScene does not grant opt-in.", json!({"type": "object", "properties": {"expected_revision": {"type": "integer"}, "actions": {"type": "array", "items": action, "minItems": 1}}, "required": ["actions"]})),
         ("execute_command", "Run an existing Claydash command by name. Some commands start an interactive gesture. The union command requires enable_boolean_operations; completed commands cannot introduce Boolean geometry while disabled.", json!({"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]})),
         ("set_view", "Set the live viewport camera. position and target are [x,y,z]; projection_mode is Perspective or Orthographic.", json!({"type": "object", "properties": {"position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "target": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "up": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "projection_mode": {"enum": ["Perspective", "Orthographic"]}}, "required": ["position", "target"]})),
@@ -234,10 +242,41 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         ("get_glb_export_status", "Read GLB export status by job id: running (stage and per-stage progress), completed (file published), failed (error), or cancelled. Retains the most recent 32 terminal jobs for this process.", json!({"type":"object","properties":{"id":uuid},"required":["id"],"additionalProperties":false})),
         ("cancel_glb_export", "Cancel a GLB export by job id. Returns cancelled, or the terminal result if already finished. A cancelled job cannot subsequently publish its file.", json!({"type":"object","properties":{"id":uuid},"required":["id"],"additionalProperties":false})),
         ("capture_viewport", "Render a viewport PNG. object_ids isolates groups; sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
-        ("capture_orthographic", "Return a PNG with X, Y, Z orthographic views. object_ids isolates groups; sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 512}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
+        ("capture_orthographic", "Return a PNG with X, Y, Z orthographic views. object_ids isolates groups; sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 512, "default": 256, "description": "Pixels per orthographic panel; must also fit inside the current viewport."}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000, "default": 8.0}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("undo", "Undo the last scene edit.", empty.clone()),
         ("redo", "Redo the last undone scene edit.", empty.clone()),
         ("save", "Save the live scene to the current path or a specified .claydash path.", json!({"type": "object", "properties": {"path": {"type": "string"}}})),
         ("open", "Open a .claydash project in the live window.", json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})),
     ].into_iter().map(|(name, description, input_schema)| json!({"name": name, "description": description, "inputSchema": input_schema})).collect()
+}
+
+pub(super) fn action_schema(action: &str, primitive: Option<PrimitiveKind>) -> AgentResult {
+    let tools = mcp_tools();
+    let apply = tools.iter().find(|tool| tool["name"] == "apply").expect("apply tool exists");
+    let variants = apply["inputSchema"]["properties"]["actions"]["items"]["oneOf"]
+        .as_array().expect("action variants exist");
+    let variant = variants.iter().find(|variant| variant["properties"]["type"]["const"] == action)
+        .ok_or_else(|| format!("unknown action: {action}"))?;
+    let mut result = json!({
+        "apply_shape": {"expected_revision": "integer from get_scene_summary (optional)", "actions": "nonempty array of tagged actions"},
+        "action": variant,
+        "tagging": "Put the action name in the type field, for example {\"type\":\"CreateObject\",\"kind\":\"SheetPanel\"}."
+    });
+    if let Some(kind) = primitive {
+        let mut example = SdfObject::create_kind(kind);
+        example.softness = 0.0;
+        result["primitive"] = json!(kind);
+        result["params_example"] = json!(example.params);
+        if action == "CreateObject" {
+            result["apply_example"] = json!({"actions":[{"type":"CreateObject","kind":kind,"params":example.params}]});
+        }
+        if kind == PrimitiveKind::SheetPanel {
+            result["sheet_bend"] = json!({
+                "shape": {"start":"finite number in sheet-local XY", "radius":"number greater than thickness/2", "angle":"radians, nonzero with magnitude below pi", "direction":"optional radians from +X toward +Y; default 0"},
+                "example": {"start":0.15,"radius":0.08,"angle":1.2,"direction":0.0},
+                "params_shape": {"SheetPanelParams":{"size":["width","height"],"thickness":"positive number","cuts":[],"bends":["<bend object>"],"stage":"Blank | Cut | Formed"}}
+            });
+        }
+    }
+    Ok(result)
 }

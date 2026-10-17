@@ -140,7 +140,7 @@ pub(crate) fn mesh_world_frame(source: &[SdfObject], root: uuid::Uuid) -> glam::
     else { crate::model::group_world_matrix(source, root) }
 }
 
-pub(crate) fn belongs_to_component(source: &[SdfObject], object: uuid::Uuid,
+pub fn belongs_to_component(source: &[SdfObject], object: uuid::Uuid,
     components: &std::collections::HashSet<uuid::Uuid>) -> bool {
     let mut current = Some(object);
     for _ in 0..source.len() {

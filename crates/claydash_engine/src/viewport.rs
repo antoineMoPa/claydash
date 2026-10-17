@@ -205,6 +205,9 @@ pub struct Viewport {
     pixel_budget: u32,
     target_ms: f64,
     initial_budget: u32,
+    preview_step: u8,
+    preview_budget_override: Option<u32>,
+    progressive_hybrid_preview: bool,
     refinement_resume_at: Option<web_time::Instant>,
     scheduler: Scheduler,
     repaint: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
@@ -377,6 +380,9 @@ impl Viewport {
             pixel_budget: INITIAL_PIXELS,
             target_ms: EDIT_TARGET_MS,
             initial_budget: INITIAL_PIXELS,
+            preview_step: 0,
+            preview_budget_override: None,
+            progressive_hybrid_preview: false,
             refinement_resume_at: None,
             scheduler: Scheduler::default(),
             repaint: None,
@@ -521,6 +527,10 @@ impl Viewport {
         }
     }
 
+    pub fn set_progressive_hybrid_preview(&mut self, enabled: bool) {
+        self.progressive_hybrid_preview = enabled;
+    }
+
     pub fn invalidate(&mut self) {
         self.scheduler.new_generation();
         self.key = None;
@@ -550,6 +560,9 @@ impl Viewport {
         self.rendering_path = None;
         self.pixel_budget = INITIAL_PIXELS;
         self.initial_budget = INITIAL_PIXELS;
+        self.preview_step = 0;
+        self.preview_budget_override = None;
+        self.progressive_hybrid_preview = false;
         self.target_ms = EDIT_TARGET_MS;
         self.refinement_resume_at = None;
         self.scheduler.reset_budgets(INITIAL_PIXELS);
@@ -645,6 +658,10 @@ impl Viewport {
         }
         if self.key.as_ref() != Some(&key) || self.refinement_region_changed {
             self.refinement_region_changed = false;
+            let preview_override = self.preview_budget_override.take();
+            if preview_override.is_none() {
+                self.preview_step = 0;
+            }
             self.scheduler.new_generation();
             self.refinement_resume_at = None;
             // World lighting/effect revisions leave the primary-hit geometry intact.
@@ -665,7 +682,8 @@ impl Viewport {
             }
             // Empty background tiles can teach a very large throughput budget.
             // A different angle must not inherit that budget for its first preview.
-            self.pixel_budget = self.scheduler.budget(Stage::Preview, self.initial_budget);
+            self.pixel_budget = preview_override
+                .unwrap_or_else(|| self.scheduler.budget(Stage::Preview, self.initial_budget));
             let mut preview_size = if refine || interleaved {
                 preview_size(key.size, self.pixel_budget)
             } else {
@@ -809,6 +827,26 @@ impl Viewport {
         if (!refine && !interleaved) || self.interacting || self.refinement_paused {
             self.activity = if self.interacting { Activity::Interaction } else if self.refinement_paused { Activity::Optimization } else { Activity::Complete };
             return Work::Cached;
+        }
+        // Hybrid scenes with imported splats cannot use the sparse SDF path:
+        // each splat must be composited over a complete depth image. Improve
+        // the whole view in a couple of bounded preview steps before native
+        // tiles start replacing it.
+        if self.progressive_hybrid_preview
+            && self.rendering_path == Some(RenderingPath::Hybrid)
+            && !interleaved
+            && self.preview_step < 2
+        {
+            let current = self.targets.as_ref().expect("prepared viewport").preview_size;
+            let current_pixels = current[0] * current[1];
+            let native_pixels = key.size[0] * key.size[1];
+            let next_budget = current_pixels.saturating_mul(2).min(self.initial_budget.saturating_mul(4));
+            if next_budget < native_pixels && preview_size(key.size, next_budget) != current {
+                self.preview_step += 1;
+                self.preview_budget_override = Some(next_budget);
+                self.refinement_region_changed = true;
+                return self.prepare(device, key, refine, deferred, interleaved);
+            }
         }
         let plan = Plan::new(if interleaved { self.sparse_size(key.size) } else { key.size }, interleaved);
         let total = plan.total();

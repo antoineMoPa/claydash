@@ -95,6 +95,7 @@ impl UiState {
         let Some(object) = scene.iter_mut().find(|object| object.uuid == selection[0]) else {
             return;
         };
+        if object.imported_splats.is_some() { return; }
         // Keep back-facing box handles in the list while drawing. An egui drag
         // owns its handle id, so the captured handle must continue to exist if
         // resizing moves that face behind another face or past the camera.

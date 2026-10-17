@@ -92,8 +92,13 @@ fn available_render_representations_are_authorable_by_agents() {
     assert_eq!(declared.len(), GroupRenderRepresentation::ALL.len());
 
     let mut app = App::new();
-    let root_id = model::objects_ref(&app.tree)[0].uuid;
-    let child = SdfObject::create_kind(PrimitiveKind::Box);
+    app.new_document();
+    let mut root = SdfObject::create_kind(PrimitiveKind::Box);
+    root.softness = 0.;
+    let root_id = root.uuid;
+    model::set_objects(&mut app.tree, vec![root]);
+    let mut child = SdfObject::create_kind(PrimitiveKind::Box);
+    child.softness = 0.;
     let child_id = child.uuid;
     let mut scene = model::objects(&app.tree);
     scene.push(child);

@@ -39,7 +39,10 @@ pub struct Inbound {
 #[serde(tag = "op", content = "args")]
 pub enum Request {
     GetState,
+    GetSceneSummary,
     GetSchema,
+    GetActionSchema { action: String, primitive: Option<PrimitiveKind> },
+    GetGaussianCloud { id: uuid::Uuid, space: Option<CloudSpace>, sample_count: Option<usize> },
     ListCommands,
     EnableSlowSmoothBlends,
     EnableBooleanOperations,
@@ -57,6 +60,23 @@ pub enum Request {
     Redo,
     Save { path: Option<PathBuf> },
     Open { path: PathBuf },
+    ImportGaussianPly { path: PathBuf },
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudSpace { Object, World }
+
+fn cloud_bounds(points: impl Iterator<Item = Vec3>) -> Option<Value> {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    let mut count = 0;
+    for point in points {
+        min = min.min(point);
+        max = max.max(point);
+        count += 1;
+    }
+    (count > 0).then(|| json!({"min": min, "max": max}))
 }
 
 #[derive(Default, Deserialize)]
@@ -338,7 +358,7 @@ fn call_socket(request: Value) -> AgentResult {
 
 fn request_payload(op: &str, args: Value) -> Value {
     let args = match op {
-        "GetState" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "EnableBooleanOperations" | "Undo" | "Redo" => Value::Null,
+        "GetState" | "GetSceneSummary" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "EnableBooleanOperations" | "Undo" | "Redo" => Value::Null,
         "CaptureViewport" | "CaptureOrthographic" if args.is_null() => json!({}),
         "Save" if args.is_null() => json!({}),
         _ => args,
@@ -464,13 +484,20 @@ impl App {
                 | Request::Undo
                 | Request::Redo
                 | Request::Open { .. }
+                | Request::ImportGaussianPly { .. }
         );
         let result = match request {
             Request::GetState => self.agent_state(),
+            Request::GetSceneSummary => self.agent_scene_summary(),
             Request::GetSchema => Ok(schema()),
+            Request::GetActionSchema { action, primitive } => mcp::action_schema(&action, primitive),
+            Request::GetGaussianCloud { id, space, sample_count } => self.agent_gaussian_cloud(id, space, sample_count),
             Request::ListCommands => Ok(Value::Array(self.commands.commands.iter().map(|(name, command)| {
                 json!({"name": name, "title": command.title, "description": command.docs, "shortcut": command.shortcut})
             }).collect())),
+            Request::ImportGaussianPly { path } => {
+                self.import_gaussian_path(&path).map(|id| json!({"id": id, "revision": self.scene_revision()}))
+            }
             Request::Apply(args) => self.agent_apply(args),
             Request::EnableSlowSmoothBlends => self.agent_enable_slow_smooth_blends(),
             Request::EnableBooleanOperations => self.agent_enable_boolean_operations(),
@@ -654,6 +681,64 @@ impl App {
                 "up": self.camera.up, "projection_mode": self.camera.projection_mode},
             "document": raw_scene,
         }))
+    }
+
+    fn agent_scene_summary(&self) -> AgentResult {
+        let objects = model::objects_ref(&self.tree);
+        let entries: Vec<Value> = objects.iter().map(|object| {
+            let matrix = model::object_world_matrix(objects, object.uuid);
+            let cloud = object.imported_splats.as_ref().map(|cloud| {
+                let points = cloud.splats.iter().map(|splat| splat.position);
+                json!({"count": cloud.splats.len(), "object_bounds": cloud_bounds(points),
+                    "world_bounds": cloud_bounds(cloud.splats.iter().map(|splat|
+                        matrix.transform_point3(splat.position)))})
+            });
+            json!({"id": object.uuid, "name": object.name,
+                "kind": if object.imported_splats.is_some() { json!("GaussianCloud") } else { json!(PrimitiveKind::from_object_type(object.object_type)) },
+                "transform": object.transform, "group_transform": object.group_transform,
+                "boolean_parent": object.boolean_parent, "operation": object.operation,
+                "imported_gaussian": cloud})
+        }).collect();
+        Ok(json!({"revision": self.scene_revision(), "objects": entries,
+            "selection": model::selected_ref(&self.tree),
+            "view": {"position": self.camera.position, "target": self.camera.target,
+                "up": self.camera.up, "projection_mode": self.camera.projection_mode},
+            "document_path": self.document.current_path()}))
+    }
+
+    fn agent_gaussian_cloud(&self, id: uuid::Uuid, space: Option<CloudSpace>, sample_count: Option<usize>) -> AgentResult {
+        let count = sample_count.unwrap_or(32);
+        if count > 256 { return Err("sample_count must be 0–256".into()); }
+        let objects = model::objects_ref(&self.tree);
+        let object = objects.iter().find(|object| object.uuid == id)
+            .ok_or_else(|| format!("object {id} not found"))?;
+        let cloud = object.imported_splats.as_ref().ok_or_else(|| format!("object {id} has no imported Gaussian cloud"))?;
+        let world = matches!(space, Some(CloudSpace::World));
+        let matrix = model::object_world_matrix(objects, id);
+        let positions: Vec<Vec3> = cloud.splats.iter().map(|splat| {
+            if world { matrix.transform_point3(splat.position) } else { splat.position }
+        }).collect();
+        let bounds = cloud_bounds(positions.iter().copied());
+        let mut axes = [Vec::with_capacity(positions.len()), Vec::with_capacity(positions.len()), Vec::with_capacity(positions.len())];
+        for position in &positions {
+            for (axis, values) in axes.iter_mut().enumerate() { values.push(position[axis]); }
+        }
+        for values in &mut axes { values.sort_unstable_by(f32::total_cmp); }
+        let percentiles = [0.02, 0.5, 0.98].map(|quantile| {
+            if positions.is_empty() { return None; }
+            let index = ((positions.len() - 1) as f32 * quantile).round() as usize;
+            Some([axes[0][index], axes[1][index], axes[2][index]])
+        });
+        let samples: Vec<Value> = (0..count.min(cloud.splats.len())).map(|slot| {
+            let index = slot * cloud.splats.len() / count.min(cloud.splats.len());
+            let splat = &cloud.splats[index];
+            json!({"index": index, "position": positions[index], "color": splat.color,
+                "opacity": splat.opacity})
+        }).collect();
+        Ok(json!({"id": id, "space": if world { "world" } else { "object" },
+            "count": cloud.splats.len(), "bounds": bounds,
+            "percentiles": {"p02": percentiles[0], "p50": percentiles[1], "p98": percentiles[2]},
+            "samples": samples}))
     }
 
     fn agent_set_view(&mut self, args: ViewArgs) -> AgentResult {

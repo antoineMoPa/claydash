@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
+base64 = "0.22"
 sdf_consts = { workspace = true }
 screened_poisson = { path = "../screened_poisson" }
 serde = { workspace = true }

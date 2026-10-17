@@ -14,6 +14,7 @@ pub enum FileMenuAction {
     New,
     Clear,
     Open,
+    ImportGaussianPly,
     OpenRecent(PathBuf),
     OpenExample(crate::examples::Example),
     Guide,

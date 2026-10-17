@@ -27,6 +27,11 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
     model::resolve_sheet_seams(&mut seam_objects)?;
     let mut ids = std::collections::HashSet::new();
     for object in objects {
+        if object.imported_splats.is_some() && (object.boolean_parent.is_some()
+            || objects.iter().any(|child| child.boolean_parent == Some(object.uuid))
+            || !object.render_representation.is_exact()) {
+            return Err("Imported Gaussian assets support object transforms, not Boolean operations or SDF representations".into());
+        }
         if object.material.kind == model::MaterialKind::Custom
             && !object.material_id.is_some_and(|id| {
                 assets.iter().any(|asset| {

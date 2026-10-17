@@ -204,6 +204,7 @@ struct GpuSplat {
     center_radius: [f32; 4],
     color_opacity: [f32; 4],
     normal: [f32; 4],
+    axes: [[f32; 4]; 3],
 }
 
 #[repr(C)]
@@ -292,6 +293,8 @@ pub struct Renderer {
     splat_instances: Vec<GpuSplat>,
     splat_buffer: wgpu::Buffer,
     splat_buffer_capacity: usize,
+    splat_sort_camera: Option<(Vec3, Vec3)>,
+    splat_buffer_dirty: bool,
     hybrid_enabled: bool,
     boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,
     fast_boolean_pipeline: Option<(u32, wgpu::RenderPipeline)>,

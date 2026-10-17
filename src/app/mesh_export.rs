@@ -118,6 +118,10 @@ impl App {
         }
         let roots = crate::renderer::poisson_mesh::geometry::export_roots(&source, &selection);
         if roots.is_empty() { return Err("Select an object or add objects to the scene".into()); }
+        let components = roots.iter().copied().collect();
+        if source.iter().any(|o| o.imported_splats.is_some() && crate::renderer::poisson_mesh::geometry::belongs_to_component(&source, o.uuid, &components)) {
+            return Err("Gaussian assets cannot be exported as solid GLB meshes; save the project to retain them".into());
+        }
         if !path.is_absolute() || path.file_name().is_none() { return Err("path must be an absolute file path".into()); }
         if !path.parent().is_some_and(|parent| parent.is_dir()) { return Err("output directory does not exist".into()); }
         if path.is_dir() { return Err("output path is a directory".into()); }
