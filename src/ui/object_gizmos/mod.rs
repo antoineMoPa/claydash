@@ -18,6 +18,44 @@ pub(super) use resize::gizmo_label_rect;
 pub(super) use resize::resize_handles;
 use resize::{longest_projected_segment, resize_handles_with_matrix_including_hidden, vector_axis};
 
+fn selected_face_stroke(ui: &egui::Ui) -> Stroke {
+    Stroke::new(1.0 / ui.ctx().pixels_per_point(), Color32::WHITE)
+}
+
+pub(super) fn draw_face_cut_selection_overlay(ui: &egui::Ui, tree: &DataTree, camera: &Camera) {
+    draw_selected_polygon_face_overlay(ui, tree, camera);
+    draw_selected_cylinder_cap_overlay(ui, tree, camera);
+    let Some(face) = crate::model::selected_box_face(tree) else {
+        return;
+    };
+    let scene = objects(tree);
+    let Some(object) = scene.iter().find(|object| object.uuid == face.object) else {
+        return;
+    };
+    let matrix = crate::model::object_world_matrix(&scene, face.object);
+    let Some(handle) = resize_handles_with_matrix_including_hidden(object, matrix, camera)
+        .into_iter()
+        .find(|handle| {
+            matches!(handle.id, ResizeHandleId::BoxFace { axis, positive }
+                if vector_axis(axis) == face.axis && positive == face.positive)
+        })
+    else {
+        return;
+    };
+    let screen: Vec<_> = handle
+        .full_patch
+        .iter()
+        .filter_map(|point| camera.project(*point, ui.ctx().pixels_per_point()))
+        .collect();
+    if screen.len() == 4 {
+        ui.painter().add(egui::Shape::convex_polygon(
+            screen,
+            Color32::WHITE.gamma_multiply(0.14),
+            selected_face_stroke(ui),
+        ));
+    }
+}
+
 impl UiState {
     #[cfg(test)]
     pub(super) fn draw_object_gizmos(
@@ -225,17 +263,17 @@ impl UiState {
                 ui.painter().add(egui::Shape::convex_polygon(
                     full_patch,
                     Color32::WHITE.gamma_multiply(0.14),
-                    Stroke::new(3.0, Color32::WHITE),
+                    selected_face_stroke(ui),
                 ));
             }
             if let Some([start, end]) = edge_segment {
                 ui.painter().line_segment(
                     [start, end],
                     Stroke::new(
-                        if response.hovered() || response.dragged() {
+                        if face_selected {
+                            1.0 / ui.ctx().pixels_per_point()
+                        } else if response.hovered() || response.dragged() {
                             4.0
-                        } else if face_selected {
-                            3.5
                         } else {
                             2.5
                         },
@@ -250,7 +288,7 @@ impl UiState {
                 ui.painter().add(egui::Shape::convex_polygon(
                     patch,
                     handle.color.gamma_multiply(0.18),
-                    stroke,
+                    if face_selected { Stroke::NONE } else { stroke },
                 ));
             } else if let Some(origin) =
                 camera.project(handle.guide_origin, ui.ctx().pixels_per_point())

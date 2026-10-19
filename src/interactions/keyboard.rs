@@ -42,6 +42,11 @@ impl InteractionState {
         .any(|key| self.keys.contains(key))
     }
 
+    pub fn control_down(&self) -> bool {
+        self.keys.contains(&KeyCode::ControlLeft)
+            || self.keys.contains(&KeyCode::ControlRight)
+    }
+
     pub fn camera_navigation_active(&self) -> bool {
         self.right_down || self.shift_pan.is_some() || self.view_rotation_active()
             || self.keys.contains(&KeyCode::ControlLeft)

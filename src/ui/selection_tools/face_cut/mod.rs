@@ -169,6 +169,7 @@ impl UiState {
             self.selection_tools.tool = SelectionTool::Select;
             return;
         }
+        crate::ui::object_gizmos::draw_face_cut_selection_overlay(ui, tree, camera);
 
         let mut request_regions = enter && draft.vertices.len() >= 2;
         let mut closed_by_click = false;
@@ -370,12 +371,12 @@ impl UiState {
             }
         }
         if matches!(draft.phase, FaceCutPhase::Outline) {
-            if let (Some(last), Some(local)) = (points.last(), hovered_local) {
-                if let Some(point) = point_world(&scene, draft.face, local)
+            let hovered_screen = hovered_local.and_then(|local| {
+                point_world(&scene, draft.face, local)
                     .and_then(|world| camera.project(world, scale))
-                {
-                    ui.painter().line_segment([*last, point], stroke);
-                }
+            });
+            if let (Some(last), Some(point)) = (points.last(), hovered_screen) {
+                ui.painter().line_segment([*last, point], stroke);
             }
             let guide_color = Color32::from_rgb(94, 203, 255);
             for guide in &guides {
@@ -452,6 +453,10 @@ impl UiState {
                     if index == 0 { 5.0 } else { 3.5 },
                     stroke.color,
                 );
+            }
+            if let Some(point) = hovered_screen {
+                ui.painter()
+                    .circle_filled(point, 3.5, stroke.color.gamma_multiply(0.75));
             }
         }
     }

@@ -345,7 +345,8 @@ impl ApplicationHandler<AppEvent> for App {
             .is_some_and(|state| state.on_window_event(&window, &event).consumed);
         #[cfg(target_arch = "wasm32")]
         let egui_consumed = {
-            self.egui_state.on_window_event(&window, &event);
+            self.egui_state
+                .on_window_event(&window, &event, self.ui.face_cut_mode());
             match event {
                 WindowEvent::CursorMoved { .. }
                 | WindowEvent::CursorLeft { .. }
@@ -567,7 +568,9 @@ impl ApplicationHandler<AppEvent> for App {
                 button: MouseButton::Right,
                 state,
                 ..
-            } => {
+            } if !(cfg!(target_arch = "wasm32")
+                && self.ui.face_cut_mode()
+                && self.interactions.control_down()) => {
                 let over_ui = self.ui.selection_gesture_active()
                     || self.pointer_over_ui(self.interactions.mouse_position, egui_consumed);
                 self.interactions.set_right_button(

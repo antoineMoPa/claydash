@@ -9,6 +9,7 @@ pub struct WebInput {
     input: RawInput,
     modifiers: Modifiers,
     pointer: Pos2,
+    control_cut_click: bool,
 }
 
 impl Default for WebInput {
@@ -17,6 +18,7 @@ impl Default for WebInput {
             input: RawInput::default(),
             modifiers: Modifiers::default(),
             pointer: Pos2::ZERO,
+            control_cut_click: false,
         }
     }
 }
@@ -41,7 +43,7 @@ impl WebInput {
         self.input.take()
     }
 
-    pub fn on_window_event(&mut self, window: &Window, event: &WindowEvent) {
+    pub fn on_window_event(&mut self, window: &Window, event: &WindowEvent, face_cut_mode: bool) {
         let scale = window.scale_factor() as f32;
         match event {
             WindowEvent::CursorMoved { position, .. } => {
@@ -50,7 +52,13 @@ impl WebInput {
             }
             WindowEvent::CursorLeft { .. } => self.input.events.push(Event::PointerGone),
             WindowEvent::MouseInput { state, button, .. } => {
-                if let Some(button) = pointer_button(*button) {
+                let cut_click = *button == MouseButton::Right
+                    && ((*state == ElementState::Pressed && self.modifiers.ctrl && face_cut_mode)
+                        || (*state == ElementState::Released && self.control_cut_click));
+                if *button == MouseButton::Right {
+                    self.control_cut_click = *state == ElementState::Pressed && cut_click;
+                }
+                if let Some(button) = pointer_button(*button, cut_click) {
                     self.input.events.push(Event::PointerButton {
                         pos: self.pointer,
                         button,
@@ -111,9 +119,12 @@ impl WebInput {
     }
 }
 
-fn pointer_button(button: MouseButton) -> Option<PointerButton> {
+fn pointer_button(button: MouseButton, control_cut_click: bool) -> Option<PointerButton> {
     match button {
         MouseButton::Left => Some(PointerButton::Primary),
+        // macOS browsers can report Control-click as a secondary press. In the
+        // cut tool, Control is the guide-snap modifier, so keep point placement.
+        MouseButton::Right if control_cut_click => Some(PointerButton::Primary),
         MouseButton::Right => Some(PointerButton::Secondary),
         MouseButton::Middle => Some(PointerButton::Middle),
         MouseButton::Back => Some(PointerButton::Extra1),

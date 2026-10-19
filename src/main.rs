@@ -5,6 +5,7 @@ mod cli;
 use claydash_engine::camera;
 mod commands;
 mod document;
+#[cfg(not(target_arch = "wasm32"))]
 mod duck;
 mod examples;
 mod guides;

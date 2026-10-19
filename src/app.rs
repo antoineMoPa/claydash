@@ -44,12 +44,14 @@ use crate::{
     camera::Camera,
     commands::{self, Commands},
     document::{ColorTheme, DocumentState, FileMenuAction},
-    duck,
     interactions::InteractionState,
     model::{objects_ref, ClaydashValue, DataTree, EditorState},
     renderer::Renderer,
     ui::UiState,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::duck;
 
 #[cfg(all(not(target_arch = "wasm32"), unix))]
 #[derive(Debug)]

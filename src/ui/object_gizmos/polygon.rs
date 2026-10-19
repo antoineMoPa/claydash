@@ -383,7 +383,7 @@ pub(super) fn draw_selected_polygon_face_overlay(ui: &egui::Ui, tree: &DataTree,
     }
     ui.painter().add(egui::Shape::closed_line(
         screen,
-        Stroke::new(3.0, Color32::WHITE),
+        selected_face_stroke(ui),
     ));
 }
 
@@ -419,6 +419,6 @@ pub(super) fn draw_selected_cylinder_cap_overlay(ui: &egui::Ui, tree: &DataTree,
     ui.painter().add(egui::Shape::convex_polygon(
         screen,
         Color32::from_rgb(255, 190, 72).gamma_multiply(0.22),
-        Stroke::new(3.0, Color32::WHITE),
+        selected_face_stroke(ui),
     ));
 }

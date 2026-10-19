@@ -52,6 +52,73 @@
     <p id="loading-message" class="loading-message" role="status" aria-label="Loading">
       <img class="loading-spinner" src="./target/loader-circle.svg" alt="" />
     </p>
+    <script>
+      // Firefox on macOS can omit pointerdown for Control + primary mouse
+      // clicks. Winit listens for pointer events, so restore that press from
+      // mousedown when the browser did not send it. Context menus can also
+      // swallow pointerup; release the press before the next cut point.
+      let nativeControlPress = null;
+      let activeControlPress = null;
+      const canvasTarget = event => event.target instanceof HTMLCanvasElement;
+      const sendPointer = (target, type, mouse, pointerId) => {
+        target.dispatchEvent(new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId,
+          pointerType: 'mouse',
+          isPrimary: true,
+          button: 0,
+          buttons: type === 'pointerdown' ? 1 : 0,
+          clientX: mouse.clientX,
+          clientY: mouse.clientY,
+          ctrlKey: mouse.ctrlKey,
+          shiftKey: mouse.shiftKey,
+          altKey: mouse.altKey,
+          metaKey: mouse.metaKey,
+        }));
+      };
+      document.addEventListener('pointerdown', event => {
+        if (event.isTrusted && canvasTarget(event) && event.ctrlKey
+            && (event.buttons & 1) !== 0 && (event.button === 0 || event.button === 2)) {
+          nativeControlPress = { target: event.target, pointerId: event.pointerId };
+          activeControlPress = nativeControlPress;
+        }
+      }, true);
+      document.addEventListener('mousedown', event => {
+        // Firefox reports a macOS Control + primary press as button 2 while
+        // buttons still has the primary bit (1). A physical secondary press
+        // has buttons 2, so it must not place a cut point.
+        if (!canvasTarget(event) || !event.ctrlKey || (event.buttons & 1) === 0
+            || (event.button !== 0 && event.button !== 2)) return;
+        const press = nativeControlPress?.target === event.target
+          ? nativeControlPress
+          : { target: event.target, pointerId: 1 };
+        if (press !== nativeControlPress) {
+          sendPointer(press.target, 'pointerdown', event, press.pointerId);
+        }
+        activeControlPress = press;
+        nativeControlPress = null;
+      }, true);
+      document.addEventListener('pointerup', event => {
+        if (event.isTrusted && activeControlPress?.pointerId === event.pointerId) {
+          activeControlPress = null;
+        }
+        nativeControlPress = null;
+      }, true);
+      const releaseControlPress = event => {
+        if (!activeControlPress) return;
+        sendPointer(activeControlPress.target, 'pointerup', event, activeControlPress.pointerId);
+        activeControlPress = null;
+      };
+      document.addEventListener('mouseup', releaseControlPress, true);
+      document.addEventListener('contextmenu', event => {
+        nativeControlPress = null;
+        if (activeControlPress) {
+          event.preventDefault();
+          releaseControlPress(event);
+        }
+      }, true);
+    </script>
     <script type="module">
       import init from './target/app.js'
       init().catch(error => {

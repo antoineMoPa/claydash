@@ -10,6 +10,10 @@ impl UiState {
         self.selection_tools.active()
     }
 
+    pub fn face_cut_mode(&self) -> bool {
+        self.selection_tools.face_cut_mode()
+    }
+
     pub fn box_selection_enabled(&self, tree: &DataTree) -> bool {
         self.selection_tools.box_mode()
             && scene_actions::pending_boolean(tree).is_none()
