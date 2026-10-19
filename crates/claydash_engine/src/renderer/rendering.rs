@@ -265,7 +265,7 @@ impl Renderer {
                 splat_pipeline: &self.splat_pipeline,
                 splat_bind_group: &self.splat_camera_bind_group,
                 splat_buffer: &self.splat_buffer,
-                splat_count: if self.hybrid_enabled { self.splat_instances.len() as u32 } else { 0 },
+                splat_count: if self.hybrid_enabled { self.splat_draw_count } else { 0 },
                 mesh_pipeline: &self.mesh_pipeline,
                 mesh_bind_group: &self.bind_group,
                 mesh_buffer: &self.mesh_buffer,

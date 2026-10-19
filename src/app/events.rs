@@ -220,7 +220,10 @@ impl ApplicationHandler<AppEvent> for App {
         let attributes = attributes.with_append(true);
         let window = Arc::new(event_loop.create_window(attributes).expect("create window"));
         #[cfg(target_arch = "wasm32")]
-        sync_web_canvas(&window);
+        {
+            sync_web_canvas(&window);
+            self.install_web_file_drop(&window);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.egui_state = Some(egui_winit::State::new(
@@ -360,6 +363,11 @@ impl ApplicationHandler<AppEvent> for App {
         };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::DroppedFile(path) => {
+                self.handle_dropped_path(&path);
+                window.request_redraw();
+            }
             WindowEvent::Focused(focused) => {
                 self.window_focused = focused;
                 if focused {
@@ -540,6 +548,17 @@ impl ApplicationHandler<AppEvent> for App {
                 self.interactions.cursor_moved(position, over_ui);
             }
             WindowEvent::MouseWheel { delta, .. }
+                if self.ui.circle_selection_enabled(&self.tree)
+                    && self.interactions.control_down()
+                    && !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
+            {
+                let steps = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(delta) => delta.y as f32 / 53.0,
+                };
+                self.ui.adjust_circle_radius(steps);
+            }
+            WindowEvent::MouseWheel { delta, .. }
                 if !self.ui.selection_gesture_active()
                     && !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
             {
@@ -595,7 +614,8 @@ impl ApplicationHandler<AppEvent> for App {
             } if !self.ui.selection_gesture_active()
                 && !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
             {
-                if self.ui.box_selection_enabled(&self.tree) {
+                if self.ui.box_selection_enabled(&self.tree)
+                    || self.ui.circle_selection_enabled(&self.tree) {
                     return;
                 }
                 let ghost = self.ui.ghost_at(
@@ -630,6 +650,10 @@ impl ApplicationHandler<AppEvent> for App {
                                 self.egui.pixels_per_point(),
                                 self.egui.input(|input| input.modifiers.shift),
                             );
+                        let entered_circle_selection = key == winit::keyboard::KeyCode::KeyC
+                            && !wants_keyboard
+                            && !self.interactions.command_modifier_down()
+                            && self.ui.enter_circle_selection_mode(&self.tree);
                         let entered_face_cut = key == winit::keyboard::KeyCode::KeyK
                             && !wants_keyboard
                             && !self.interactions.command_modifier_down()
@@ -640,7 +664,8 @@ impl ApplicationHandler<AppEvent> for App {
                             && self
                                 .ui
                                 .delete_active_polygon_point(&self.egui, &mut self.tree);
-                        if !entered_box_selection && !entered_face_cut && !timeline_shortcut && !deleted_polygon_point {
+                        if !entered_box_selection && !entered_circle_selection
+                            && !entered_face_cut && !timeline_shortcut && !deleted_polygon_point {
                             self.interactions.key_pressed(
                                 key,
                                 wants_keyboard,

@@ -264,6 +264,16 @@ pub fn deserialize_scene(bytes: &[u8]) -> Result<ObservableKVTree<ClaydashValue>
         let ids: std::collections::HashSet<_> = objects.iter().map(|object| object.uuid).collect();
         let mut repaired = false;
         for object in &mut objects {
+            if let Some(mesh) = &object.imported_mesh {
+                if mesh.positions.len() > 10_000_000 || mesh.triangles.len() > 10_000_000
+                    || mesh.owners.len() != mesh.triangles.len()
+                    || mesh.normals.len() != mesh.triangles.len()
+                    || mesh.positions.iter().any(|point| !point.is_finite())
+                    || mesh.triangles.iter().flatten().any(|index| *index as usize >= mesh.positions.len())
+                    || mesh.normals.iter().flatten().any(|normal| !normal.is_finite()) {
+                    return Err("Project contains invalid imported mesh data".into());
+                }
+            }
             if object
                 .boolean_parent
                 .is_some_and(|parent| !ids.contains(&parent))

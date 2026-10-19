@@ -68,6 +68,7 @@ use crate::document;
 #[cfg(target_arch = "wasm32")]
 enum WebDocumentMessage {
     ImportedSplats { request: u64, name: String, bytes: Vec<u8> },
+    DroppedFile { name: String, bytes: Vec<u8> },
     Opened {
         request: u64,
         name: std::path::PathBuf,
@@ -278,6 +279,218 @@ impl App {
         crate::model::set_objects(&mut self.tree, objects);
         crate::model::set_selected_exact(&mut self.tree, vec![id]);
         Ok(id)
+    }
+
+    fn import_image_plane(&mut self, name: &str, bytes: Vec<u8>) -> Result<uuid::Uuid, String> {
+        if bytes.len() > 16 * 1024 * 1024 {
+            return Err("Image exceeds the 16 MB limit".into());
+        }
+        image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
+        let mut object = crate::model::SdfObject::create_image_plane();
+        object.name = std::path::Path::new(name).file_stem()
+            .unwrap_or_default().to_string_lossy().into_owned();
+        let stencil = crate::model::ImageStencil::new(name.to_owned(), bytes, true);
+        if let crate::model::SdfParams::BoxParams(params) = &mut object.params {
+            params.box_q.x = stencil.size.x * 0.5;
+            params.box_q.y = stencil.size.y * 0.5;
+        }
+        object.image_stencil = Some(stencil);
+        let id = object.uuid;
+        let mut objects = crate::model::objects(&self.tree);
+        objects.push(object);
+        self.tree.make_undo_redo_snapshot();
+        crate::model::set_objects(&mut self.tree, objects);
+        crate::model::set_selected_exact(&mut self.tree, vec![id]);
+        Ok(id)
+    }
+
+    fn import_glb(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<uuid::Uuid>, String> {
+        let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| error.to_string())?;
+        let blob = gltf.blob.as_deref().ok_or("GLB has no embedded geometry buffer")?;
+        let scene = gltf.default_scene().or_else(|| gltf.scenes().next())
+            .ok_or("GLB has no scene")?;
+        let mut imported = Vec::new();
+        let mut pending = scene.nodes().map(|node| (node, glam::Mat4::IDENTITY)).collect::<Vec<_>>();
+        while let Some((node, parent)) = pending.pop() {
+            let transform = parent * glam::Mat4::from_cols_array_2d(&node.transform().matrix());
+            pending.extend(node.children().map(|child| (child, transform)));
+            let Some(mesh) = node.mesh() else { continue };
+            for (primitive_index, primitive) in mesh.primitives().enumerate() {
+                if primitive.mode() != gltf::mesh::Mode::Triangles {
+                    continue;
+                }
+                let reader = primitive.reader(|buffer| (buffer.index() == 0).then_some(blob));
+                let mut positions = reader.read_positions().ok_or("GLB mesh has no positions")?
+                    .map(|point| transform.transform_point3(glam::Vec3::from_array(point)))
+                    .collect::<Vec<_>>();
+                let indices = reader.read_indices().map(|indices| indices.into_u32().collect::<Vec<_>>())
+                    .unwrap_or_else(|| (0..positions.len() as u32).collect());
+                if positions.len() > 10_000_000 || indices.len() / 3 > 10_000_000
+                    || indices.len() % 3 != 0 || indices.iter().any(|index| *index as usize >= positions.len())
+                    || positions.iter().any(|position| !position.is_finite()) {
+                    return Err("GLB has invalid triangle geometry".into());
+                }
+                if indices.is_empty() { continue; }
+                let (minimum, maximum) = positions.iter().fold(
+                    (glam::Vec3::splat(f32::INFINITY), glam::Vec3::splat(f32::NEG_INFINITY)),
+                    |(minimum, maximum), point| (minimum.min(*point), maximum.max(*point)),
+                );
+                let center = (minimum + maximum) * 0.5;
+                for position in &mut positions { *position -= center; }
+                let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+                object.transform.translation = center;
+                object.name = mesh.name().or_else(|| node.name()).map(str::to_owned)
+                    .unwrap_or_else(|| format!("{name} mesh {}", primitive_index + 1));
+                object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+                let reflected = transform.determinant() < 0.0;
+                let triangles = indices.chunks_exact(3).map(|face| {
+                    if reflected { [face[0], face[2], face[1]] }
+                    else { [face[0], face[1], face[2]] }
+                })
+                    .collect::<Vec<_>>();
+                let owners = vec![object.uuid; triangles.len()];
+                object.imported_mesh = Some(Arc::new(
+                    crate::renderer::poisson_mesh::geometry::Mesh::from_parts(positions, triangles, owners)
+                ));
+                let color = primitive.material().pbr_metallic_roughness().base_color_factor();
+                object.color = glam::Vec4::from_array(color);
+                imported.push(object);
+            }
+        }
+        if imported.is_empty() { return Err("GLB contains no triangle meshes".into()); }
+        let ids = imported.iter().map(|object| object.uuid).collect::<Vec<_>>();
+        let mut objects = crate::model::objects(&self.tree);
+        objects.extend(imported);
+        self.tree.make_undo_redo_snapshot();
+        crate::model::set_objects(&mut self.tree, objects);
+        crate::model::set_selected_exact(&mut self.tree, ids.clone());
+        Ok(ids)
+    }
+
+    fn import_project_contents(&mut self, bytes: &[u8]) -> Result<Vec<uuid::Uuid>, String> {
+        let scene = crate::document::deserialize_scene(bytes)?;
+        let mut source = DataTree::default();
+        source.set_tree("scene", scene);
+        let mut incoming = crate::model::objects(&source);
+        let mut cameras = crate::model::scene_cameras(&source);
+        let mut materials = crate::model::material_assets(&source);
+        if incoming.is_empty() && cameras.is_empty() {
+            return Err("Project contains no objects or cameras".into());
+        }
+        let ids = incoming.iter().map(|object| object.uuid)
+            .chain(cameras.iter().map(|camera| camera.uuid))
+            .chain(materials.iter().map(|material| material.uuid))
+            .map(|id| (id, uuid::Uuid::new_v4()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let selected = incoming.iter().map(|object| ids[&object.uuid])
+            .chain(cameras.iter().map(|camera| ids[&camera.uuid])).collect::<Vec<_>>();
+        for object in &mut incoming {
+            let old_id = object.uuid;
+            object.uuid = ids[&old_id];
+            object.boolean_parent = object.boolean_parent.and_then(|id| ids.get(&id).copied());
+            object.material_id = object.material_id.and_then(|id| ids.get(&id).copied());
+            if let Some(inlay) = &mut object.surface_inlay {
+                if let Some(id) = ids.get(&inlay.host) { inlay.host = *id; }
+                else { object.surface_inlay = None; }
+            }
+            if let Some(extrusion) = &mut object.path_extrusion {
+                extrusion.profile_curve = extrusion.profile_curve.and_then(|id| ids.get(&id).copied());
+            }
+            match &mut object.params {
+                crate::model::SdfParams::TextParams(params) => {
+                    params.path = params.path.and_then(|id| ids.get(&id).copied());
+                }
+                crate::model::SdfParams::SheetPanelParams(params) => {
+                    if let Some(seam) = &mut params.seam {
+                        if let Some(id) = ids.get(&seam.source) { seam.source = *id; }
+                        else { params.seam = None; }
+                    }
+                }
+                _ => {}
+            }
+            if let Some(mesh) = &mut object.imported_mesh {
+                let mesh = Arc::make_mut(mesh);
+                for owner in &mut mesh.owners {
+                    if let Some(id) = ids.get(owner) { *owner = *id; }
+                }
+            }
+            object.saved_mesh = None;
+            object.saved_group_capture = None;
+            object.saved_neural_field = None;
+        }
+        for camera in &mut cameras { camera.uuid = ids[&camera.uuid]; }
+        for material in &mut materials { material.uuid = ids[&material.uuid]; }
+        let mut objects = crate::model::objects(&self.tree);
+        objects.extend(incoming);
+        let mut destination_cameras = crate::model::scene_cameras(&self.tree);
+        destination_cameras.extend(cameras);
+        let mut destination_materials = crate::model::material_assets(&self.tree);
+        destination_materials.extend(materials);
+        self.tree.make_undo_redo_snapshot();
+        crate::model::set_material_assets(&mut self.tree, destination_materials);
+        crate::model::set_objects(&mut self.tree, objects);
+        crate::model::set_scene_cameras(&mut self.tree, destination_cameras);
+        crate::model::set_selected_exact(&mut self.tree, selected.clone());
+        Ok(selected)
+    }
+
+    fn handle_dropped_bytes(&mut self, name: &str, bytes: Vec<u8>) {
+        let extension = std::path::Path::new(name).extension()
+            .and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase();
+        let result = match extension.as_str() {
+            "ply" => self.import_gaussian_ply(
+                std::path::Path::new(name).file_stem().and_then(|stem| stem.to_str()).unwrap_or(name),
+                &bytes,
+            ).map(|_| ()),
+            "png" | "jpg" | "jpeg" | "webp" => self.import_image_plane(name, bytes).map(|_| ()),
+            "claydash" => self.import_project_contents(&bytes).map(|_| ()),
+            "glb" => self.import_glb(name, &bytes).map(|_| ()),
+            _ => return,
+        };
+        if let Err(error) = result {
+            self.document.set_error(&format!("drop {name}"), error);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn install_web_file_drop(&self, _window: &Window) {
+        use wasm_bindgen::JsCast;
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else { return };
+        let dragover = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::DragEvent)>::new(
+            |event: web_sys::DragEvent| event.prevent_default(),
+        );
+        document.add_event_listener_with_callback("dragover", dragover.as_ref().unchecked_ref()).ok();
+        dragover.forget();
+        let tx = self.document_tx.clone();
+        let ctx = self.egui.clone();
+        let drop = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::DragEvent)>::new(move |event: web_sys::DragEvent| {
+            event.prevent_default();
+            let Some(files) = event.data_transfer().and_then(|transfer| transfer.files()) else { return };
+            for index in 0..files.length() {
+                let Some(file) = files.get(index) else { continue };
+                let tx = tx.clone();
+                let ctx = ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let name = file.name();
+                    let promise = file.array_buffer();
+                    let Ok(buffer) = wasm_bindgen_futures::JsFuture::from(promise).await else { return };
+                    let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+                    let _ = tx.send(WebDocumentMessage::DroppedFile { name, bytes });
+                    ctx.request_repaint();
+                });
+            }
+        });
+        document.add_event_listener_with_callback("drop", drop.as_ref().unchecked_ref()).ok();
+        drop.forget();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_dropped_path(&mut self, path: &std::path::Path) {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return };
+        match std::fs::read(path) {
+            Ok(bytes) => self.handle_dropped_bytes(name, bytes),
+            Err(error) => self.document.set_error("read dropped file", error.to_string()),
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -640,6 +853,9 @@ impl App {
     fn process_web_document_messages(&mut self) {
         while let Ok(message) = self.document_rx.try_recv() {
             match message {
+                WebDocumentMessage::DroppedFile { name, bytes } => {
+                    self.handle_dropped_bytes(&name, bytes);
+                }
                 WebDocumentMessage::ImportedSplats { request, name, bytes } => {
                     if request == self.document_request {
                         if let Err(error) = self.import_gaussian_ply(&name, &bytes) {
@@ -706,6 +922,115 @@ impl App {
 #[cfg(test)]
 mod file_action_tests {
     use super::*;
+
+    #[test]
+    fn initial_box_uses_optimized_mesh() {
+        let app = App::new();
+        let objects = objects_ref(&app.tree);
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].render_representation,
+            crate::model::GroupRenderRepresentation::DirectMesh);
+    }
+
+    fn triangle_glb() -> Vec<u8> {
+        let mut binary = Vec::new();
+        for value in [0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+            binary.extend_from_slice(&value.to_le_bytes());
+        }
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0]}],
+            "nodes": [{"mesh": 0, "translation": [2, 0, 0]}],
+            "meshes": [{"name": "Triangle", "primitives": [{"attributes": {"POSITION": 0}}]}],
+            "buffers": [{"byteLength": binary.len()}],
+            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": binary.len()}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0]}]
+        }).to_string();
+        let mut json = json.into_bytes();
+        json.resize((json.len() + 3) & !3, b' ');
+        let total = 12 + 8 + json.len() + 8 + binary.len();
+        let mut bytes = Vec::with_capacity(total);
+        bytes.extend_from_slice(b"glTF");
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&(total as u32).to_le_bytes());
+        bytes.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"JSON");
+        bytes.extend_from_slice(&json);
+        bytes.extend_from_slice(&(binary.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"BIN\0");
+        bytes.extend_from_slice(&binary);
+        bytes
+    }
+
+    #[test]
+    fn dropped_glb_creates_persistent_transformable_mesh() {
+        let mut app = App::new();
+        let id = app.import_glb("triangle.glb", &triangle_glb()).unwrap()[0];
+        let object = crate::model::objects(&app.tree).into_iter().find(|object| object.uuid == id).unwrap();
+        let mesh = object.imported_mesh.as_ref().unwrap();
+        assert_eq!(mesh.triangles, vec![[0, 1, 2]]);
+        assert_eq!(mesh.positions[0], glam::Vec3::new(-0.5, -0.5, 0.0));
+        assert_eq!(object.transform.translation, glam::Vec3::new(2.5, 0.5, 0.0));
+        assert_eq!(crate::model::raymarch(
+            glam::Vec3::new(2.2, 0.2, 1.0), glam::Vec3::NEG_Z, &[object.clone()]), Some(id));
+        let duplicate = object.duplicate();
+        assert_eq!(duplicate.imported_mesh.unwrap().owners, vec![duplicate.uuid]);
+        let bytes = crate::document::serialize_scene(&app.tree).unwrap();
+        let scene = crate::document::deserialize_scene(&bytes).unwrap();
+        let mut restored = DataTree::default();
+        restored.set_tree("scene", scene);
+        assert_eq!(crate::model::objects(&restored).into_iter().find(|object| object.uuid == id)
+            .unwrap().imported_mesh.unwrap().triangles, vec![[0, 1, 2]]);
+    }
+
+    #[test]
+    fn dropped_image_uses_pixel_aspect_ratio_for_plane() {
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgba8(4, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut app = App::new();
+        let id = app.import_image_plane("wide.png", png).unwrap();
+        let object = crate::model::objects(&app.tree).into_iter().find(|object| object.uuid == id).unwrap();
+        let stencil = object.image_stencil.unwrap();
+        assert!(stencil.image_plane);
+        assert_eq!(stencil.size, glam::Vec2::new(1.0, 0.5));
+        let crate::model::SdfParams::BoxParams(params) = object.params else { panic!("image plane must be a box") };
+        assert_eq!(params.box_q.x, 0.5);
+        assert_eq!(params.box_q.y, 0.25);
+    }
+
+    #[test]
+    fn dropped_ply_adds_selected_splat_asset() {
+        let names = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
+        let ply = format!("ply\nformat ascii 1.0\nelement vertex 1\n{}end_header\n0 0 0 -2 -3 -4 1 0 0 0 1 0 0 3\n",
+            names.map(|name| format!("property float {name}\n")).join(""));
+        let mut app = App::new();
+        let before = objects_ref(&app.tree).len();
+        app.handle_dropped_bytes("cloud.PLY", ply.into_bytes());
+        let objects = objects_ref(&app.tree);
+        assert_eq!(objects.len(), before + 1);
+        assert_eq!(objects.last().unwrap().imported_splats.as_ref().unwrap().splats.len(), 1);
+        assert_eq!(crate::model::selected_ref(&app.tree), &[objects.last().unwrap().uuid]);
+    }
+
+    #[test]
+    fn dropped_project_merges_objects_without_replacing_current_document() {
+        let mut app = App::new();
+        let old_objects = objects_ref(&app.tree).to_vec();
+        let old_path = app.document.current_path().map(std::path::Path::to_path_buf);
+        let mut scene = DataTree::default();
+        let parent = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        let mut child = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
+        child.boolean_parent = Some(parent.uuid);
+        scene.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(vec![parent, child]));
+        let bytes = crate::document::serialize_scene(&scene).unwrap();
+        app.handle_dropped_bytes("empty.claydash", bytes);
+        let objects = objects_ref(&app.tree);
+        assert_eq!(objects.len(), old_objects.len() + 2);
+        assert_eq!(objects[0].uuid, old_objects[0].uuid);
+        assert_eq!(objects.last().unwrap().boolean_parent, Some(objects[objects.len() - 2].uuid));
+        assert_eq!(app.document.current_path(), old_path.as_deref());
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

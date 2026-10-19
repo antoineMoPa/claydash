@@ -8,6 +8,10 @@ use crate::{
 };
 use claydash_engine::gaussian_ply::GaussianCloud;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionMode { #[default] Replace, Add, Subtract }
+
 pub fn center(tree: &DataTree) -> Option<Vec3> {
     let edit = model::cloud_edit(tree)?;
     let scene = model::objects_ref(tree);
@@ -81,7 +85,7 @@ pub fn select_rect(
     camera: &Camera,
     rect: egui::Rect,
     scale: f32,
-    additive: bool,
+    mode: SelectionMode,
 ) {
     let Some(mut edit) = model::cloud_edit(tree) else {
         return;
@@ -96,7 +100,13 @@ pub fn select_rect(
     };
     let matrix = model::object_world_matrix(scene, edit.object);
     let view_projection = camera.projection() * camera.view();
-    if !additive {
+    if mode == SelectionMode::Subtract {
+        edit.indices.retain(|index| cloud.splats.get(*index).is_none_or(|splat|
+            !gaussian_overlaps_rect(camera, view_projection, matrix, splat, rect, scale)));
+        model::set_cloud_edit(tree, Some(edit));
+        return;
+    }
+    if mode == SelectionMode::Replace {
         edit.indices.clear();
     }
     let mut included = vec![false; cloud.splats.len()];
@@ -113,6 +123,134 @@ pub fn select_rect(
         }
     }
     model::set_cloud_edit(tree, Some(edit));
+}
+
+pub fn select_circle_stroke(
+    tree: &mut DataTree,
+    camera: &Camera,
+    start: egui::Pos2,
+    end: egui::Pos2,
+    radius: f32,
+    scale: f32,
+    mode: SelectionMode,
+) {
+    let Some(mut edit) = model::cloud_edit(tree) else { return };
+    let scene = model::objects_ref(tree);
+    let Some(cloud) = scene.iter().find(|object| object.uuid == edit.object)
+        .and_then(|object| object.imported_splats.as_ref()) else { return };
+    let matrix = model::object_world_matrix(scene, edit.object);
+    let view_projection = camera.projection() * camera.view();
+    if mode == SelectionMode::Subtract {
+        edit.indices.retain(|index| cloud.splats.get(*index).is_none_or(|splat|
+            !gaussian_overlaps_capsule(camera, view_projection, matrix, splat,
+                start, end, radius, scale)));
+        model::set_cloud_edit(tree, Some(edit));
+        return;
+    }
+    let mut included = vec![false; cloud.splats.len()];
+    for index in &edit.indices {
+        if let Some(slot) = included.get_mut(*index) { *slot = true; }
+    }
+    for (index, splat) in cloud.splats.iter().enumerate() {
+        if !included[index] && gaussian_overlaps_capsule(camera, view_projection, matrix,
+            splat, start, end, radius, scale) {
+            edit.indices.push(index);
+        }
+    }
+    model::set_cloud_edit(tree, Some(edit));
+}
+
+fn gaussian_overlaps_capsule(
+    camera: &Camera,
+    view_projection: Mat4,
+    object_world: Mat4,
+    splat: &claydash_engine::gaussian_ply::Gaussian,
+    start: egui::Pos2,
+    end: egui::Pos2,
+    radius: f32,
+    pixels_per_point: f32,
+) -> bool {
+    let center = view_projection * object_world.transform_point3(splat.position).extend(1.0);
+    if center.w <= 0.0 { return false; }
+    let ndc = center.truncate() / center.w;
+    let screen = egui::pos2(
+        (camera.viewport_origin.x + (ndc.x * 0.5 + 0.5) * camera.viewport.x) / pixels_per_point,
+        (camera.viewport_origin.y + (0.5 - ndc.y * 0.5) * camera.viewport.y) / pixels_per_point,
+    );
+    let basis = Mat3::from_quat(splat.rotation);
+    let axes = [basis.x_axis * splat.scale.x, basis.y_axis * splat.scale.y,
+        basis.z_axis * splat.scale.z];
+    let mut xx = 0.0;
+    let mut xy = 0.0;
+    let mut yy = 0.0;
+    for axis in axes {
+        let projected = view_projection * object_world.transform_vector3(axis).extend(0.0);
+        let sigma = Vec2::new(
+            (projected.x - ndc.x * projected.w) * camera.viewport.x / (2.0 * center.w * pixels_per_point),
+            -(projected.y - ndc.y * projected.w) * camera.viewport.y / (2.0 * center.w * pixels_per_point),
+        );
+        xx += sigma.x * sigma.x;
+        xy += sigma.x * sigma.y;
+        yy += sigma.y * sigma.y;
+    }
+    let support = 2.5;
+    let extent_x = support * xx.sqrt();
+    let extent_y = support * yy.sqrt();
+    if screen.x + extent_x < start.x.min(end.x) - radius
+        || screen.x - extent_x > start.x.max(end.x) + radius
+        || screen.y + extent_y < start.y.min(end.y) - radius
+        || screen.y - extent_y > start.y.max(end.y) + radius {
+        return false;
+    }
+    if distance_to_segment(screen, start, end) <= radius { return true; }
+    let determinant = xx * yy - xy * xy;
+    if determinant <= 1e-12 { return false; }
+    let inside = |point: egui::Pos2| {
+        let delta = point - screen;
+        (yy * delta.x * delta.x - 2.0 * xy * delta.x * delta.y
+            + xx * delta.y * delta.y) / determinant <= support * support
+    };
+    if inside(start) || inside(end) { return true; }
+    let a = xx.sqrt();
+    let b = xy / a;
+    let c = (yy - b * b).max(0.0).sqrt();
+    let boundary = |index: usize| {
+        let angle = std::f32::consts::TAU * index as f32 / 32.0;
+        screen + egui::vec2(
+            support * a * angle.cos(),
+            support * (b * angle.cos() + c * angle.sin()),
+        )
+    };
+    let mut previous = boundary(0);
+    for index in 1..=32 {
+        let current = boundary(index);
+        if segment_distance(start, end, previous, current) <= radius { return true; }
+        previous = current;
+    }
+    false
+}
+
+fn distance_to_segment(point: egui::Pos2, start: egui::Pos2, end: egui::Pos2) -> f32 {
+    let segment = end - start;
+    let length_squared = segment.length_sq();
+    if length_squared <= f32::EPSILON { return point.distance(start); }
+    let t = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
+    point.distance(start + segment * t)
+}
+
+fn segment_distance(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2, d: egui::Pos2) -> f32 {
+    let cross = |u: egui::Vec2, v: egui::Vec2| u.x * v.y - u.y * v.x;
+    let ab = b - a;
+    let cd = d - c;
+    let denominator = cross(ab, cd);
+    if denominator.abs() > 1e-8 {
+        let ac = c - a;
+        let t = cross(ac, cd) / denominator;
+        let u = cross(ac, ab) / denominator;
+        if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) { return 0.0; }
+    }
+    distance_to_segment(a, c, d).min(distance_to_segment(b, c, d))
+        .min(distance_to_segment(c, a, b)).min(distance_to_segment(d, a, b))
 }
 
 fn gaussian_overlaps_rect(
@@ -308,14 +446,52 @@ mod tests {
             egui::pos2(point.x + 45., point.y + 5.),
         );
         assert!(!overlap.contains(point));
-        select_rect(&mut tree, &camera, overlap, 1., false);
+        select_rect(&mut tree, &camera, overlap, 1., SelectionMode::Replace);
         assert_eq!(model::cloud_edit(&tree).unwrap().indices, vec![1]);
         let miss = egui::Rect::from_min_max(
             egui::pos2(point.x + 210., point.y - 5.),
             egui::pos2(point.x + 225., point.y + 5.),
         );
-        select_rect(&mut tree, &camera, miss, 1., false);
+        select_rect(&mut tree, &camera, miss, 1., SelectionMode::Replace);
         assert!(model::cloud_edit(&tree).unwrap().indices.is_empty());
+    }
+
+    #[test]
+    fn circle_selection_includes_visible_splat_footprint_and_stroke_path() {
+        let (mut tree, _) = scene();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800., 600.);
+        camera.position = Vec3::new(0., 0., 6.);
+        camera.target = Vec3::ZERO;
+        let point = camera.project(Vec3::X, 1.).unwrap();
+        let edge = egui::pos2(point.x + 40., point.y);
+        select_circle_stroke(&mut tree, &camera, edge, edge, 10., 1., SelectionMode::Replace);
+        assert_eq!(model::cloud_edit(&tree).unwrap().indices, vec![1]);
+        let mut edit = model::cloud_edit(&tree).unwrap();
+        edit.indices.clear();
+        model::set_cloud_edit(&mut tree, Some(edit));
+        select_circle_stroke(&mut tree, &camera,
+            egui::pos2(point.x - 90., point.y), egui::pos2(point.x + 90., point.y), 5., 1., SelectionMode::Replace);
+        assert!(model::cloud_edit(&tree).unwrap().indices.contains(&1));
+    }
+
+    #[test]
+    fn box_and_circle_subtract_only_overlapping_splats() {
+        let (mut tree, _) = scene();
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::new(800., 600.);
+        camera.position = Vec3::new(0., 0., 6.);
+        camera.target = Vec3::ZERO;
+        let mut edit = model::cloud_edit(&tree).unwrap();
+        edit.indices = vec![0, 1, 2];
+        model::set_cloud_edit(&mut tree, Some(edit));
+        let middle = camera.project(Vec3::X, 1.).unwrap();
+        let rect = egui::Rect::from_center_size(middle, egui::vec2(12., 12.));
+        select_rect(&mut tree, &camera, rect, 1., SelectionMode::Subtract);
+        assert_eq!(model::cloud_edit(&tree).unwrap().indices, vec![0, 2]);
+        let right = camera.project(Vec3::X * 2., 1.).unwrap();
+        select_circle_stroke(&mut tree, &camera, right, right, 5., 1., SelectionMode::Subtract);
+        assert_eq!(model::cloud_edit(&tree).unwrap().indices, vec![0]);
     }
 
     #[test]
@@ -335,13 +511,13 @@ mod tests {
             egui::pos2(point.x + 90., point.y + 90.),
             egui::pos2(point.x + 100., point.y + 100.),
         );
-        select_rect(&mut tree, &camera, opposite_corner, 1., false);
+        select_rect(&mut tree, &camera, opposite_corner, 1., SelectionMode::Replace);
         assert!(model::cloud_edit(&tree).unwrap().indices.is_empty());
         let along_major_axis = egui::Rect::from_min_max(
             egui::pos2(point.x + 80., point.y - 90.),
             egui::pos2(point.x + 100., point.y - 70.),
         );
-        select_rect(&mut tree, &camera, along_major_axis, 1., false);
+        select_rect(&mut tree, &camera, along_major_axis, 1., SelectionMode::Replace);
         assert_eq!(model::cloud_edit(&tree).unwrap().indices, vec![1]);
         assert_eq!(model::selected(&tree), vec![id]);
     }

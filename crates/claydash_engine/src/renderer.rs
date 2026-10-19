@@ -294,6 +294,8 @@ pub struct Renderer {
     cloud_edit_selection: Option<(uuid::Uuid, Vec<usize>)>,
     splat_buffer: wgpu::Buffer,
     splat_buffer_capacity: usize,
+    splat_draw_count: u32,
+    splat_transform_preview: bool,
     splat_sort_camera: Option<(Vec3, Vec3)>,
     splat_buffer_dirty: bool,
     hybrid_enabled: bool,

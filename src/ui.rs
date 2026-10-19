@@ -16,6 +16,8 @@ pub(crate) mod scene_actions;
 mod scene_panel;
 mod secondary_panels;
 mod selection_tools;
+#[cfg(unix)]
+pub(crate) use selection_tools::{box_selection, circle_selection, circle_variable_selection, region_selection_ids};
 pub(crate) use selection_tools::polygon_is_valid;
 mod status_bar;
 mod variable_gizmos;

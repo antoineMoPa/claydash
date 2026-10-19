@@ -49,6 +49,8 @@ pub enum Request {
     Apply(ApplyArgs),
     ExecuteCommand { name: String },
     SetView(ViewArgs),
+    SelectBox(selection::SelectBoxArgs),
+    SelectCircle(selection::SelectCircleArgs),
     BuildPoissonMesh { id: uuid::Uuid },
     GetPoissonMeshStatus { id: uuid::Uuid },
     ExportGlb(export::ExportGlbArgs),
@@ -492,6 +494,8 @@ impl App {
                 | Request::EnableBooleanOperations
                 | Request::ExecuteCommand { .. }
                 | Request::SetView(_)
+                | Request::SelectBox(_)
+                | Request::SelectCircle(_)
                 | Request::BuildPoissonMesh { .. }
                 | Request::Undo
                 | Request::Redo
@@ -515,6 +519,8 @@ impl App {
             Request::EnableBooleanOperations => self.agent_enable_boolean_operations(),
             Request::ExecuteCommand { name } => self.agent_execute_command(&name),
             Request::SetView(args) => self.agent_set_view(args),
+            Request::SelectBox(args) => self.agent_select_box(args),
+            Request::SelectCircle(args) => self.agent_select_circle(args),
             Request::BuildPoissonMesh { id } => self.agent_build_poisson_mesh(id),
             Request::GetPoissonMeshStatus { id } => self.agent_poisson_mesh_status(id),
             Request::ExportGlb(args) => self.agent_export_glb(args),
@@ -682,6 +688,7 @@ impl App {
             "document_path": self.document.current_path(),
             "objects": model::objects_ref(&self.tree),
             "selection": model::selected_ref(&self.tree),
+            "cloud_edit_selection": model::cloud_edit(&self.tree),
             "materials": model::material_assets(&self.tree),
             "variables": model::scene_variables(&self.tree),
             "cameras": model::scene_cameras(&self.tree),
@@ -784,6 +791,7 @@ mod capture;
 mod export;
 mod headless;
 mod mcp;
+mod selection;
 #[cfg(test)]
 mod tests;
 mod validation;

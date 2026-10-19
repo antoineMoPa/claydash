@@ -24,6 +24,10 @@ pub(super) fn group_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree) 
     let Some(index) = scene.iter().position(|object| object.uuid == target) else {
         return;
     };
+    if scene[index].imported_mesh.is_some() {
+        ui.weak("Imported mesh");
+        return;
+    }
     let saved_settings = scene[index].neural_sdf;
     let saved_accelerator = scene[index].sphere_accelerator;
     let saved_box_accelerator = scene[index].box_accelerator;
@@ -303,7 +307,7 @@ fn bulk_optimizations_panel(ui: &mut egui::Ui, tree: &mut DataTree, selection: &
 // A selected Boolean ancestor already represents its entire selected subtree.
 fn bulk_optimization_targets(scene: &[SdfObject], selection: &[uuid::Uuid]) -> Vec<usize> {
     scene.iter().enumerate().filter_map(|(index, object)| {
-        if !selection.contains(&object.uuid) { return None; }
+        if !selection.contains(&object.uuid) || object.imported_mesh.is_some() { return None; }
         let mut parent = object.boolean_parent;
         for _ in 0..scene.len() {
             let Some(id) = parent else { break; };

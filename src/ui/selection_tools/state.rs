@@ -10,6 +10,10 @@ impl UiState {
         self.selection_tools.active()
     }
 
+    pub fn transform_gesture_active(&self) -> bool {
+        matches!(self.selection_tools.gesture, Some(Gesture::Transform(_)))
+    }
+
     pub fn face_cut_mode(&self) -> bool {
         self.selection_tools.face_cut_mode()
     }
@@ -21,6 +25,31 @@ impl UiState {
                 tree.get_path("editor.state"),
                 ClaydashValue::None | ClaydashValue::EditorState(EditorState::Start)
             )
+    }
+
+    pub fn circle_selection_enabled(&self, tree: &DataTree) -> bool {
+        self.selection_tools.circle_mode()
+            && scene_actions::pending_boolean(tree).is_none()
+            && matches!(tree.get_path("editor.state"),
+                ClaydashValue::None | ClaydashValue::EditorState(EditorState::Start))
+    }
+
+    pub fn enter_circle_selection_mode(&mut self, tree: &DataTree) -> bool {
+        if self.selection_tools.active()
+            || scene_actions::pending_boolean(tree).is_some()
+            || !matches!(tree.get_path("editor.state"),
+                ClaydashValue::None | ClaydashValue::EditorState(EditorState::Start)) {
+            return false;
+        }
+        self.selection_tools.tool = SelectionTool::Circle;
+        true
+    }
+
+    pub fn adjust_circle_radius(&mut self, wheel_steps: f32) {
+        if self.selection_tools.circle_mode() && wheel_steps.is_finite() {
+            self.selection_tools.circle_radius =
+                (self.selection_tools.circle_radius * 1.12_f32.powf(wheel_steps)).clamp(4.0, 512.0);
+        }
     }
 
     pub fn enter_box_selection_mode(&mut self, tree: &DataTree) -> bool {
@@ -70,7 +99,7 @@ impl UiState {
         self.selection_tools.gesture = Some(Gesture::Box {
             start: point,
             end: point,
-            additive,
+            mode: if additive { SelectionMode::Add } else { SelectionMode::Replace },
         });
         true
     }
@@ -122,7 +151,18 @@ impl UiState {
                                 egui::include_image!(
                                     "../../../assets/icons/lucide/square-dashed.svg"
                                 ),
-                                if crate::model::cloud_edit(tree).is_some() { "Box select points (B) · drag a rectangle · Shift adds" } else { "Box select (B) · drag a rectangle · Shift adds" },
+                                if crate::model::cloud_edit(tree).is_some() { "Box select points (B) · drag a rectangle · Shift adds · Alt subtracts" } else { "Box select (B) · drag a rectangle · Shift adds · Alt subtracts" },
+                            ),
+                            (
+                                SelectionTool::Circle,
+                                egui::include_image!(
+                                    "../../../assets/icons/lucide/circle-dot.svg"
+                                ),
+                                if crate::model::cloud_edit(tree).is_some() {
+                                    "Circle select points (C) · drag to paint · Shift adds · Alt subtracts · Ctrl+scroll changes radius"
+                                } else {
+                                    "Circle select (C) · drag to paint · Shift adds · Alt subtracts · Ctrl+scroll changes radius"
+                                },
                             ),
                         ];
                         if crate::model::selected_modeling_face(tree).is_some()

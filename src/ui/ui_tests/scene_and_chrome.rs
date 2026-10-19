@@ -382,7 +382,7 @@ fn compact_toolbar_buttons_and_bottom_projection_control() {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(bottom_buttons.len(), 5);
+            assert_eq!(bottom_buttons.len(), 6);
             assert!(bottom_buttons
                 .windows(2)
                 .all(|pair| pair[0].right() < pair[1].left()));

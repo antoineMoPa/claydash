@@ -52,11 +52,11 @@ fn guide_face_scene() -> Vec<crate::model::SdfObject> {
 impl App {
     pub fn new() -> Self {
         let mut scene = DataTree::default();
+        let mut box_object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        box_object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
         scene.set_path(
             "sdf_objects",
-            ClaydashValue::VecSDFObject(vec![crate::model::SdfObject::create_kind(
-                crate::model::PrimitiveKind::Box,
-            )]),
+            ClaydashValue::VecSDFObject(vec![box_object]),
         );
         #[allow(unused_mut)]
         let mut tree = data_tree_with_scene(scene);
@@ -455,6 +455,7 @@ fn startup_scene_contains_only_the_default_cube() {
     assert_eq!(objects.len(), 1);
     let mut expected = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
     expected.uuid = objects[0].uuid;
+    expected.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
     assert_eq!(
         serde_json::to_value(&objects[0]).unwrap(),
         serde_json::to_value(expected).unwrap()

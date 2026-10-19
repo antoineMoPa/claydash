@@ -641,7 +641,13 @@ impl App {
         // events. Do not queue expensive refinement ahead of their next edit.
         let interacting = !capture_render && self.interactions.viewport_interaction_active(
             self.egui.input(|input| input.pointer.any_down()), &self.tree);
+        let transform_preview = !capture_render && (self.ui.transform_gesture_active()
+            || matches!(self.tree.get_path("editor.state"),
+                ClaydashValue::EditorState(crate::model::EditorState::Grabbing
+                    | crate::model::EditorState::Rotating
+                    | crate::model::EditorState::Scaling)));
         if let Some(renderer) = &mut self.renderer {
+            renderer.set_splat_transform_preview(transform_preview);
             let cloud_edit = if capture_render { None } else { crate::model::cloud_edit(&self.tree) };
             renderer.set_cloud_edit_selection(cloud_edit.as_ref().map(|edit| (edit.object, edit.indices.as_slice())));
             let scene_versions = scene_render_versions(&self.tree, capture_render);

@@ -476,6 +476,8 @@ impl Renderer {
             splat_buffer_dirty: true,
             splat_buffer,
             splat_buffer_capacity: 1,
+            splat_draw_count: 0,
+            splat_transform_preview: false,
             hybrid_enabled: false,
             boolean_pipeline: None,
             fast_boolean_pipeline: None,

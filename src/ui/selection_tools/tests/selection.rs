@@ -22,6 +22,137 @@ fn box_selection_shortcut_enters_mode_only_while_idle() {
 }
 
 #[test]
+fn circle_selection_shortcut_and_radius_obey_idle_state() {
+    let mut state = UiState::default();
+    let mut tree = DataTree::default();
+    assert!(state.enter_circle_selection_mode(&tree));
+    assert!(state.circle_selection_enabled(&tree));
+    let radius = state.selection_tools.circle_radius;
+    state.adjust_circle_radius(2.0);
+    assert!(state.selection_tools.circle_radius > radius);
+    state.adjust_circle_radius(-100.0);
+    assert_eq!(state.selection_tools.circle_radius, 4.0);
+    state.selection_tools.tool = SelectionTool::Select;
+    tree.set_path("editor.state", ClaydashValue::EditorState(EditorState::Grabbing));
+    assert!(!state.enter_circle_selection_mode(&tree));
+}
+
+#[test]
+fn circle_selection_includes_scene_cameras() {
+    let camera = camera();
+    let mut scene_camera = crate::camera::SceneCamera::from_view("Camera", &camera);
+    scene_camera.transform.translation = Vec3::ZERO;
+    let center = camera.project(Vec3::ZERO, 1.0).unwrap();
+    assert_eq!(circle_selection(&[], &[scene_camera.clone()], &camera,
+        center, center, 10.0, 1.0, vec![]), vec![scene_camera.uuid]);
+}
+
+#[test]
+fn circle_selection_includes_shared_points() {
+    let camera = camera();
+    let mut tree = DataTree::default();
+    let id = uuid::Uuid::new_v4();
+    let mut variables = crate::model::SceneVariables::default();
+    variables.vectors.push(crate::model::VectorVariable {
+        id, name: "Point".into(), value: Vec3::ZERO,
+        space: crate::model::VariableSpace::World,
+    });
+    crate::model::set_scene_variables(&mut tree, variables);
+    let center = camera.project(Vec3::ZERO, 1.0).unwrap();
+    assert_eq!(circle_variable_selection(&tree, &camera, center, center, 10.0, 1.0), Some(id));
+}
+
+#[test]
+fn circle_brush_selects_along_drag_and_escape_exits() {
+    let ctx = egui::Context::default();
+    let camera = camera();
+    let mut state = UiState::default();
+    state.selection_tools.tool = SelectionTool::Circle;
+    let mut tree = DataTree::default();
+    let mut left = SdfObject::create(sdf_consts::TYPE_BOX);
+    left.transform.translation.x = -1.0;
+    let mut right = SdfObject::create(sdf_consts::TYPE_BOX);
+    right.transform.translation.x = 1.0;
+    set_objects(&mut tree, vec![left.clone(), right.clone()]);
+    let start = camera.project(left.transform.translation, 1.0).unwrap();
+    let end = camera.project(right.transform.translation, 1.0).unwrap();
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos, pressed, button: egui::PointerButton::Primary,
+        modifiers: egui::Modifiers::NONE,
+    };
+    draw(&mut state, &ctx, &mut tree, &camera,
+        vec![egui::Event::PointerMoved(start), button(start, true)]);
+    assert_eq!(selected(&tree), vec![left.uuid]);
+    draw(&mut state, &ctx, &mut tree, &camera, vec![egui::Event::PointerMoved(end)]);
+    assert_eq!(selected(&tree), vec![left.uuid, right.uuid]);
+    draw(&mut state, &ctx, &mut tree, &camera, vec![button(end, false)]);
+    assert!(state.selection_tools.circle_mode());
+    draw(&mut state, &ctx, &mut tree, &camera, vec![egui::Event::Key {
+        key: egui::Key::Escape, physical_key: None, pressed: true,
+        repeat: false, modifiers: egui::Modifiers::NONE,
+    }]);
+    assert!(!state.selection_tools.circle_mode());
+    assert_eq!(selected(&tree), vec![left.uuid, right.uuid]);
+}
+
+#[test]
+fn circle_brush_subtracts_only_touched_objects() {
+    let ctx = egui::Context::default();
+    let camera = camera();
+    let mut state = UiState::default();
+    state.selection_tools.tool = SelectionTool::Circle;
+    let mut tree = DataTree::default();
+    let mut left = SdfObject::create(sdf_consts::TYPE_BOX);
+    left.transform.translation.x = -1.0;
+    let mut right = SdfObject::create(sdf_consts::TYPE_BOX);
+    right.transform.translation.x = 1.0;
+    set_objects(&mut tree, vec![left.clone(), right.clone()]);
+    set_selected(&mut tree, vec![left.uuid, right.uuid]);
+    let center = camera.project(left.transform.translation, 1.0).unwrap();
+    state.selection_tools.gesture = Some(Gesture::Circle {
+        last: center, painted: false, radius: 20.0, mode: SelectionMode::Subtract,
+    });
+    draw(&mut state, &ctx, &mut tree, &camera, vec![egui::Event::PointerMoved(center)]);
+    assert_eq!(selected(&tree), vec![right.uuid]);
+}
+
+#[test]
+fn box_selection_subtracts_without_selecting_new_objects() {
+    let ctx = egui::Context::default();
+    let camera = camera();
+    let mut state = UiState::default();
+    state.selection_tools.tool = SelectionTool::Box;
+    let mut tree = DataTree::default();
+    let mut left = SdfObject::create(sdf_consts::TYPE_BOX);
+    left.transform.translation.x = -1.0;
+    let mut right = SdfObject::create(sdf_consts::TYPE_BOX);
+    right.transform.translation.x = 1.0;
+    set_objects(&mut tree, vec![left.clone(), right.clone()]);
+    set_selected(&mut tree, vec![left.uuid]);
+    let center = camera.project(right.transform.translation, 1.0).unwrap();
+    state.selection_tools.gesture = Some(Gesture::Box {
+        start: center - egui::vec2(10.0, 10.0), end: center,
+        mode: SelectionMode::Subtract,
+    });
+    draw(&mut state, &ctx, &mut tree, &camera, vec![
+        egui::Event::PointerMoved(center + egui::vec2(10.0, 10.0)),
+        egui::Event::PointerButton { pos: center + egui::vec2(10.0, 10.0),
+            button: egui::PointerButton::Primary, pressed: false,
+            modifiers: egui::Modifiers::NONE },
+    ]);
+    assert_eq!(selected(&tree), vec![left.uuid]);
+}
+
+#[test]
+fn subtracting_a_group_removes_an_exactly_selected_part() {
+    let parent = SdfObject::create(sdf_consts::TYPE_BOX);
+    let mut child = SdfObject::create(sdf_consts::TYPE_BOX);
+    child.boolean_parent = Some(parent.uuid);
+    assert!(region_selection_ids(&[child.clone(), parent.clone()],
+        SelectionMode::Subtract, vec![child.uuid], vec![parent.uuid]).is_empty());
+}
+
+#[test]
 fn face_cut_shortcut_needs_a_selected_face_and_idle_editor() {
     let mut state = UiState::default();
     let mut tree = DataTree::default();
@@ -51,14 +182,14 @@ fn box_selection_shortcut_starts_at_the_current_pointer() {
     let Some(Gesture::Box {
         start,
         end,
-        additive,
+        mode,
     }) = state.selection_tools.gesture
     else {
         panic!("B should begin the box gesture immediately");
     };
     assert_eq!(start, egui::pos2(210.0, 130.0));
     assert_eq!(end, start);
-    assert!(additive);
+    assert_eq!(mode, SelectionMode::Add);
 }
 
 #[test]
@@ -248,7 +379,7 @@ fn tiny_box_picks_object_like_regular_click_with_shift() {
         state.selection_tools.gesture = Some(Gesture::Box {
             start,
             end: start,
-            additive: shift,
+            mode: if shift { SelectionMode::Add } else { SelectionMode::Replace },
         });
         draw(
             &mut state,

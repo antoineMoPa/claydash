@@ -155,7 +155,6 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
     if let Some(cloud) = &object.imported_splats {
         ui.label(RichText::new("Gaussian splat asset").strong());
         ui.label(format!("{} Gaussians", cloud.splats.len()));
-        ui.weak("Displays base color; view-dependent color data is preserved.");
         if changed { set_objects(tree, scene); }
         apply_keyframe_requests(tree, runtime, keyframes);
         return;

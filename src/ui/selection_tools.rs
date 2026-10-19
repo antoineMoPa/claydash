@@ -1,11 +1,13 @@
 use super::*;
 use crate::model::{ClaydashValue, EditorState};
+use crate::cloud_edit::SelectionMode;
 
 #[derive(Default, PartialEq, Eq)]
 enum SelectionTool {
     #[default]
     Select,
     Box,
+    Circle,
     FaceCut,
 }
 
@@ -412,15 +414,22 @@ enum Gesture {
     Box {
         start: egui::Pos2,
         end: egui::Pos2,
-        additive: bool,
+        mode: SelectionMode,
     },
+    Circle { last: egui::Pos2, painted: bool, radius: f32, mode: SelectionMode },
 }
 
-#[derive(Default)]
 pub(super) struct SelectionTools {
     tool: SelectionTool,
     gesture: Option<Gesture>,
     face_cut: Option<FaceCutDraft>,
+    circle_radius: f32,
+}
+
+impl Default for SelectionTools {
+    fn default() -> Self {
+        Self { tool: SelectionTool::Select, gesture: None, face_cut: None, circle_radius: 40.0 }
+    }
 }
 
 impl SelectionTools {
@@ -431,12 +440,29 @@ impl SelectionTools {
         self.tool == SelectionTool::Box
     }
 
+    pub fn circle_mode(&self) -> bool {
+        self.tool == SelectionTool::Circle
+    }
+
     pub fn face_cut_mode(&self) -> bool {
         self.tool == SelectionTool::FaceCut
     }
 }
 
-fn box_selection(
+pub(crate) fn region_selection_ids(
+    scene: &[SdfObject], mode: SelectionMode, previous: Vec<uuid::Uuid>, hits: Vec<uuid::Uuid>,
+) -> Vec<uuid::Uuid> {
+    let mut result = if mode == SelectionMode::Replace { Vec::new() } else { previous };
+    if mode == SelectionMode::Subtract {
+        result.retain(|id| !hits.contains(id)
+            && !hits.contains(&scene_actions::viewport_group_root(scene, *id)));
+    } else {
+        for id in hits { if !result.contains(&id) { result.push(id); } }
+    }
+    result
+}
+
+pub(crate) fn box_selection(
     scene: &[SdfObject],
     camera: &Camera,
     rect: egui::Rect,
@@ -460,6 +486,56 @@ fn box_selection(
         }
     }
     ids
+}
+
+pub(crate) fn circle_selection(
+    scene: &[SdfObject],
+    scene_cameras: &[crate::camera::SceneCamera],
+    camera: &Camera,
+    start: egui::Pos2,
+    end: egui::Pos2,
+    radius: f32,
+    scale: f32,
+    mut ids: Vec<uuid::Uuid>,
+) -> Vec<uuid::Uuid> {
+    for object in scene {
+        let world = crate::model::object_world_matrix(scene, object.uuid).transform_point3(Vec3::ZERO);
+        if (world - camera.position).dot(camera.target - camera.position) <= 0.0 { continue; }
+        if camera.project(world, scale).is_some_and(|point|
+            distance_to_segment(point, start, end) <= radius)
+        {
+            let id = scene_actions::viewport_group_root(scene, object.uuid);
+            if !ids.contains(&id) { ids.push(id); }
+        }
+    }
+    for scene_camera in scene_cameras {
+        let world = scene_camera.transform.translation;
+        if (world - camera.position).dot(camera.target - camera.position) <= 0.0 { continue; }
+        if camera.project(world, scale).is_some_and(|point|
+            distance_to_segment(point, start, end) <= radius)
+            && !ids.contains(&scene_camera.uuid) {
+            ids.push(scene_camera.uuid);
+        }
+    }
+    ids
+}
+
+pub(crate) fn circle_variable_selection(
+    tree: &DataTree,
+    camera: &Camera,
+    start: egui::Pos2,
+    end: egui::Pos2,
+    radius: f32,
+    scale: f32,
+) -> Option<uuid::Uuid> {
+    crate::model::scene_variables(tree).vectors.into_iter().filter_map(|variable| {
+        let world = crate::model::variable_viewport_frame(tree, &variable)
+            .transform_point3(variable.value);
+        if (world - camera.position).dot(camera.target - camera.position) <= 0.0 { return None; }
+        let screen = camera.project(world, scale)?;
+        let distance = distance_to_segment(screen, start, end);
+        (distance <= radius).then_some((variable.id, distance))
+    }).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(id, _)| id)
 }
 
 mod state;

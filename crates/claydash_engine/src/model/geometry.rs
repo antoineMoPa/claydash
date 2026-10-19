@@ -186,6 +186,8 @@ pub struct SdfObject {
     pub uuid: uuid::Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_splats: Option<std::sync::Arc<crate::gaussian_ply::GaussianCloud>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_mesh: Option<std::sync::Arc<crate::renderer::poisson_mesh::geometry::Mesh>>,
     pub transform: Transform,
     pub group_transform: Transform,
     pub color: Vec4,
@@ -299,6 +301,7 @@ impl SdfObject {
         Self {
             uuid: uuid::Uuid::new_v4(),
             imported_splats: None,
+            imported_mesh: None,
             transform: Transform::default(),
             group_transform: Transform::default(),
             render_representation: GroupRenderRepresentation::default(),
@@ -413,6 +416,13 @@ impl SdfObject {
         let mut copy = self.clone();
         copy.uuid = uuid::Uuid::new_v4();
         copy.saved_mesh = None;
+        if let Some(mesh) = &self.imported_mesh {
+            let mut duplicated = (**mesh).clone();
+            for owner in &mut duplicated.owners {
+                if *owner == self.uuid { *owner = copy.uuid; }
+            }
+            copy.imported_mesh = Some(std::sync::Arc::new(duplicated));
+        }
         copy
     }
 
@@ -469,7 +479,7 @@ impl SdfObject {
         text: Option<&PreparedText>,
     ) -> f32 {
         // Imported radiance has no solid surface for Boolean or mesh queries.
-        if self.imported_splats.is_some() { return f32::INFINITY; }
+        if self.imported_splats.is_some() || self.imported_mesh.is_some() { return f32::INFINITY; }
         if repeat && self.repetition.enabled {
             if let RepetitionMode::Radial { axis, count, pivot } = self.repetition.mode {
                 let mut distance = f32::INFINITY;

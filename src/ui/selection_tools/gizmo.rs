@@ -306,6 +306,7 @@ impl UiState {
             released,
             cancel,
             additive,
+            subtractive,
             navigating,
             ctrl_snap_rotation,
             bypass_guides,
@@ -316,11 +317,14 @@ impl UiState {
                 i.pointer.primary_released(),
                 i.key_pressed(egui::Key::Escape) || !i.focused,
                 i.modifiers.shift,
+                i.modifiers.alt,
                 i.modifiers.ctrl || i.pointer.secondary_down(),
                 i.modifiers.ctrl,
                 i.modifiers.alt,
             )
         });
+        let selection_mode = if subtractive { SelectionMode::Subtract }
+            else if additive { SelectionMode::Add } else { SelectionMode::Replace };
         let snap_guides = crate::model::snapping_enabled(tree, ctrl_snap_rotation, bypass_guides);
         let snap_rotation = match &mut self.selection_tools.gesture {
             Some(Gesture::Transform(session))
@@ -370,6 +374,9 @@ impl UiState {
                 crate::model::set_scene_cameras(tree, cameras);
             }
             self.selection_tools.gesture = None;
+            if self.selection_tools.circle_mode() {
+                self.selection_tools.tool = SelectionTool::Select;
+            }
             return;
         }
         if !matches!(
@@ -394,7 +401,7 @@ impl UiState {
                 commands::transform_targets(tree)
             };
         let cloud_source = crate::cloud_edit::source(tree);
-        if !self.selection_tools.box_mode()
+        if !self.selection_tools.box_mode() && !self.selection_tools.circle_mode()
             && (!transform_targets.is_empty() || cloud_source.is_some())
         {
             let center = crate::cloud_edit::center(tree).unwrap_or_else(|| {
@@ -500,8 +507,34 @@ impl UiState {
                 self.selection_tools.gesture = Some(Gesture::Box {
                     start: p,
                     end: p,
-                    additive,
+                    mode: selection_mode,
                 });
+            }
+        }
+        if self.selection_tools.circle_mode() {
+            if let Some(center) = pointer.filter(|point| ui.clip_rect().contains(*point)) {
+                let color = ui.visuals().selection.bg_fill;
+                ui.painter().circle_filled(center, self.selection_tools.circle_radius,
+                    color.gamma_multiply(0.12));
+                ui.painter().circle_stroke(center, self.selection_tools.circle_radius,
+                    Stroke::new(1.0, color));
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                if pressed && !navigating && !egui::Popup::is_any_open(ui.ctx())
+                    && self.selection_tools.gesture.is_none()
+                    && !self.regions.iter().any(|region| region.contains(center)) {
+                    if let Some(mut edit) = crate::model::cloud_edit(tree) {
+                        if selection_mode == SelectionMode::Replace {
+                            edit.indices.clear();
+                            crate::model::set_cloud_edit(tree, Some(edit));
+                        }
+                    } else if selection_mode == SelectionMode::Replace {
+                        set_selected(tree, vec![]);
+                    }
+                    self.selection_tools.gesture = Some(Gesture::Circle {
+                        last: center, painted: false, radius: self.selection_tools.circle_radius,
+                        mode: selection_mode,
+                    });
+                }
             }
         }
         match &mut self.selection_tools.gesture {
@@ -654,7 +687,7 @@ impl UiState {
             Some(Gesture::Box {
                 start,
                 end,
-                additive,
+                mode,
             }) => {
                 if let Some(p) = pointer {
                     *end = ui.clip_rect().clamp(p);
@@ -674,28 +707,70 @@ impl UiState {
                     // across display scales. Exactly 3 px remains a box gesture.
                     if start.distance(*end) < 3.0 {
                         self.selection_tools.tool = SelectionTool::Select;
-                        crate::interactions::InteractionState::select_at(
-                            camera,
-                            tree,
-                            Vec2::new(end.x, end.y) * scale,
-                            self.ghosts.pick(*end),
-                            *additive,
-                        );
+                        let physical = Vec2::new(end.x, end.y) * scale;
+                        if *mode == SelectionMode::Subtract {
+                            if let Some(mut edit) = crate::model::cloud_edit(tree) {
+                                if let Some(index) = crate::cloud_edit::pick(tree, camera, physical) {
+                                    edit.indices.retain(|selected| *selected != index);
+                                    crate::model::set_cloud_edit(tree, Some(edit));
+                                }
+                            } else {
+                                let (origin, direction) = camera.ray(physical);
+                                let hit = self.ghosts.pick(*end)
+                                    .or_else(|| crate::interactions::raymarch(origin, direction, &scene));
+                                if let Some(hit) = hit {
+                                    let root = scene_actions::viewport_group_root(&scene, hit);
+                                    let mut remaining = selection.clone();
+                                    remaining.retain(|id| *id != hit && *id != root
+                                        && scene_actions::viewport_group_root(&scene, *id) != root);
+                                    if remaining != selection { set_selected(tree, remaining); }
+                                }
+                            }
+                        } else {
+                            crate::interactions::InteractionState::select_at(
+                                camera, tree, physical, self.ghosts.pick(*end),
+                                *mode == SelectionMode::Add);
+                        }
                     } else {
                         if crate::model::cloud_edit(tree).is_some() {
-                            crate::cloud_edit::select_rect(tree, camera, rect, scale, *additive);
+                            crate::cloud_edit::select_rect(tree, camera, rect, scale, *mode);
                         } else {
-                            set_selected(
-                                tree,
-                                box_selection(
-                                    &scene,
-                                    camera,
-                                    rect,
-                                    scale,
-                                    if *additive { selection } else { vec![] },
-                                ),
-                            );
+                            let hits = box_selection(&scene, camera, rect, scale, vec![]);
+                            let next = region_selection_ids(&scene, *mode, selection.clone(), hits);
+                            if next != selection { set_selected(tree, next); }
                         }
+                    }
+                }
+            }
+            Some(Gesture::Circle { last, painted, radius, mode }) => {
+                if let Some(end) = pointer {
+                    let end = ui.clip_rect().clamp(end);
+                    if !*painted || *last != end || *radius != self.selection_tools.circle_radius {
+                        if crate::model::cloud_edit(tree).is_some() {
+                            crate::cloud_edit::select_circle_stroke(tree, camera, *last, end,
+                                self.selection_tools.circle_radius, scale, *mode);
+                        } else {
+                            let previous = crate::model::selected(tree);
+                            let previous_variable = crate::model::selected_variable(tree);
+                            let cameras = crate::model::scene_cameras(tree);
+                            let hits = circle_selection(&scene, &cameras, camera, *last, end,
+                                self.selection_tools.circle_radius, scale, vec![]);
+                            let ids = region_selection_ids(&scene, *mode, previous.clone(), hits);
+                            let variable = circle_variable_selection(tree, camera, *last, end,
+                                self.selection_tools.circle_radius, scale);
+                            if ids != previous { set_selected(tree, ids); }
+                            if *mode == SelectionMode::Subtract {
+                                if let Some(id) = previous_variable {
+                                    crate::model::set_selected_variable(tree,
+                                        (variable != Some(id)).then_some(id));
+                                }
+                            } else if let Some(id) = variable.or(previous_variable) {
+                                crate::model::set_selected_variable(tree, Some(id));
+                            }
+                        }
+                        *last = end;
+                        *painted = true;
+                        *radius = self.selection_tools.circle_radius;
                     }
                 }
             }

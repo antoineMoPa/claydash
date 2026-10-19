@@ -186,7 +186,42 @@ pub(super) struct GpuMeshVertex {
     pub captured_color: [f32; 4],
 }
 
+const TRANSFORM_PREVIEW_SPLATS: usize = 1_500;
+
+fn preview_splats(instances: &[GpuSplat], limit: usize) -> Vec<GpuSplat> {
+    if instances.len() <= limit { return instances.to_vec(); }
+    let selected_count = instances.iter().filter(|splat| splat.normal[3] == 2.0).count();
+    let selected_limit = selected_count.min(limit);
+    let mut preview = Vec::with_capacity(limit);
+    if selected_limit > 0 {
+        for (ordinal, splat) in instances.iter().filter(|splat| splat.normal[3] == 2.0).enumerate() {
+            if ordinal == preview.len() * selected_count / selected_limit {
+                preview.push(*splat);
+            }
+        }
+    }
+    let ordinary_limit = limit - preview.len();
+    if ordinary_limit > 0 {
+        let ordinary_count = instances.len() - selected_count;
+        let mut taken = 0;
+        for (ordinal, splat) in instances.iter().filter(|splat| splat.normal[3] != 2.0).enumerate() {
+            if ordinal == taken * ordinary_count / ordinary_limit {
+                preview.push(*splat);
+                taken += 1;
+            }
+        }
+    }
+    preview
+}
+
 impl Renderer {
+    pub fn set_splat_transform_preview(&mut self, active: bool) {
+        if self.splat_transform_preview == active { return; }
+        self.splat_transform_preview = active;
+        self.splat_buffer_dirty = true;
+        self.viewport.invalidate();
+    }
+
     pub(super) fn upload_splat_camera(&mut self, camera: &Camera, world: World) {
         if !self.hybrid_enabled && self.mesh_vertex_count == 0 {
             return;
@@ -225,7 +260,11 @@ impl Renderer {
             && self.splat_sort_camera == Some((camera.position, forward)) {
             return;
         }
-        self.splat_instances.sort_by(|a, b| {
+        let mut preview = (self.splat_transform_preview
+            && self.splat_instances.len() > TRANSFORM_PREVIEW_SPLATS)
+            .then(|| preview_splats(&self.splat_instances, TRANSFORM_PREVIEW_SPLATS));
+        let splats = preview.as_mut().map_or(&mut self.splat_instances, |preview| preview);
+        splats.sort_by(|a, b| {
             let a_depth = (Vec3::from_array(a.center_radius[..3].try_into().unwrap())
                 - camera.position)
                 .dot(forward);
@@ -234,9 +273,10 @@ impl Renderer {
                 .dot(forward);
             b_depth.total_cmp(&a_depth)
         });
-        let bytes = bytemuck::cast_slice(&self.splat_instances);
-        if self.splat_instances.len() > self.splat_buffer_capacity {
-            self.splat_buffer_capacity = self.splat_instances.len();
+        let bytes = bytemuck::cast_slice(splats);
+        self.splat_draw_count = splats.len() as u32;
+        if splats.len() > self.splat_buffer_capacity {
+            self.splat_buffer_capacity = splats.len();
             self.splat_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("splat instances"),
                 size: bytes.len().max(std::mem::size_of::<GpuSplat>()) as u64,
@@ -256,6 +296,22 @@ impl Renderer {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn transform_preview_caps_splats_and_keeps_selected_splats() {
+        let splats: Vec<_> = (0..12_000).map(|index| GpuSplat {
+            center_radius: [index as f32, 0.0, 0.0, 0.0],
+            color_opacity: [1.0; 4],
+            normal: [0.0, 1.0, 0.0, if (5_100..5_110).contains(&index) { 2.0 } else { 1.0 }],
+            axes: [[0.0; 4]; 3],
+        }).collect();
+        let preview = preview_splats(&splats, TRANSFORM_PREVIEW_SPLATS);
+        assert_eq!(preview.len(), TRANSFORM_PREVIEW_SPLATS);
+        assert_eq!(preview.iter().filter(|splat| splat.normal[3] == 2.0).count(), 10);
+        assert!(preview.iter().any(|splat| splat.center_radius[0] < 100.0));
+        assert!(preview.iter().any(|splat| splat.center_radius[0] > 11_900.0));
+        assert_eq!(preview_splats(&splats[..100], TRANSFORM_PREVIEW_SPLATS).len(), 100);
+    }
 
     #[test]
     #[ignore = "requires a GPU adapter"]

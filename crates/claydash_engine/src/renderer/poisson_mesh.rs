@@ -197,6 +197,24 @@ impl PoissonMeshState {
             {
                 continue;
             }
+            if let Some(mesh) = &object.imported_mesh {
+                if object.boolean_parent.is_none()
+                    && object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh
+                    && !mesh.positions.is_empty() && !mesh.triangles.is_empty()
+                {
+                    self.ready.insert(object.uuid, Ready {
+                        root: object.uuid, component: object.uuid, revision,
+                        sample_resolution: object.gaussian_splats.resolution,
+                        mesh_resolution: object.poisson_mesh.resolution,
+                        algorithm: MeshAlgorithm::Direct,
+                        baked_frame_inverse: glam::Mat4::IDENTITY,
+                        vertices: mesh.positions.len(), triangles: mesh.triangles.len(),
+                        showing: true, mesh: mesh.clone(),
+                    });
+                    changed = true;
+                }
+                continue;
+            }
             let Some(saved) = object.saved_mesh.as_ref().filter(|saved|
                 Self::saved_mesh_matches(source, object, saved, revision)) else { continue; };
             let algorithm = match saved.representation {
@@ -225,6 +243,10 @@ impl PoissonMeshState {
 
     pub(super) fn objects_for_save(&self, source: &[SdfObject], objects: &mut [SdfObject], revision: i32) {
         for object in objects {
+            if object.imported_mesh.is_some() {
+                object.saved_mesh = None;
+                continue;
+            }
             let original = source.iter().find(|candidate| candidate.uuid == object.uuid);
             let ready = self.ready.get(&object.uuid).filter(|ready|
                 ready.revision == revision
@@ -283,7 +305,8 @@ impl PoissonMeshState {
     /// after an edit. A failed source is left as exact SDF until it changes.
     pub fn queue_missing_direct_meshes(&mut self, source: &[SdfObject], revision: i32) {
         for object in source.iter().filter(|object| object.boolean_parent.is_none()
-            && object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh) {
+            && object.render_representation == crate::model::GroupRenderRepresentation::DirectMesh
+            && object.imported_mesh.is_none()) {
             let id = object.uuid;
             if self.ready.get(&id).is_some_and(|ready| ready.revision == revision
                 && ready.mesh_resolution == object.poisson_mesh.resolution)
@@ -512,7 +535,7 @@ impl PoissonMeshState {
 
     pub fn rebuild_buffer(&self, device: &wgpu::Device, source: &[SdfObject], buffer: &mut wgpu::Buffer, count: &mut u32, voxels: &super::voxels::VoxelState) {
         let owners: HashMap<_, _> = super::bvh::boolean_postorder(source).iter().enumerate()
-            .map(|(index, object)| (object.uuid, (index as u32, object.color.to_array()))).collect();
+            .map(|(index, object)| (object.uuid, index as u32)).collect();
         let capacity = self.ready.values().filter(|ready| ready.showing)
             .map(|ready| ready.mesh.triangles.len()).sum::<usize>() * 3;
         let mut vertices = Vec::with_capacity(capacity);
@@ -520,13 +543,15 @@ impl PoissonMeshState {
             let pose = geometry::mesh_world_frame(source, ready.component) * ready.baked_frame_inverse;
             let normal_pose = pose.inverse().transpose();
             for (triangle_index, triangle) in ready.mesh.triangles.iter().enumerate() {
-                let Some(&(owner, color)) = owners.get(&ready.mesh.owners[triangle_index]) else { continue; };
+                let Some(&owner) = owners.get(&ready.mesh.owners[triangle_index]) else { continue; };
                 let points = triangle.map(|index| pose.transform_point3(ready.mesh.positions[index as usize]));
                 for (corner, point) in points.into_iter().enumerate() {
                     let normal = normal_pose.transform_vector3(ready.mesh.normals[triangle_index][corner]);
                     vertices.push(super::hybrid_splats::GpuMeshVertex {
                         position: point.extend(1.0).to_array(), normal: normal.extend(owner as f32).to_array(),
-                        captured_color: color,
+                        // Alpha marks captured voxel faces. Source meshes use the
+                        // owning object's live material in poisson_material.wgsl.
+                        captured_color: [0.0; 4],
                     });
                 }
             }
@@ -576,6 +601,24 @@ impl PoissonMeshState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_mesh_restores_at_any_revision_without_rebuilding() {
+        let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+        object.imported_mesh = Some(Arc::new(geometry::Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![object.uuid])));
+        let mut state = PoissonMeshState::default();
+        assert!(state.restore_saved(&[object.clone()], 7));
+        assert_eq!(state.ready[&object.uuid].triangles, 1);
+        state.queue_missing_direct_meshes(&[object.clone()], 7);
+        assert!(state.requests.is_empty());
+        assert!(state.invalidate_for_revision(8));
+        assert!(state.restore_saved(&[object.clone()], 8));
+        let mut saved = vec![object.clone()];
+        state.objects_for_save(&[object], &mut saved, 8);
+        assert!(saved[0].saved_mesh.is_none());
+    }
 
     #[test]
     fn ready_meshes_survive_document_round_trip_without_rebuilding() {
