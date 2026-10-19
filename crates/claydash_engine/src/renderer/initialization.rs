@@ -471,6 +471,7 @@ impl Renderer {
             splat_camera_buffer,
             splat_camera_bind_group,
             splat_instances: Vec::new(),
+            cloud_edit_selection: None,
             splat_sort_camera: None,
             splat_buffer_dirty: true,
             splat_buffer,

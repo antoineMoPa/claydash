@@ -802,8 +802,9 @@ fn scene_reset_cancels_computations_and_isolates_late_capture_results() {
 }
 
 impl Renderer {
-    pub fn optimized_objects_for_save(&self, source: &[SdfObject]) -> Vec<SdfObject> {
+    pub fn optimized_objects_for_save(&self, source: &[SdfObject], mesh_revision: i32) -> Vec<SdfObject> {
         let mut objects = self.neural_jobs.objects_for_save(source);
+        self.poisson_mesh.objects_for_save(source, &mut objects, mesh_revision);
         super::group_capture::objects_with_saved_captures(
             source,
             &mut objects,

@@ -18,8 +18,8 @@ mod secondary_panels;
 mod selection_tools;
 pub(crate) use selection_tools::polygon_is_valid;
 mod status_bar;
-mod variables;
 mod variable_gizmos;
+mod variables;
 pub(crate) use status_bar::RenderProgress;
 mod panel_placement;
 mod ui_widgets;
@@ -435,10 +435,19 @@ impl UiState {
                     && !self.selection_tools.box_mode()
                     && !self.selection_tools.face_cut_mode()
                     && scene_actions::pending_boolean(tree).is_none()
-                    && (matches!(tree.get_path("editor.state"), ClaydashValue::None | ClaydashValue::EditorState(crate::model::EditorState::Start))
-                        || (crate::model::selected_variable(tree).is_some() && matches!(tree.get_path("editor.state"), ClaydashValue::EditorState(crate::model::EditorState::Grabbing))))
-                    && !matches!(tree.get_path("editor.place_cursor"), ClaydashValue::Bool(true))
-                {
+                    && (matches!(
+                        tree.get_path("editor.state"),
+                        ClaydashValue::None
+                            | ClaydashValue::EditorState(crate::model::EditorState::Start)
+                    ) || (crate::model::selected_variable(tree).is_some()
+                        && matches!(
+                            tree.get_path("editor.state"),
+                            ClaydashValue::EditorState(crate::model::EditorState::Grabbing)
+                        )))
+                    && !matches!(
+                        tree.get_path("editor.place_cursor"),
+                        ClaydashValue::Bool(true)
+                    ) {
                     self.draw_variable_gizmos(ui, tree, camera, self.regions.len())
                 } else {
                     false
@@ -476,7 +485,9 @@ impl UiState {
                             && !self.selection_tools.face_cut_mode()
                             && !self.selection_tools.active()
                         {
-                            if crate::model::selected_variable(tree).is_none() {
+                            if crate::model::selected_variable(tree).is_none()
+                                && crate::model::cloud_edit(tree).is_none()
+                            {
                                 self.draw_object_gizmos_avoiding(
                                     ui,
                                     tree,

@@ -7,6 +7,15 @@ impl InteractionState {
             ClaydashValue::EditorState(mode) => mode,
             _ => EditorState::Start,
         };
+        if crate::model::cloud_edit(tree).is_some()
+            && matches!(
+                mode,
+                EditorState::Grabbing | EditorState::Rotating | EditorState::Scaling
+            )
+        {
+            self.update_cloud_transformation(camera, tree, mode);
+            return;
+        }
         if mode == EditorState::ExtendingCurve {
             self.transform_session = None;
             self.extrusion_session = None;
@@ -208,6 +217,115 @@ impl InteractionState {
         if cameras_changed {
             crate::model::set_scene_cameras(tree, cameras);
         }
+    }
+
+    fn update_cloud_transformation(
+        &mut self,
+        camera: &Camera,
+        tree: &mut DataTree,
+        mode: EditorState,
+    ) {
+        if self
+            .cloud_transform_session
+            .as_ref()
+            .is_none_or(|session| session.mode != mode)
+        {
+            let Some((edit, original)) = crate::cloud_edit::source(tree) else {
+                return;
+            };
+            let Some(center) = crate::cloud_edit::center(tree) else {
+                return;
+            };
+            let initial_cursor = if mode == EditorState::Grabbing {
+                camera.cursor_on_plane(self.mouse_position, center)
+            } else {
+                camera.cursor_at_depth(self.mouse_position, center)
+            };
+            self.cloud_transform_session = Some(CloudTransformSession {
+                mode,
+                edit,
+                original,
+                center,
+                initial_cursor,
+                initial_angle: camera.cursor_angle(self.mouse_position, center),
+                initial_radius: initial_cursor.distance(center).max(0.001),
+                last_operation: Mat4::IDENTITY,
+            });
+        }
+        let Some(session) = self.cloud_transform_session.as_ref() else {
+            return;
+        };
+        let mask = Vec3::new(
+            matches!(
+                tree.get_path("editor.constrain_x"),
+                ClaydashValue::Bool(true)
+            ) as u8 as f32,
+            matches!(
+                tree.get_path("editor.constrain_y"),
+                ClaydashValue::Bool(true)
+            ) as u8 as f32,
+            matches!(
+                tree.get_path("editor.constrain_z"),
+                ClaydashValue::Bool(true)
+            ) as u8 as f32,
+        );
+        let constrained = mask != Vec3::ZERO;
+        let mask = if constrained { mask } else { Vec3::ONE };
+        let cursor = if mode == EditorState::Grabbing {
+            camera.cursor_on_plane(self.mouse_position, session.center)
+        } else {
+            camera.cursor_at_depth(self.mouse_position, session.center)
+        };
+        let operation = match mode {
+            EditorState::Grabbing => {
+                Mat4::from_translation((cursor - session.initial_cursor) * mask)
+            }
+            EditorState::Scaling => {
+                let factor = (cursor.distance(session.center) / session.initial_radius).max(0.001);
+                Mat4::from_translation(session.center)
+                    * Mat4::from_scale(Vec3::ONE + (Vec3::splat(factor) - Vec3::ONE) * mask)
+                    * Mat4::from_translation(-session.center)
+            }
+            EditorState::Rotating => {
+                let angle = rotation_drag_angle(
+                    camera.cursor_angle(self.mouse_position, session.center)
+                        - session.initial_angle,
+                    self.control_down(),
+                );
+                let axis = if constrained {
+                    mask / mask.length()
+                } else {
+                    (camera.target - camera.position) / (camera.target - camera.position).length()
+                };
+                let numeric = match &self.numeric_rotation {
+                    NumericRotationInput::Editing(input) => input.parse::<f32>().ok(),
+                    _ => None,
+                };
+                let pivot =
+                    if crate::model::rotation_pivot(tree) == crate::model::RotationPivot::Cursor {
+                        crate::model::cursor_position(tree)
+                    } else {
+                        session.center
+                    };
+                Mat4::from_translation(pivot)
+                    * Mat4::from_quat(Quat::from_axis_angle(
+                        axis,
+                        numeric.map_or(if constrained { angle } else { -angle }, f32::to_radians),
+                    ))
+                    * Mat4::from_translation(-pivot)
+            }
+            _ => Mat4::IDENTITY,
+        };
+        if operation == session.last_operation {
+            return;
+        }
+        let edit = session.edit.clone();
+        let original = session.original.clone();
+        self.cloud_transform_session
+            .as_mut()
+            .unwrap()
+            .last_operation = operation;
+        crate::cloud_edit::apply(tree, &edit, &original, operation);
     }
 
     fn update_curve_extension(&mut self, camera: &Camera, tree: &mut DataTree) {

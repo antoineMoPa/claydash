@@ -115,14 +115,14 @@ impl UiState {
                                 egui::include_image!(
                                     "../../../assets/icons/lucide/mouse-pointer-2.svg"
                                 ),
-                                "Select objects",
+                                if crate::model::cloud_edit(tree).is_some() { "Select points" } else { "Select objects" },
                             ),
                             (
                                 SelectionTool::Box,
                                 egui::include_image!(
                                     "../../../assets/icons/lucide/square-dashed.svg"
                                 ),
-                                "Box select (B) · drag a rectangle · Shift adds",
+                                if crate::model::cloud_edit(tree).is_some() { "Box select points (B) · drag a rectangle · Shift adds" } else { "Box select (B) · drag a rectangle · Shift adds" },
                             ),
                         ];
                         if crate::model::selected_modeling_face(tree).is_some()

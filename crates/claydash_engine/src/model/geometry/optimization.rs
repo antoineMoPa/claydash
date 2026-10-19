@@ -425,6 +425,18 @@ pub struct SavedGroupCapture {
     pub capture: SavedDepthAtlas,
 }
 
+/// A versioned mesh result stored beside its editable source geometry.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SavedMesh {
+    pub version: u32,
+    pub source_revision: i32,
+    pub representation: GroupRenderRepresentation,
+    pub sample_resolution: u32,
+    pub mesh_resolution: u32,
+    pub baked_frame_inverse: glam::Mat4,
+    pub mesh: std::sync::Arc<crate::renderer::poisson_mesh::geometry::Mesh>,
+}
+
 /// World-space distance from the captured surface at which exact refinement begins.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "StoredDepthAcceleratorSettings")]

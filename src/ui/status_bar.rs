@@ -22,6 +22,9 @@ pub(crate) enum RenderProgress {
 
 impl UiState {
     fn selection_label(tree: &DataTree) -> Option<String> {
+        if crate::model::cloud_edit(tree).is_some() {
+            return Some("Point Cloud".into());
+        }
         if let Some(face) = crate::model::selected_modeling_face(tree) {
             let scene = crate::model::objects_ref(tree);
             if scene.iter().any(|object| object.uuid == face.object()) {

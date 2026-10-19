@@ -291,6 +291,7 @@ pub struct Renderer {
     splat_camera_buffer: wgpu::Buffer,
     splat_camera_bind_group: wgpu::BindGroup,
     splat_instances: Vec<GpuSplat>,
+    cloud_edit_selection: Option<(uuid::Uuid, Vec<usize>)>,
     splat_buffer: wgpu::Buffer,
     splat_buffer_capacity: usize,
     splat_sort_camera: Option<(Vec3, Vec3)>,
@@ -346,6 +347,18 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    pub fn set_cloud_edit_selection(&mut self, selection: Option<(uuid::Uuid, &[usize])>) {
+        match selection {
+            Some((object, indices)) => {
+                if self.cloud_edit_selection.as_ref().is_some_and(|(id, saved)| *id == object && saved == indices) {
+                    return;
+                }
+                self.cloud_edit_selection = Some((object, indices.to_vec()));
+            }
+            None => self.cloud_edit_selection = None,
+        }
+    }
+
     fn mesh_is_visible(&self) -> bool {
         self.poisson_mesh.shown_root().is_some() || self.voxels.is_visible()
     }

@@ -20,6 +20,7 @@ pub enum ClaydashValue {
     BoxFaceSelection(BoxFaceSelection),
     ModelingFaceSelection(ModelingFaceSelection),
     CurvePointSelection(CurvePointSelection),
+    CloudEdit(CloudEdit),
     Uuid(uuid::Uuid),
     VecUuid(Vec<uuid::Uuid>),
     F32(f32),
@@ -125,6 +126,33 @@ impl CanBeNone<ClaydashValue> for ClaydashValue {
 }
 
 pub type DataTree = ObservableKVTree<ClaydashValue>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudEdit {
+    pub object: uuid::Uuid,
+    pub indices: Vec<usize>,
+}
+
+pub fn cloud_edit(tree: &DataTree) -> Option<CloudEdit> {
+    match tree.get_path("editor.cloud_edit") {
+        ClaydashValue::CloudEdit(edit)
+            if selected_ref(tree) == [edit.object]
+                && objects_ref(tree).iter().any(|object| {
+                    object.uuid == edit.object && object.imported_splats.is_some()
+                }) =>
+        {
+            Some(edit)
+        }
+        _ => None,
+    }
+}
+
+pub fn set_cloud_edit(tree: &mut DataTree, edit: Option<CloudEdit>) {
+    tree.set_transient_path(
+        "editor.cloud_edit",
+        edit.map_or(ClaydashValue::None, ClaydashValue::CloudEdit),
+    );
+}
 
 pub fn picked_material(tree: &DataTree) -> Material {
     match tree.get_path("editor.material") {
@@ -340,7 +368,9 @@ pub fn set_objects(tree: &mut DataTree, mut value: Vec<SdfObject>) {
     super::apply_vector_bindings(&variables, &mut value);
     // Routine editor edits maintain every directed seam. Incompatible edits are
     // rejected by retaining the previous objects; MCP has a fallible draft path.
-    if super::resolve_sheet_seams(&mut value).is_err() { return; }
+    if super::resolve_sheet_seams(&mut value).is_err() {
+        return;
+    }
     if variables.bindings.len() + variables.rigid_bindings.len() != previous_count
         || variables != super::scene_variables(tree)
     {
@@ -356,7 +386,9 @@ pub fn set_objects_transient(tree: &mut DataTree, mut value: Vec<SdfObject>) {
     let mut variables = super::scene_variables(tree);
     super::evaluate_derived_variables(&mut variables);
     super::apply_vector_bindings(&variables, &mut value);
-    if super::resolve_sheet_seams(&mut value).is_err() { return; }
+    if super::resolve_sheet_seams(&mut value).is_err() {
+        return;
+    }
     tree.set_transient_path(
         "scene.variables",
         ClaydashValue::SceneVariables(variables.clone()),
@@ -365,6 +397,9 @@ pub fn set_objects_transient(tree: &mut DataTree, mut value: Vec<SdfObject>) {
 }
 
 pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    if selected_ref(tree) != value {
+        set_cloud_edit(tree, None);
+    }
     super::set_selected_variable(tree, None);
     set_selected_modeling_face(tree, None);
     set_selected_curve_point(tree, None);
@@ -378,6 +413,9 @@ pub fn set_selected(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
 }
 
 pub fn set_selected_exact(tree: &mut DataTree, value: Vec<uuid::Uuid>) {
+    if selected_ref(tree) != value {
+        set_cloud_edit(tree, None);
+    }
     super::set_selected_variable(tree, None);
     set_selected_modeling_face(tree, None);
     set_selected_curve_point(tree, None);

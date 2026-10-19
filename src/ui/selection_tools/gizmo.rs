@@ -345,10 +345,13 @@ impl UiState {
         };
         if cancel {
             if let Some(Gesture::Transform(session)) = self.selection_tools.gesture.take() {
+                if let Some((edit, original)) = &session.cloud {
+                    crate::cloud_edit::apply(tree, edit, original, glam::Mat4::IDENTITY);
+                }
                 let mut scene = objects(tree);
                 let mut cameras = crate::model::scene_cameras(tree);
                 let mut variables = crate::model::scene_variables(tree);
-                for target in session.targets {
+                for target in &session.targets {
                     commands::set_transform_target(
                         &mut scene,
                         &mut cameras,
@@ -358,7 +361,9 @@ impl UiState {
                         target.transform,
                     );
                 }
-                set_objects(tree, scene);
+                if !session.targets.is_empty() {
+                    set_objects(tree, scene);
+                }
                 if variables != crate::model::scene_variables(tree) {
                     crate::model::set_scene_variables(tree, variables);
                 }
@@ -380,19 +385,25 @@ impl UiState {
                 .iter()
                 .any(|object| object.uuid == selection[0] && object.lattice.is_some());
         let face_selected = crate::model::selected_modeling_face(tree).is_some();
-        let transform_targets = if (lattice_selected || face_selected)
-            && crate::model::selected_variable(tree).is_none()
+        let transform_targets =
+            if (lattice_selected || face_selected || crate::model::cloud_edit(tree).is_some())
+                && crate::model::selected_variable(tree).is_none()
+            {
+                Vec::new()
+            } else {
+                commands::transform_targets(tree)
+            };
+        let cloud_source = crate::cloud_edit::source(tree);
+        if !self.selection_tools.box_mode()
+            && (!transform_targets.is_empty() || cloud_source.is_some())
         {
-            Vec::new()
-        } else {
-            commands::transform_targets(tree)
-        };
-        if !self.selection_tools.box_mode() && !transform_targets.is_empty() {
-            let center = transform_targets
-                .iter()
-                .map(|target| target.world.transform_point3(Vec3::ZERO))
-                .sum::<Vec3>()
-                / transform_targets.len() as f32;
+            let center = crate::cloud_edit::center(tree).unwrap_or_else(|| {
+                transform_targets
+                    .iter()
+                    .map(|target| target.world.transform_point3(Vec3::ZERO))
+                    .sum::<Vec3>()
+                    / transform_targets.len().max(1) as f32
+            });
             if let Some(geometry) = selection_gizmo_geometry(camera, center, scale) {
                 let movement_only = transform_targets
                     .iter()
@@ -468,6 +479,7 @@ impl UiState {
                             world_units_per_point: geometry.world_units_per_point,
                             rotation_snap_active: snap_rotation,
                             targets: transform_targets.clone(),
+                            cloud: cloud_source.clone(),
                             anchors,
                             guides,
                             active_guide: None,
@@ -624,7 +636,12 @@ impl UiState {
                             },
                         );
                     }
-                    set_objects(tree, scene);
+                    if !session.targets.is_empty() {
+                        set_objects(tree, scene);
+                    }
+                    if let Some((edit, original)) = &session.cloud {
+                        crate::cloud_edit::apply(tree, edit, original, operation);
+                    }
                     if variables != crate::model::scene_variables(tree) {
                         crate::model::set_scene_variables(tree, variables);
                     }
@@ -665,16 +682,20 @@ impl UiState {
                             *additive,
                         );
                     } else {
-                        set_selected(
-                            tree,
-                            box_selection(
-                                &scene,
-                                camera,
-                                rect,
-                                scale,
-                                if *additive { selection } else { vec![] },
-                            ),
-                        );
+                        if crate::model::cloud_edit(tree).is_some() {
+                            crate::cloud_edit::select_rect(tree, camera, rect, scale, *additive);
+                        } else {
+                            set_selected(
+                                tree,
+                                box_selection(
+                                    &scene,
+                                    camera,
+                                    rect,
+                                    scale,
+                                    if *additive { selection } else { vec![] },
+                                ),
+                            );
+                        }
                     }
                 }
             }

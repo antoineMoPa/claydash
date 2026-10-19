@@ -235,7 +235,8 @@ impl App {
     fn project_tree_for_save(&self) -> DataTree {
         let mut tree = self.tree.clone();
         if let Some(renderer) = &self.renderer {
-            let objects = renderer.optimized_objects_for_save(objects_ref(&self.tree));
+            let source = objects_ref(&self.tree);
+            let objects = renderer.optimized_objects_for_save(source, rendering::mesh_source_revision(source));
             crate::model::set_objects(&mut tree, objects);
         }
         tree

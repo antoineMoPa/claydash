@@ -28,6 +28,18 @@ struct TransformSession {
 }
 
 #[derive(Clone)]
+struct CloudTransformSession {
+    mode: EditorState,
+    edit: crate::model::CloudEdit,
+    original: std::sync::Arc<claydash_engine::gaussian_ply::GaussianCloud>,
+    center: Vec3,
+    initial_cursor: Vec3,
+    initial_angle: f32,
+    initial_radius: f32,
+    last_operation: Mat4,
+}
+
+#[derive(Clone)]
 struct ExtrusionSession {
     mode: EditorState,
     object: uuid::Uuid,
@@ -111,6 +123,7 @@ pub struct InteractionState {
     right_pan_reference: Option<Vec3>,
     shift_pan: Option<ShiftPanSession>,
     transform_session: Option<TransformSession>,
+    cloud_transform_session: Option<CloudTransformSession>,
     pending_grab_pointer: Option<Vec2>,
     curve_grab_mouse_start: Option<Vec2>,
     extrusion_session: Option<ExtrusionSession>,
@@ -131,6 +144,7 @@ impl Default for InteractionState {
             right_pan_reference: None,
             shift_pan: None,
             transform_session: None,
+            cloud_transform_session: None,
             pending_grab_pointer: None,
             curve_grab_mouse_start: None,
             extrusion_session: None,

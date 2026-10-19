@@ -3,6 +3,7 @@ mod app;
 #[cfg(not(target_arch = "wasm32"))]
 mod cli;
 use claydash_engine::camera;
+mod cloud_edit;
 mod commands;
 mod document;
 #[cfg(not(target_arch = "wasm32"))]

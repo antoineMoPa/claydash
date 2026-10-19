@@ -235,6 +235,8 @@ pub struct SdfObject {
     pub saved_neural_field: Option<std::sync::Arc<SavedNeuralField>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_group_capture: Option<std::sync::Arc<SavedGroupCapture>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_mesh: Option<std::sync::Arc<SavedMesh>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -308,6 +310,7 @@ impl SdfObject {
             box_accelerator: BoxAcceleratorSettings::default(),
             saved_neural_field: None,
             saved_group_capture: None,
+            saved_mesh: None,
             color: material.color,
             object_type: kind.object_type(),
             params: match kind {
@@ -409,6 +412,7 @@ impl SdfObject {
     pub fn duplicate(&self) -> Self {
         let mut copy = self.clone();
         copy.uuid = uuid::Uuid::new_v4();
+        copy.saved_mesh = None;
         copy
     }
 

@@ -41,6 +41,15 @@ impl BuildProgress {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshAlgorithm { Poisson, Direct }
 
+impl MeshAlgorithm {
+    fn representation(self) -> crate::model::GroupRenderRepresentation {
+        match self {
+            Self::Poisson => crate::model::GroupRenderRepresentation::PoissonMesh,
+            Self::Direct => crate::model::GroupRenderRepresentation::DirectMesh,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum PoissonMeshAction {
     Build(uuid::Uuid),
@@ -149,6 +158,98 @@ pub(super) struct PoissonMeshState {
 }
 
 impl PoissonMeshState {
+    fn saved_mesh_matches(
+        source: &[SdfObject],
+        object: &SdfObject,
+        saved: &crate::model::SavedMesh,
+        revision: i32,
+    ) -> bool {
+        let mesh = &saved.mesh;
+        let valid_shape = saved.version == 1
+            && object.boolean_parent.is_none()
+            && saved.source_revision == revision
+            && saved.representation == object.render_representation
+            && matches!(saved.representation, crate::model::GroupRenderRepresentation::PoissonMesh
+                | crate::model::GroupRenderRepresentation::DirectMesh)
+            && (saved.representation == crate::model::GroupRenderRepresentation::DirectMesh
+                || saved.sample_resolution == object.gaussian_splats.resolution)
+            && saved.mesh_resolution == object.poisson_mesh.resolution
+            && saved.baked_frame_inverse.to_cols_array().iter().all(|value| value.is_finite())
+            && !mesh.positions.is_empty()
+            && !mesh.triangles.is_empty()
+            && mesh.positions.len() <= 10_000_000
+            && mesh.triangles.len() <= 10_000_000
+            && mesh.owners.len() == mesh.triangles.len()
+            && mesh.normals.len() == mesh.triangles.len()
+            && mesh.positions.iter().all(|point| point.is_finite())
+            && mesh.triangles.iter().all(|triangle| triangle.iter().all(|index| (*index as usize) < mesh.positions.len()))
+            && mesh.normals.iter().flatten().all(|normal| normal.is_finite());
+        if !valid_shape { return false; }
+        let ids: std::collections::HashSet<_> = source.iter().map(|member| member.uuid).collect();
+        mesh.owners.iter().all(|owner| ids.contains(owner))
+    }
+
+    pub(super) fn restore_saved(&mut self, source: &[SdfObject], revision: i32) -> bool {
+        let mut changed = false;
+        for object in source {
+            if self.cancelled.contains(&object.uuid)
+                || self.ready.get(&object.uuid).is_some_and(|ready| ready.revision == revision)
+            {
+                continue;
+            }
+            let Some(saved) = object.saved_mesh.as_ref().filter(|saved|
+                Self::saved_mesh_matches(source, object, saved, revision)) else { continue; };
+            let algorithm = match saved.representation {
+                crate::model::GroupRenderRepresentation::PoissonMesh => MeshAlgorithm::Poisson,
+                crate::model::GroupRenderRepresentation::DirectMesh => MeshAlgorithm::Direct,
+                _ => continue,
+            };
+            let mesh = saved.mesh.clone();
+            self.ready.insert(object.uuid, Ready {
+                root: object.uuid,
+                component: object.uuid,
+                revision,
+                sample_resolution: saved.sample_resolution,
+                mesh_resolution: saved.mesh_resolution,
+                algorithm,
+                baked_frame_inverse: saved.baked_frame_inverse,
+                vertices: mesh.positions.len(),
+                triangles: mesh.triangles.len(),
+                showing: true,
+                mesh,
+            });
+            changed = true;
+        }
+        changed
+    }
+
+    pub(super) fn objects_for_save(&self, source: &[SdfObject], objects: &mut [SdfObject], revision: i32) {
+        for object in objects {
+            let original = source.iter().find(|candidate| candidate.uuid == object.uuid);
+            let ready = self.ready.get(&object.uuid).filter(|ready|
+                ready.revision == revision
+                    && ready.algorithm.representation() == object.render_representation
+                    && ready.mesh_resolution == object.poisson_mesh.resolution
+                    && (ready.algorithm == MeshAlgorithm::Direct
+                        || ready.sample_resolution == object.gaussian_splats.resolution));
+            object.saved_mesh = if let Some(ready) = ready {
+                Some(Arc::new(crate::model::SavedMesh {
+                    version: 1,
+                    source_revision: revision,
+                    representation: ready.algorithm.representation(),
+                    sample_resolution: ready.sample_resolution,
+                    mesh_resolution: ready.mesh_resolution,
+                    baked_frame_inverse: ready.baked_frame_inverse,
+                    mesh: ready.mesh.clone(),
+                }))
+            } else {
+                original.and_then(|original| original.saved_mesh.as_ref())
+                    .filter(|saved| Self::saved_mesh_matches(source, object, saved, revision))
+                    .cloned()
+            };
+        }
+    }
+
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) fn seed_pending_scene_reset_test(&mut self) -> Arc<std::sync::atomic::AtomicBool> {
         let root = uuid::Uuid::new_v4();
@@ -475,6 +576,48 @@ impl PoissonMeshState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ready_meshes_survive_document_round_trip_without_rebuilding() {
+        for (representation, algorithm) in [
+            (crate::model::GroupRenderRepresentation::DirectMesh, MeshAlgorithm::Direct),
+            (crate::model::GroupRenderRepresentation::PoissonMesh, MeshAlgorithm::Poisson),
+        ] {
+            let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+            object.render_representation = representation;
+            let id = object.uuid;
+            let source = vec![object.clone()];
+            let mesh = Arc::new(geometry::Mesh::from_parts(
+                vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]], vec![id]));
+            let mut built = PoissonMeshState::default();
+            built.ready.insert(id, Ready {
+                root: id, component: id, revision: 7,
+                sample_resolution: object.gaussian_splats.resolution,
+                mesh_resolution: object.poisson_mesh.resolution,
+                algorithm, baked_frame_inverse: glam::Mat4::IDENTITY,
+                vertices: 3, triangles: 1, showing: true, mesh,
+            });
+            let mut stored = source.clone();
+            built.objects_for_save(&source, &mut stored, 7);
+            assert!(stored[0].saved_mesh.is_some());
+            let bytes = serde_json::to_vec(&stored).unwrap();
+            let reopened: Vec<SdfObject> = serde_json::from_slice(&bytes).unwrap();
+            let mut restored = PoissonMeshState::default();
+            assert!(restored.restore_saved(&reopened, 7));
+            assert_eq!(restored.ready[&id].triangles, 1);
+            assert_eq!(restored.ready[&id].algorithm, algorithm);
+            assert!(restored.ready[&id].showing);
+            restored.queue_missing_direct_meshes(&reopened, 7);
+            assert!(restored.requests.is_empty());
+            let mut immediate_resave = reopened.clone();
+            PoissonMeshState::default().objects_for_save(&reopened, &mut immediate_resave, 7);
+            assert!(immediate_resave[0].saved_mesh.is_some());
+            assert!(!PoissonMeshState::default().restore_saved(&reopened, 8));
+            let mut changed = reopened.clone();
+            changed[0].render_representation = crate::model::GroupRenderRepresentation::ExactSdf;
+            assert!(!PoissonMeshState::default().restore_saved(&changed, 7));
+        }
+    }
 
     #[test]
     fn direct_mesh_queues_once_and_retries_after_source_or_resolution_change() {

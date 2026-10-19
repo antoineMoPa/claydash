@@ -45,6 +45,10 @@ struct TransformGesture {
     world_units_per_point: f32,
     rotation_snap_active: bool,
     targets: Vec<commands::TransformTarget>,
+    cloud: Option<(
+        crate::model::CloudEdit,
+        std::sync::Arc<claydash_engine::gaussian_ply::GaussianCloud>,
+    )>,
     anchors: Vec<Vec3>,
     guides: Vec<crate::guides::FaceGuide>,
     active_guide: Option<crate::guides::ActiveGuideSet>,
@@ -365,8 +369,14 @@ fn gizmo_action_at(point: egui::Pos2, geometry: &GizmoGeometry) -> Option<GizmoA
         .map(|(_, axis)| GizmoAction::RotateAxis(axis))
 }
 
-pub(in crate::ui) fn movement_gizmo_contains(camera: &Camera, world: Vec3, scale: f32, point: egui::Pos2) -> bool {
-    selection_gizmo_geometry(camera, world, scale).and_then(|geometry| gizmo_action_at(point, &geometry))
+pub(in crate::ui) fn movement_gizmo_contains(
+    camera: &Camera,
+    world: Vec3,
+    scale: f32,
+    point: egui::Pos2,
+) -> bool {
+    selection_gizmo_geometry(camera, world, scale)
+        .and_then(|geometry| gizmo_action_at(point, &geometry))
         .is_some_and(|action| matches!(action, GizmoAction::MoveFree | GizmoAction::MoveAxis(_)))
 }
 

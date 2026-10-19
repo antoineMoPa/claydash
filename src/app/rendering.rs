@@ -29,13 +29,29 @@ fn renderer_recovery_preserves_scene_and_selection() {
     assert_eq!(commands::effective_selected_ids(&tree), vec![id]);
 }
 
+#[cfg(test)]
+#[test]
+fn cloud_edit_selection_invalidates_viewport_scene() {
+    let mut tree = DataTree::default();
+    let before = scene_render_versions(&tree, false);
+    tree.set_transient_path(
+        "editor.cloud_edit",
+        ClaydashValue::CloudEdit(crate::model::CloudEdit {
+            object: uuid::Uuid::new_v4(),
+            indices: vec![3],
+        }),
+    );
+    assert_ne!(scene_render_versions(&tree, false), before);
+}
+
 pub(super) fn scene_render_versions(tree: &DataTree, capture_render: bool) -> [i32; 2] {
     let export_version = if capture_render { i32::MIN } else { 0 };
     // Material source and parameters both affect the cached viewport image.
     [
         tree.path_version("scene.sdf_objects")
             .wrapping_add(tree.path_version("scene.materials"))
-            .wrapping_add(tree.path_version("scene.selected_uuids")),
+            .wrapping_add(tree.path_version("scene.selected_uuids"))
+            .wrapping_add(tree.path_version("editor.cloud_edit")),
         tree.path_version("scene.world")
             .wrapping_add(export_version),
     ]
@@ -626,8 +642,8 @@ impl App {
         let interacting = !capture_render && self.interactions.viewport_interaction_active(
             self.egui.input(|input| input.pointer.any_down()), &self.tree);
         if let Some(renderer) = &mut self.renderer {
-            // Selection is drawn by the editor gizmos. Keep the cached scene
-            // image when only selection changes, avoiding a full refinement.
+            let cloud_edit = if capture_render { None } else { crate::model::cloud_edit(&self.tree) };
+            renderer.set_cloud_edit_selection(cloud_edit.as_ref().map(|edit| (edit.object, edit.indices.as_slice())));
             let scene_versions = scene_render_versions(&self.tree, capture_render);
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             let scene_objects = self

@@ -20,6 +20,7 @@ impl Renderer {
             }
             mesh_changed |= self.poisson_mesh.reconcile_representation(objects);
             mesh_changed |= self.poisson_mesh.invalidate_for_revision(mesh_source_revision);
+            mesh_changed |= self.poisson_mesh.restore_saved(objects, mesh_source_revision);
             mesh_changed |= self.poisson_mesh.poll(mesh_source_revision);
             self.poisson_mesh.queue_missing_direct_meshes(objects, mesh_source_revision);
             if mesh_changed {

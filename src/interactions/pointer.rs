@@ -7,6 +7,21 @@ impl InteractionState {
         tree: &mut DataTree,
         ghost: Option<uuid::Uuid>,
     ) {
+        if self.cloud_transform_session.is_some()
+            && matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::EditorState(EditorState::Rotating | EditorState::Scaling)
+            )
+        {
+            self.update_transformation(camera, tree);
+            self.cloud_transform_session = None;
+            tree.set_path(
+                "editor.state",
+                ClaydashValue::EditorState(EditorState::Start),
+            );
+            tree.make_undo_redo_snapshot();
+            return;
+        }
         if self.view_rotation.is_some() || self.view_rotation_requested {
             self.finish_view_rotation(tree);
             return;
@@ -109,6 +124,10 @@ impl InteractionState {
         ghost: Option<uuid::Uuid>,
         shift: bool,
     ) {
+        if crate::model::cloud_edit(tree).is_some() {
+            crate::cloud_edit::select_at(tree, camera, position, shift);
+            return;
+        }
         let (origin, direction) = camera.ray(position);
         let scene = objects(tree);
         let ghost = ghost.filter(|id| scene.iter().any(|object| object.uuid == *id));
@@ -143,6 +162,23 @@ impl InteractionState {
             return;
         };
         let mut selection = selected(tree);
+        if !shift
+            && selection == [hit]
+            && scene
+                .iter()
+                .any(|object| object.uuid == hit && object.imported_splats.is_some())
+        {
+            crate::model::set_selected_exact(tree, vec![hit]);
+            crate::model::set_cloud_edit(
+                tree,
+                Some(crate::model::CloudEdit {
+                    object: hit,
+                    indices: Vec::new(),
+                }),
+            );
+            crate::cloud_edit::select_at(tree, camera, position, false);
+            return;
+        }
         if shift {
             let target = crate::ui::scene_actions::viewport_group_root(&scene, hit);
             if selection.contains(&target) {
@@ -196,6 +232,21 @@ impl InteractionState {
     }
 
     pub fn pointer_up(&mut self, camera: &Camera, tree: &mut DataTree) {
+        if self.cloud_transform_session.is_some()
+            && matches!(
+                tree.get_path("editor.state"),
+                ClaydashValue::EditorState(EditorState::Grabbing)
+            )
+        {
+            self.update_transformation(camera, tree);
+            self.cloud_transform_session = None;
+            tree.set_path(
+                "editor.state",
+                ClaydashValue::EditorState(EditorState::Start),
+            );
+            tree.make_undo_redo_snapshot();
+            return;
+        }
         if let Some(session) = self.shift_pan.take() {
             if self.mouse_position.distance(session.start) < PAN_DRAG_THRESHOLD {
                 Self::select_at(camera, tree, session.start, session.ghost, true);
@@ -267,7 +318,9 @@ impl InteractionState {
         }
         let initial_cursor = if mode == EditorState::Grabbing {
             camera.cursor_on_plane(
-                self.pending_grab_pointer.take().unwrap_or(self.mouse_position),
+                self.pending_grab_pointer
+                    .take()
+                    .unwrap_or(self.mouse_position),
                 center,
             )
         } else {
@@ -294,8 +347,7 @@ impl InteractionState {
                 tree,
                 self.keys.contains(&KeyCode::ControlLeft)
                     || self.keys.contains(&KeyCode::ControlRight),
-                self.keys.contains(&KeyCode::AltLeft)
-                    || self.keys.contains(&KeyCode::AltRight),
+                self.keys.contains(&KeyCode::AltLeft) || self.keys.contains(&KeyCode::AltRight),
             ),
             targets,
             anchors,

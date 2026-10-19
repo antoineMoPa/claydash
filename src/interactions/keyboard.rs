@@ -16,10 +16,19 @@ impl InteractionState {
 
     pub fn release_inactive_modifiers(&mut self, modifiers: winit::keyboard::ModifiersState) {
         for (active, keys) in [
-            (modifiers.control_key(), [KeyCode::ControlLeft, KeyCode::ControlRight]),
-            (modifiers.shift_key(), [KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+            (
+                modifiers.control_key(),
+                [KeyCode::ControlLeft, KeyCode::ControlRight],
+            ),
+            (
+                modifiers.shift_key(),
+                [KeyCode::ShiftLeft, KeyCode::ShiftRight],
+            ),
             (modifiers.alt_key(), [KeyCode::AltLeft, KeyCode::AltRight]),
-            (modifiers.super_key(), [KeyCode::SuperLeft, KeyCode::SuperRight]),
+            (
+                modifiers.super_key(),
+                [KeyCode::SuperLeft, KeyCode::SuperRight],
+            ),
         ] {
             if !active {
                 for key in keys {
@@ -43,18 +52,20 @@ impl InteractionState {
     }
 
     pub fn control_down(&self) -> bool {
-        self.keys.contains(&KeyCode::ControlLeft)
-            || self.keys.contains(&KeyCode::ControlRight)
+        self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight)
     }
 
     pub fn camera_navigation_active(&self) -> bool {
-        self.right_down || self.shift_pan.is_some() || self.view_rotation_active()
+        self.right_down
+            || self.shift_pan.is_some()
+            || self.view_rotation_active()
             || self.keys.contains(&KeyCode::ControlLeft)
             || self.keys.contains(&KeyCode::ControlRight)
     }
 
     pub fn viewport_interaction_active(&self, pointer_down: bool, tree: &DataTree) -> bool {
-        pointer_down || self.camera_navigation_active()
+        pointer_down
+            || self.camera_navigation_active()
             || matches!(tree.get_path("editor.state"),
                 ClaydashValue::EditorState(state) if state != EditorState::Start)
     }
@@ -89,6 +100,82 @@ impl InteractionState {
             );
         if (egui_wants_keyboard && !modal_confirm_key) || !first_press {
             return;
+        }
+        if crate::model::cloud_edit(tree).is_some() && !self.command_modifier_down() {
+            let mode = match tree.get_path("editor.state") {
+                ClaydashValue::EditorState(mode) => mode,
+                _ => EditorState::Start,
+            };
+            if mode == EditorState::Start {
+                match key {
+                    KeyCode::Escape => {
+                        crate::model::set_cloud_edit(tree, None);
+                        return;
+                    }
+                    KeyCode::Backspace | KeyCode::Delete => {
+                        crate::cloud_edit::delete_selected(tree);
+                        return;
+                    }
+                    KeyCode::KeyG | KeyCode::KeyR | KeyCode::KeyS => {
+                        if crate::cloud_edit::center(tree).is_some() {
+                            tree.make_undo_redo_snapshot();
+                            self.cloud_transform_session = None;
+                            tree.set_path(
+                                "editor.state",
+                                ClaydashValue::EditorState(match key {
+                                    KeyCode::KeyG => EditorState::Grabbing,
+                                    KeyCode::KeyR => EditorState::Rotating,
+                                    _ => EditorState::Scaling,
+                                }),
+                            );
+                            for axis in [
+                                "editor.constrain_x",
+                                "editor.constrain_y",
+                                "editor.constrain_z",
+                            ] {
+                                tree.set_path(axis, ClaydashValue::Bool(false));
+                            }
+                            self.numeric_rotation = NumericRotationInput::Editing(String::new());
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+            } else if matches!(
+                mode,
+                EditorState::Grabbing | EditorState::Rotating | EditorState::Scaling
+            ) {
+                match key {
+                    KeyCode::KeyG | KeyCode::KeyR | KeyCode::KeyS => return,
+                    KeyCode::Escape => {
+                        if let Some(session) = self.cloud_transform_session.take() {
+                            crate::cloud_edit::apply(
+                                tree,
+                                &session.edit,
+                                &session.original,
+                                Mat4::IDENTITY,
+                            );
+                        }
+                        tree.set_path(
+                            "editor.state",
+                            ClaydashValue::EditorState(EditorState::Start),
+                        );
+                        self.numeric_rotation = NumericRotationInput::Idle;
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        self.cloud_transform_session = None;
+                        tree.set_path(
+                            "editor.state",
+                            ClaydashValue::EditorState(EditorState::Start),
+                        );
+                        tree.make_undo_redo_snapshot();
+                        self.numeric_rotation = NumericRotationInput::Idle;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
         if self.view_rotation.is_some() || self.view_rotation_requested {
             match key {
