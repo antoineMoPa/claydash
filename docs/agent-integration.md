@@ -292,7 +292,20 @@ Ordinary mesh/point-cloud PLY files and compressed vendor-specific layouts are r
 
 The viewport renders oriented anisotropic Gaussians with their baked base color and opacity.
 Higher-order view-dependent color coefficients are preserved, but are not currently evaluated.
-Assets support picking and object transforms, not solid Boolean operations, material edits,
-or GLB mesh export. Save a `.claydash` project to retain the splats.
+Assets support splat selection and transforms. They do not support solid Boolean operations,
+material edits, or GLB mesh export. Save a `.claydash` project to retain the splats.
+
+For MCP color edits, select splats with `select_box` or `select_circle` using
+`cloud_object_id`, then call `adjust_gaussian_colors` with the same ID. The default scope
+edits only selected splats; `"scope":"all"` edits the whole cloud without a selection.
+Each call is undoable and accepts `expected_revision` from `get_scene_summary`.
+
+```json
+{"cloud_object_id":"OBJECT_UUID","operation":"desaturate","amount":1.0}
+```
+
+Operations are `desaturate` (blend toward grayscale, 0–1), `saturation` (factor 0–4),
+`contrast` (factor 0–4 around 0.5), and `brightness` (add -1–1). RGB values are floored
+at zero, with no highlight clipping. Opacity and higher-order coefficients stay intact.
 
 Property mapping follows the [Graphdeco Gaussian model format](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/scene/gaussian_model.py).

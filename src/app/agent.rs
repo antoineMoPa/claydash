@@ -43,6 +43,7 @@ pub enum Request {
     GetSchema,
     GetActionSchema { action: String, primitive: Option<PrimitiveKind> },
     GetGaussianCloud { id: uuid::Uuid, space: Option<CloudSpace>, sample_count: Option<usize> },
+    AdjustGaussianColors(color::AdjustGaussianColorsArgs),
     ListCommands,
     EnableSlowSmoothBlends,
     EnableBooleanOperations,
@@ -496,6 +497,7 @@ impl App {
                 | Request::SetView(_)
                 | Request::SelectBox(_)
                 | Request::SelectCircle(_)
+                | Request::AdjustGaussianColors(_)
                 | Request::BuildPoissonMesh { .. }
                 | Request::Undo
                 | Request::Redo
@@ -508,6 +510,7 @@ impl App {
             Request::GetSchema => Ok(schema()),
             Request::GetActionSchema { action, primitive } => mcp::action_schema(&action, primitive),
             Request::GetGaussianCloud { id, space, sample_count } => self.agent_gaussian_cloud(id, space, sample_count),
+            Request::AdjustGaussianColors(args) => self.agent_adjust_gaussian_colors(args),
             Request::ListCommands => Ok(Value::Array(self.commands.commands.iter().map(|(name, command)| {
                 json!({"name": name, "title": command.title, "description": command.docs, "shortcut": command.shortcut})
             }).collect())),
@@ -788,6 +791,7 @@ impl App {
 
 mod actions;
 mod capture;
+mod color;
 mod export;
 mod headless;
 mod mcp;

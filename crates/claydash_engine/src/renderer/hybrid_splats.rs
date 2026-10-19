@@ -191,8 +191,12 @@ const TRANSFORM_PREVIEW_SPLATS: usize = 1_500;
 fn preview_splats(instances: &[GpuSplat], limit: usize) -> Vec<GpuSplat> {
     if instances.len() <= limit { return instances.to_vec(); }
     let selected_count = instances.iter().filter(|splat| splat.normal[3] == 2.0).count();
+    // Only the moving selection needs reduced detail. Sampling the stationary
+    // cloud makes a dense scan nearly vanish while its splats are being moved.
     let selected_limit = selected_count.min(limit);
-    let mut preview = Vec::with_capacity(limit);
+    let ordinary_count = instances.len() - selected_count;
+    let ordinary_limit = if selected_count > 0 { ordinary_count } else { limit };
+    let mut preview = Vec::with_capacity(selected_limit + ordinary_limit);
     if selected_limit > 0 {
         for (ordinal, splat) in instances.iter().filter(|splat| splat.normal[3] == 2.0).enumerate() {
             if ordinal == preview.len() * selected_count / selected_limit {
@@ -200,9 +204,7 @@ fn preview_splats(instances: &[GpuSplat], limit: usize) -> Vec<GpuSplat> {
             }
         }
     }
-    let ordinary_limit = limit - preview.len();
     if ordinary_limit > 0 {
-        let ordinary_count = instances.len() - selected_count;
         let mut taken = 0;
         for (ordinal, splat) in instances.iter().filter(|splat| splat.normal[3] != 2.0).enumerate() {
             if ordinal == taken * ordinary_count / ordinary_limit {
@@ -306,11 +308,32 @@ mod tests {
             axes: [[0.0; 4]; 3],
         }).collect();
         let preview = preview_splats(&splats, TRANSFORM_PREVIEW_SPLATS);
-        assert_eq!(preview.len(), TRANSFORM_PREVIEW_SPLATS);
+        assert_eq!(preview.len(), 12_000);
         assert_eq!(preview.iter().filter(|splat| splat.normal[3] == 2.0).count(), 10);
         assert!(preview.iter().any(|splat| splat.center_radius[0] < 100.0));
         assert!(preview.iter().any(|splat| splat.center_radius[0] > 11_900.0));
+        let object_preview: Vec<_> = splats.iter().map(|splat| {
+            let mut splat = *splat;
+            splat.normal[3] = 1.0;
+            splat
+        }).collect();
+        assert_eq!(preview_splats(&object_preview, TRANSFORM_PREVIEW_SPLATS).len(), TRANSFORM_PREVIEW_SPLATS);
         assert_eq!(preview_splats(&splats[..100], TRANSFORM_PREVIEW_SPLATS).len(), 100);
+    }
+
+    #[test]
+    fn transform_preview_keeps_unselected_cloud_visible_for_large_selection() {
+        let splats: Vec<_> = (0..12_000).map(|index| GpuSplat {
+            center_radius: [index as f32, 0.0, 0.0, 0.0],
+            color_opacity: [1.0; 4],
+            normal: [0.0, 1.0, 0.0, if index < 8_000 { 2.0 } else { 1.0 }],
+            axes: [[0.0; 4]; 3],
+        }).collect();
+        let preview = preview_splats(&splats, TRANSFORM_PREVIEW_SPLATS);
+        let selected = preview.iter().filter(|splat| splat.normal[3] == 2.0).count();
+        assert_eq!(selected, TRANSFORM_PREVIEW_SPLATS);
+        assert_eq!(preview.len() - selected, 4_000);
+        assert!(preview.iter().any(|splat| splat.center_radius[0] > 11_900.0));
     }
 
     #[test]
