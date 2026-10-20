@@ -1,5 +1,29 @@
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+struct SurfaceJob {
+    cloud: std::sync::Arc<claydash_engine::gaussian_ply::GaussianCloud>,
+    result: std::sync::Arc<
+        std::sync::Mutex<
+            Option<Result<claydash_engine::renderer::poisson_mesh::geometry::Mesh, String>>,
+        >,
+    >,
+}
+
+fn cloud_mesh_color(cloud: &claydash_engine::gaussian_ply::GaussianCloud) -> glam::Vec4 {
+    let step = cloud.splats.len().div_ceil(4096).max(1);
+    let (sum, weight) = cloud.splats.iter().step_by(step).fold(
+        (glam::Vec3::ZERO, 0.0_f32),
+        |(sum, weight), splat| {
+            (
+                sum + glam::Vec3::from_array(splat.color) * splat.opacity,
+                weight + splat.opacity,
+            )
+        },
+    );
+    (sum / weight.max(1e-6)).extend(1.0)
+}
+
 pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut AnimationRuntime) {
     let selection = selected(tree);
     if selection.len() == 1
@@ -155,7 +179,98 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
     if let Some(cloud) = &object.imported_splats {
         ui.label(RichText::new("Gaussian splat asset").strong());
         ui.label(format!("{} Gaussians", cloud.splats.len()));
-        if changed { set_objects(tree, scene); }
+        #[cfg(not(target_arch = "wasm32"))]
+        let job_id = egui::Id::new(("gaussian-surface-job", object_id));
+        let error_id = egui::Id::new(("gaussian-surface-error", object_id));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let job = ui
+                .ctx()
+                .data(|data| data.get_temp::<std::sync::Arc<SurfaceJob>>(job_id));
+            if let Some(job) = job {
+                let completed = job.result.lock().ok().and_then(|mut result| result.take());
+                if let Some(result) = completed {
+                    ui.ctx().data_mut(|data| data.remove::<std::sync::Arc<SurfaceJob>>(job_id));
+                    if std::sync::Arc::ptr_eq(cloud, &job.cloud) {
+                        match result {
+                            Ok(mesh) => {
+                                tree.make_undo_redo_snapshot();
+                                if object.material_id.is_none() {
+                                    let color = cloud_mesh_color(cloud);
+                                    object.material.color = color;
+                                    object.color = color;
+                                }
+                                object.imported_mesh = Some(std::sync::Arc::new(mesh));
+                                object.imported_splats = None;
+                                object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+                                changed = true;
+                                ui.ctx().request_repaint();
+                            }
+                            Err(error) => { ui.ctx().data_mut(|data| data.insert_temp(error_id, error)); }
+                        }
+                    }
+                } else {
+                    ui.horizontal(|ui| { ui.spinner(); ui.label("Surfacing Gaussians…"); });
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+                }
+            } else if ui.button("Convert to mesh").on_hover_text("Reconstruct a textured triangle surface. This replaces the splat asset and can be undone.").clicked() {
+                let source = cloud.clone();
+                let result = std::sync::Arc::new(std::sync::Mutex::new(None));
+                let output = result.clone();
+                std::thread::spawn(move || {
+                    let mesh = claydash_engine::gaussian_surface::reconstruct(&source, object_id);
+                    if let Ok(mut slot) = output.lock() { *slot = Some(mesh); }
+                });
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(job_id, std::sync::Arc::new(SurfaceJob { cloud: cloud.clone(), result }));
+                    data.remove::<String>(error_id);
+                });
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        if ui.button("Convert to mesh").clicked() {
+            let result = claydash_engine::gaussian_surface::reconstruct(cloud, object_id);
+            match result {
+                Ok(mesh) => {
+                    tree.make_undo_redo_snapshot();
+                    if object.material_id.is_none() {
+                        let color = cloud_mesh_color(cloud);
+                        object.material.color = color;
+                        object.color = color;
+                    }
+                    object.imported_mesh = Some(std::sync::Arc::new(mesh));
+                    object.imported_splats = None;
+                    object.render_representation =
+                        crate::model::GroupRenderRepresentation::DirectMesh;
+                    changed = true;
+                    ui.ctx().request_repaint();
+                }
+                Err(error) => {
+                    ui.ctx().data_mut(|data| data.insert_temp(error_id, error));
+                }
+            }
+        }
+        if let Some(error) = ui.ctx().data(|data| data.get_temp::<String>(error_id)) {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        if changed {
+            set_objects(tree, scene);
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        apply_keyframe_requests(tree, runtime, keyframes);
+        return;
+    }
+    if let Some(mesh) = &object.imported_mesh {
+        ui.label(RichText::new("Triangle mesh asset").strong());
+        ui.label(format!(
+            "{} vertices, {} triangles",
+            mesh.positions.len(),
+            mesh.triangles.len()
+        ));
+        if changed {
+            set_objects(tree, scene);
+        }
         apply_keyframe_requests(tree, runtime, keyframes);
         return;
     }

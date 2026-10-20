@@ -25,6 +25,7 @@ impl Renderer {
             self.poisson_mesh.queue_missing_direct_meshes(objects, mesh_source_revision);
             if mesh_changed {
                 self.poisson_mesh.rebuild_buffer(&self.device, objects, &mut self.mesh_buffer, &mut self.mesh_vertex_count, &self.voxels);
+                self.rebuild_mesh_color_atlas();
                 self.invalidate_scene();
             }
             if let Some(requested) = self.poisson_mesh.next_request() {

@@ -186,7 +186,11 @@ pub(super) struct GpuMeshVertex {
     pub captured_color: [f32; 4],
 }
 
-const TRANSFORM_PREVIEW_SPLATS: usize = 1_500;
+const MIN_TRANSFORM_PREVIEW_SPLATS: usize = 3_000;
+
+fn transform_preview_limit(object_splats: usize) -> usize {
+    object_splats.div_ceil(5).max(MIN_TRANSFORM_PREVIEW_SPLATS)
+}
 
 fn preview_splats(instances: &[GpuSplat], limit: usize) -> Vec<GpuSplat> {
     if instances.len() <= limit { return instances.to_vec(); }
@@ -217,9 +221,12 @@ fn preview_splats(instances: &[GpuSplat], limit: usize) -> Vec<GpuSplat> {
 }
 
 impl Renderer {
-    pub fn set_splat_transform_preview(&mut self, active: bool) {
-        if self.splat_transform_preview == active { return; }
+    pub fn set_splat_transform_preview(&mut self, active: bool, object_splats: usize) {
+        let active = active && object_splats > 0;
+        let limit = transform_preview_limit(object_splats);
+        if self.splat_transform_preview == active && self.splat_transform_preview_limit == limit { return; }
         self.splat_transform_preview = active;
+        self.splat_transform_preview_limit = limit;
         self.splat_buffer_dirty = true;
         self.viewport.invalidate();
     }
@@ -263,8 +270,8 @@ impl Renderer {
             return;
         }
         let mut preview = (self.splat_transform_preview
-            && self.splat_instances.len() > TRANSFORM_PREVIEW_SPLATS)
-            .then(|| preview_splats(&self.splat_instances, TRANSFORM_PREVIEW_SPLATS));
+            && self.splat_instances.len() > self.splat_transform_preview_limit)
+            .then(|| preview_splats(&self.splat_instances, self.splat_transform_preview_limit));
         let splats = preview.as_mut().map_or(&mut self.splat_instances, |preview| preview);
         splats.sort_by(|a, b| {
             let a_depth = (Vec3::from_array(a.center_radius[..3].try_into().unwrap())
@@ -301,13 +308,16 @@ mod tests {
 
     #[test]
     fn transform_preview_caps_splats_and_keeps_selected_splats() {
+        assert_eq!(transform_preview_limit(100), 3_000);
+        assert_eq!(transform_preview_limit(12_000), 3_000);
+        assert_eq!(transform_preview_limit(30_000), 6_000);
         let splats: Vec<_> = (0..12_000).map(|index| GpuSplat {
             center_radius: [index as f32, 0.0, 0.0, 0.0],
             color_opacity: [1.0; 4],
             normal: [0.0, 1.0, 0.0, if (5_100..5_110).contains(&index) { 2.0 } else { 1.0 }],
             axes: [[0.0; 4]; 3],
         }).collect();
-        let preview = preview_splats(&splats, TRANSFORM_PREVIEW_SPLATS);
+        let preview = preview_splats(&splats, transform_preview_limit(splats.len()));
         assert_eq!(preview.len(), 12_000);
         assert_eq!(preview.iter().filter(|splat| splat.normal[3] == 2.0).count(), 10);
         assert!(preview.iter().any(|splat| splat.center_radius[0] < 100.0));
@@ -317,8 +327,8 @@ mod tests {
             splat.normal[3] = 1.0;
             splat
         }).collect();
-        assert_eq!(preview_splats(&object_preview, TRANSFORM_PREVIEW_SPLATS).len(), TRANSFORM_PREVIEW_SPLATS);
-        assert_eq!(preview_splats(&splats[..100], TRANSFORM_PREVIEW_SPLATS).len(), 100);
+        assert_eq!(preview_splats(&object_preview, transform_preview_limit(splats.len())).len(), 3_000);
+        assert_eq!(preview_splats(&splats[..100], transform_preview_limit(100)).len(), 100);
     }
 
     #[test]
@@ -329,9 +339,9 @@ mod tests {
             normal: [0.0, 1.0, 0.0, if index < 8_000 { 2.0 } else { 1.0 }],
             axes: [[0.0; 4]; 3],
         }).collect();
-        let preview = preview_splats(&splats, TRANSFORM_PREVIEW_SPLATS);
+        let preview = preview_splats(&splats, transform_preview_limit(splats.len()));
         let selected = preview.iter().filter(|splat| splat.normal[3] == 2.0).count();
-        assert_eq!(selected, TRANSFORM_PREVIEW_SPLATS);
+        assert_eq!(selected, 3_000);
         assert_eq!(preview.len() - selected, 4_000);
         assert!(preview.iter().any(|splat| splat.center_radius[0] > 11_900.0));
     }

@@ -15,7 +15,7 @@ pub struct Sample { pub point: [f32; 3], pub normal: [f32; 3] }
 pub struct Mesh { pub positions: Vec<[f32; 3]>, pub triangles: Vec<[u32; 3]> }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Settings { pub cells: usize, pub point_weight: f32, pub max_iterations: usize }
+pub struct Settings { pub cells: usize, pub point_weight: f32, pub max_iterations: usize, pub field_smoothing_passes: usize }
 
 pub const MIN_CELLS: usize = 8;
 pub const MAX_CELLS: usize = 256;
@@ -28,7 +28,7 @@ fn zeroed<T: Clone>(count: usize, value: T) -> Result<Vec<T>, String> {
 }
 
 impl Default for Settings {
-    fn default() -> Self { Self { cells: 64, point_weight: 2.0, max_iterations: 240 } }
+    fn default() -> Self { Self { cells: 64, point_weight: 2.0, max_iterations: 240, field_smoothing_passes: 0 } }
 }
 
 #[derive(Clone, Copy)]
@@ -201,12 +201,39 @@ pub fn reconstruct(samples: &[Sample], settings: Settings, cancel: Option<&Atomi
     progress(0.0);
     let grid = Grid::new(samples, settings, cancel)?;
     progress(0.1);
-    let solution = grid.solve(settings, cancel, |fraction| progress(0.1 + 0.7*fraction))?;
+    let mut solution = grid.solve(settings, cancel, |fraction| progress(0.1 + 0.7*fraction))?;
+    smooth_field(&mut solution, grid.side, settings.field_smoothing_passes, cancel)?;
     let iso = grid.interpolations.iter().map(|interp| (0..8).map(|corner| solution[interp.nodes[corner]] * interp.weights[corner]).sum::<f32>()).sum::<f32>() / samples.len() as f32;
     if !iso.is_finite() { return Err("Poisson iso value is invalid".into()); }
     let mesh = extract(&grid, &solution, iso, cancel, |fraction| progress(0.8+0.2*fraction))?;
     progress(1.0);
     Ok(mesh)
+}
+
+fn smooth_field(values: &mut [f32], side: usize, passes: usize, cancel: Option<&AtomicBool>) -> Result<(), String> {
+    if passes > 8 { return Err("Too many Poisson field smoothing passes".into()); }
+    if passes == 0 { return Ok(()); }
+    let mut next = zeroed(values.len(), 0.0)?;
+    for pass in 0..passes {
+        for axis in 0..3 {
+            let stride = match axis { 0 => 1, 1 => side, _ => side * side };
+            for z in 0..side { for y in 0..side { for x in 0..side {
+                if x == 0 && y == 0 && z % 8 == 0 && cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                    return Err("Mesh computation cancelled".into());
+                }
+                let coordinate = [x, y, z][axis];
+                let index = (z * side + y) * side + x;
+                let low = if coordinate > 0 { values[index - stride] } else { values[index] };
+                let high = if coordinate + 1 < side { values[index + stride] } else { values[index] };
+                next[index] = (low + 2.0 * values[index] + high) * 0.25;
+            } } }
+            values.copy_from_slice(&next);
+        }
+        if pass + 1 < passes && cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err("Mesh computation cancelled".into());
+        }
+    }
+    Ok(())
 }
 
 fn extract(grid: &Grid, values: &[f32], iso: f32, cancel: Option<&AtomicBool>, mut progress: impl FnMut(f32)) -> Result<Mesh, String> {
@@ -277,6 +304,18 @@ fn emit(mesh: &mut Mesh, mut triangle: [u32;3], direction: [f32;3]) {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn field_smoothing_reduces_grid_impulse_without_changing_constant_field() {
+        let mut impulse = vec![0.0; 5 * 5 * 5];
+        impulse[62] = 1.0;
+        smooth_field(&mut impulse, 5, 2, None).unwrap();
+        assert!(impulse[62] < 0.1 && impulse[62] > 0.0);
+        assert!(impulse[61] > 0.0 && impulse[63] > 0.0);
+        let mut constant = vec![3.0; 5 * 5 * 5];
+        smooth_field(&mut constant, 5, 2, None).unwrap();
+        assert!(constant.iter().all(|&value| value == 3.0));
+    }
 
     #[test]
     fn cancellation_during_solve_returns_error() {

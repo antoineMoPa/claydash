@@ -150,6 +150,7 @@ impl Renderer {
         let owners: std::collections::HashMap<_, _> = order.iter().enumerate()
             .map(|(index, object)| (object.uuid, index as u32)).collect();
         let columns = page.size / poisson_mesh::textured_glb::TILE;
+        let imported = source.iter().any(|object| object.uuid == page.root && object.imported_mesh.is_some());
         let mut vertices = Vec::<[[f32; 4]; 7]>::with_capacity(page.count);
         for i in 0..page.count {
             let triangle = page.mesh.triangle(page.first + i);
@@ -161,7 +162,7 @@ impl Renderer {
                 triangle[1].extend(0.0).to_array(),
                 triangle[2].extend(0.0).to_array(),
                 [((i as u32 % columns) * 16) as f32,
-                    ((i as u32 / columns) * 16) as f32, page.size as f32, 0.0],
+                    ((i as u32 / columns) * 16) as f32, page.size as f32, if imported { 1.0 } else { 0.0 }],
                 normals[0].extend(0.0).to_array(),
                 normals[1].extend(0.0).to_array(),
                 normals[2].extend(0.0).to_array(),

@@ -13,7 +13,8 @@ pub struct Page {
     pub png: Vec<u8>,
     /// One linear RGBA color per mesh triangle; these pages skip texture baking.
     pub colors: Option<std::sync::Arc<Vec<[f32; 4]>>>,
-    pub materials: Option<std::sync::Arc<std::collections::BTreeMap<uuid::Uuid, crate::model::Material>>>,
+    pub materials:
+        Option<std::sync::Arc<std::collections::BTreeMap<uuid::Uuid, crate::model::Material>>>,
 }
 pub fn page_size(count: usize) -> u32 {
     ((count as f32).sqrt().ceil() as u32 * TILE)
@@ -21,11 +22,7 @@ pub fn page_size(count: usize) -> u32 {
         .max(64)
 }
 pub(crate) fn triangle_uv(index: usize, size: u32) -> [[f32; 2]; 3] {
-    let columns = size / TILE;
-    let x = (index as u32 % columns) * TILE;
-    let y = (index as u32 / columns) * TILE;
-    [[x + 2, y + 2], [x + 14, y + 2], [x + 2, y + 14]]
-        .map(|p| [p[0] as f32 / size as f32, p[1] as f32 / size as f32])
+    super::geometry::baked_triangle_uv(index, size, (size / TILE).pow(2) as usize)
 }
 pub(super) fn buffer_view(data: &mut Vec<u8>, views: &mut Vec<Value>, bytes: &[u8]) -> usize {
     while data.len() % 4 != 0 {
@@ -51,10 +48,30 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
     let mut materials = Vec::new();
     for page in pages {
         if page.materials.is_some() {
-            if page.first.checked_add(page.count).is_none_or(|end|end>page.mesh.triangles.len()) { return Err("Invalid solid mesh range".into()); }
-            let primitives=super::solid_glb::append(page,&mut binary,&mut views,&mut accessors,&mut materials)?;
-            if let Some(&mesh)=object_meshes.get(&page.root) { meshes[mesh]["primitives"].as_array_mut().unwrap().extend(primitives); }
-            else { object_meshes.insert(page.root,meshes.len());nodes.push(json!({"name":page.name,"mesh":meshes.len()}));meshes.push(json!({"name":page.name,"primitives":primitives})); }
+            if page
+                .first
+                .checked_add(page.count)
+                .is_none_or(|end| end > page.mesh.triangles.len())
+            {
+                return Err("Invalid solid mesh range".into());
+            }
+            let primitives = super::solid_glb::append(
+                page,
+                &mut binary,
+                &mut views,
+                &mut accessors,
+                &mut materials,
+            )?;
+            if let Some(&mesh) = object_meshes.get(&page.root) {
+                meshes[mesh]["primitives"]
+                    .as_array_mut()
+                    .unwrap()
+                    .extend(primitives);
+            } else {
+                object_meshes.insert(page.root, meshes.len());
+                nodes.push(json!({"name":page.name,"mesh":meshes.len()}));
+                meshes.push(json!({"name":page.name,"primitives":primitives}));
+            }
             continue;
         }
         if (page.colors.is_none() && page.png.is_empty())
@@ -86,7 +103,15 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
             if let Some(sampled) = &page.colors {
                 colors.extend([sampled[page.first + i]; 3]);
             } else {
-                uvs.extend_from_slice(&triangle_uv(i, page.size));
+                if page.mesh.baked_texture.is_some() {
+                    uvs.extend_from_slice(&super::geometry::baked_triangle_uv(
+                        page.first + i,
+                        page.size,
+                        page.mesh.triangles.len(),
+                    ));
+                } else {
+                    uvs.extend_from_slice(&triangle_uv(i, page.size));
+                }
             }
         }
         let p = buffer_view(&mut binary, &mut views, bytemuck::cast_slice(&positions));
@@ -133,12 +158,18 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
             // Ignore unused transparent tiles when deciding whether this primitive
             // needs blending in a glTF viewer.
             for i in 0..page.count {
-                let columns = page.size / TILE;
-                let x = (i as u32 % columns) * TILE;
-                let y = (i as u32 / columns) * TILE;
+                let tile = if page.mesh.baked_texture.is_some() {
+                    super::geometry::baked_triangle_tile_size(page.mesh.triangles.len())
+                        .unwrap_or(TILE as usize) as u32
+                } else {
+                    TILE
+                };
+                let columns = page.size / tile;
+                let x = (i as u32 % columns) * tile;
+                let y = (i as u32 / columns) * tile;
                 if image.width() == page.size && image.height() == page.size {
-                    for row in y..y + TILE {
-                        for col in x..x + TILE {
+                    for row in y..y + tile {
+                        for col in x..x + tile {
                             transparent |= image.get_pixel(col, row).0[3] < 255;
                         }
                     }
@@ -167,7 +198,12 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
             meshes.push(json!({"name":page.name,"primitives":[primitive]}));
         }
     }
-    let extensions:Vec<_>=materials.iter().any(|m|m["extensions"]["KHR_materials_emissive_strength"].is_object()).then_some("KHR_materials_emissive_strength").into_iter().collect();
+    let extensions: Vec<_> = materials
+        .iter()
+        .any(|m| m["extensions"]["KHR_materials_emissive_strength"].is_object())
+        .then_some("KHR_materials_emissive_strength")
+        .into_iter()
+        .collect();
     let mut document=serde_json::to_vec(&json!({"asset":{"version":"2.0","generator":"Claydash"},"extensionsUsed":extensions,"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>()}],"nodes":nodes,"meshes":meshes,"materials":materials,"textures":textures,"images":images,"samplers":[{"magFilter":9729,"minFilter":9729,"wrapS":33071,"wrapT":33071}],"buffers":[{"byteLength":binary.len()}],"bufferViews":views,"accessors":accessors})).map_err(|e|e.to_string())?;
     while document.len() % 4 != 0 {
         document.push(b' ');

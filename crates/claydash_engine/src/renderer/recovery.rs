@@ -65,6 +65,7 @@ impl Renderer {
             &mut self.mesh_vertex_count,
             &self.voxels,
         );
+        self.rebuild_mesh_color_atlas();
     }
 }
 

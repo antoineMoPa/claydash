@@ -25,10 +25,16 @@ fn create_scene_bind_group(
     sampler: &wgpu::Sampler,
     image_atlas: &wgpu::Texture,
     image_sampler: &wgpu::Sampler,
+    mesh_color_atlas: &wgpu::Texture,
+    mesh_color_sampler: &wgpu::Sampler,
     box_depth_buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     let view = atlas.create_view(&Default::default());
     let image_view = image_atlas.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    let mesh_color_view = mesh_color_atlas.create_view(&wgpu::TextureViewDescriptor {
         dimension: Some(wgpu::TextureViewDimension::D2Array),
         ..Default::default()
     });
@@ -59,6 +65,14 @@ fn create_scene_bind_group(
     entries.push(wgpu::BindGroupEntry {
         binding: 13,
         resource: box_depth_buffer.as_entire_binding(),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 14,
+        resource: wgpu::BindingResource::TextureView(&mesh_color_view),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 15,
+        resource: wgpu::BindingResource::Sampler(mesh_color_sampler),
     });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("scene bind group"),
@@ -266,6 +280,21 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let mesh_color_atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("baked mesh color atlas"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mesh_color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
         let modifier_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("modifier parameters"),
             size: (MAX_OBJECTS * modifier_gpu::MAX_PARAM_SLOTS * 16) as u64,
@@ -337,6 +366,22 @@ impl Renderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ])
                 .collect::<Vec<_>>(),
         });
@@ -357,6 +402,8 @@ impl Renderer {
             &lattice_sampler,
             &image_atlas,
             &image_sampler,
+            &mesh_color_atlas,
+            &mesh_color_sampler,
             &box_depth_buffer,
         );
         let shader_source = super::material_gpu::shader_source();
@@ -478,6 +525,7 @@ impl Renderer {
             splat_buffer_capacity: 1,
             splat_draw_count: 0,
             splat_transform_preview: false,
+            splat_transform_preview_limit: 3_000,
             hybrid_enabled: false,
             boolean_pipeline: None,
             fast_boolean_pipeline: None,
@@ -505,6 +553,8 @@ impl Renderer {
             lattice_sampler,
             image_atlas,
             image_sampler,
+            mesh_color_atlas,
+            mesh_color_sampler,
             modifier_params_buffer,
             uploaded_scene_versions: [i32::MIN; 2],
             neural_jobs: Default::default(),
@@ -540,7 +590,7 @@ impl Renderer {
         self.rebuild_scene_bind_group();
     }
 
-    fn rebuild_scene_bind_group(&mut self) {
+    pub(super) fn rebuild_scene_bind_group(&mut self) {
         self.bind_group = create_scene_bind_group(
             &self.device,
             &self.bind_group_layout,
@@ -558,8 +608,44 @@ impl Renderer {
             &self.lattice_sampler,
             &self.image_atlas,
             &self.image_sampler,
+            &self.mesh_color_atlas,
+            &self.mesh_color_sampler,
             &self.box_depth_buffer,
         );
+    }
+
+    pub(super) fn rebuild_mesh_color_atlas(&mut self) {
+        let pages = self.poisson_mesh.baked_texture_pages();
+        let size = pages.iter().map(|(_, texture)| texture.size).max().unwrap_or(1);
+        let layers = pages.len().max(1) as u32;
+        let atlas = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("baked mesh color atlas"),
+            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: layers },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (layer, (_, texture)) in pages.iter().enumerate() {
+            let Ok(image) = image::load_from_memory(&texture.png) else { continue; };
+            let rgba = image.to_rgba8();
+            if rgba.width() != texture.size || rgba.height() != texture.size { continue; }
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &atlas, mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba.as_raw(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0, bytes_per_row: Some(texture.size * 4),
+                    rows_per_image: Some(texture.size),
+                },
+                wgpu::Extent3d { width: texture.size, height: texture.size, depth_or_array_layers: 1 },
+            );
+        }
+        self.mesh_color_atlas = atlas;
+        self.rebuild_scene_bind_group();
     }
 
     pub(super) fn capture_record_budget(&self) -> usize {

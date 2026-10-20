@@ -1,6 +1,7 @@
 //! Reusable SDF scene geometry, CPU queries, GPU rendering, Gaussian splats and meshes.
 //! Editor commands and observable application state live in the claydash application.
 pub mod gaussian_ply;
+pub mod gaussian_surface;
 pub mod camera;
 pub mod model;
 pub mod renderer;

@@ -247,3 +247,35 @@ fn imported_gaussian_ply_renders_without_proxy_and_follows_transform() {
     assert_ne!(mixed.rgba, blank.rgba);
     assert!(renderer.gpu_fault().is_none());
 }
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn imported_mesh_uses_live_material_instead_of_placeholder_box() {
+    use crate::model::GroupRenderRepresentation;
+    use crate::renderer::poisson_mesh::geometry::Mesh;
+    let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+        width: 65, height: 65, ..Default::default()
+    })).unwrap();
+    let mut camera = Camera::new();
+    camera.position = Vec3::new(0., 0., 3.);
+    camera.target = Vec3::ZERO;
+    let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    object.render_representation = GroupRenderRepresentation::DirectMesh;
+    object.imported_mesh = Some(std::sync::Arc::new(Mesh::from_parts(
+        vec![Vec3::new(-0.7, -0.7, 0.), Vec3::new(0.7, -0.7, 0.),
+            Vec3::new(0.7, 0.7, 0.), Vec3::new(-0.7, 0.7, 0.)],
+        vec![[0, 1, 2], [0, 2, 3]], vec![object.uuid; 2])));
+    let world = World::default();
+    let capture = |renderer: &mut Renderer, object: &SdfObject| renderer.render_offscreen(
+        &camera, std::slice::from_ref(object), world, &[], Duration::from_secs(30)
+    ).unwrap();
+    object.color = glam::Vec4::new(0.9, 0.05, 0.05, 1.);
+    object.material.color = object.color;
+    let red = capture(&mut renderer, &object);
+    object.color = glam::Vec4::new(0.05, 0.05, 0.9, 1.);
+    object.material.color = object.color;
+    let blue = capture(&mut renderer, &object);
+    let pixel = (32 * 65 + 32) * 4;
+    assert!(red.rgba[pixel] > red.rgba[pixel + 2], "mesh must show its red material");
+    assert!(blue.rgba[pixel + 2] > blue.rgba[pixel], "mesh must update to blue material");
+}

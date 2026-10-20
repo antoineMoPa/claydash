@@ -83,6 +83,10 @@ pub(super) fn mesh_source_revision(objects: &[crate::model::SdfObject]) -> i32 {
             && crate::renderer::poisson_mesh::geometry::mesh_pose_is_independent(objects, object.uuid))
         .map(|object| object.uuid).collect();
     for object in objects {
+        // Imported geometry replaces the placeholder primitive. Mark this
+        // representation change without hashing large embedded assets each frame.
+        if object.imported_mesh.is_some() { 1_u8.hash(&mut hasher); }
+        if object.imported_splats.is_some() { 2_u8.hash(&mut hasher); }
         let independent_pose = independent.contains(&object.uuid);
         // Native smooth radii and inlay shell widths are measured in world
         // units. Their direct field mesh changes shape under global scaling,
@@ -156,6 +160,33 @@ fn selection_and_camera_changes_keep_mesh_source_revision() {
     assert_eq!(mesh_source_revision(crate::model::objects_ref(&tree)), mesh_revision);
     crate::model::set_objects(&mut tree, vec![]);
     assert_ne!(mesh_source_revision(crate::model::objects_ref(&tree)), mesh_revision);
+}
+
+#[cfg(test)]
+#[test]
+fn replacing_cloud_with_mesh_changes_mesh_revision_but_material_does_not() {
+    let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    object.imported_splats = Some(std::sync::Arc::new(claydash_engine::gaussian_ply::GaussianCloud {
+        splats: vec![claydash_engine::gaussian_ply::Gaussian {
+            position: glam::Vec3::ZERO, scale: glam::Vec3::ONE,
+            rotation: glam::Quat::IDENTITY, color: [1., 0., 0.],
+            opacity: 1., sh_rest: Vec::new(),
+        }],
+    }));
+    let cloud_revision = mesh_source_revision(std::slice::from_ref(&object));
+    object.imported_splats = None;
+    object.imported_mesh = Some(std::sync::Arc::new(
+        crate::renderer::poisson_mesh::geometry::Mesh::from_parts(
+            vec![glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y],
+            vec![[0, 1, 2]], vec![object.uuid],
+        ),
+    ));
+    object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+    let mesh_revision = mesh_source_revision(std::slice::from_ref(&object));
+    assert_ne!(cloud_revision, mesh_revision);
+    object.material.color = glam::Vec4::new(0.1, 0.2, 0.8, 1.);
+    object.color = object.material.color;
+    assert_eq!(mesh_source_revision(std::slice::from_ref(&object)), mesh_revision);
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -646,9 +677,16 @@ impl App {
                 ClaydashValue::EditorState(crate::model::EditorState::Grabbing
                     | crate::model::EditorState::Rotating
                     | crate::model::EditorState::Scaling)));
+        let cloud_edit = if capture_render { None } else { crate::model::cloud_edit(&self.tree) };
+        let preview_objects = cloud_edit.as_ref().map(|edit| vec![edit.object])
+            .unwrap_or_else(|| crate::model::selected(&self.tree));
+        let preview_splats = crate::model::objects_ref(&self.tree).iter()
+            .filter(|object| preview_objects.contains(&object.uuid))
+            .filter_map(|object| object.imported_splats.as_ref())
+            .map(|cloud| cloud.splats.len())
+            .sum();
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_splat_transform_preview(transform_preview);
-            let cloud_edit = if capture_render { None } else { crate::model::cloud_edit(&self.tree) };
+            renderer.set_splat_transform_preview(transform_preview, preview_splats);
             renderer.set_cloud_edit_selection(cloud_edit.as_ref().map(|edit| (edit.object, edit.indices.as_slice())));
             let scene_versions = scene_render_versions(&self.tree, capture_render);
             #[cfg(all(not(target_arch = "wasm32"), unix))]

@@ -50,6 +50,8 @@ impl Surface {
             triangles,
             owners,
             normals: vec![],
+            colors: vec![],
+            baked_texture: None,
         }
     }
     fn append(&mut self, other: Surface) {

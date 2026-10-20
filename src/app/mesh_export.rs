@@ -222,15 +222,20 @@ impl App {
                 Ok(Ok(ExportResult::Meshes(objects))) => {
                     job.completed = None;
                     for (root, object, colors) in objects {
-                        let materials=if colors.is_none() { crate::renderer::poisson_mesh::solid_glb::materials_for_mesh(&job.source,&object.mesh).map(Arc::new) } else { None };
+                        let baked = if colors.is_none() && job.source.iter()
+                            .find(|source| source.uuid == root)
+                            .is_some_and(|source| source.material_id.is_none()) {
+                            object.mesh.baked_texture.clone()
+                        } else { None };
+                        let materials=if colors.is_none() && baked.is_none() { crate::renderer::poisson_mesh::solid_glb::materials_for_mesh(&job.source,&object.mesh).map(Arc::new) } else { None };
                         let mesh = Arc::new(object.mesh);
-                        let page_triangles = if colors.is_some() || materials.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
+                        let page_triangles = if baked.is_some() || colors.is_some() || materials.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
                         for first in (0..mesh.triangles.len()).step_by(page_triangles) {
                             let count = (mesh.triangles.len() - first).min(page_triangles);
                             job.pages.push(Page { name: object.name.clone(), root,
                                 mesh: mesh.clone(), first, count,
-                                size: if colors.is_some() { 64 } else { crate::renderer::poisson_mesh::textured_glb::page_size(count) },
-                                png: Vec::new(), colors: colors.clone(), materials: materials.clone() });
+                                size: if colors.is_some() { 64 } else { baked.as_ref().map_or_else(|| crate::renderer::poisson_mesh::textured_glb::page_size(count), |texture| texture.size) },
+                                png: baked.as_ref().map_or_else(Vec::new, |texture| texture.png.clone()), colors: colors.clone(), materials: materials.clone() });
                         }
                     }
                     if job.pages.is_empty() { finish = Some(Err("There are no meshes to export".into())); }
@@ -240,7 +245,7 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => finish = Some(Err("Export worker stopped unexpectedly".into())),
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
-        } else if job.texture_index < job.pages.len() && (job.pages[job.texture_index].colors.is_some() || job.pages[job.texture_index].materials.is_some()) {
+        } else if job.texture_index < job.pages.len() && (job.pages[job.texture_index].colors.is_some() || job.pages[job.texture_index].materials.is_some() || !job.pages[job.texture_index].png.is_empty()) {
             job.texture_index += 1;
         } else if job.texture_index < job.pages.len() {
             *job.stage.lock().unwrap() = ExportStage::Baking { index: job.texture_index + 1,

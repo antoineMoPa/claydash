@@ -325,6 +325,8 @@ fn extract(
         triangles: vec![],
         owners: vec![],
         normals: vec![],
+        colors: vec![],
+        baked_texture: None,
     };
     let mut edges = HashMap::<(u64, u64), u32>::new();
     let mut budget = super::super::cooperative_work::WorkerBudget::new();

@@ -103,7 +103,7 @@ fn cube_mesh(
     mut keep_working: impl FnMut() -> bool,
 ) -> Result<VoxelGeometry, String> {
     let mut mesh = Mesh { positions: Vec::new(), triangles: Vec::new(),
-        owners: Vec::new(), normals: Vec::new() };
+        owners: Vec::new(), normals: Vec::new(), colors: Vec::new(), baked_texture: None };
     let mut colors = Vec::new();
     for (index, (key, (owner, color))) in cells.iter().enumerate() {
         if index % 128 == 0 && !keep_working() { return Err("Voxel build cancelled".into()); }

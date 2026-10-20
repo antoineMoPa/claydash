@@ -285,6 +285,8 @@ fn empty_mesh() -> Mesh {
         triangles: vec![],
         owners: vec![],
         normals: vec![],
+        colors: vec![],
+        baked_texture: None,
     }
 }
 
@@ -342,6 +344,8 @@ fn combine(
                 );
                 joined.owners.extend_from_slice(&right.owners);
                 joined.normals.clear();
+                joined.colors.clear();
+                joined.baked_texture = None;
                 joined
             }
         });
@@ -396,6 +400,8 @@ fn combine(
         triangles,
         owners,
         normals: vec![],
+        colors: vec![],
+        baked_texture: None,
     })
 }
 

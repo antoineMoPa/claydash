@@ -7,6 +7,7 @@ struct PoissonBakeVertex {
     @location(4) @interpolate(flat) na: vec3<f32>,
     @location(5) @interpolate(flat) nb: vec3<f32>,
     @location(6) @interpolate(flat) nc: vec3<f32>,
+    @location(7) @interpolate(flat) imported: u32,
 }
 @vertex fn vs_poisson_bake(@builtin(vertex_index) vertex: u32,
     @location(0) a: vec4<f32>, @location(1) b: vec4<f32>,
@@ -22,6 +23,7 @@ struct PoissonBakeVertex {
     output.tile = uv * 16.0;
     output.a = a; output.b = b.xyz; output.c = c.xyz;
     output.na = na.xyz; output.nb = nb.xyz; output.nc = nc.xyz;
+    output.imported = u32(tile.w + 0.5);
     return output;
 }
 @fragment fn fs_poisson_bake(input: PoissonBakeVertex) -> @location(0) vec4<f32> {
@@ -35,6 +37,6 @@ struct PoissonBakeVertex {
         + input.nb * uv.x + input.nc * uv.y);
     // Export base colour, not viewport illumination or camera exposure. The
     // importing renderer supplies directional lights and specular highlights.
-    let sampled = poisson_surface(point, normal, u32(input.a.w + 0.5));
+    let sampled = poisson_surface(point, normal, u32(input.a.w + 0.5), input.imported != 0u);
     return vec4(max(sampled.surface.color, vec3(0.0)), clamp(sampled.surface.opacity, 0.0, 1.0));
 }

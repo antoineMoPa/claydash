@@ -775,6 +775,29 @@ fn assign_material(
 }
 
 #[cfg(test)]
+#[test]
+fn imported_mesh_receives_selected_material() {
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+    object.imported_mesh = Some(std::sync::Arc::new(
+        crate::renderer::poisson_mesh::geometry::Mesh::from_parts(
+            vec![glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y],
+            vec![[0, 1, 2]], vec![object.uuid],
+        ),
+    ));
+    let id = object.uuid;
+    set_objects(&mut tree, vec![object]);
+    crate::model::set_selected_exact(&mut tree, vec![id]);
+    let material = Material::fabric_preset(crate::model::FabricPreset::Jersey);
+    apply_material(&mut tree, material);
+    let updated = objects(&tree).pop().unwrap();
+    assert_eq!(updated.material, material);
+    assert_eq!(updated.color, material.color);
+    assert!(updated.imported_mesh.is_some());
+}
+
+#[cfg(test)]
 mod emission_ui_tests {
     use super::*;
 
