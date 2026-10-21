@@ -126,7 +126,11 @@ impl WebJob {
         let error_result = result.clone();
         let error_context = context.clone();
         let onerror = Closure::wrap(Box::new(move |error: web_sys::ErrorEvent| {
-            *error_result.borrow_mut() = Some(Err(format!("Mesh worker failed: {}", error.message())));
+            let detail = js_sys::Reflect::get(error.as_ref(), &wasm_bindgen::JsValue::from_str("message"))
+                .ok().and_then(|value| value.as_string())
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| "worker script could not be loaded".to_owned());
+            *error_result.borrow_mut() = Some(Err(format!("Mesh worker failed: {detail}")));
             error_context.request_repaint();
         }) as Box<dyn FnMut(_)>);
         worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
@@ -206,7 +210,11 @@ impl WebBytesJob {
         let error_result = result.clone();
         let error_context = context.clone();
         let onerror = Closure::wrap(Box::new(move |error: web_sys::ErrorEvent| {
-            *error_result.borrow_mut() = Some(Err(format!("Mesh encoder failed: {}", error.message())));
+            let detail = js_sys::Reflect::get(error.as_ref(), &wasm_bindgen::JsValue::from_str("message"))
+                .ok().and_then(|value| value.as_string())
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| "worker script could not be loaded".to_owned());
+            *error_result.borrow_mut() = Some(Err(format!("Mesh encoder failed: {detail}")));
             error_context.request_repaint();
         }) as Box<dyn FnMut(_)>);
         worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));

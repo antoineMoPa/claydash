@@ -57,7 +57,11 @@ impl WebPlyImport {
         });
         let error_ctx = ctx;
         let onerror = Closure::<dyn FnMut(web_sys::ErrorEvent)>::new(move |event: web_sys::ErrorEvent| {
-            let _ = tx.send(WebDocumentMessage::PlyError { request, message: event.message() });
+            let message = js_sys::Reflect::get(event.as_ref(), &JsValue::from_str("message"))
+                .ok().and_then(|value| value.as_string())
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| "Could not load Gaussian PLY worker script".to_owned());
+            let _ = tx.send(WebDocumentMessage::PlyError { request, message });
             error_ctx.request_repaint();
         });
         worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
