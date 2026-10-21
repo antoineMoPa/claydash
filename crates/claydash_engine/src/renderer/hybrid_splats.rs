@@ -266,35 +266,79 @@ impl Renderer {
         // Back to front alpha composition preserves overlapping layers.
         let forward = camera.target - camera.position;
         if !self.splat_buffer_dirty
-            && self.splat_sort_camera == Some((camera.position, forward)) {
+            && self.splat_sort_camera == Some((camera.position, forward))
+            && self.splat_upload_cursor == self.splat_upload_total {
             return;
         }
         let mut preview = (self.splat_transform_preview
             && self.splat_instances.len() > self.splat_transform_preview_limit)
             .then(|| preview_splats(&self.splat_instances, self.splat_transform_preview_limit));
         let splats = preview.as_mut().map_or(&mut self.splat_instances, |preview| preview);
-        splats.sort_by(|a, b| {
-            let a_depth = (Vec3::from_array(a.center_radius[..3].try_into().unwrap())
-                - camera.position)
-                .dot(forward);
-            let b_depth = (Vec3::from_array(b.center_radius[..3].try_into().unwrap())
-                - camera.position)
-                .dot(forward);
-            b_depth.total_cmp(&a_depth)
-        });
-        let bytes = bytemuck::cast_slice(splats);
-        self.splat_draw_count = splats.len() as u32;
-        if splats.len() > self.splat_buffer_capacity {
-            self.splat_buffer_capacity = splats.len();
-            self.splat_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("splat instances"),
-                size: bytes.len().max(std::mem::size_of::<GpuSplat>()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
+        if self.splat_buffer_dirty || self.splat_sort_camera != Some((camera.position, forward)) {
+            splats.sort_by(|a, b| {
+                let a_depth = (Vec3::from_array(a.center_radius[..3].try_into().unwrap())
+                    - camera.position)
+                    .dot(forward);
+                let b_depth = (Vec3::from_array(b.center_radius[..3].try_into().unwrap())
+                    - camera.position)
+                    .dot(forward);
+                b_depth.total_cmp(&a_depth)
             });
+            self.splat_upload_cursor = 0;
+            self.splat_upload_total = splats.len();
+            self.splat_draw_count = 0;
+            self.splat_first_count = 0;
+            for (_, count) in &mut self.splat_extra_buffers { *count = 0; }
         }
-        if !bytes.is_empty() {
-            self.queue.write_buffer(&self.splat_buffer, 0, bytes);
+        let bytes: &[u8] = bytemuck::cast_slice(splats);
+        let stride = std::mem::size_of::<GpuSplat>();
+        let max_page_splats = (self.device.limits().max_buffer_size.min(16 * 1024 * 1024)
+            / stride as u64).max(1) as usize;
+        let pages_this_frame = if cfg!(target_arch = "wasm32") && !self.splat_transform_preview { 1 } else { usize::MAX };
+        for _ in 0..pages_this_frame {
+            if self.splat_upload_cursor == splats.len() { break; }
+            let start = self.splat_upload_cursor;
+            let end = (start + max_page_splats).min(splats.len());
+            let page = &bytes[start * stride..end * stride];
+            let count = (end - start) as u32;
+            if start == 0 {
+                if end > self.splat_buffer_capacity {
+                    self.splat_buffer_capacity = end;
+                    self.splat_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("splat instances"), size: page.len() as u64,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                }
+                self.queue.write_buffer(&self.splat_buffer, 0, page);
+                self.splat_first_count = count;
+            } else {
+                let page_index = start / max_page_splats - 1;
+                if page_index == self.splat_extra_buffers.len() {
+                    let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("splat instances page"), size: page.len() as u64,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.splat_extra_buffers.push((buffer, count));
+                } else {
+                    let (buffer, stored_count) = &mut self.splat_extra_buffers[page_index];
+                    if buffer.size() < page.len() as u64 {
+                        *buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("splat instances page"), size: page.len() as u64,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                    }
+                    *stored_count = count;
+                }
+                self.queue.write_buffer(&self.splat_extra_buffers[page_index].0, 0, page);
+            }
+            self.splat_draw_count += count;
+            self.splat_upload_cursor = end;
+        }
+        if self.splat_upload_cursor == splats.len() {
+            self.splat_extra_buffers.truncate(splats.len().div_ceil(max_page_splats).saturating_sub(1));
         }
         self.splat_sort_camera = Some((camera.position, forward));
         self.splat_buffer_dirty = false;

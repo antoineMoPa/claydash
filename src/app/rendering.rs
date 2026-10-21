@@ -540,6 +540,8 @@ impl App {
         let mut cancel_render = false;
         let material_version_before_ui = self.tree.path_version("scene.materials");
         let render_progress = self.render_progress();
+        #[cfg(target_arch = "wasm32")]
+        let mut cancel_ply_import = false;
         let interaction_guide = self.interactions.active_guide();
         let mut output = egui.run_ui(input, |ui| {
             (file_action, cancel_render) = self.ui.draw(
@@ -553,7 +555,28 @@ impl App {
             );
             self.mesh_export_options_panel(ui);
             self.mesh_export_panel(ui);
+            #[cfg(target_arch = "wasm32")]
+            if let Some(job) = self.web_ply_import.as_ref() {
+                egui::Window::new("Importing Gaussian PLY")
+                    .collapsible(false)
+                    .show(ui.ctx(), |ui| {
+                        ui.label(&job.name);
+                        if job.total > 0 {
+                            let preparing = job.parsed < job.total;
+                            let progress = if preparing { job.parsed } else { job.loaded };
+                            ui.add(egui::ProgressBar::new((job.parsed + job.loaded) as f32 / (2 * job.total) as f32)
+                                .text(format!("{}: {} / {} splats",
+                                    if preparing { "Parsing" } else { "Loading" }, progress, job.total)));
+                        } else {
+                            ui.spinner();
+                            ui.label("Reading and parsing PLY");
+                        }
+                        if ui.button("Cancel").clicked() { cancel_ply_import = true; }
+                    });
+            }
         });
+        #[cfg(target_arch = "wasm32")]
+        if cancel_ply_import { self.web_ply_import = None; }
         let preview_requests = egui.data(|data| {
             data.get_temp::<crate::renderer::MaterialPreviewRequests>(
                 crate::renderer::MaterialPreviewRequests::egui_id(),

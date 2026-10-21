@@ -302,7 +302,11 @@ impl Renderer {
                     pass.set_pipeline(&self.splat_pipeline);
                     pass.set_bind_group(0, &self.splat_camera_bind_group, &[]);
                     pass.set_vertex_buffer(0, self.splat_buffer.slice(..));
-                    pass.draw(0..6, 0..self.splat_instances.len() as u32);
+                    pass.draw(0..6, 0..self.splat_first_count);
+                    for (buffer, count) in &self.splat_extra_buffers {
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        pass.draw(0..6, 0..*count);
+                    }
                 }
             }
             let start = Instant::now();
@@ -409,6 +413,8 @@ impl Renderer {
                     splat_pipeline: &self.splat_pipeline,
                     splat_bind_group: &self.splat_camera_bind_group,
                     splat_buffer: &self.splat_buffer,
+                    splat_first_count: self.splat_first_count,
+                    splat_extra_buffers: &self.splat_extra_buffers,
                     splat_count: self.splat_instances.len() as u32,
                     mesh_pipeline: &self.mesh_pipeline,
                     mesh_bind_group: &self.bind_group,
@@ -691,6 +697,8 @@ impl Renderer {
                     splat_pipeline: &self.splat_pipeline,
                     splat_bind_group: &self.splat_camera_bind_group,
                     splat_buffer: &self.splat_buffer,
+                    splat_first_count: self.splat_first_count,
+                    splat_extra_buffers: &self.splat_extra_buffers,
                     splat_count: self.splat_instances.len() as u32,
                     mesh_pipeline: &self.mesh_pipeline,
                     mesh_bind_group: &self.bind_group,

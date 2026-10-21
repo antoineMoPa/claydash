@@ -20,22 +20,7 @@ struct PackedCloud {
 
 impl Serialize for GaussianCloud {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut bytes = Vec::new();
-        for g in &self.splats {
-            bytes.push(g.sh_rest.len() as u8);
-            for value in g
-                .position
-                .to_array()
-                .into_iter()
-                .chain(g.scale.to_array())
-                .chain(g.rotation.to_array())
-                .chain(g.color)
-                .chain([g.opacity])
-                .chain(g.sh_rest.iter().copied())
-            {
-                bytes.extend_from_slice(&value.to_le_bytes());
-            }
-        }
+        let bytes = encode_batch(&self.splats);
         PackedCloud {
             encoding: "gaussian-f32-le-v1".into(),
             count: self.splats.len(),
@@ -57,41 +42,67 @@ impl<'de> Deserialize<'de> for GaussianCloud {
             return Err(error());
         }
         let bytes = STANDARD.decode(&stored.data).map_err(|_| error())?;
-        let mut data = bytes.as_slice();
-        let mut splats = Vec::new();
-        for _ in 0..stored.count {
-            let (&sh_count, rest) = data.split_first().ok_or_else(error)?;
-            if !matches!(sh_count, 0 | 9 | 24 | 45) {
-                return Err(error());
-            }
-            data = rest;
-            let mut values = Vec::with_capacity(14 + sh_count as usize);
-            for _ in 0..14 + sh_count as usize {
-                values.push(Scalar::F32.read(&mut data, false).map_err(|_| error())?);
-            }
-            let g = Gaussian {
-                position: Vec3::from_slice(&values[0..3]),
-                scale: Vec3::from_slice(&values[3..6]),
-                rotation: Quat::from_xyzw(values[6], values[7], values[8], values[9]),
-                color: [values[10], values[11], values[12]],
-                opacity: values[13],
-                sh_rest: values[14..].to_vec(),
-            };
-            if values.iter().any(|v| !v.is_finite())
-                || g.scale.min_element() <= 0.
-                || (g.rotation.length_squared() - 1.).abs() > 0.001
-                || !(0. ..=1.).contains(&g.opacity)
-                || g.color.iter().any(|c| *c < 0.)
-            {
-                return Err(error());
-            }
-            splats.push(g);
-        }
-        if !data.is_empty() {
-            return Err(error());
-        }
+        let splats = decode_batch(&bytes, stored.count).map_err(|_| error())?;
         Ok(Self { splats })
     }
+}
+
+/// Compact batches transferred from the web import worker. The layout matches
+/// the existing embedded asset representation, without its base64 wrapper.
+pub fn encode_batch(splats: &[Gaussian]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for g in splats {
+        bytes.push(g.sh_rest.len() as u8);
+        for value in g.position.to_array().into_iter()
+            .chain(g.scale.to_array())
+            .chain(g.rotation.to_array())
+            .chain(g.color)
+            .chain([g.opacity])
+            .chain(g.sh_rest.iter().copied())
+        {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+pub fn decode_batch(bytes: &[u8], count: usize) -> Result<Vec<Gaussian>, String> {
+    if count > MAX_SPLATS { return Err("Too many Gaussians".into()); }
+    let error = || "Invalid Gaussian batch".to_string();
+    let mut data = bytes;
+    let mut splats = Vec::with_capacity(count.min(bytes.len() / 57));
+    for _ in 0..count {
+        let (&sh_count, rest) = data.split_first().ok_or_else(error)?;
+        if !matches!(sh_count, 0 | 9 | 24 | 45) {
+            return Err(error());
+        }
+        data = rest;
+        let mut values = Vec::with_capacity(14 + sh_count as usize);
+        for _ in 0..14 + sh_count as usize {
+            values.push(Scalar::F32.read(&mut data, false).map_err(|_| error())?);
+        }
+        let g = Gaussian {
+            position: Vec3::from_slice(&values[0..3]),
+            scale: Vec3::from_slice(&values[3..6]),
+            rotation: Quat::from_xyzw(values[6], values[7], values[8], values[9]),
+            color: [values[10], values[11], values[12]],
+            opacity: values[13],
+            sh_rest: values[14..].to_vec(),
+        };
+        if values.iter().any(|v| !v.is_finite())
+            || g.scale.min_element() <= 0.
+            || (g.rotation.length_squared() - 1.).abs() > 0.001
+            || !(0. ..=1.).contains(&g.opacity)
+            || g.color.iter().any(|c| *c < 0.)
+        {
+            return Err(error());
+        }
+        splats.push(g);
+    }
+    if !data.is_empty() {
+        return Err(error());
+    }
+    Ok(splats)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,6 +181,10 @@ impl Scalar {
 }
 
 pub fn read(bytes: &[u8]) -> Result<GaussianCloud, String> {
+    read_with_progress(bytes, |_, _| {})
+}
+
+pub fn read_with_progress(bytes: &[u8], mut progress: impl FnMut(usize, usize)) -> Result<GaussianCloud, String> {
     let mut offset = 0;
     let mut lines = Vec::new();
     loop {
@@ -307,6 +322,7 @@ pub fn read(bytes: &[u8]) -> Result<GaussianCloud, String> {
             opacity: 1. / (1. + (-v(13)).exp()),
             sh_rest: sh.iter().map(|(_, i)| values[*i]).collect(),
         });
+        if row % 4096 == 4095 || row + 1 == count { progress(row + 1, count); }
     }
     Ok(GaussianCloud { splats })
 }
@@ -333,6 +349,9 @@ mod tests {
             values.map(|n| n.to_string()).join(" ")
         );
         let expected = read(ascii.as_bytes()).unwrap();
+        let mut progress = Vec::new();
+        assert_eq!(read_with_progress(ascii.as_bytes(), |done, total| progress.push((done, total))).unwrap(), expected);
+        assert_eq!(progress, vec![(1, 1)]);
         let g = &expected.splats[0];
         assert_eq!(g.position, Vec3::new(1., 2., 3.));
         assert_eq!(g.rotation, Quat::IDENTITY);
@@ -372,6 +391,22 @@ mod tests {
 #[cfg(test)]
 mod asset_tests {
     use super::*;
+    #[test]
+    fn worker_batch_round_trip_and_rejects_truncation() {
+        let splats = vec![Gaussian {
+            position: Vec3::new(1., 2., 3.),
+            scale: Vec3::splat(0.2),
+            rotation: Quat::IDENTITY,
+            color: [0.1, 0.2, 0.3],
+            opacity: 0.8,
+            sh_rest: vec![0.25; 9],
+        }];
+        let mut bytes = encode_batch(&splats);
+        assert_eq!(decode_batch(&bytes, 1).unwrap(), splats);
+        assert!(decode_batch(&bytes, 2).is_err());
+        bytes.pop();
+        assert!(decode_batch(&bytes, 1).is_err());
+    }
     #[test]
     fn packed_asset_retains_all_coefficients_and_rejects_corrupt_payloads() {
         let cloud = GaussianCloud {

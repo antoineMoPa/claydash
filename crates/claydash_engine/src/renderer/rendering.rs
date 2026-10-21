@@ -265,6 +265,8 @@ impl Renderer {
                 splat_pipeline: &self.splat_pipeline,
                 splat_bind_group: &self.splat_camera_bind_group,
                 splat_buffer: &self.splat_buffer,
+                splat_first_count: self.splat_first_count,
+                splat_extra_buffers: &self.splat_extra_buffers,
                 splat_count: if self.hybrid_enabled { self.splat_draw_count } else { 0 },
                 mesh_pipeline: &self.mesh_pipeline,
                 mesh_bind_group: &self.bind_group,
@@ -284,6 +286,7 @@ impl Renderer {
         // tile is part of this submission, the later texture copy observes it.
         let capture = capture
             && !computing_optimization
+            && self.splat_upload_cursor == self.splat_upload_total
             && self.viewport.matches(&view_key)
             && (!viewport_refine || self.viewport.is_refined())
             && !self.capture_pending;
@@ -485,6 +488,12 @@ impl Renderer {
         self.queue
             .submit(callback_commands.into_iter().chain([encoder.finish()]));
         self.viewport.submitted(&self.queue, work, readback);
+        // Invalidation discards an encoded batch. Wait until the scheduler
+        // owns this submission before requesting the next upload page.
+        if self.splat_upload_cursor < self.splat_upload_total {
+            self.viewport.invalidate();
+            egui.request_repaint();
+        }
         self.free_textures(output);
         let presented = frame.is_some();
         if let Some(frame) = frame {

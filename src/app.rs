@@ -14,6 +14,9 @@ mod mesh_export;
 #[cfg(target_arch = "wasm32")]
 #[path = "app/web_mesh_export.rs"]
 mod mesh_export;
+#[cfg(target_arch = "wasm32")]
+#[path = "app/web_ply_import.rs"]
+mod web_ply_import;
 use initialization::data_tree_with_scene;
 
 #[cfg(target_arch = "wasm32")]
@@ -67,7 +70,11 @@ use crate::document;
 
 #[cfg(target_arch = "wasm32")]
 enum WebDocumentMessage {
-    ImportedSplats { request: u64, name: String, bytes: Vec<u8> },
+    PlyFile { request: Option<u64>, file: web_sys::File },
+    PlyBatch { request: u64, data: Vec<u8>, count: usize, loaded: usize, total: usize },
+    PlyProgress { request: u64, parsed: usize, total: usize },
+    PlyComplete { request: u64, total: usize },
+    PlyError { request: u64, message: String },
     DroppedFile { name: String, bytes: Vec<u8> },
     Opened {
         request: u64,
@@ -150,6 +157,10 @@ pub struct App {
     document_rx: Receiver<WebDocumentMessage>,
     #[cfg(target_arch = "wasm32")]
     document_request: u64,
+    #[cfg(target_arch = "wasm32")]
+    web_ply_generation: u64,
+    #[cfg(target_arch = "wasm32")]
+    web_ply_import: Option<web_ply_import::WebPlyImport>,
     #[cfg(target_arch = "wasm32")]
     web_loading_complete: bool,
 }
@@ -245,6 +256,8 @@ impl App {
 
     fn cancel_document_work(&mut self) {
         self.mesh_export_options = None;
+        #[cfg(target_arch = "wasm32")]
+        { self.web_ply_import = None; }
         self.cancel_render();
         self.cancel_mesh_export_for_document_change();
         // The worker retains its cancellation token. Its eventual completion
@@ -269,6 +282,10 @@ impl App {
 
     fn import_gaussian_ply(&mut self, name: &str, bytes: &[u8]) -> Result<uuid::Uuid, String> {
         let cloud = claydash_engine::gaussian_ply::read(bytes)?;
+        Ok(self.install_gaussian_cloud(name, cloud))
+    }
+
+    fn install_gaussian_cloud(&mut self, name: &str, cloud: claydash_engine::gaussian_ply::GaussianCloud) -> uuid::Uuid {
         let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
         object.name = name.to_owned();
         object.imported_splats = Some(std::sync::Arc::new(cloud));
@@ -278,7 +295,8 @@ impl App {
         self.tree.make_undo_redo_snapshot();
         crate::model::set_objects(&mut self.tree, objects);
         crate::model::set_selected_exact(&mut self.tree, vec![id]);
-        Ok(id)
+        self.document.mark_cloud_imported(&self.tree, id);
+        id
     }
 
     fn import_image_plane(&mut self, name: &str, bytes: Vec<u8>) -> Result<uuid::Uuid, String> {
@@ -470,6 +488,11 @@ impl App {
                 let Some(file) = files.get(index) else { continue };
                 let tx = tx.clone();
                 let ctx = ctx.clone();
+                if file.name().to_ascii_lowercase().ends_with(".ply") {
+                    let _ = tx.send(WebDocumentMessage::PlyFile { request: None, file });
+                    ctx.request_repaint();
+                    continue;
+                }
                 wasm_bindgen_futures::spawn_local(async move {
                     let name = file.name();
                     let promise = file.array_buffer();
@@ -702,6 +725,7 @@ impl App {
                 | FileMenuAction::OpenExample(_)
         ) {
             self.document_request = self.document_request.wrapping_add(1);
+            self.web_ply_import = None;
         }
         let request = self.document_request;
         match action {
@@ -710,9 +734,7 @@ impl App {
                 let ctx = self.egui.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Some(file) = rfd::AsyncFileDialog::new().add_filter("Gaussian PLY", &["ply"]).pick_file().await {
-                        let name = file.file_name();
-                        let bytes = file.read().await;
-                        let _ = tx.send(WebDocumentMessage::ImportedSplats { request, name, bytes });
+                        let _ = tx.send(WebDocumentMessage::PlyFile { request: Some(request), file: file.inner().clone() });
                         ctx.request_repaint();
                     }
                 });
@@ -851,17 +873,65 @@ impl App {
 
     #[cfg(target_arch = "wasm32")]
     fn process_web_document_messages(&mut self) {
-        while let Ok(message) = self.document_rx.try_recv() {
+        for _ in 0..4 {
+            let Ok(message) = self.document_rx.try_recv() else { break };
             match message {
-                WebDocumentMessage::DroppedFile { name, bytes } => {
-                    self.handle_dropped_bytes(&name, bytes);
+                WebDocumentMessage::PlyFile { request, file } => {
+                    if request.is_some_and(|request| request != self.document_request) { continue; }
+                    self.web_ply_import = None;
+                    self.web_ply_generation = self.web_ply_generation.wrapping_add(1);
+                    let request = self.web_ply_generation;
+                    match web_ply_import::WebPlyImport::start(file, request, self.document_tx.clone(), self.egui.clone()) {
+                        Ok(job) => self.web_ply_import = Some(job),
+                        Err(error) => self.document.set_error("import Gaussian PLY", error),
+                    }
                 }
-                WebDocumentMessage::ImportedSplats { request, name, bytes } => {
-                    if request == self.document_request {
-                        if let Err(error) = self.import_gaussian_ply(&name, &bytes) {
-                            self.document.set_error("import Gaussian PLY", error);
+                WebDocumentMessage::PlyBatch { request, data, count, loaded, total } => {
+                    if let Some(job) = self.web_ply_import.as_mut().filter(|job| job.request == request) {
+                        match claydash_engine::gaussian_ply::decode_batch(&data, count) {
+                            Ok(batch) => {
+                                if job.splats.capacity() < total
+                                    && job.splats.try_reserve_exact(total.saturating_sub(job.splats.len())).is_err()
+                                {
+                                    self.web_ply_import = None;
+                                    self.document.set_error("import Gaussian PLY", "not enough memory for the cloud");
+                                } else {
+                                    job.splats.extend(batch);
+                                    job.loaded = loaded;
+                                    job.total = total;
+                                }
+                            }
+                            Err(error) => {
+                                self.web_ply_import = None;
+                                self.document.set_error("import Gaussian PLY", error);
+                            }
                         }
                     }
+                }
+                WebDocumentMessage::PlyProgress { request, parsed, total } => {
+                    if let Some(job) = self.web_ply_import.as_mut().filter(|job| job.request == request) {
+                        job.parsed = parsed;
+                        job.total = total;
+                    }
+                }
+                WebDocumentMessage::PlyComplete { request, total } => {
+                    if self.web_ply_import.as_ref().is_some_and(|job| job.request == request) {
+                        let mut job = self.web_ply_import.take().unwrap();
+                        if job.splats.len() == total {
+                            self.install_gaussian_cloud(&job.name, claydash_engine::gaussian_ply::GaussianCloud { splats: std::mem::take(&mut job.splats) });
+                        } else {
+                            self.document.set_error("import Gaussian PLY", "incomplete worker result");
+                        }
+                    }
+                }
+                WebDocumentMessage::PlyError { request, message } => {
+                    if self.web_ply_import.as_ref().is_some_and(|job| job.request == request) {
+                        self.web_ply_import = None;
+                        self.document.set_error("import Gaussian PLY", message);
+                    }
+                }
+                WebDocumentMessage::DroppedFile { name, bytes } => {
+                    self.handle_dropped_bytes(&name, bytes);
                 }
                 WebDocumentMessage::Opened {
                     request,
@@ -916,6 +986,7 @@ impl App {
                 }
             }
         }
+        if self.web_ply_import.is_some() { self.egui.request_repaint(); }
     }
 }
 

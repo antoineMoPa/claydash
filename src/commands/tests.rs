@@ -115,6 +115,38 @@ fn invert_selection_selects_only_previously_unselected_objects() {
 }
 
 #[test]
+fn invert_selection_in_splat_edit_mode_keeps_object_selected() {
+    use claydash_engine::gaussian_ply::{Gaussian, GaussianCloud};
+    use std::sync::Arc;
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create(TYPE_BOX);
+    object.imported_splats = Some(Arc::new(GaussianCloud {
+        splats: (0..3).map(|_| Gaussian {
+            position: glam::Vec3::ZERO,
+            scale: glam::Vec3::ONE,
+            rotation: glam::Quat::IDENTITY,
+            color: [1.; 3],
+            opacity: 1.,
+            sh_rest: vec![],
+        }).collect(),
+    }));
+    let id = object.uuid;
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_cloud_edit(&mut tree, Some(crate::model::CloudEdit { object: id, indices: vec![1] }));
+    invert_selection(&mut tree);
+    assert_eq!(crate::model::cloud_edit(&tree).unwrap().indices, vec![0, 2]);
+    assert_eq!(selected(&tree), vec![id]);
+    invert_selection(&mut tree);
+    assert_eq!(crate::model::cloud_edit(&tree).unwrap().indices, vec![1]);
+    crate::model::set_cloud_edit(&mut tree, Some(crate::model::CloudEdit { object: id, indices: vec![] }));
+    invert_selection(&mut tree);
+    assert_eq!(crate::model::cloud_edit(&tree).unwrap().indices, vec![0, 1, 2]);
+    invert_selection(&mut tree);
+    assert!(crate::model::cloud_edit(&tree).unwrap().indices.is_empty());
+}
+
+#[test]
 fn deleting_a_group_removes_its_operands() {
     let mut tree = group_tree();
     delete(&mut tree);

@@ -493,6 +493,37 @@ fn object_list_points_have_no_creation_section_and_selection_drives_g() {
 }
 
 #[test]
+fn clicking_current_cloud_in_object_list_exits_point_edit_mode() {
+    use claydash_engine::gaussian_ply::{Gaussian, GaussianCloud};
+    let ctx = egui::Context::default();
+    let mut tree = DataTree::default();
+    let mut cloud = SdfObject::create(sdf_consts::TYPE_BOX);
+    cloud.name = "Cloud asset".into();
+    cloud.imported_splats = Some(std::sync::Arc::new(GaussianCloud { splats: vec![Gaussian {
+        position: Vec3::ZERO,
+        scale: Vec3::ONE,
+        rotation: glam::Quat::IDENTITY,
+        color: [1.; 3],
+        opacity: 1.,
+        sh_rest: vec![],
+    }] }));
+    let id = cloud.uuid;
+    let mut other = SdfObject::create(sdf_consts::TYPE_SPHERE);
+    other.name = "Other object".into();
+    let other_id = other.uuid;
+    set_objects(&mut tree, vec![cloud, other]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_cloud_edit(&mut tree, Some(crate::model::CloudEdit { object: id, indices: vec![0] }));
+    click_scene_text(&ctx, &mut tree, "Cloud asset", egui::Modifiers::NONE);
+    assert_eq!(selected(&tree), vec![id]);
+    assert!(crate::model::cloud_edit(&tree).is_none());
+    crate::model::set_cloud_edit(&mut tree, Some(crate::model::CloudEdit { object: id, indices: vec![0] }));
+    click_scene_text(&ctx, &mut tree, "Other object", egui::Modifiers::NONE);
+    assert_eq!(selected(&tree), vec![other_id]);
+    assert!(crate::model::cloud_edit(&tree).is_none());
+}
+
+#[test]
 fn list_double_click_renames_objects_and_points_and_escape_cancels() {
     use crate::model::{scene_variables, set_scene_variables, SceneVariables, VectorVariable, VariableSpace};
     let ctx = egui::Context::default(); let mut tree = DataTree::default();

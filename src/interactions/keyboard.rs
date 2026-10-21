@@ -319,6 +319,10 @@ impl InteractionState {
             }
         }
         let primary_modifier = self.primary_modifier_down();
+        if key == KeyCode::KeyA && primary_modifier && crate::model::cloud_edit(tree).is_some() {
+            crate::cloud_edit::select_all(tree);
+            return;
+        }
         let name = match key {
             KeyCode::KeyG => "grab",
             KeyCode::KeyS => "scale",

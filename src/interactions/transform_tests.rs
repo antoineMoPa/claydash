@@ -544,6 +544,36 @@ fn primary_modifier_i_inverts_selection() {
 }
 
 #[test]
+fn primary_modifier_a_selects_all_cloud_points() {
+    use claydash_engine::gaussian_ply::{Gaussian, GaussianCloud};
+    let (mut tree, id) = selected_object();
+    let mut objects = objects(&tree);
+    objects[0].imported_splats = Some(std::sync::Arc::new(GaussianCloud {
+        splats: (0..3).map(|_| Gaussian {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            rotation: glam::Quat::IDENTITY,
+            color: [1.; 3],
+            opacity: 1.,
+            sh_rest: vec![],
+        }).collect(),
+    }));
+    set_objects(&mut tree, objects);
+    crate::model::set_cloud_edit(&mut tree, Some(crate::model::CloudEdit { object: id, indices: vec![1] }));
+    let mut interactions = InteractionState::default();
+    let mut command_map = Commands::new();
+    commands::register_all(&mut command_map);
+    interactions.key_pressed(KeyCode::SuperLeft, false, &command_map, &mut tree);
+    interactions.key_pressed(KeyCode::KeyA, false, &command_map, &mut tree);
+    assert_eq!(crate::model::cloud_edit(&tree).unwrap().indices, vec![0, 1, 2]);
+    assert_eq!(selected(&tree), vec![id]);
+    interactions.key_released(KeyCode::KeyA);
+    interactions.key_pressed(KeyCode::KeyI, false, &command_map, &mut tree);
+    assert!(crate::model::cloud_edit(&tree).unwrap().indices.is_empty());
+    assert_eq!(selected(&tree), vec![id]);
+}
+
+#[test]
 fn new_primitives_spawn_under_cursor_and_follow_it_without_an_offset() {
     for mode in [
         crate::camera::ProjectionMode::Perspective,

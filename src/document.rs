@@ -56,6 +56,7 @@ pub struct DocumentState {
     saved_scene: Option<Vec<u8>>,
     observed_authored_version: u64,
     dirty: bool,
+    imported_clouds_since_save: Vec<uuid::Uuid>,
     recent_paths: Vec<PathBuf>,
     ui_preferences: UiPreferences,
     error: Option<String>,
@@ -99,6 +100,7 @@ impl Default for DocumentState {
             saved_scene: None,
             observed_authored_version: 0,
             dirty: false,
+            imported_clouds_since_save: Vec::new(),
             recent_paths: load_recent_paths(),
             ui_preferences: load_ui_preferences(),
             error: None,
@@ -113,6 +115,7 @@ impl DocumentState {
         self.saved_scene = None;
         self.observed_authored_version = 0;
         self.dirty = false;
+        self.imported_clouds_since_save.clear();
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -123,6 +126,13 @@ impl DocumentState {
         self.saved_scene = serialize_scene(tree).ok();
         self.observed_authored_version = tree.authored_version();
         self.dirty = false;
+        self.imported_clouds_since_save.clear();
+    }
+
+    pub fn mark_cloud_imported(&mut self, tree: &DataTree, id: uuid::Uuid) {
+        self.imported_clouds_since_save.push(id);
+        self.observed_authored_version = tree.authored_version();
+        self.dirty = true;
     }
 
     pub fn refresh_dirty(&mut self, tree: &DataTree) {
@@ -131,6 +141,15 @@ impl DocumentState {
             return;
         }
         self.observed_authored_version = version;
+        if !self.imported_clouds_since_save.is_empty()
+            && self.imported_clouds_since_save.iter().any(|id| {
+                crate::model::objects_ref(tree).iter().any(|object| object.uuid == *id)
+            })
+        {
+            self.dirty = true;
+            return;
+        }
+        self.imported_clouds_since_save.clear();
         let current = serialize_scene(tree).ok();
         if self.saved_scene.is_none() {
             self.saved_scene = current;
@@ -245,6 +264,36 @@ mod new_document_tests {
             "scene.cursor_position",
             ClaydashValue::Vec3(glam::Vec3::ZERO),
         );
+        document.refresh_dirty(&tree);
+        assert!(!document.is_dirty());
+    }
+
+    #[test]
+    fn imported_cloud_stays_dirty_without_serializing_on_each_edit() {
+        let mut tree = DataTree::default();
+        crate::model::set_objects(&mut tree, Vec::new());
+        tree.set_path("scene.cursor_position", ClaydashValue::Vec3(glam::Vec3::ZERO));
+        let mut document = DocumentState::default();
+        document.mark_scene_clean(&tree);
+        let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        object.imported_splats = Some(std::sync::Arc::new(
+            claydash_engine::gaussian_ply::GaussianCloud { splats: vec![
+                claydash_engine::gaussian_ply::Gaussian {
+                    position: glam::Vec3::ZERO,
+                    scale: glam::Vec3::ONE,
+                    rotation: glam::Quat::IDENTITY,
+                    color: [1.; 3], opacity: 1., sh_rest: Vec::new(),
+                }
+            ] }
+        ));
+        let id = object.uuid;
+        crate::model::set_objects(&mut tree, vec![object]);
+        document.mark_cloud_imported(&tree, id);
+        tree.set_path("scene.cursor_position", ClaydashValue::Vec3(glam::Vec3::X));
+        document.refresh_dirty(&tree);
+        assert!(document.is_dirty());
+        crate::model::set_objects(&mut tree, Vec::new());
+        tree.set_path("scene.cursor_position", ClaydashValue::Vec3(glam::Vec3::ZERO));
         document.refresh_dirty(&tree);
         assert!(!document.is_dirty());
     }

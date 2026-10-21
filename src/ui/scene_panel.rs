@@ -294,6 +294,7 @@ pub(super) fn object_row(
                             && !response.triple_clicked()
                         {
                             response.surrender_focus();
+                            crate::model::set_cloud_edit(tree, None);
                             if !scene_actions::apply_boolean_pick(tree, object.uuid) {
                                 let extend = ui.input(|input| {
                                     input.modifiers.shift || input.modifiers.command

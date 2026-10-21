@@ -13,6 +13,33 @@ mod objects;
 mod training;
 pub(super) use training::PackedTrainingScene;
 
+#[cfg(any(test, target_arch = "wasm32"))]
+fn web_splat_display_indices(count: usize, selected: Option<&[bool]>) -> Vec<usize> {
+    const DISPLAY_LIMIT: usize = 250_000;
+    const EXTRA_SELECTED_LIMIT: usize = 10_000;
+    let mut indices: Vec<_> = (0..count).step_by(count.div_ceil(DISPLAY_LIMIT).max(1)).collect();
+    if let Some(selected) = selected {
+        let selected_count = selected.iter().filter(|value| **value).count();
+        indices.extend(selected.iter().enumerate()
+            .filter_map(|(index, value)| value.then_some(index))
+            .step_by(selected_count.div_ceil(EXTRA_SELECTED_LIMIT).max(1)));
+        indices.sort_unstable();
+        indices.dedup();
+    }
+    indices
+}
+
+#[cfg(test)]
+#[test]
+fn web_splat_display_keeps_sparse_selected_points_within_budget() {
+    let mut selected = vec![false; 2_000_000];
+    selected[1_999_999] = true;
+    let indices = web_splat_display_indices(selected.len(), Some(&selected));
+    assert!(indices.len() <= 250_001);
+    assert!(indices.contains(&1_999_999));
+    assert!(indices.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
 impl Renderer {
     pub(super) fn upload_scene_with_world(
         &mut self,
@@ -648,7 +675,7 @@ impl Renderer {
                     for index in indices { if let Some(slot) = selected.get_mut(*index) { *slot = true; } }
                     selected
                 });
-            for (index, splat) in cloud.splats.iter().enumerate() {
+            let mut add_splat = |index: usize, splat: &crate::gaussian_ply::Gaussian| {
                 let basis = glam::Mat3::from_quat(splat.rotation);
                 let axes = [basis.x_axis * splat.scale.x, basis.y_axis * splat.scale.y, basis.z_axis * splat.scale.z]
                     .map(|axis| matrix.transform_vector3(axis).extend(0.).to_array());
@@ -657,6 +684,16 @@ impl Renderer {
                     color_opacity: [splat.color[0], splat.color[1], splat.color[2], splat.opacity],
                     normal: [0., 1., 0., if selected_indices.as_ref().is_some_and(|selected| selected[index]) { 2. } else { 1. }], axes,
                 });
+            };
+            // Browser GPU draws and memory use must stay bounded. The source
+            // cloud remains complete for point edits and project saving.
+            #[cfg(target_arch = "wasm32")]
+            for index in web_splat_display_indices(cloud.splats.len(), selected_indices.as_deref()) {
+                add_splat(index, &cloud.splats[index]);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            for (index, splat) in cloud.splats.iter().enumerate() {
+                add_splat(index, splat);
             }
         }
         let initial_pixel_budget =

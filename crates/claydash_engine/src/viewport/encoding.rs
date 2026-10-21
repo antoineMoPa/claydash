@@ -242,7 +242,11 @@ impl Viewport {
                         pass.set_pipeline(hybrid.splat_pipeline);
                         pass.set_bind_group(0, hybrid.splat_bind_group, &[]);
                         pass.set_vertex_buffer(0, hybrid.splat_buffer.slice(..));
-                        draw_splat_work(&mut pass, shading_work, size, hybrid.splat_count);
+                        draw_splat_work(&mut pass, shading_work, size, hybrid.splat_first_count);
+                        for (buffer, count) in hybrid.splat_extra_buffers {
+                            pass.set_vertex_buffer(0, buffer.slice(..));
+                            draw_splat_work(&mut pass, shading_work, size, *count);
+                        }
                     }
                     if hybrid.mesh_vertex_count > 0 {
                         pass.set_pipeline(hybrid.mesh_pipeline);

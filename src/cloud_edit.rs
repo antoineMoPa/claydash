@@ -12,6 +12,16 @@ use claydash_engine::gaussian_ply::GaussianCloud;
 #[serde(rename_all = "snake_case")]
 pub enum SelectionMode { #[default] Replace, Add, Subtract }
 
+pub fn select_all(tree: &mut DataTree) {
+    let Some(mut edit) = model::cloud_edit(tree) else { return };
+    let Some(count) = model::objects_ref(tree).iter()
+        .find(|object| object.uuid == edit.object)
+        .and_then(|object| object.imported_splats.as_ref())
+        .map(|cloud| cloud.splats.len()) else { return };
+    edit.indices = (0..count).collect();
+    model::set_cloud_edit(tree, Some(edit));
+}
+
 pub fn center(tree: &DataTree) -> Option<Vec3> {
     let edit = model::cloud_edit(tree)?;
     let scene = model::objects_ref(tree);

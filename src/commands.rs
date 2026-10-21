@@ -151,7 +151,7 @@ pub fn register_all(commands: &mut Commands) {
         commands,
         "invert_selection",
         "Invert Selection",
-        "Select every unselected object and deselect every selected object.",
+        "Invert selected points in splat edit mode, or selected objects in object mode.",
         "Cmd/Ctrl+I",
         invert_selection,
     );
@@ -426,6 +426,21 @@ fn select_all(tree: &mut DataTree) {
 }
 
 fn invert_selection(tree: &mut DataTree) {
+    if let Some(mut edit) = crate::model::cloud_edit(tree) {
+        if let Some(cloud) = crate::model::objects_ref(tree).iter()
+            .find(|object| object.uuid == edit.object)
+            .and_then(|object| object.imported_splats.as_ref())
+        {
+            let mut selected = vec![false; cloud.splats.len()];
+            for index in &edit.indices {
+                if let Some(slot) = selected.get_mut(*index) { *slot = true; }
+            }
+            edit.indices = selected.into_iter().enumerate()
+                .filter_map(|(index, was_selected)| (!was_selected).then_some(index)).collect();
+            crate::model::set_cloud_edit(tree, Some(edit));
+        }
+        return;
+    }
     let current = selected(tree);
     let mut inverted: Vec<_> = objects(tree)
         .into_iter()

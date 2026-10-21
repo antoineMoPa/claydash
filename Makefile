@@ -9,6 +9,7 @@ build:
 	cp assets/poisson-mesh-worker.js www/poisson-mesh-worker.js
 	cp assets/voxel-worker.js www/voxel-worker.js
 	cp assets/poisson-encode-worker.js www/poisson-encode-worker.js
+	cp assets/gaussian-ply-worker.js www/gaussian-ply-worker.js
 
 deploy:
 	du -h target/wasm32-unknown-unknown/release/claydash.wasm

@@ -167,6 +167,8 @@ pub struct HybridPass<'a> {
     pub splat_pipeline: &'a wgpu::RenderPipeline,
     pub splat_bind_group: &'a wgpu::BindGroup,
     pub splat_buffer: &'a wgpu::Buffer,
+    pub splat_first_count: u32,
+    pub splat_extra_buffers: &'a [(wgpu::Buffer, u32)],
     pub splat_count: u32,
     pub mesh_pipeline: &'a wgpu::RenderPipeline,
     pub mesh_bind_group: &'a wgpu::BindGroup,
