@@ -293,6 +293,9 @@ pub fn execute(commands: &Commands, name: &str, tree: &mut DataTree) {
 }
 
 fn delete(tree: &mut DataTree) {
+    if crate::cloud_edit::delete_selected(tree) {
+        return;
+    }
     if let Some(point) = crate::model::selected_curve_point(tree) {
         let mut scene = objects(tree);
         if selected(tree) == vec![point.object] {

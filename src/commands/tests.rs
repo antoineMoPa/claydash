@@ -147,6 +147,32 @@ fn invert_selection_in_splat_edit_mode_keeps_object_selected() {
 }
 
 #[test]
+fn delete_in_splat_edit_mode_removes_selected_splats_and_keeps_object() {
+    use claydash_engine::gaussian_ply::{Gaussian, GaussianCloud};
+    use std::sync::Arc;
+    let mut tree = DataTree::default();
+    let mut object = SdfObject::create(TYPE_BOX);
+    object.imported_splats = Some(Arc::new(GaussianCloud {
+        splats: (0..3).map(|index| Gaussian {
+            position: glam::Vec3::splat(index as f32),
+            scale: glam::Vec3::ONE,
+            rotation: glam::Quat::IDENTITY,
+            color: [1.; 3],
+            opacity: 1.,
+            sh_rest: vec![],
+        }).collect(),
+    }));
+    let id = object.uuid;
+    set_objects(&mut tree, vec![object]);
+    set_selected(&mut tree, vec![id]);
+    crate::model::set_cloud_edit(&mut tree, Some(crate::model::CloudEdit { object: id, indices: vec![0, 2] }));
+    delete(&mut tree);
+    let scene = objects(&tree);
+    let splats = &scene[0].imported_splats.as_ref().unwrap().splats;
+    assert_eq!(splats.iter().map(|splat| splat.position.x).collect::<Vec<_>>(), vec![1.0]);
+}
+
+#[test]
 fn deleting_a_group_removes_its_operands() {
     let mut tree = group_tree();
     delete(&mut tree);
