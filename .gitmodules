@@ -1,0 +1,4 @@
+[submodule "crates/egui_command_palette"]
+	path = crates/egui_command_palette
+	url = git@github.com:antoineMoPa/egui_command_palette.git
+	branch = main

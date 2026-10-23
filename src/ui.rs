@@ -196,11 +196,16 @@ impl Default for UiState {
         style.frame_fill = Color32::TRANSPARENT;
         style.active_border = Color32::from_rgb(95, 142, 246);
         style.accent = Color32::from_rgb(95, 142, 246);
+        let mut palette = CommandPalette::default();
+        let palette_style = palette.style_mut();
+        palette_style.row_height = 38.0;
+        palette_style.title_size = 13.0;
+        palette_style.detail_top = 21.0;
         Self {
             animation: AnimationRuntime::default(),
             frames: Frames::new().with_style(style),
             layout,
-            palette: CommandPalette::default(),
+            palette,
             panel_placements: PanelPlacements::default(),
             regions: Vec::new(),
             viewport_rect: None,
