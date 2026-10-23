@@ -2,7 +2,7 @@ use super::validation::params_match;
 use super::*;
 
 impl App {
-    pub(super) fn agent_apply(&mut self, args: ApplyArgs) -> AgentResult {
+    pub(crate) fn agent_apply(&mut self, args: ApplyArgs) -> AgentResult {
         if args
             .expected_revision
             .is_some_and(|expected| expected != self.scene_revision())
@@ -38,6 +38,8 @@ impl App {
                     position,
                     params,
                     render_representation,
+                    color,
+                    material_id,
                 } => {
                     let mut object = SdfObject::create_kind(kind);
                     object.render_representation = render_representation
@@ -46,6 +48,21 @@ impl App {
                     object.material = model::picked_material(&draft);
                     object.material_id = model::picked_material_id(&draft);
                     object.color = object.material.color;
+                    if let Some(id) = material_id {
+                        let asset = model::material_assets(&draft).into_iter()
+                            .find(|asset| asset.uuid == id)
+                            .ok_or_else(|| format!("material {id} does not exist"))?;
+                        object.material_id = Some(id);
+                        object.material = asset.material;
+                        object.color = asset.material.color;
+                    }
+                    if let Some(color) = color {
+                        if !color.iter().all(|component| component.is_finite() && (0.0..=1.0).contains(component)) {
+                            return Err("color components must be finite and between 0 and 1".into());
+                        }
+                        object.color = glam::Vec4::from_array(color);
+                        object.material.color = object.color;
+                    }
                     if let Some(name) = name {
                         object.name = name;
                     }
@@ -173,6 +190,30 @@ impl App {
                         .filter(|selected| *selected != id)
                         .collect();
                     model::set_selected(&mut draft, selection);
+                }
+                Action::CreateMesh { name, vertices, faces, shading } => {
+                    created.push(mesh::create_mesh(&mut draft, name, vertices, faces, shading)?);
+                }
+                Action::CreateSectionMesh { name, sections, caps, shading } => {
+                    created.push(mesh_sections::create(&mut draft, name, sections, caps, shading)?);
+                }
+                Action::SetMeshSections { id, sections, caps } => {
+                    mesh_sections::rebuild(&mut draft, id, sections, caps)?;
+                }
+                Action::AddMeshVertices { id, vertices } => {
+                    mesh::add_vertices(&mut draft, id, vertices)?;
+                }
+                Action::AddMeshFaces { id, faces } => {
+                    mesh::add_faces(&mut draft, id, faces)?;
+                }
+                Action::SetMeshShading { id, shading } => {
+                    mesh::set_shading(&mut draft, id, shading)?;
+                }
+                Action::ProjectMeshUvs { id, direction, up, scale, offset } => {
+                    mesh::project_uvs(&mut draft, id, direction, up, scale, offset)?;
+                }
+                Action::SetMeshUvs { id, uvs } => {
+                    mesh::set_uvs(&mut draft, id, uvs)?;
                 }
                 Action::CreateVectorVariable {
                     id,
@@ -461,9 +502,6 @@ impl App {
         } else {
             draft.make_undo_redo_snapshot();
             self.tree = draft;
-        }
-        if replace {
-            self.agent_revision += 1;
         }
         Ok(
             json!({"revision": self.scene_revision(), "created_ids": created,

@@ -49,6 +49,30 @@ fn guide_face_scene() -> Vec<crate::model::SdfObject> {
     vec![cut_source, cut, box_source, box_extrusion]
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn guide_splat_scene() -> (crate::model::SdfObject, Vec<usize>) {
+    use std::sync::Arc;
+
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/guide-duck.ply");
+    let bytes = std::fs::read(path).expect("read Guide duck PLY fixture");
+    let mut cloud = claydash_engine::gaussian_ply::read(&bytes).expect("parse Guide duck PLY fixture");
+    let duck_center = glam::Vec3::new(0.0, -0.3, 2.5);
+    cloud.splats.retain(|splat| {
+        splat.position.distance_squared(duck_center) < 0.65 * 0.65
+            && splat.position.y > -0.55
+    });
+    let surroundings = cloud.splats.iter().enumerate().filter_map(|(index, splat)| {
+        (splat.color[0] - splat.color[2] <= 0.31
+            || splat.color[1] - splat.color[2] <= 0.17)
+            .then_some(index)
+    }).collect();
+    let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+    object.name = "Duck scan".into();
+    object.transform.rotation = glam::Quat::from_rotation_z(std::f32::consts::PI);
+    object.imported_splats = Some(Arc::new(cloud));
+    (object, surroundings)
+}
+
 impl App {
     pub fn new() -> Self {
         let mut scene = DataTree::default();
@@ -279,6 +303,68 @@ impl App {
             camera
         };
         #[cfg(not(target_arch = "wasm32"))]
+        let camera = if let Some(panel) = std::env::args().find_map(|argument| {
+            match argument.as_str() {
+                "--guide-panel=splat-object" => Some("object"),
+                "--guide-panel=splat-selection" => Some("selection"),
+                "--guide-panel=splat-cleanup" => Some("cleanup"),
+                _ => None,
+            }
+        }) {
+            let (object, surroundings) = guide_splat_scene();
+            let id = object.uuid;
+            crate::model::set_objects(&mut tree, vec![object]);
+            crate::model::set_selected_exact(&mut tree, vec![id]);
+            if panel != "object" {
+                crate::model::set_cloud_edit(
+                    &mut tree,
+                    Some(crate::model::CloudEdit {
+                        object: id,
+                        indices: surroundings,
+                    }),
+                );
+                if panel == "cleanup" {
+                    assert!(crate::cloud_edit::delete_selected(&mut tree));
+                    let feature = crate::model::objects_ref(&tree)[0]
+                        .imported_splats
+                        .as_ref()
+                        .expect("guide duck cloud")
+                        .splats
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, splat)| {
+                            (splat.position.z < 2.55
+                                && splat.color[0] - splat.color[1] > 0.17)
+                                .then_some(index)
+                        })
+                        .collect();
+                    crate::model::set_cloud_edit(
+                        &mut tree,
+                        Some(crate::model::CloudEdit {
+                            object: id,
+                            indices: feature,
+                        }),
+                    );
+                    let (edit, original) = crate::cloud_edit::source(&tree)
+                        .expect("guide rim selection");
+                    crate::cloud_edit::apply(
+                        &mut tree,
+                        &edit,
+                        &original,
+                        glam::Mat4::from_translation(glam::Vec3::new(0.08, 0.04, 0.0)),
+                    );
+                }
+            }
+            tree.make_undo_redo_snapshot();
+            Camera {
+                position: glam::Vec3::new(0.4, 1.1, 0.1),
+                target: glam::Vec3::new(0.0, 0.25, 2.5),
+                ..camera
+            }
+        } else {
+            camera
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         if std::env::args().any(|argument| argument == "--guide-panel=camera") {
             let scene_camera = crate::camera::SceneCamera::from_view("Camera 1", &camera);
             crate::model::set_selected(&mut tree, vec![scene_camera.uuid]);
@@ -290,6 +376,8 @@ impl App {
         let (renderer_tx, renderer_rx) = channel();
         #[cfg(target_arch = "wasm32")]
         let (document_tx, document_rx) = channel();
+        #[cfg(target_arch = "wasm32")]
+        web_mcp::set_sender(document_tx.clone());
         let document = DocumentState::default();
         let egui = egui::Context::default();
         egui.style_mut_of(egui::Theme::Light, |style| {
@@ -360,11 +448,19 @@ impl App {
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             agent_requests: None,
             #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_bridge_error: None,
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_camera: Camera::new(),
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
             agent_proxy: None,
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             agent_capture: None,
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             agent_revision: 0,
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_revision_key: std::cell::Cell::new((u64::MAX, i32::MIN)),
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            agent_revision_counter: std::cell::Cell::new(0),
             #[cfg(all(not(target_arch = "wasm32"), unix))]
             agent_redraw_pending: false,
             #[cfg(not(target_arch = "wasm32"))]

@@ -261,13 +261,30 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
         apply_keyframe_requests(tree, runtime, keyframes);
         return;
     }
-    if let Some(mesh) = &object.imported_mesh {
+    if let Some(mesh) = &mut object.imported_mesh {
         ui.label(RichText::new("Triangle mesh asset").strong());
         ui.label(format!(
             "{} vertices, {} triangles",
             mesh.positions.len(),
             mesh.triangles.len()
         ));
+        let mut shading = mesh.shading;
+        egui::ComboBox::from_label("Shading")
+            .selected_text(match shading {
+                crate::renderer::poisson_mesh::geometry::MeshShading::Auto => "Auto",
+                crate::renderer::poisson_mesh::geometry::MeshShading::Flat => "Flat",
+                crate::renderer::poisson_mesh::geometry::MeshShading::Smooth => "Smooth",
+            })
+            .show_ui(ui, |ui| {
+                use crate::renderer::poisson_mesh::geometry::MeshShading;
+                ui.selectable_value(&mut shading, MeshShading::Auto, "Auto (60° crease)");
+                ui.selectable_value(&mut shading, MeshShading::Flat, "Flat");
+                ui.selectable_value(&mut shading, MeshShading::Smooth, "Smooth");
+            });
+        if shading != mesh.shading {
+            std::sync::Arc::make_mut(mesh).set_shading(shading);
+            changed = true;
+        }
         if changed {
             set_objects(tree, scene);
         }
@@ -831,6 +848,11 @@ pub(super) fn params_editor(
             ui.label("Closed sections along local X");
             ui.weak("Profile Y/Z values scale with the section's half height and half width. Matching point numbers connect along the loft.");
             let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Interpolation");
+                changed |= ui.selectable_value(&mut value.interpolation, crate::model::LoftInterpolation::SectionEase, "Section ease").changed();
+                changed |= ui.selectable_value(&mut value.interpolation, crate::model::LoftInterpolation::Smooth, "Smooth").changed();
+            });
             let mut remove = None;
             let mut add_profile_point = None;
             let mut remove_profile_point = None;

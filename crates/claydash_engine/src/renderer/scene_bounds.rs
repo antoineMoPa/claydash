@@ -287,8 +287,9 @@ pub(super) fn create_scene_pipeline_for_materials(
     features: SceneShaderFeatures,
     hybrid_splats: bool,
 ) -> wgpu::RenderPipeline {
+    let shader_source = super::material_gpu::shader_source_for_features(shader_source, features.materials);
     let source = specialized_neural_shader_source(
-        &specialized_shader_source(shader_source, capacity),
+        &specialized_shader_source(&shader_source, capacity),
         features.neural_width,
     );
     let source = if features.bloom {
@@ -309,7 +310,7 @@ pub(super) fn create_scene_pipeline_for_materials(
     if shader_source.contains("override FAST_PREVIEW") {
         constants.push(("FAST_PREVIEW", f64::from(fast_preview)));
     }
-    constants.extend(scene_feature_constants(shader_source, features));
+    constants.extend(scene_feature_constants(&shader_source, features));
     if shader_source.contains("override HYBRID_SPLATS") {
         constants.push(("HYBRID_SPLATS", f64::from(hybrid_splats)));
     }
@@ -351,8 +352,9 @@ pub(super) fn create_hybrid_depth_pipeline(
     features: SceneShaderFeatures,
     skip_splats: bool,
 ) -> wgpu::RenderPipeline {
+    let shader_source = super::material_gpu::shader_source_for_features(shader_source, features.materials);
     let source = specialized_neural_shader_source(
-        &specialized_shader_source(shader_source, capacity),
+        &specialized_shader_source(&shader_source, capacity),
         features.neural_width,
     );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -403,8 +405,9 @@ pub(super) fn create_deferred_geometry_pipeline(
     hybrid_splats: bool,
     features: SceneShaderFeatures,
 ) -> wgpu::RenderPipeline {
+    let shader_source = super::material_gpu::shader_source_for_features(shader_source, features.materials);
     let source = specialized_neural_shader_source(
-        &specialized_shader_source(shader_source, capacity),
+        &specialized_shader_source(&shader_source, capacity),
         features.neural_width,
     );
     let source = if features.emission {
@@ -412,7 +415,7 @@ pub(super) fn create_deferred_geometry_pipeline(
     } else {
         source
     };
-    let mut constants = scene_feature_constants(shader_source, features);
+    let mut constants = scene_feature_constants(&shader_source, features);
     constants.extend_from_slice(&[
         ("USE_BVH", 1.0),
         ("HAS_BOOLEANS", f64::from(capacity > 1)),

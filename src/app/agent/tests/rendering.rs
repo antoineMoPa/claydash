@@ -3,6 +3,26 @@ use super::super::mcp::mcp_tools;
 use super::super::*;
 
 #[test]
+fn agent_view_is_independent_and_user_capture_is_explicit() {
+    let mut app = App::new();
+    app.new_document();
+    app.camera.position = Vec3::new(0.0, 0.0, 12.0);
+    let user_position = app.camera.position;
+    app.agent_set_view(ViewArgs {
+        position: [3.0, 4.0, 5.0], target: [0.0, 0.0, 0.0],
+        up: None, projection_mode: Some(ProjectionMode::Orthographic),
+    }).unwrap();
+    assert_eq!(app.camera.position, user_position);
+    assert_eq!(app.agent_view_camera().position, Vec3::new(3.0, 4.0, 5.0));
+    assert_eq!(app.agent_state().unwrap()["view"]["position"], json!([3.0, 4.0, 5.0]));
+    let default: Request = serde_json::from_value(request_payload("CaptureViewport", json!({}))).unwrap();
+    let user: Request = serde_json::from_value(request_payload("CaptureViewport", json!({"view":"user"}))).unwrap();
+    assert!(matches!(default, Request::CaptureViewport(CaptureViewportArgs { view: CaptureCameraSource::Agent, .. })));
+    assert!(matches!(user, Request::CaptureViewport(CaptureViewportArgs { view: CaptureCameraSource::User, .. })));
+    assert!(mcp_tools().iter().any(|tool| tool["name"] == "get_user_view"));
+}
+
+#[test]
 fn capture_modes_are_typed_and_override_legacy_refinement() {
     for op in ["CaptureViewport", "CaptureOrthographic"] {
         for (mode, expected) in [

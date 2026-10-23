@@ -167,8 +167,10 @@ impl UiState {
             polygon_editor::finish(tree);
         }
         let viewport = self.viewport_rect.unwrap();
+        // Viewport chrome shares the background order with the editor canvas so
+        // floating windows and their popups always cover it.
         let left = egui::Area::new("top-left-tools".into())
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Background)
             .fixed_pos(self.viewport_rect.unwrap().left_top() + egui::vec2(6.0, 6.0))
             .show(ctx, |ui| {
                 ui.set_clip_rect(viewport);
@@ -299,7 +301,7 @@ impl UiState {
             6.0
         };
         let right = egui::Area::new("top-right-tools".into())
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Background)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(viewport.right_top() + egui::vec2(-6.0, projection_y))
             .show(ctx, |ui| {
@@ -400,7 +402,7 @@ impl UiState {
         let yaw = offset.x.atan2(offset.z).to_degrees();
         let pitch = (offset.y / offset.length().max(0.001)).asin().to_degrees();
         let area = egui::Area::new("view-gizmo".into())
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Background)
             .pivot(egui::Align2::LEFT_BOTTOM)
             .fixed_pos(self.viewport_rect.unwrap().left_bottom() + egui::vec2(10.0, -10.0))
             .show(ctx, |ui| {

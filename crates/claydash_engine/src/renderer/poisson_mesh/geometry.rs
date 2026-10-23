@@ -6,14 +6,50 @@ use std::sync::{
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Mesh {
+    #[serde(default)]
+    pub revision: u64,
     pub positions: Vec<Vec3>,
     pub triangles: Vec<[u32; 3]>,
     pub owners: Vec<uuid::Uuid>,
     pub normals: Vec<[Vec3; 3]>,
+    #[serde(default, skip_serializing_if = "MeshShading::is_auto")]
+    pub shading: MeshShading,
+    /// Optional UV coordinates for each triangle corner. Per-corner storage preserves seams.
+    #[serde(default)]
+    pub uvs: Vec<[[f32; 2]; 3]>,
     #[serde(default)]
     pub colors: Vec<[f32; 3]>,
     #[serde(default)]
     pub baked_texture: Option<BakedTexture>,
+    /// Authored section templates retained for editing a generated loft.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<MeshSection>,
+    #[serde(default)]
+    pub section_caps: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MeshSection {
+    pub station: f32,
+    pub origin: [f32; 3],
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+    /// Closed contour without a repeated final point, in section-frame coordinates.
+    pub points: Vec<[f32; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum MeshShading {
+    #[default]
+    Auto,
+    Flat,
+    Smooth,
+}
+
+impl MeshShading {
+    fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -128,18 +164,103 @@ impl Mesh {
     ) -> Self {
         let normals = corner_normals(&positions, &triangles, &owners);
         Self {
+            revision: 0,
             positions,
             triangles,
             owners,
             normals,
+            shading: MeshShading::Auto,
+            uvs: Vec::new(),
             colors: Vec::new(),
             baked_texture: None,
+            sections: Vec::new(),
+            section_caps: false,
         }
     }
 
     pub fn triangle(&self, index: usize) -> [Vec3; 3] {
         self.triangles[index].map(|corner| self.positions[corner as usize])
     }
+
+    pub fn regenerate_normals(&mut self) {
+        let section_side_faces = self.sections.first().and_then(|first| {
+            let side_faces = self.sections.len().checked_sub(1)?
+                .checked_mul(first.points.len())?.checked_mul(2)?;
+            let cap_faces = first.points.len().checked_mul(2)?;
+            (self.section_caps && self.sections.len() >= 2
+                && side_faces.checked_add(cap_faces) == Some(self.triangles.len())
+                && self.owners.len() == self.triangles.len())
+                .then_some(side_faces)
+        });
+        if let Some(side_faces) = section_side_faces {
+            if self.shading != MeshShading::Flat {
+                let mut normals = match self.shading {
+                    MeshShading::Auto => corner_normals(
+                        &self.positions, &self.triangles[..side_faces], &self.owners[..side_faces],
+                    ),
+                    MeshShading::Smooth => smooth_corner_normals(
+                        &self.positions, &self.triangles[..side_faces],
+                    ),
+                    MeshShading::Flat => unreachable!(),
+                };
+                normals.extend(flat_corner_normals(&self.positions, &self.triangles[side_faces..]));
+                self.normals = normals;
+                return;
+            }
+        }
+        self.normals = match self.shading {
+            MeshShading::Auto => corner_normals(&self.positions, &self.triangles, &self.owners),
+            MeshShading::Flat => flat_corner_normals(&self.positions, &self.triangles),
+            MeshShading::Smooth => smooth_corner_normals(&self.positions, &self.triangles),
+        };
+    }
+
+    pub fn set_shading(&mut self, shading: MeshShading) {
+        if self.shading != shading {
+            self.shading = shading;
+            self.regenerate_normals();
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+}
+
+fn flat_corner_normals(positions: &[Vec3], triangles: &[[u32; 3]]) -> Vec<[Vec3; 3]> {
+    triangles
+        .iter()
+        .map(|face| {
+            let [a, b, c] = face.map(|index| positions[index as usize]);
+            let normal = (b - a).cross(c - a).normalize_or_zero();
+            [normal; 3]
+        })
+        .collect()
+}
+
+fn smooth_corner_normals(positions: &[Vec3], triangles: &[[u32; 3]]) -> Vec<[Vec3; 3]> {
+    let mut vertex_normals = vec![Vec3::ZERO; positions.len()];
+    let face_normals = flat_corner_normals(positions, triangles);
+    for (face, flat) in triangles.iter().zip(&face_normals) {
+        for corner in 0..3 {
+            let point = positions[face[corner] as usize];
+            let left = positions[face[(corner + 1) % 3] as usize] - point;
+            let right = positions[face[(corner + 2) % 3] as usize] - point;
+            let angle = left.cross(right).length().atan2(left.dot(right));
+            vertex_normals[face[corner] as usize] += flat[corner] * angle;
+        }
+    }
+    triangles
+        .iter()
+        .zip(face_normals)
+        .map(|(face, flat)| {
+            std::array::from_fn(|corner| {
+                let normal = vertex_normals[face[corner] as usize].normalize_or_zero();
+                if normal.length_squared() > 0.5 {
+                    normal
+                } else {
+                    flat[corner]
+                }
+            })
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -151,7 +272,7 @@ struct Sample {
 
 /// Angle-weighted corner normals. Only manifold edges join a smooth fan;
 /// touching at one vertex and sharp creases stay separate.
-pub(crate) fn corner_normals(
+pub fn corner_normals(
     positions: &[Vec3],
     triangles: &[[u32; 3]],
     _owners: &[uuid::Uuid],

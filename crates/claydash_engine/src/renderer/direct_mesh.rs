@@ -281,12 +281,15 @@ fn manifold_with_owners(mesh: &Mesh, cut: bool) -> Result<Manifold<FaceOwner>, S
 
 fn empty_mesh() -> Mesh {
     Mesh {
+        revision: 0,
         positions: vec![],
         triangles: vec![],
         owners: vec![],
         normals: vec![],
+        shading: Default::default(),
         colors: vec![],
-        baked_texture: None,
+        uvs: vec![],
+        baked_texture: None, sections: Vec::new(), section_caps: false,
     }
 }
 
@@ -396,12 +399,15 @@ fn combine(
         .map(|face| face[0].owner)
         .collect();
     Ok(Mesh {
+        revision: 0,
         positions,
         triangles,
         owners,
         normals: vec![],
+        shading: Default::default(),
         colors: vec![],
-        baked_texture: None,
+        uvs: vec![],
+        baked_texture: None, sections: Vec::new(), section_caps: false,
     })
 }
 

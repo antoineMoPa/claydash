@@ -218,12 +218,7 @@ impl PreparedSampleLattice<'_> {
         let cage_point = self.inverse.transform_point3(point);
         let mut rest = cage_point;
         for _ in 0..4 {
-            let next = cage_point - self.lattice.displacement_with_offsets(rest, &self.offsets);
-            let change = next - rest;
-            rest = next;
-            if change.length_squared() < 0.00000001 {
-                break;
-            }
+            rest = cage_point - self.lattice.displacement_with_offsets(rest, &self.offsets);
         }
         self.forward.transform_point3(rest)
     }

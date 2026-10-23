@@ -350,6 +350,7 @@ impl SdfObject {
                 }),
                 PrimitiveKind::SheetPanel => SdfParams::SheetPanelParams(SheetPanelParams::default()),
                 PrimitiveKind::Loft => SdfParams::LoftParams(LoftParams {
+                    interpolation: LoftInterpolation::SectionEase,
                     sections: vec![
                         LoftSection {
                             x: -1.0,

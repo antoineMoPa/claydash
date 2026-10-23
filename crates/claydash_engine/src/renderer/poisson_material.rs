@@ -45,7 +45,8 @@ fn ambient_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 { return 1.0; }
 pub(super) fn create_pipeline(device: &wgpu::Device, layout: Option<&wgpu::PipelineLayout>,
     scene: &str, format: wgpu::TextureFormat, capacity: u32,
     features: SceneShaderFeatures) -> wgpu::RenderPipeline {
-    let source = source(scene, capacity);
+    let source = super::material_gpu::shader_source_for_features(
+        &source(scene, capacity), features.materials);
     let source = if features.bloom { super::bloom::scene_source(&source, "fs_poisson") } else { source };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Poisson source materials"), source: wgpu::ShaderSource::Wgsl(source.into()),

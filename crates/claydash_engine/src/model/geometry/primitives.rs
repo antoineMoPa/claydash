@@ -41,11 +41,40 @@ pub struct LoftSection {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoftParams {
     pub sections: Vec<LoftSection>,
+    #[serde(default)]
+    pub interpolation: LoftInterpolation,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LoftInterpolation {
+    #[default]
+    SectionEase,
+    Smooth,
 }
 
 impl LoftParams {
     pub const MAX_SECTIONS: usize = 16;
     pub const MAX_PROFILE_POINTS: usize = 32;
+
+    pub fn blend(&self, a: f32, b: f32, previous: f32, next: f32, t: f32, x: [f32; 4]) -> f32 {
+        match self.interpolation {
+            LoftInterpolation::SectionEase => {
+                let eased = t * t * (3.0 - 2.0 * t);
+                a + (b - a) * eased
+            }
+            LoftInterpolation::Smooth => {
+                let span = x[2] - x[1];
+                let m0 = (b - previous) * span / (x[2] - x[0]).max(0.0001);
+                let m1 = (next - a) * span / (x[3] - x[1]).max(0.0001);
+                let t2 = t * t;
+                let t3 = t2 * t;
+                (2.0 * t3 - 3.0 * t2 + 1.0) * a
+                    + (t3 - 2.0 * t2 + t) * m0
+                    + (-2.0 * t3 + 3.0 * t2) * b
+                    + (t3 - t2) * m1
+            }
+        }
+    }
 
     pub fn profile_count(&self) -> usize {
         self.sections
@@ -89,15 +118,16 @@ impl LoftParams {
             } else {
                 0.0
             };
+            let slope_bound = if self.interpolation == LoftInterpolation::Smooth { 2.5 } else { 1.5 };
             maximum.max(
-                (delta.length() + width_delta.abs() + profile_motion) * 1.5 / (b.x - a.x).max(0.01),
+                (delta.length() + width_delta.abs() + profile_motion) * slope_bound / (b.x - a.x).max(0.01),
             )
         });
         (1.0 / (1.0 + slope)).clamp(0.05, 0.8)
     }
 
     pub fn local_extent(&self) -> Vec3 {
-        self.sections.iter().fold(Vec3::ZERO, |extent, section| {
+        let extent = self.sections.iter().fold(Vec3::ZERO, |extent, section| {
             let profile_extent = section
                 .profile
                 .as_ref()
@@ -112,7 +142,12 @@ impl LoftParams {
                 section.center_y.abs() + section.half_height * profile_extent.x.max(1.0),
                 section.center_z.abs() + section.half_width * profile_extent.y.max(1.0),
             ))
-        })
+        });
+        if self.interpolation == LoftInterpolation::Smooth {
+            extent * 1.25
+        } else {
+            extent
+        }
     }
 
     pub fn distance(&self, point: Vec3) -> f32 {
@@ -127,7 +162,9 @@ impl LoftParams {
         }
         let mut a = first;
         let mut b = &self.sections[1];
-        for pair in self.sections.windows(2) {
+        let mut segment = 0;
+        for (index, pair) in self.sections.windows(2).enumerate() {
+            segment = index;
             a = &pair[0];
             b = &pair[1];
             if point.x <= b.x {
@@ -135,11 +172,18 @@ impl LoftParams {
             }
         }
         let t = ((point.x - a.x) / (b.x - a.x).max(0.0001)).clamp(0.0, 1.0);
-        let t = t * t * (3.0 - 2.0 * t);
-        let center = Vec2::new(a.center_y, a.center_z).lerp(Vec2::new(b.center_y, b.center_z), t);
-        let radii = Vec2::new(a.half_height, a.half_width)
-            .lerp(Vec2::new(b.half_height, b.half_width), t)
-            .max(Vec2::splat(0.001));
+        let previous = &self.sections[segment.saturating_sub(1)];
+        let next_section = &self.sections[(segment + 2).min(self.sections.len() - 1)];
+        let x = [previous.x, a.x, b.x, next_section.x];
+        let blend = |a, b, p, n| self.blend(a, b, p, n, t, x);
+        let center = Vec2::new(
+            blend(a.center_y, b.center_y, previous.center_y, next_section.center_y),
+            blend(a.center_z, b.center_z, previous.center_z, next_section.center_z),
+        );
+        let radii = Vec2::new(
+            blend(a.half_height, b.half_height, previous.half_height, next_section.half_height),
+            blend(a.half_width, b.half_width, previous.half_width, next_section.half_width),
+        ).max(Vec2::splat(0.001));
         let cross_point = Vec2::new(point.y, point.z);
         let profile_count = self.profile_count();
         let radial = if profile_count >= 3 {
@@ -147,14 +191,18 @@ impl LoftParams {
             let mut inside = false;
             for index in 0..profile_count {
                 let next = (index + 1) % profile_count;
-                let left = center
-                    + Self::profile_point(a, index, profile_count)
-                        .lerp(Self::profile_point(b, index, profile_count), t)
-                        * radii;
-                let right = center
-                    + Self::profile_point(a, next, profile_count)
-                        .lerp(Self::profile_point(b, next, profile_count), t)
-                        * radii;
+                let profile_point = |i| {
+                    let pa = Self::profile_point(a, i, profile_count);
+                    let pb = Self::profile_point(b, i, profile_count);
+                    let pp = Self::profile_point(previous, i, profile_count);
+                    let pn = Self::profile_point(next_section, i, profile_count);
+                    center + Vec2::new(
+                        blend(pa.x, pb.x, pp.x, pn.x),
+                        blend(pa.y, pb.y, pp.y, pn.y),
+                    ) * radii
+                };
+                let left = profile_point(index);
+                let right = profile_point(next);
                 let edge = right - left;
                 let relative = cross_point - left;
                 let length_squared = edge.length_squared();
@@ -178,6 +226,30 @@ impl LoftParams {
         let cap = (first.x - point.x).max(point.x - last.x);
         let q = Vec2::new(radial, cap);
         q.max(Vec2::ZERO).length() + q.max_element().min(0.0)
+    }
+}
+
+#[cfg(test)]
+mod loft_interpolation_tests {
+    use super::*;
+
+    #[test]
+    fn smooth_loft_keeps_a_tangent_through_a_section() {
+        let loft = LoftParams {
+            sections: Vec::new(),
+            interpolation: LoftInterpolation::Smooth,
+        };
+        let values = [0.0, 0.2, 1.0, 1.1];
+        let left = loft.blend(values[0], values[1], values[0], values[2], 0.999, [0.0, 0.0, 1.0, 3.0]);
+        let knot = loft.blend(values[0], values[1], values[0], values[2], 1.0, [0.0, 0.0, 1.0, 3.0]);
+        let right = loft.blend(values[1], values[2], values[0], values[3], 0.0005, [0.0, 1.0, 3.0, 4.0]);
+        assert!(((knot - left) - (right - knot)).abs() < 0.00001);
+    }
+
+    #[test]
+    fn old_lofts_default_to_section_ease() {
+        let loft: LoftParams = serde_json::from_str(r#"{"sections":[]}"#).unwrap();
+        assert_eq!(loft.interpolation, LoftInterpolation::SectionEase);
     }
 }
 

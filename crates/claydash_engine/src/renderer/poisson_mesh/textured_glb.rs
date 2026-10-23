@@ -104,11 +104,15 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
                 colors.extend([sampled[page.first + i]; 3]);
             } else {
                 if page.mesh.baked_texture.is_some() {
-                    uvs.extend_from_slice(&super::geometry::baked_triangle_uv(
-                        page.first + i,
-                        page.size,
-                        page.mesh.triangles.len(),
-                    ));
+                    if let Some(face_uvs) = page.mesh.uvs.get(page.first + i) {
+                        uvs.extend_from_slice(face_uvs);
+                    } else {
+                        uvs.extend_from_slice(&super::geometry::baked_triangle_uv(
+                            page.first + i,
+                            page.size,
+                            page.mesh.triangles.len(),
+                        ));
+                    }
                 } else {
                     uvs.extend_from_slice(&triangle_uv(i, page.size));
                 }
@@ -158,6 +162,10 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
             // Ignore unused transparent tiles when deciding whether this primitive
             // needs blending in a glTF viewer.
             for i in 0..page.count {
+                if page.mesh.baked_texture.is_some() && !page.mesh.uvs.is_empty() {
+                    transparent = image.pixels().any(|pixel| pixel.0[3] < 255);
+                    break;
+                }
                 let tile = if page.mesh.baked_texture.is_some() {
                     super::geometry::baked_triangle_tile_size(page.mesh.triangles.len())
                         .unwrap_or(TILE as usize) as u32
@@ -232,6 +240,39 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn custom_baked_texture_uses_authored_uvs_in_glb() {
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 64, 64);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&vec![255; 64 * 64 * 4]).unwrap();
+        }
+        let mut mesh = Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            vec![[0, 1, 2]],
+            vec![uuid::Uuid::nil()],
+        );
+        mesh.uvs = vec![[[0.25, 0.75], [0.75, 0.75], [0.25, 0.25]]];
+        mesh.baked_texture = Some(super::super::geometry::BakedTexture { size: 64, png: png.clone() });
+        let bytes = encode_textured(&[Page {
+            name: "Custom UV".into(), root: uuid::Uuid::nil(),
+            mesh: std::sync::Arc::new(mesh), first: 0, count: 1,
+            size: 64, png, colors: None, materials: None,
+        }]).unwrap();
+        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let doc: Value = serde_json::from_slice(&bytes[20..20 + json_len]).unwrap();
+        let accessor = &doc["accessors"][2];
+        let view = &doc["bufferViews"][accessor["bufferView"].as_u64().unwrap() as usize];
+        let start = 28 + json_len + view["byteOffset"].as_u64().unwrap() as usize;
+        let actual = (0..6).map(|component| {
+            let at = start + component * 4;
+            f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+        }).collect::<Vec<_>>();
+        assert_eq!(actual, vec![0.25, 0.75, 0.75, 0.75, 0.25, 0.25]);
+    }
     #[test]
     fn textured_glb_has_uv_image_and_relightable_material() {
         let mut png_bytes = Vec::new();

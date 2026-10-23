@@ -134,6 +134,46 @@ pub(super) fn shader_source() -> String {
     shader_source_for_assets(&[])
 }
 
+/// Keep the scene ABI and material dispatch intact while omitting evaluator
+/// bodies that this pipeline variant cannot call. Chrome still spends time
+/// parsing and validating those bodies when their override is false.
+pub(super) fn shader_source_for_features(source: &str, features: BuiltinMaterialFeatures) -> String {
+    // Custom WGSL can call built-in material helpers, so preserve their
+    // complete namespace for documents that define custom materials.
+    if source.contains("fn custom_material_1(") {
+        return source.to_owned();
+    }
+    let mut source = source.to_owned();
+    for (enabled, call, module, replacement) in [
+        (features.wood, "evaluate_wood(point, normal, material_object, base, header.offset)",
+            include_str!("../../assets/shaders/material_wood.wgsl"), ""),
+        (features.diagnostic, "evaluate_diagnostic(point, material_object, base, header.offset)",
+            include_str!("../../assets/shaders/material_diagnostic.wgsl"), ""),
+        (features.brick, "evaluate_brick(point, normal, view, material_object, base, header.offset)",
+            include_str!("../../assets/shaders/material_brick.wgsl"),
+            "const BRICK_BOND: u32 = 2u; const BRICK_RELIEF: u32 = 3u;\nfn brick_geometry_visible(object: Object) -> bool { return false; }\nfn brick_structure_height(face: vec2<f32>, bond: vec4<f32>, relief: vec4<f32>) -> f32 { return 0.0; }"),
+        (features.fabric, "evaluate_fabric(point, normal, material_object, base, header.offset)",
+            include_str!("../../assets/shaders/material_fabric.wgsl"),
+            "const FABRIC_PITCH: u32 = 3u;\nfn fabric_geometry_visible(object: Object) -> bool { return false; }\nfn fabric_geometry_cut(local: vec3<f32>, object: Object, offset: u32) -> f32 { return 0.0; }\nfn fabric_extra_light(surface: Surface, light: vec3<f32>, view: vec3<f32>) -> vec3<f32> { return vec3(0.0); }"),
+        (features.metal, "evaluate_metal(point, normal, material_object, base, header.offset)",
+            include_str!("../../assets/shaders/material_metal.wgsl"), ""),
+    ] {
+        if !enabled {
+            source = source.replace(call, "base");
+            source = source.replace(module, replacement);
+        }
+    }
+    if !features.metal {
+        let metal_light = include_str!("../../assets/shaders/material_metal_light.wgsl");
+        let metal_stub = "const METAL_PAINT: u32 = 4u;\nfn metal_light(point: vec3<f32>, view: vec3<f32>, surface: Surface, ao: f32) -> vec3<f32> { return vec3(0.0); }\nfn metal_scene_reflection(point: vec3<f32>, view: vec3<f32>, surface: Surface, ao: f32) -> vec3<f32> { return vec3(0.0); }";
+        source = source.replace(metal_light, metal_stub);
+        if let Some((poisson_metal, _)) = metal_light.split_once("// One traced scene reflection") {
+            source = source.replace(poisson_metal, metal_stub);
+        }
+    }
+    source
+}
+
 pub(super) fn shader_source_for_assets(assets: &[MaterialAsset]) -> String {
     let mut cases = String::new();
     let mut functions = String::new();
@@ -385,6 +425,35 @@ mod tests {
         let mut injected = MaterialAsset::custom("Injection".into());
         injected.wgsl = Some("return base; } @group(0) @binding(12) var<storage> extra: array<f32>; fn other() -> Surface { return base;".into());
         assert!(validate_custom_materials(&[injected]).is_err());
+    }
+
+    #[test]
+    fn scene_shader_omits_unused_material_bodies_and_remains_valid() {
+        let full = shader_source();
+        for kind in [MaterialKind::Solid, MaterialKind::Brick, MaterialKind::Fabric,
+            MaterialKind::Metal, MaterialKind::Wood, MaterialKind::Diagnostic] {
+            let features = BuiltinMaterialFeatures::for_materials(&[Material::preset(kind)]);
+            let source = shader_source_for_features(&full, features);
+            let module = wgpu::naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|error| panic!("{kind:?}: {}", error.emit_to_string(&source)));
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            ).validate(&module).unwrap_or_else(|error| panic!("{kind:?}: {error:?}"));
+            let poisson = shader_source_for_features(&
+                super::poisson_material::source(&full, 1), features);
+            let module = wgpu::naga::front::wgsl::parse_str(&poisson)
+                .unwrap_or_else(|error| panic!("Poisson {kind:?}: {}", error.emit_to_string(&poisson)));
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            ).validate(&module).unwrap_or_else(|error| panic!("Poisson {kind:?}: {error:?}"));
+            if kind == MaterialKind::Solid {
+                assert!(!source.contains("fn evaluate_brick("));
+                assert!(!source.contains("fn evaluate_metal("));
+                assert!(source.len() < full.len() - 40_000);
+            }
+        }
     }
 }
 

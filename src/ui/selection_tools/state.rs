@@ -112,7 +112,7 @@ impl UiState {
         camera: &mut Camera,
     ) {
         let area = egui::Area::new("selection-tools".into())
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Background)
             .pivot(egui::Align2::RIGHT_BOTTOM)
             .fixed_pos(viewport.right_bottom() - egui::vec2(6.0, 6.0))
             .show(ctx, |ui| {

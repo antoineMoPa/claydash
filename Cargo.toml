@@ -46,6 +46,7 @@ winit = "0.30.13"
 web-time = "1.1.0"
 png = "0.17.16"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+base64 = "0.22"
 mp4 = "0.14.0"
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
 
@@ -53,7 +54,6 @@ gltf = { version = "1.4.1", default-features = false, features = ["utils", "name
 pollster = "0.4.0"
 openh264 = "0.9.8"
 egui-winit = { version = "0.36.2", default-features = false }
-base64 = "0.22"
 arboard = { version = "3.6.1", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

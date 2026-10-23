@@ -64,7 +64,12 @@ fn poisson_shade(point: vec3<f32>, normal: vec3<f32>, owner: u32, imported: bool
         let light = select(normalize(vec3(2.0, 3.0, 2.0) - input.point),
             normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
         let diffuse = max(dot(normal, light), 0.0);
-        let ambient = diffuse_ambient_fill(normal, 0.13);
+        // Authored image colors need enough studio fill to stay legible when
+        // a textured mesh faces away from the fixed key light. The sparse
+        // scan-color and voxel paths keep their existing lighting.
+        let base_ambient = diffuse_ambient_fill(normal, 0.13);
+        let ambient = select(base_ambient, max(base_ambient, 0.52),
+            input.captured_color.a > 1.5);
         let daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);
         var direct = select(0.75, camera.sun_direction.w * daylight, camera.world_mode.x == 1u);
         if camera.world_mode.x == 4u { direct = 0.12; }

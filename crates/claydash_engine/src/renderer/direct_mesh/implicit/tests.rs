@@ -112,6 +112,37 @@ fn lattice_mesh_uses_deformed_field_and_preserves_world_frame() {
 }
 
 #[test]
+fn deformed_ring_field_closes_without_edge_resolution_failure() {
+    let mut ring = SdfObject::create_kind(PrimitiveKind::Torus);
+    ring.params = SdfParams::TorusParams {
+        major_radius: 0.38,
+        minor_radius: 0.09,
+    };
+    let mut lattice = Lattice::new(Vec3::splat(-0.6), Vec3::splat(0.6), 3);
+    for z in 0..3 {
+        for y in 0..3 {
+            for x in 0..3 {
+                let index = lattice.index(x, y, z);
+                lattice.offsets[index] = Vec3::new(
+                    0.035 * (y as f32 - 1.0),
+                    0.02 * (x as f32 - 1.0),
+                    0.065 * (x as f32 - 1.0) * (y as f32 - 1.0),
+                );
+            }
+        }
+    }
+    ring.lattice = Some(lattice);
+    let scene = [ring.clone()];
+    let mesh = run(&scene, ring.uuid, 32);
+    closed(&mesh);
+    let mut field = PreparedDirectField::new(&scene, ring.uuid).unwrap();
+    assert!(mesh
+        .positions
+        .iter()
+        .all(|&point| field.sample(point).0.abs() < 2e-4));
+}
+
+#[test]
 fn practical_thin_inlay_has_both_closed_shell_surfaces() {
     let host = sphere(0.4);
     let mut shell = sphere(0.6);

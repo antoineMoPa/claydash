@@ -9,6 +9,8 @@ mod rendering;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod navigation_profile;
 mod mesh_export_options;
+mod mesh_actions;
+mod mesh_sections;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_export;
 #[cfg(target_arch = "wasm32")]
@@ -17,6 +19,8 @@ mod mesh_export;
 #[cfg(target_arch = "wasm32")]
 #[path = "app/web_ply_import.rs"]
 mod web_ply_import;
+#[cfg(target_arch = "wasm32")]
+mod web_mcp;
 use initialization::data_tree_with_scene;
 
 #[cfg(target_arch = "wasm32")]
@@ -70,6 +74,7 @@ use crate::document;
 
 #[cfg(target_arch = "wasm32")]
 enum WebDocumentMessage {
+    WebMcp(web_mcp::Inbound),
     PlyFile { request: Option<u64>, file: web_sys::File },
     PlyBatch { request: u64, data: Vec<u8>, count: usize, loaded: usize, total: usize },
     PlyProgress { request: u64, parsed: usize, total: usize },
@@ -111,11 +116,19 @@ pub struct App {
     #[cfg(all(not(target_arch = "wasm32"), unix))]
     agent_requests: Option<Receiver<agent::Inbound>>,
     #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_bridge_error: Option<String>,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_camera: Camera,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
     agent_proxy: Option<winit::event_loop::EventLoopProxy<AppEvent>>,
     #[cfg(all(not(target_arch = "wasm32"), unix))]
     agent_capture: Option<agent::AgentCapture>,
     #[cfg(all(not(target_arch = "wasm32"), unix))]
     agent_revision: u64,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_revision_key: std::cell::Cell<(u64, i32)>,
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    agent_revision_counter: std::cell::Cell<u64>,
     #[cfg(all(not(target_arch = "wasm32"), unix))]
     agent_redraw_pending: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -274,6 +287,8 @@ impl App {
     fn replace_scene(&mut self, scene: DataTree) {
         self.cancel_document_work();
         self.tree = data_tree_with_scene(scene);
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        { self.agent_revision = self.agent_revision.saturating_add(1); }
         self.interactions = InteractionState::default();
         self.ui.reset_document_gestures();
         self.clear_document_egui_state();
@@ -286,6 +301,14 @@ impl App {
     }
 
     fn install_gaussian_cloud(&mut self, name: &str, cloud: claydash_engine::gaussian_ply::GaussianCloud) -> uuid::Uuid {
+        let bounds = cloud.splats.iter().filter_map(|splat| {
+            splat.position.is_finite().then_some(splat.position)
+        }).fold(None, |bounds: Option<(glam::Vec3, glam::Vec3)>, point| {
+            Some(match bounds {
+                Some((min, max)) => (min.min(point), max.max(point)),
+                None => (point, point),
+            })
+        });
         let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
         object.name = name.to_owned();
         object.imported_splats = Some(std::sync::Arc::new(cloud));
@@ -296,6 +319,23 @@ impl App {
         crate::model::set_objects(&mut self.tree, objects);
         crate::model::set_selected_exact(&mut self.tree, vec![id]);
         self.document.mark_cloud_imported(&self.tree, id);
+        if let Some((min, max)) = bounds {
+            let center = (min + max) * 0.5;
+            let radius = (max - min).length() * 0.5;
+            let aspect = (self.camera.viewport.x / self.camera.viewport.y.max(1.0)).max(0.01);
+            let vertical_half_angle = 22.5_f32.to_radians();
+            let horizontal_half_angle = (vertical_half_angle.tan() * aspect).atan();
+            let distance = (radius * 1.15 / vertical_half_angle.min(horizontal_half_angle).sin())
+                .max(0.5);
+            let offset = self.camera.position - self.camera.target;
+            let direction = if offset.length_squared() > 0.0 {
+                offset / offset.length()
+            } else {
+                glam::Vec3::Z
+            };
+            self.camera.target = center;
+            self.camera.position = center + direction * distance;
+        }
         id
     }
 
@@ -876,6 +916,7 @@ impl App {
         for _ in 0..4 {
             let Ok(message) = self.document_rx.try_recv() else { break };
             match message {
+                WebDocumentMessage::WebMcp(inbound) => self.process_web_mcp(inbound),
                 WebDocumentMessage::PlyFile { request, file } => {
                     if request.is_some_and(|request| request != self.document_request) { continue; }
                     self.web_ply_import = None;

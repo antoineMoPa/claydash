@@ -127,6 +127,15 @@ when a small viewport cycles through cached frames quickly.
 
 ## Material library previews
 
+Browser startup defers full SDF pipeline creation until the scene actually has
+SDF geometry. A mesh-only scene uses its raster background and mesh material
+pipeline; WebAssembly excludes visible meshes from the SDF BVH just as native
+builds do, and pending DirectMesh roots do not trigger a temporary SDF fallback.
+When an SDF pipeline is needed, its shaded, depth, and deferred source includes only the built-in material
+evaluators enabled by that scene. Shared material dispatch and geometry hooks
+remain valid for the absent families, while custom WGSL scenes retain the full
+helper namespace. The same source selection applies to Poisson mesh materials.
+
 Material spheres are requested by visible UI rectangles, after filtering and section expansion. Startup and closed sections generate no thumbnails. Requests are refreshed each frame, so scrolling away discards pending demand. The renderer produces at most one new sphere per frame and waits for GPU completion before starting another. Cached textures are reused when reopening sections; edited or deleted shared materials invalidate their own entries. WGSL source changes invalidate preview pipelines and textures.
 
 Preview pipelines enable only the requested material family and sphere geometry. Combining every material family in an eagerly compiled preview pipeline stalled Chrome's GPU queue. Preview compilation now runs asynchronously: browsers use WebGPU's `createRenderPipelineAsync` through a small device-handle bridge; native builds use a worker thread. Pending cards display spinners, and failed compilations show an error tooltip instead of retrying every frame. No draw using a new preview pipeline is submitted until compilation completes. Filtering/closing a section drops its thumbnail demand; a completed compiler job only populates the pipeline cache. Source changes discard the old result channel, so stale jobs cannot replace newer shaders. Preview uploads preserve scene background jobs and captures, and restore scene buffers before drawing the viewport.

@@ -298,6 +298,7 @@ impl ApplicationHandler<AppEvent> for App {
         }
         #[cfg(target_arch = "wasm32")]
         {
+            web_mcp::set_window(window.clone());
             let renderer_tx = self.renderer_tx.clone();
             let renderer_window = window.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -310,8 +311,8 @@ impl ApplicationHandler<AppEvent> for App {
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         if !self.benchmark && self.ui_benchmark.is_none() && self.guide_screenshot.is_none() {
             match super::agent::listen(self.agent_proxy.clone()) {
-                Ok(receiver) => self.agent_requests = Some(receiver),
-                Err(error) => eprintln!("Claydash agent bridge unavailable: {error}"),
+                Ok(receiver) => { self.agent_requests = Some(receiver); self.agent_bridge_error = None; }
+                Err(error) => { eprintln!("Claydash agent bridge unavailable: {error}"); self.agent_bridge_error = Some(error); }
             }
         }
     }

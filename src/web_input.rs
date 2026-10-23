@@ -30,11 +30,21 @@ impl WebInput {
 
     pub fn take(&mut self, window: &Window) -> RawInput {
         let scale = window.scale_factor() as f32;
-        let size = window.inner_size().to_logical::<f32>(window.scale_factor());
-        self.input.screen_rect = Some(Rect::from_min_size(
-            Pos2::ZERO,
-            egui::vec2(size.width, size.height),
-        ));
+        // Winit's web resize observer can lag behind changes to the canvas
+        // backing store. The workspace must use the visible CSS viewport,
+        // while egui paints into physical pixels at the browser's real DPR.
+        let browser = web_sys::window().expect("browser window");
+        let width = browser
+            .inner_width()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
+        let height = browser
+            .inner_height()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
+        self.input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, height)));
         if let Some(viewport) = self.input.viewports.get_mut(&egui::ViewportId::ROOT) {
             viewport.native_pixels_per_point = Some(scale);
             viewport.inner_rect = self.input.screen_rect;

@@ -23,7 +23,7 @@ pub(crate) enum RenderProgress {
 impl UiState {
     fn selection_label(tree: &DataTree) -> Option<String> {
         if crate::model::cloud_edit(tree).is_some() {
-            return Some("Point Cloud".into());
+            return Some("Edit mode · Gaussian splats".into());
         }
         if let Some(face) = crate::model::selected_modeling_face(tree) {
             let scene = crate::model::objects_ref(tree);
@@ -37,7 +37,9 @@ impl UiState {
             1 => crate::model::objects_ref(tree)
                 .iter()
                 .find(|object| object.uuid == selection[0])
-                .map(|object| object.name.clone()),
+                .map(|object| if object.imported_splats.is_some() {
+                    format!("Object mode · {}", object.name)
+                } else { object.name.clone() }),
             count => Some(format!("{count} objects")),
         }
     }
@@ -123,8 +125,20 @@ impl UiState {
                 "Click another object · Esc cancels".into(),
             ));
         }
-        self.face_cut_status(tree)
-            .map(|message| ("Face cut".into(), message))
+        if let Some(message) = self.face_cut_status(tree) {
+            return Some(("Face cut".into(), message));
+        }
+        if let Some(edit) = crate::model::cloud_edit(tree) {
+            return Some(("Edit mode · Gaussian splats".into(),
+                format!("{} selected · select and transform splats", edit.indices.len())));
+        }
+        let selected = crate::model::selected_ref(tree);
+        if selected.len() == 1 && crate::model::objects_ref(tree).iter().any(|object|
+            object.uuid == selected[0] && object.imported_splats.is_some()) {
+            return Some(("Object mode · Gaussian splats".into(),
+                "Transform the whole cloud · enter Edit mode to select splats".into()));
+        }
+        None
     }
 
     pub(super) fn draw_status_bar(
@@ -132,6 +146,7 @@ impl UiState {
         ui: &mut egui::Ui,
         tree: &DataTree,
         progress: Option<RenderProgress>,
+        agent_bridge_error: Option<&str>,
     ) -> bool {
         let line = self.status_line(tree);
         let mut cancel = false;
@@ -186,7 +201,8 @@ impl UiState {
                         }
                         ui.label(egui::RichText::new(title).strong().size(12.0));
                     });
-                } else if let Some((title, message)) = line {
+                } else if let Some((title, message)) = agent_bridge_error.map(|error|
+                    ("MCP unavailable".into(), format!("Desktop bridge could not connect: {error}"))).or(line) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 10.0;
                         ui.label(
@@ -240,5 +256,22 @@ mod tests {
             UiState::selection_label(&tree).as_deref(),
             Some("2 objects")
         );
+    }
+
+    #[test]
+    fn gaussian_mode_labels_identify_object_and_splat_editing() {
+        use claydash_engine::gaussian_ply::GaussianCloud;
+        let mut cloud = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        cloud.imported_splats = Some(std::sync::Arc::new(GaussianCloud { splats: Vec::new() }));
+        let id = cloud.uuid;
+        let mut tree = DataTree::default();
+        crate::model::set_objects(&mut tree, vec![cloud]);
+        crate::model::set_selected_exact(&mut tree, vec![id]);
+        let ui = UiState::default();
+        assert!(UiState::selection_label(&tree).unwrap().starts_with("Object mode"));
+        assert_eq!(ui.status_line(&tree).unwrap().0, "Object mode · Gaussian splats");
+        crate::model::set_cloud_edit(&mut tree, Some(crate::model::CloudEdit { object: id, indices: vec![] }));
+        assert_eq!(UiState::selection_label(&tree).as_deref(), Some("Edit mode · Gaussian splats"));
+        assert_eq!(ui.status_line(&tree).unwrap().0, "Edit mode · Gaussian splats");
     }
 }

@@ -55,6 +55,7 @@ pub(super) fn append(
     let source = page.materials.as_ref().ok_or("Missing solid materials")?;
     if page.mesh.normals.len() != page.mesh.triangles.len()
         || page.mesh.owners.len() != page.mesh.triangles.len()
+        || (!page.mesh.uvs.is_empty() && page.mesh.uvs.len() != page.mesh.triangles.len())
     {
         return Err("Incomplete solid mesh normals/owners".into());
     }
@@ -67,15 +68,18 @@ pub(super) fn append(
         let material = source.get(&owner).ok_or("Missing solid owner material")?;
         let mut positions = Vec::<[f32; 3]>::new();
         let mut normals = Vec::<[f32; 3]>::new();
+        let mut uvs = Vec::<[f32; 2]>::new();
         let mut indices = Vec::<u32>::new();
         let mut shared = HashMap::new();
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = -min;
+        let has_uvs = !page.mesh.uvs.is_empty();
         for face in faces {
             for (corner, vertex) in page.mesh.triangles[face].into_iter().enumerate() {
                 let p = page.mesh.positions[vertex as usize];
                 let normal = page.mesh.normals[face][corner];
-                if !p.is_finite() || !normal.is_finite() {
+                let uv = if has_uvs { page.mesh.uvs[face][corner] } else { [0.0; 2] };
+                if !p.is_finite() || !normal.is_finite() || uv.iter().any(|value| !value.is_finite()) {
                     return Err("Nonfinite solid mesh".into());
                 }
                 let key = (
@@ -83,11 +87,13 @@ pub(super) fn append(
                     normal
                         .to_array()
                         .map(|v| if v == 0.0 { 0 } else { v.to_bits() }),
+                    uv.map(|v| if v == 0.0 { 0 } else { v.to_bits() }),
                 );
                 let index = *shared.entry(key).or_insert_with(|| {
                     let index = positions.len() as u32;
                     positions.push(p.to_array());
                     normals.push(normal.to_array());
+                    if has_uvs { uvs.push(uv); }
                     min = min.min(p);
                     max = max.max(p);
                     index
@@ -99,6 +105,11 @@ pub(super) fn append(
         views[pos]["target"] = json!(34962);
         let norm = buffer_view(binary, views, bytemuck::cast_slice(&normals));
         views[norm]["target"] = json!(34962);
+        let uv_view = has_uvs.then(|| {
+            let view = buffer_view(binary, views, bytemuck::cast_slice(&uvs));
+            views[view]["target"] = json!(34962);
+            view
+        });
         let short = positions.len() <= 65536;
         let ix = if short {
             let indices: Vec<u16> = indices.iter().map(|i| *i as u16).collect();
@@ -113,6 +124,9 @@ pub(super) fn append(
             json!({"bufferView":norm,"componentType":5126,"count":normals.len(),"type":"VEC3"}),
         );
         accessors.push(json!({"bufferView":ix,"componentType":if short{5123}else{5125},"count":indices.len(),"type":"SCALAR"}));
+        if let Some(view) = uv_view {
+            accessors.push(json!({"bufferView":view,"componentType":5126,"count":uvs.len(),"type":"VEC2"}));
+        }
         let alpha = (material.color.w * material.opacity).clamp(0.0, 1.0);
         let mut mat = json!({"name":"Solid material","pbrMetallicRoughness":{"baseColorFactor":[material.color.x,material.color.y,material.color.z,alpha],"metallicFactor":material.metallic.clamp(0.0,1.0),"roughnessFactor":material.roughness.clamp(0.0,1.0)},"doubleSided":true,"alphaMode":if alpha<1.0{"BLEND"}else{"OPAQUE"}});
         if material.emits_light() {
@@ -127,7 +141,9 @@ pub(super) fn append(
                 materials.push(mat);
                 i
             });
-        primitives.push(json!({"attributes":{"POSITION":base,"NORMAL":base+1},"indices":base+2,"material":m,"mode":4}));
+        let mut attributes = json!({"POSITION":base,"NORMAL":base+1});
+        if has_uvs { attributes["TEXCOORD_0"] = json!(base + 3); }
+        primitives.push(json!({"attributes":attributes,"indices":base+2,"material":m,"mode":4}));
     }
     Ok(primitives)
 }
@@ -200,5 +216,26 @@ mod tests {
         o.material.kind = MaterialKind::Solid;
         o.material_id = Some(Uuid::new_v4());
         assert!(materials_for_mesh(&[o], &mesh).is_none());
+    }
+
+    #[test]
+    fn solid_export_keeps_explicit_uv_seams() {
+        let object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        let mut mesh = Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X + Vec3::Y],
+            vec![[0, 1, 2], [1, 3, 2]], vec![object.uuid; 2]);
+        mesh.uvs = vec![[[0., 0.], [1., 0.], [0., 1.]],
+            [[2., 0.], [2., 1.], [1., 1.]]];
+        let materials = materials_for_mesh(&[object.clone()], &mesh).unwrap();
+        let page = Page { name: "Patch".into(), root: object.uuid,
+            mesh: Arc::new(mesh), first: 0, count: 2, size: 64,
+            png: vec![], colors: None, materials: Some(Arc::new(materials)) };
+        let bytes = super::super::textured_glb::encode_textured(&[page]).unwrap();
+        let n = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let doc: Value = serde_json::from_slice(&bytes[20..20 + n]).unwrap();
+        let primitive = &doc["meshes"][0]["primitives"][0];
+        let uv_accessor = primitive["attributes"]["TEXCOORD_0"].as_u64().unwrap() as usize;
+        assert_eq!(doc["accessors"][uv_accessor]["count"], 6,
+            "the shared positions must split at the UV seam");
     }
 }

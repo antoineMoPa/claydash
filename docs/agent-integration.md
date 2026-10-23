@@ -37,6 +37,8 @@ a socket at a time. `claydash mcp` and `claydash agent` connect to that existing
 To use another socket, set `CLAYDASH_AGENT_SOCKET` to the same absolute socket path in the
 server and clients. Use a private directory; custom parent-directory permissions are preserved.
 A stale socket left after termination is recovered on the next start.
+Unix socket paths have a platform length limit. If the path is too long, Claydash reports its
+length and asks for a shorter `CLAYDASH_AGENT_SOCKET` path.
 
 For a private session started and stopped by the MCP client, configure the command with:
 
@@ -75,6 +77,15 @@ The configuration follows each client's current local MCP documentation:
 [Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
 [Claude Code](https://code.claude.com/docs/en/mcp), and
 [OpenCode](https://opencode.ai/v2/docs/mcp-servers).
+
+## Editable mesh shading
+
+`CreateMesh` accepts optional `shading`: `Auto` (default, 60° creases), `Flat`, or
+`Smooth`. `SetMeshShading` changes it later with `{ "id": "…", "shading": "Smooth" }`.
+Smooth shading averages face normals at shared vertex indices, so adjacent faces must use
+the same vertex indices to blend. The Object settings panel has the same Shading control.
+`GetMesh` returns the shading mode and one normal per triangle corner; edits regenerate
+normals, and saved scenes and GLB export retain the result.
 
 ## GLB export
 
@@ -161,8 +172,10 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
    without changing their shape; the capture returns an error for those parts. Captures use
    `mode: "simple_shading"` by default; use
    `mode: "full_material"` for close material inspection or `mode: "outline"` to see primitive
-   wire guides for every captured object, including hidden Boolean operands. Outline PNGs contain
-   the guides on a dark background, without editor controls or gizmos. The scene, selection, and
+   wire guides for every captured object, including hidden Boolean operands. Captures omit editor
+   controls and gizmos, and include a view title, horizontal and vertical world-axis directions,
+   and a scale bar measured at the camera target depth. Outline PNGs contain the guides on a
+   dark background. The scene, selection, and
    live viewport mode stay unchanged. Legacy `refine: true` selects full material rendering and
    `refine: false` selects simple shading; an explicit `mode` takes precedence over `refine`.
    Repeat the edit and capture steps until the design looks right.
@@ -206,6 +219,25 @@ box after a subsequent call supplies their generated IDs:
 
 `PutObject` replaces a complete object by UUID. It gives agents access to every serialized object
 field, including materials, repetition, mirrors, lattice, path extrusion, and surface inlays.
+The `lattice` field is either `null` or an object with `resolution` (an integer from 2 to 9),
+`min` and `max` (three-number vectors in the lattice owner's local space), and `offsets` (an
+array of `resolution³` three-number displacement vectors). Index a control as
+`x + resolution * (y + resolution * z)`, with X varying fastest. To create a three-point cage,
+start with 27 `[0,0,0]` offsets, then edit the entries for the surface controls. For example,
+the upper far corner is entry 26. Include `shape_keys: []`, `current_shape_key: 0`, and
+`shape_position: 0.0` when constructing a complete lattice value. Each shape key has a `name`
+and its own full `offsets` array; `current_shape_key` is zero for the undeformed base pose or a
+one-based shape-key index. All dimensions and offsets must be finite, and each `max` component
+must exceed its `min` component.
+
+Interior controls are derived when the cage is evaluated. For each interior point, Claydash
+linearly interpolates the two opposing offsets along X, Y, and Z at that point, then averages
+those three vectors. Its stored interior offset is ignored. Surface controls, including face,
+edge, and corner controls, use their stored offsets directly. The resulting control field is
+trilinearly interpolated between neighboring points. Thus, set the surrounding surface
+controls to shape the interior; changing an interior array entry alone does not deform the
+object. Shape keys use the same offset layout.
+
 `CreateObject` also accepts `render_representation`, and `SetRenderRepresentation` changes that
 choice on an existing object, including a Boolean group root or leaf. The choices are `exact_sdf`, `box_depth_atlas`, `sphere_depth_atlas`, and `gaussian_splats`. The capture modes record
 depth and the hit material from box faces or radial sphere rays; Gaussian splats project radial hits into soft opacity along each view ray.
@@ -260,12 +292,19 @@ claydash agent GetSchema
 claydash agent GetState
 claydash agent Apply '{"actions":[{"type":"CreateObject","kind":"Box","position":[0,0,0]}]}'
 claydash agent CaptureViewport --output /tmp/claydash-view.png
+claydash agent CaptureViewport '{"mode":"outline"}' --output /tmp/claydash-outline.png
+claydash agent CaptureOrthographic --output /tmp/claydash-views.png '{"panel_size":256}'
 claydash agent Save '{"path":"/tmp/design.claydash"}'
 ```
 
 Use the absolute binary path if `claydash` is not on `PATH`. CLI errors go to stderr and exit with
 a nonzero status. Without `--output`, `CaptureViewport` returns JSON containing PNG bytes encoded
 as base64.
+`--output` may go before or after the JSON capture options and works for both capture operations.
+`GetSceneSummary` accepts no arguments, including `{}`. Its `view.viewport_size` gives the
+agent capture size in pixels; `view.fov_y_degrees` is 45 for perspective and null for orthographic.
+`SelectBox` and `SelectCircle` use coordinates local to that capture: `[0,0]` is its top-left,
+with X right and Y down. Desktop window position and display scale do not affect these values.
 
 The bridge only accepts connections on the local socket, never a network port. File operations run
 with the same local user permissions as the native Claydash process.

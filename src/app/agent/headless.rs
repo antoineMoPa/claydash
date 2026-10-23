@@ -65,6 +65,7 @@ pub(super) fn run(options: Options, private_mcp: bool) -> Result<(), String> {
     app.agent_redraw_pending = true;
     app.camera.viewport = app.renderer.as_ref().unwrap().size();
     app.camera.viewport_origin = Vec2::ZERO;
+    app.agent_camera.viewport = app.camera.viewport;
     let requests = if private_mcp {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -157,7 +158,7 @@ fn run_requests(app: &mut App, requests: Receiver<Inbound>) {
 impl App {
     fn render_agent_offscreen(&mut self) {
         let capture = self.agent_capture.as_ref().unwrap();
-        let camera = capture.camera(&self.camera);
+        let camera = capture.camera();
         let objects = capture
             .objects
             .as_deref()

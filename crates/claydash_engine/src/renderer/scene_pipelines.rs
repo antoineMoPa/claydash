@@ -93,8 +93,7 @@ impl Renderer {
         capacity: u32,
         features: SceneShaderFeatures,
     ) {
-        let raster_only = self.node_count == 0
-            && (self.mesh_vertex_count > 0 || !self.splat_instances.is_empty());
+        let raster_only = self.node_count == 0;
         if raster_only {
             self.viewport.set_contact_pipeline(None);
             self.mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(

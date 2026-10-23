@@ -330,6 +330,13 @@ impl Renderer {
         let mesh_components = if manage_scene_jobs {
             let mut components = self.poisson_mesh.shown_components();
             components.extend(self.voxels.shown_components());
+            #[cfg(target_arch = "wasm32")]
+            components.extend(source_objects.iter().filter_map(|object| {
+                (object.boolean_parent.is_none()
+                    && object.render_representation
+                        == crate::model::GroupRenderRepresentation::DirectMesh)
+                    .then_some(object.uuid)
+            }));
             components
         }
             else { std::collections::HashSet::new() };
@@ -406,11 +413,8 @@ impl Renderer {
                 let used_as_inlay_host = source_objects.iter().any(|part| {
                     part.surface_inlay.is_some_and(|inlay| inlay.host == object.uuid)
                 });
-                #[cfg(not(target_arch = "wasm32"))]
                 let contains_mesh = objects[first..=root].iter()
                     .any(|part| mesh_components.contains(&part.uuid));
-                #[cfg(target_arch = "wasm32")]
-                let contains_mesh = false;
                 if object.boolean_parent.is_none() && source_supports_split && !contains_mesh
                     && !used_as_inlay_host && object.mirror.is_none()
                     // Cage transforms are already attached to every GPU
@@ -469,10 +473,7 @@ impl Renderer {
         let mut starts = vec![0u32; objects.len()];
         for index in 0..gpu_objects.len() {
             if gpu_objects[index].meta[3] < 0 {
-                #[cfg(not(target_arch = "wasm32"))]
                 let meshed = mesh_components.contains(&objects[index].uuid);
-                #[cfg(target_arch = "wasm32")]
-                let meshed = false;
                 if let Some(bound) = component_bounds[index].filter(|_| !meshed) {
                     group_bounds.push(bound);
                 }

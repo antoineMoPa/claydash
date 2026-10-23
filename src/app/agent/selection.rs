@@ -59,11 +59,12 @@ impl App {
             return Err("box min must be above and left of max".into());
         }
         let rect = egui::Rect::from_min_max(min, max);
+        let camera = self.agent_view_camera();
         if self.agent_prepare_cloud_selection(args.cloud_object_id)? {
-            crate::cloud_edit::select_rect(&mut self.tree, &self.camera, rect, 1.0, args.mode);
+            crate::cloud_edit::select_rect(&mut self.tree, &camera, rect, 1.0, args.mode);
         } else {
             let scene = model::objects_ref(&self.tree);
-            let hits = crate::ui::box_selection(scene, &self.camera, rect, 1.0, vec![]);
+            let hits = crate::ui::box_selection(scene, &camera, rect, 1.0, vec![]);
             let previous = model::selected(&self.tree);
             let next = crate::ui::region_selection_ids(scene, args.mode, previous.clone(), hits);
             if next != previous { model::set_selected(&mut self.tree, next); }
@@ -77,6 +78,7 @@ impl App {
         if !args.radius.is_finite() || !(4.0..=512.0).contains(&args.radius) {
             return Err("circle radius must be finite and between 4 and 512 viewport pixels".into());
         }
+        let camera = self.agent_view_camera();
         if self.agent_prepare_cloud_selection(args.cloud_object_id)? {
             if args.mode == SelectionMode::Replace {
                 if let Some(mut edit) = model::cloud_edit(&self.tree) {
@@ -84,17 +86,17 @@ impl App {
                     model::set_cloud_edit(&mut self.tree, Some(edit));
                 }
             }
-            crate::cloud_edit::select_circle_stroke(&mut self.tree, &self.camera,
+            crate::cloud_edit::select_circle_stroke(&mut self.tree, &camera,
                 start, end, args.radius, 1.0, args.mode);
         } else {
             let previous = model::selected(&self.tree);
             let previous_variable = model::selected_variable(&self.tree);
             let hits = crate::ui::circle_selection(model::objects_ref(&self.tree),
-                &model::scene_cameras(&self.tree), &self.camera,
+                &model::scene_cameras(&self.tree), &camera,
                 start, end, args.radius, 1.0, vec![]);
             let next = crate::ui::region_selection_ids(model::objects_ref(&self.tree),
                 args.mode, previous.clone(), hits);
-            let variable = crate::ui::circle_variable_selection(&self.tree, &self.camera,
+            let variable = crate::ui::circle_variable_selection(&self.tree, &camera,
                 start, end, args.radius, 1.0);
             if next != previous { model::set_selected(&mut self.tree, next); }
             match args.mode {
@@ -122,9 +124,9 @@ mod tests {
     fn mcp_region_tools_replace_add_and_subtract_object_selection() {
         let mut app = App::new();
         app.new_document();
-        app.camera.position = Vec3::new(0.0, 0.0, 8.0);
-        app.camera.target = Vec3::ZERO;
-        app.camera.viewport = Vec2::new(800.0, 600.0);
+        app.agent_camera.position = Vec3::new(0.0, 0.0, 8.0);
+        app.agent_camera.target = Vec3::ZERO;
+        app.agent_camera.viewport = Vec2::new(800.0, 600.0);
         let mut left = SdfObject::create_kind(PrimitiveKind::Box);
         left.transform.translation.x = -1.0;
         let mut right = SdfObject::create_kind(PrimitiveKind::Box);
@@ -134,8 +136,8 @@ mod tests {
             min: [center.x - 12.0, center.y - 12.0],
             max: [center.x + 12.0, center.y + 12.0], mode, cloud_object_id: None,
         };
-        let left_point = app.camera.project(left.transform.translation, 1.0).unwrap();
-        let right_point = app.camera.project(right.transform.translation, 1.0).unwrap();
+        let left_point = app.agent_camera.project(left.transform.translation, 1.0).unwrap();
+        let right_point = app.agent_camera.project(right.transform.translation, 1.0).unwrap();
         app.agent_select_box(rect(left_point, SelectionMode::Replace)).unwrap();
         assert_eq!(model::selected(&app.tree), vec![left.uuid]);
         app.agent_select_box(rect(right_point, SelectionMode::Add)).unwrap();
@@ -154,9 +156,9 @@ mod tests {
         use claydash_engine::gaussian_ply::{Gaussian, GaussianCloud};
         let mut app = App::new();
         app.new_document();
-        app.camera.position = Vec3::new(0.0, 0.0, 8.0);
-        app.camera.target = Vec3::ZERO;
-        app.camera.viewport = Vec2::new(800.0, 600.0);
+        app.agent_camera.position = Vec3::new(0.0, 0.0, 8.0);
+        app.agent_camera.target = Vec3::ZERO;
+        app.agent_camera.viewport = Vec2::new(800.0, 600.0);
         let mut object = SdfObject::create_kind(PrimitiveKind::Box);
         object.imported_splats = Some(std::sync::Arc::new(GaussianCloud {
             splats: [0.0, 2.0].map(|x| Gaussian {
@@ -167,7 +169,7 @@ mod tests {
         }));
         let id = object.uuid;
         model::set_objects(&mut app.tree, vec![object]);
-        let point = app.camera.project(Vec3::ZERO, 1.0).unwrap();
+        let point = app.agent_camera.project(Vec3::ZERO, 1.0).unwrap();
         app.agent_select_circle(SelectCircleArgs {
             start: [point.x, point.y], end: None, radius: 10.0,
             mode: SelectionMode::Replace, cloud_object_id: Some(id),

@@ -14,11 +14,13 @@ pub struct AgentCapture {
     pub objects: Option<Vec<SdfObject>>,
     pub mode: CaptureMode,
     pub view: CaptureView,
+    pub camera: Camera,
+    pub cancelled_retries: u8,
 }
 
 impl AgentCapture {
-    pub fn camera(&self, live: &Camera) -> Camera {
-        let mut camera = live.clone();
+    pub fn camera(&self) -> Camera {
+        let mut camera = self.camera.clone();
         if let CaptureView::Orthographic {
             panel_size,
             distance,
@@ -45,7 +47,19 @@ impl AgentCapture {
         frame: crate::renderer::CapturedFrame,
         camera: &Camera,
     ) -> AgentResult {
-        let cropped = crate::render_export::crop_to_viewport(frame, camera);
+        let mut cropped = crate::render_export::crop_to_viewport(frame, camera);
+        let title = match &self.view {
+            CaptureView::Viewport => match camera.projection_mode {
+                ProjectionMode::Perspective => "Perspective view",
+                ProjectionMode::Orthographic => "Orthographic view",
+            },
+            CaptureView::Orthographic { frames, .. } => match frames.len() {
+                0 => "Side view",
+                1 => "Top view",
+                _ => "Front view",
+            },
+        };
+        super::capture_overlay::annotate(&mut cropped, camera, title);
         if let CaptureView::Orthographic { frames, .. } = &mut self.view {
             frames.push(cropped);
             if frames.len() < 3 {
@@ -75,40 +89,14 @@ pub(super) fn orthographic_sheet(
         return Err("orthographic views have different sizes".into());
     }
     let width = x.width * 3;
-    let height = x.height + 24;
+    let height = x.height;
     let mut rgba = vec![0; (width * height * 4) as usize];
     for (column, frame) in frames.iter().enumerate() {
         for row in 0..frame.height {
             let source = (row * frame.width * 4) as usize;
-            let target = (((row + 24) * width + column as u32 * frame.width) * 4) as usize;
+            let target = ((row * width + column as u32 * frame.width) * 4) as usize;
             rgba[target..target + (frame.width * 4) as usize]
                 .copy_from_slice(&frame.rgba[source..source + (frame.width * 4) as usize]);
-        }
-    }
-    for pixel in rgba[..(width * 24 * 4) as usize].chunks_exact_mut(4) {
-        pixel.copy_from_slice(&[35, 43, 54, 255]);
-    }
-    for (column, glyph) in [
-        [0b10001, 0b01010, 0b00100, 0b01010, 0b10001],
-        [0b10001, 0b01010, 0b00100, 0b00100, 0b00100],
-        [0b11111, 0b00010, 0b00100, 0b01000, 0b11111],
-    ]
-    .iter()
-    .enumerate()
-    {
-        for (row, bits) in glyph.iter().enumerate() {
-            for col in 0..5 {
-                if bits & (1 << (4 - col)) != 0 {
-                    for dy in 0..2 {
-                        for dx in 0..2 {
-                            let px = column as u32 * x.width + 10 + col * 2 + dx;
-                            let py = 7 + row as u32 * 2 + dy;
-                            let offset = ((py * width + px) * 4) as usize;
-                            rgba[offset..offset + 4].copy_from_slice(&[240, 244, 249, 255]);
-                        }
-                    }
-                }
-            }
         }
     }
     Ok(crate::renderer::CapturedFrame {

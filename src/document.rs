@@ -317,9 +317,11 @@ pub fn deserialize_scene(bytes: &[u8]) -> Result<ObservableKVTree<ClaydashValue>
                 if mesh.positions.len() > 10_000_000 || mesh.triangles.len() > 10_000_000
                     || mesh.owners.len() != mesh.triangles.len()
                     || mesh.normals.len() != mesh.triangles.len()
+                    || (!mesh.uvs.is_empty() && mesh.uvs.len() != mesh.triangles.len())
                     || mesh.positions.iter().any(|point| !point.is_finite())
                     || mesh.triangles.iter().flatten().any(|index| *index as usize >= mesh.positions.len())
-                    || mesh.normals.iter().flatten().any(|normal| !normal.is_finite()) {
+                    || mesh.normals.iter().flatten().any(|normal| !normal.is_finite())
+                    || mesh.uvs.iter().flatten().flatten().any(|coordinate| !coordinate.is_finite()) {
                     return Err("Project contains invalid imported mesh data".into());
                 }
             }

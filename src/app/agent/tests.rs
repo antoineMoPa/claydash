@@ -6,12 +6,90 @@ mod rendering;
 mod variables;
 
 #[test]
+fn cli_capture_output_accepts_json_in_either_position() {
+    for args in [
+        vec!["--output", "/tmp/capture.png", "{\"mode\":\"outline\"}"],
+        vec!["{\"mode\":\"outline\"}", "--output", "/tmp/capture.png"],
+    ] {
+        let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let (request, output) = parse_agent_arguments("CaptureViewport", &args).unwrap();
+        assert_eq!(request["args"]["mode"], "outline");
+        assert_eq!(output.unwrap(), PathBuf::from("/tmp/capture.png"));
+    }
+    let args = ["--output".to_owned(), "/tmp/views.png".to_owned()];
+    assert!(parse_agent_arguments("CaptureOrthographic", &args).is_ok());
+    assert!(parse_agent_arguments("GetState", &args).is_err());
+}
+
+#[test]
+fn summary_accepts_empty_map_and_reports_capture_geometry() {
+    let (request, _) = parse_agent_arguments("GetSceneSummary", &["{}".to_owned()]).unwrap();
+    assert!(serde_json::from_value::<Request>(request).is_ok());
+    let mut app = App::new();
+    app.new_document();
+    let view = app.agent_scene_summary().unwrap()["view"].clone();
+    assert_eq!(view["fov_y_degrees"], 45.0);
+    assert!(view["viewport_size"][0].is_number());
+}
+
+#[test]
+fn long_socket_path_reports_actionable_error() {
+    let long = PathBuf::from(format!("/tmp/{}", "a".repeat(110)));
+    let error = validate_socket_path(&long).unwrap_err();
+    assert!(error.contains("CLAYDASH_AGENT_SOCKET"));
+    assert!(error.contains("too long"));
+}
+
+#[test]
+fn scene_revision_is_compact_and_rejects_stale_edits_after_reopen() {
+    let mut app = App::new();
+    app.new_document();
+    let first = app.scene_revision();
+    assert!(first > 0 && first <= u32::MAX as u64);
+    assert_eq!(first, app.scene_revision());
+    model::set_objects(&mut app.tree, vec![SdfObject::create_kind(PrimitiveKind::Box)]);
+    let edited = app.scene_revision();
+    assert!(edited > first);
+    app.replace_scene(model::DataTree::default());
+    let reopened = app.scene_revision();
+    assert!(reopened > edited && reopened <= u32::MAX as u64);
+    let error = app.agent_apply(ApplyArgs { expected_revision: Some(edited), actions: Vec::new() }).unwrap_err();
+    assert!(error.contains("scene changed"));
+}
+
+#[test]
+fn create_object_accepts_color_and_material_in_one_action() {
+    let mut app = App::new();
+    app.new_document();
+    let asset = MaterialAsset::new(model::Material::default());
+    model::set_material_assets(&mut app.tree, vec![asset.clone()]);
+    let action: Action = serde_json::from_value(json!({
+        "type":"CreateObject", "kind":"Box", "material_id":asset.uuid,
+        "color":[0.2,0.4,0.6,1.0]
+    })).unwrap();
+    app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![action] }).unwrap();
+    let object = model::objects_ref(&app.tree).last().unwrap();
+    assert_eq!(object.material_id, Some(asset.uuid));
+    assert_eq!(object.color, glam::Vec4::new(0.2, 0.4, 0.6, 1.0));
+    assert_eq!(object.material.color, object.color);
+    let action: Action = serde_json::from_value(json!({
+        "type":"CreateObject", "kind":"Box", "color":[1.2,0.4,0.6,1.0]
+    })).unwrap();
+    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![action] }).is_err());
+    let action: Action = serde_json::from_value(json!({
+        "type":"CreateObject", "kind":"Box", "material_id":uuid::Uuid::new_v4()
+    })).unwrap();
+    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![action] }).is_err());
+}
+
+#[test]
 fn sheet_surface_path_and_persistent_seams_apply_and_reload_atomically() {
     let mut app=App::new(); app.new_document();
     let mut source:model::SheetPanelParams=serde_json::from_value(mcp::schema()["sheet_surface_example"]["SheetPanelParams"].clone()).unwrap();
     let make=|params:model::SheetPanelParams,position| Action::CreateObject {
         kind:PrimitiveKind::SheetPanel,name:None,position:Some(position),transform:None,
         params:Some(SdfParams::SheetPanelParams(params)),render_representation:None,
+        color: None, material_id: None,
     };
     let result=app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![make(source.clone(),[0.0,0.0,0.0])]}).unwrap();
     let source_id:uuid::Uuid=serde_json::from_value(result["created_ids"][0].clone()).unwrap();
@@ -110,7 +188,7 @@ fn sheet_mcp_edits_validate_atomically_and_capture_stages_do_not_mutate_scene() 
     let result = app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::CreateObject {
         kind: PrimitiveKind::SheetPanel, name: Some("Fender".into()),
         position: None, transform: None, params: Some(SdfParams::SheetPanelParams(panel.clone())),
-        render_representation: None,
+        render_representation: None, color: None, material_id: None,
     }] }).unwrap();
     let id: uuid::Uuid = serde_json::from_value(result["created_ids"][0].clone()).unwrap();
     let before = serde_json::to_value(model::objects_ref(&app.tree)).unwrap();
@@ -157,6 +235,8 @@ fn orthographic_capture_uses_three_axes_and_combines_panels() {
         reply,
         objects: None,
         mode: CaptureMode::SimpleShading,
+        camera: Camera::new(),
+        cancelled_retries: 0,
         view: CaptureView::Orthographic {
             panel_size: 96,
             distance: 8.0,
@@ -164,7 +244,7 @@ fn orthographic_capture_uses_three_axes_and_combines_panels() {
         },
     };
     for (index, direction) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
-        let camera = capture.camera(&Camera::new());
+        let camera = capture.camera();
         assert_eq!(camera.position, direction * 8.0);
         assert_eq!(camera.target, Vec3::ZERO);
         assert_eq!(camera.projection_mode, ProjectionMode::Orthographic);
@@ -179,7 +259,7 @@ fn orthographic_capture_uses_three_axes_and_combines_panels() {
     }
     if let CaptureView::Orthographic { frames, .. } = &capture.view {
         let sheet = orthographic_sheet(frames).unwrap();
-        assert_eq!((sheet.width, sheet.height), (288, 120));
+        assert_eq!((sheet.width, sheet.height), (288, 96));
         for (index, red) in [0, 60, 120].into_iter().enumerate() {
             let pixel = ((30 * sheet.width + index as u32 * 96 + 48) * 4) as usize;
             assert_eq!(sheet.rgba[pixel], red);
@@ -291,6 +371,7 @@ fn agent_edits_are_undoable_and_reject_stale_revisions() {
                 position: None,
                 params: None,
                 render_representation: None,
+                color: None, material_id: None,
             }],
         })
         .unwrap();
@@ -306,6 +387,7 @@ fn agent_edits_are_undoable_and_reject_stale_revisions() {
                 position: None,
                 params: None,
                 render_representation: None,
+                color: None, material_id: None,
             }],
         })
         .is_err());
@@ -451,6 +533,7 @@ fn invalid_text_edit_is_atomic_and_valid_text_is_undoable() {
             ..model::TextParams::default()
         })),
         render_representation: None,
+        color: None, material_id: None,
     };
     let result = app.agent_apply(ApplyArgs {
         expected_revision: Some(app.scene_revision()),
@@ -468,6 +551,7 @@ fn invalid_text_edit_is_atomic_and_valid_text_is_undoable() {
             ..model::TextParams::default()
         })),
         render_representation: None,
+        color: None, material_id: None,
     };
     app.agent_apply(ApplyArgs {
         expected_revision: Some(app.scene_revision()),
@@ -519,6 +603,9 @@ fn compact_gaussian_queries_preserve_revision_and_transform_positions() {
     let names = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
     let ply = format!("ply\nformat ascii 1.0\nelement vertex 3\n{}end_header\n-1 0 0 -2 -2 -2 1 0 0 0 1 0 0 3\n0 1 0 -2 -2 -2 1 0 0 0 0 1 0 3\n1 2 0 -2 -2 -2 1 0 0 0 0 0 1 3\n", names.map(|name| format!("property float {name}\n")).join(""));
     let id = app.import_gaussian_ply("sample", ply.as_bytes()).unwrap();
+    assert!((app.camera.target - Vec3::new(0.0, 1.0, 0.0)).length() < 0.0001);
+    assert!((app.camera.position - app.camera.target).length() > 3.0);
+    assert_eq!(app.agent_camera.target, Vec3::ZERO);
     let mut transform = model::objects_ref(&app.tree).iter().find(|object| object.uuid == id).unwrap().transform;
     transform.translation = Vec3::new(10.0, 0.0, 0.0);
     app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectTransform { id, transform }] }).unwrap();

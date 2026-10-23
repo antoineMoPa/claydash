@@ -290,6 +290,22 @@ fn bezier_extrusion_distance(point: vec3<f32>, object: Object) -> f32 {
     return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
 }
 
+fn loft_blend(a: f32, b: f32, previous: f32, next: f32, t: f32, smooth_mode: bool, x: vec4<f32>) -> f32 {
+    if !smooth_mode {
+        let eased = t * t * (3.0 - 2.0 * t);
+        return mix(a, b, eased);
+    }
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return (2.0 * t3 - 3.0 * t2 + 1.0) * a
+        + (t3 - 2.0 * t2 + t) * (b - previous) * (x.z - x.y) / max(x.z - x.x, 0.0001)
+        + (-2.0 * t3 + 3.0 * t2) * b
+        + (t3 - t2) * (next - a) * (x.z - x.y) / max(x.w - x.y, 0.0001);
+}
+fn loft_blend2(a: vec2<f32>, b: vec2<f32>, previous: vec2<f32>, next: vec2<f32>, t: f32, smooth_mode: bool, x: vec4<f32>) -> vec2<f32> {
+    return vec2(loft_blend(a.x, b.x, previous.x, next.x, t, smooth_mode, x),
+        loft_blend(a.y, b.y, previous.y, next.y, t, smooth_mode, x));
+}
 fn loft_distance(point: vec3<f32>, object: Object) -> f32 {
     let offset = bitcast<u32>(object.params.x);
     let count = bitcast<u32>(object.params.y);
@@ -307,21 +323,30 @@ fn loft_distance(point: vec3<f32>, object: Object) -> f32 {
     let b = a + stride;
     let ax = polygon_points[a].x;
     let bx = polygon_points[b].x;
-    var t = clamp((point.x - ax) / max(bx - ax, 0.0001), 0.0, 1.0);
-    t = t * t * (3.0 - 2.0 * t);
-    let center = mix(vec2(polygon_points[a].y, polygon_points[a + 1u].x),
-        vec2(polygon_points[b].y, polygon_points[b + 1u].x), t);
-    let radii = max(mix(vec2(polygon_points[a + 1u].y, polygon_points[a + 2u].x),
-        vec2(polygon_points[b + 1u].y, polygon_points[b + 2u].x), t), vec2(0.001));
+    let t = clamp((point.x - ax) / max(bx - ax, 0.0001), 0.0, 1.0);
+    let previous = offset + select(section - 1u, 0u, section == 0u) * stride;
+    let next_section = offset + min(section + 2u, count - 1u) * stride;
+    let smooth_mode = polygon_points[a + 2u].y > 0.5;
+    let x = vec4(polygon_points[previous].x, ax, bx, polygon_points[next_section].x);
+    let center = loft_blend2(vec2(polygon_points[a].y, polygon_points[a + 1u].x),
+        vec2(polygon_points[b].y, polygon_points[b + 1u].x),
+        vec2(polygon_points[previous].y, polygon_points[previous + 1u].x),
+        vec2(polygon_points[next_section].y, polygon_points[next_section + 1u].x), t, smooth_mode, x);
+    let radii = max(loft_blend2(vec2(polygon_points[a + 1u].y, polygon_points[a + 2u].x),
+        vec2(polygon_points[b + 1u].y, polygon_points[b + 2u].x),
+        vec2(polygon_points[previous + 1u].y, polygon_points[previous + 2u].x),
+        vec2(polygon_points[next_section + 1u].y, polygon_points[next_section + 2u].x), t, smooth_mode, x), vec2(0.001));
     var radial = (length((point.yz - center) / radii) - 1.0) * min(radii.x, radii.y);
     if profile_count >= 3u {
         var distance_squared = 1e20;
         var inside = false;
         for (var index = 0u; index < 32u; index++) {
             if index >= profile_count { break; }
-            let next = select(index + 1u, 0u, index + 1u == profile_count);
-            let left = center + mix(polygon_points[a + 3u + index], polygon_points[b + 3u + index], t) * radii;
-            let right = center + mix(polygon_points[a + 3u + next], polygon_points[b + 3u + next], t) * radii;
+            let next_index = select(index + 1u, 0u, index + 1u == profile_count);
+            let left = center + loft_blend2(polygon_points[a + 3u + index], polygon_points[b + 3u + index],
+                polygon_points[previous + 3u + index], polygon_points[next_section + 3u + index], t, smooth_mode, x) * radii;
+            let right = center + loft_blend2(polygon_points[a + 3u + next_index], polygon_points[b + 3u + next_index],
+                polygon_points[previous + 3u + next_index], polygon_points[next_section + 3u + next_index], t, smooth_mode, x) * radii;
             let edge = right - left;
             let relative = point.yz - left;
             let length_squared = dot(edge, edge);
@@ -466,7 +491,7 @@ fn poisson_owner_supported(object: Object) -> bool {
     let kind = object.state.y;
     // A surface inlay clips against another component and needs a separate
     // host query. Keep its sampled triangle owner until that path is present.
-    return (kind >= 1 && kind <= 7 || kind == 11)
+    return ((kind >= 1 && kind <= 7) || kind == 11)
         && (kind == 6 || object.mirror_axes.w == 0u);
 }
 

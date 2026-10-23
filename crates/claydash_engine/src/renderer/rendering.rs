@@ -165,8 +165,7 @@ impl Renderer {
         // Imported Gaussian assets and preview meshes are already raster data.
         // With no SDF objects, tiled refinement would redraw every splat for
         // each tile row and trace an empty field in the background pass.
-        let raster_only = self.uploaded_object_count == 0
-            && (self.mesh_vertex_count > 0 || !self.splat_instances.is_empty());
+        let raster_only = self.uploaded_object_count == 0;
         let view_key = crate::viewport::ViewKey {
             matrix: (camera.projection() * camera.view()).to_cols_array_2d(),
             position: camera.position.to_array(),

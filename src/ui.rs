@@ -160,6 +160,7 @@ impl EditorPane {
 }
 
 pub struct UiState {
+    agent_capture_clean: bool,
     animation: AnimationRuntime,
     frames: Frames,
     layout: Layout<EditorPane>,
@@ -197,6 +198,7 @@ impl Default for UiState {
         style.active_border = Color32::from_rgb(95, 142, 246);
         style.accent = Color32::from_rgb(95, 142, 246);
         Self {
+            agent_capture_clean: false,
             animation: AnimationRuntime::default(),
             frames: Frames::new().with_style(style),
             layout,
@@ -220,6 +222,14 @@ impl Default for UiState {
 }
 
 impl UiState {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn set_agent_capture_clean(&mut self, clean: bool) {
+        self.agent_capture_clean = clean;
+    }
+
+    pub(crate) fn agent_capture_clean(&self) -> bool {
+        self.agent_capture_clean
+    }
     pub fn delete_active_polygon_point(&self, ctx: &egui::Context, tree: &mut DataTree) -> bool {
         if polygon_editor::active(tree).is_none() {
             return false;
@@ -290,6 +300,8 @@ impl UiState {
         document: &mut DocumentState,
         interaction_guide: Option<crate::guides::ActiveGuideSet>,
         render_progress: Option<RenderProgress>,
+        agent_bridge_error: Option<&str>,
+        canvas_size: Vec2,
     ) -> (Option<FileMenuAction>, bool) {
         self.regions.clear();
         document.refresh_dirty(tree);
@@ -352,7 +364,7 @@ impl UiState {
             }
             file_action
         };
-        let cancel_render = self.draw_status_bar(viewport_ui, tree, render_progress);
+        let cancel_render = self.draw_status_bar(viewport_ui, tree, render_progress, agent_bridge_error);
         let viewport_frame = self
             .layout
             .find_pane(|pane| *pane == EditorPane::Viewport)
@@ -397,7 +409,15 @@ impl UiState {
         self.viewport_rect = self
             .layout
             .find_pane(|pane| *pane == EditorPane::Viewport)
-            .and_then(|(pane, _)| self.frames.pane_rect(pane));
+            .and_then(|(pane, _)| self.frames.pane_rect(pane))
+            .map(|rect| {
+                let scale = viewport_ui.ctx().pixels_per_point();
+                rect.intersect(egui::Rect::from_min_max(
+                    egui::Pos2::ZERO,
+                    egui::pos2(canvas_size.x / scale, canvas_size.y / scale),
+                ))
+            })
+            .filter(|rect| rect.width() > 0.0 && rect.height() > 0.0);
         if let Some(rect) = self.viewport_rect {
             if let ClaydashValue::Uuid(id) = tree.get_path("editor.polygon_edit_requested") {
                 tree.set_transient_path("editor.polygon_edit_requested", ClaydashValue::None);
@@ -422,8 +442,10 @@ impl UiState {
             let scale = viewport_ui.ctx().pixels_per_point();
             camera.viewport_origin = Vec2::new(rect.left(), rect.top()) * scale;
             camera.viewport = Vec2::new(rect.width().max(1.0), rect.height().max(1.0)) * scale;
-            self.draw_top_controls(viewport_ui.ctx(), tree, camera);
-            self.draw_view_gizmo(viewport_ui.ctx(), tree, camera);
+            if !self.agent_capture_clean {
+                self.draw_top_controls(viewport_ui.ctx(), tree, camera);
+                self.draw_view_gizmo(viewport_ui.ctx(), tree, camera);
+            }
             viewport_ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 if commands::outline_mode(tree) {
@@ -431,6 +453,9 @@ impl UiState {
                     // scene-only exports keep their normal shaded image.
                     ui.painter()
                         .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+                }
+                if self.agent_capture_clean {
+                    return;
                 }
                 self.regions.extend(camera_overlay::draw(ui, tree, camera));
                 let variable_pointer = if polygon_editor::active(tree).is_none()

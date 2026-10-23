@@ -392,6 +392,54 @@ fn compact_toolbar_buttons_and_bottom_projection_control() {
         }
     }
 }
+
+#[test]
+fn viewport_controls_stay_below_floating_windows() {
+    let ctx = egui::Context::default();
+    egui_extras::install_image_loaders(&ctx);
+    let mut state = UiState::default();
+    let mut tree = DataTree::default();
+    let mut camera = Camera::new();
+    state.viewport_rect = Some(egui::Rect::from_min_size(
+        egui::pos2(100.0, 40.0), egui::vec2(600.0, 500.0),
+    ));
+    let mut window_rect = None;
+    for pass in 0..4 {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                time: Some(pass as f64),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO, egui::vec2(900.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                state.regions.clear();
+                state.draw_top_controls(ui.ctx(), &mut tree, &mut camera);
+                state.draw_view_gizmo(ui.ctx(), &mut tree, &mut camera);
+                if pass >= 2 {
+                    let toolbar = state.regions[0].center();
+                    egui::Window::new("Floating panel")
+                        .fixed_pos(toolbar - egui::vec2(30.0, 15.0))
+                        .default_width(160.0)
+                        .show(ui.ctx(), |ui| { ui.label("Above the viewport controls"); })
+                        .map(|window| window_rect = Some(window.response.rect));
+                }
+            },
+        );
+        output.textures_delta.clear();
+        if pass == 1 {
+            let toolbar = state.regions[0].center();
+            let control_layer = ctx.layer_id_at(toolbar).expect("toolbar accepts pointer input");
+            assert_eq!(control_layer.order, egui::Order::Background);
+            assert_ne!(control_layer, egui::LayerId::background());
+        }
+    }
+    let toolbar = state.regions[0].center();
+    assert!(window_rect.unwrap().contains(toolbar), "window {window_rect:?} misses toolbar {toolbar:?}");
+    let covering_layer = ctx.layer_id_at(toolbar).expect("window covers toolbar");
+    assert_eq!(covering_layer.order, egui::Order::Middle);
+}
 #[test]
 fn cursor_menu_moves_to_selected_object_center_and_resets() {
     let mut state = UiState::default();

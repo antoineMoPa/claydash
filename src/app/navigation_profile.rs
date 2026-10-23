@@ -67,6 +67,8 @@ fn profile_navigation_cpu() {
                     &mut app.document,
                     None,
                     None,
+                    None,
+                    Vec2::new(1280.0, 800.0),
                 );
             },
         );

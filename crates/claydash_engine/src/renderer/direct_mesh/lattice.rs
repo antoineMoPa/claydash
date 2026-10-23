@@ -14,12 +14,7 @@ impl Cage<'_> {
     fn native_rest(&self, point: Vec3) -> Vec3 {
         let mut rest = point;
         for _ in 0..4 {
-            let next = point - self.lattice.displacement_with_offsets(rest, &self.offsets);
-            let change = next - rest;
-            rest = next;
-            if change.length_squared() < 1e-8 {
-                break;
-            }
+            rest = point - self.lattice.displacement_with_offsets(rest, &self.offsets);
         }
         rest
     }
@@ -266,6 +261,29 @@ mod tests {
                 assert!(cage.native_rest(point).distance(rest) < 1e-5);
             }
         }
+    }
+
+    #[test]
+    fn cage_inverse_has_no_iteration_count_seam() {
+        let mut lattice = Lattice::new(Vec3::splat(-1.0), Vec3::ONE, 2);
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    let index = lattice.index(x, y, z);
+                    let control_x = lattice.position(x, y, z).x;
+                    lattice.offsets[index].x = 0.2 * control_x;
+                }
+            }
+        }
+        let cage = Cage {
+            offsets: lattice.effective_offsets(),
+            lattice: &lattice,
+            frame: Mat4::IDENTITY,
+            inverse: Mat4::IDENTITY,
+        };
+        let left = cage.native_rest(Vec3::new(0.012499, 0.0, 0.0));
+        let right = cage.native_rest(Vec3::new(0.012501, 0.0, 0.0));
+        assert!((right - left).length() < 1e-5);
     }
 
     #[test]

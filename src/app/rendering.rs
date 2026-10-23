@@ -85,7 +85,10 @@ pub(super) fn mesh_source_revision(objects: &[crate::model::SdfObject]) -> i32 {
     for object in objects {
         // Imported geometry replaces the placeholder primitive. Mark this
         // representation change without hashing large embedded assets each frame.
-        if object.imported_mesh.is_some() { 1_u8.hash(&mut hasher); }
+        if let Some(mesh) = &object.imported_mesh {
+            1_u8.hash(&mut hasher);
+            mesh.revision.hash(&mut hasher);
+        }
         if object.imported_splats.is_some() { 2_u8.hash(&mut hasher); }
         let independent_pose = independent.contains(&object.uuid);
         // Native smooth radii and inlay shell widths are measured in world
@@ -501,6 +504,7 @@ impl App {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
+        let canvas_size = renderer.size();
         let material_assets = crate::model::material_assets(&self.tree);
         let shader_error = renderer.sync_custom_materials(&material_assets).err();
         self.egui.data_mut(|data| {
@@ -552,6 +556,13 @@ impl App {
                 &mut self.document,
                 interaction_guide,
                 render_progress,
+                {
+                    #[cfg(all(not(target_arch = "wasm32"), unix))]
+                    { self.agent_bridge_error.as_deref() }
+                    #[cfg(any(target_arch = "wasm32", not(unix)))]
+                    { None }
+                },
+                canvas_size,
             );
             self.mesh_export_options_panel(ui);
             self.mesh_export_panel(ui);
@@ -620,7 +631,13 @@ impl App {
             egui_state.handle_platform_output(&window, std::mem::take(&mut output.platform_output));
         }
 
-        let effective_selection = if self.pending_render.is_some() {
+        #[cfg(all(not(target_arch = "wasm32"), unix))]
+        let agent_capture_active = self.agent_capture.is_some();
+        #[cfg(any(target_arch = "wasm32", not(unix)))]
+        let agent_capture_active = false;
+        let effective_selection = if self.pending_render.is_some()
+            || agent_capture_active
+            || self.ui.agent_capture_clean() {
             Vec::new()
         } else {
             commands::effective_selected_ids(&self.tree)
@@ -653,7 +670,7 @@ impl App {
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         let render_camera = self.agent_capture.as_ref().map_or_else(
             || self.camera.clone(),
-            |capture| capture.camera(&self.camera),
+            |capture| capture.camera(),
         );
         #[cfg(any(target_arch = "wasm32", not(unix)))]
         let render_camera = self.camera.clone();
@@ -693,14 +710,28 @@ impl App {
         let outline_capture = false;
         // Pointer gizmos and modal G/R/S transforms can pause between motion
         // events. Do not queue expensive refinement ahead of their next edit.
-        let interacting = !capture_render && self.interactions.viewport_interaction_active(
-            self.egui.input(|input| input.pointer.any_down()), &self.tree);
-        let transform_preview = !capture_render && (self.ui.transform_gesture_active()
-            || matches!(self.tree.get_path("editor.state"),
-                ClaydashValue::EditorState(crate::model::EditorState::Grabbing
-                    | crate::model::EditorState::Rotating
-                    | crate::model::EditorState::Scaling)));
-        let cloud_edit = if capture_render { None } else { crate::model::cloud_edit(&self.tree) };
+        let interacting = !capture_render
+            && !self.ui.agent_capture_clean()
+            && self.interactions.viewport_interaction_active(
+                self.egui.input(|input| input.pointer.any_down()),
+                &self.tree,
+            );
+        let transform_preview = !capture_render
+            && !self.ui.agent_capture_clean()
+            && (self.ui.transform_gesture_active()
+                || matches!(
+                    self.tree.get_path("editor.state"),
+                    ClaydashValue::EditorState(
+                        crate::model::EditorState::Grabbing
+                            | crate::model::EditorState::Rotating
+                            | crate::model::EditorState::Scaling
+                    )
+                ));
+        let cloud_edit = if (capture_render && !capture_ui) || self.ui.agent_capture_clean() {
+            None
+        } else {
+            crate::model::cloud_edit(&self.tree)
+        };
         let preview_objects = cloud_edit.as_ref().map(|edit| vec![edit.object])
             .unwrap_or_else(|| crate::model::selected(&self.tree));
         let preview_splats = crate::model::objects_ref(&self.tree).iter()
@@ -763,15 +794,25 @@ impl App {
             if let Some(result) = renderer.take_capture() {
                 #[cfg(unix)]
                 let agent_handled = if let Some(mut capture) = self.agent_capture.take() {
-                    let encoded = result
-                        .as_ref()
-                        .map_err(Clone::clone)
-                        .and_then(|frame| capture.accept_frame(frame.clone(), &render_camera));
-                    if matches!(encoded, Ok(serde_json::Value::Null)) {
+                    // A readback can be invalidated while the desktop viewport changes.
+                    // Keep the capture snapshot and retry before replying to the agent.
+                    if matches!(&result, Err(error) if error == "Capture cancelled")
+                        && capture.cancelled_retries < 2
+                    {
+                        capture.cancelled_retries += 1;
                         self.agent_capture = Some(capture);
                         renderer.invalidate_scene();
                     } else {
-                        let _ = capture.reply.send(encoded);
+                        let encoded = result
+                            .as_ref()
+                            .map_err(Clone::clone)
+                            .and_then(|frame| capture.accept_frame(frame.clone(), &render_camera));
+                        if matches!(encoded, Ok(serde_json::Value::Null)) {
+                            self.agent_capture = Some(capture);
+                            renderer.invalidate_scene();
+                        } else {
+                            let _ = capture.reply.send(encoded);
+                        }
                     }
                     true
                 } else {

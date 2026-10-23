@@ -190,7 +190,7 @@ pub(super) fn pack_primitive(
                     position: [section.center_z, section.half_height],
                 });
                 polygon_points.push(GpuPolygonPoint {
-                    position: [section.half_width, 0.0],
+                    position: [section.half_width, if loft.interpolation == crate::model::LoftInterpolation::Smooth { 1.0 } else { 0.0 }],
                 });
                 for index in 0..profile_count {
                     polygon_points.push(GpuPolygonPoint {

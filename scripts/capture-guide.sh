@@ -2,10 +2,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 check=false
-if [[ ${1:-} == --check ]]; then
-  check=true
-elif [[ $# -ne 0 ]]; then
-  printf 'usage: %s [--check]\n' "$0" >&2
+splats_only=false
+case ${1:-} in
+  '') ;;
+  --check) check=true ;;
+  --splats) splats_only=true ;;
+  --check-splats) check=true; splats_only=true ;;
+  *) printf 'usage: %s [--check|--splats|--check-splats]\n' "$0" >&2; exit 2 ;;
+esac
+if [[ $# -gt 1 ]]; then
+  printf 'usage: %s [--check|--splats|--check-splats]\n' "$0" >&2
   exit 2
 fi
 command -v cwebp >/dev/null || { printf 'cwebp is required to build guide images\n' >&2; exit 1; }
@@ -44,19 +50,24 @@ capture() {
     mv "$tmp/$name.webp" "$out/$name.webp"
   fi
 }
-capture window --guide-theme=dark
-capture light --guide-theme=light
-capture shapes --guide-theme=dark --ui-preview --guide-panel=shapes
-capture gizmos --guide-theme=dark --ui-preview --guide-panel=gizmos
-capture face-cut --guide-theme=dark --ui-preview --guide-panel=face-cut
-capture path-extrusion --guide-theme=dark --ui-preview --guide-panel=path-extrusion
-capture boolean --guide-theme=dark --ui-preview --guide-panel=operand
-capture materials --guide-theme=dark --ui-preview --guide-panel=materials
-capture repeat --guide-theme=dark --ui-preview --guide-panel=repeat
-capture mirror --guide-theme=dark --ui-preview --guide-panel=mirror
-capture modifiers --guide-theme=dark --ui-preview --guide-panel=modifiers
-capture camera --guide-theme=dark --guide-panel=camera
-capture animation --guide-theme=dark --guide-panel=animation
+if ! $splats_only; then
+  capture window --guide-theme=dark
+  capture light --guide-theme=light
+  capture shapes --guide-theme=dark --ui-preview --guide-panel=shapes
+  capture gizmos --guide-theme=dark --ui-preview --guide-panel=gizmos
+  capture face-cut --guide-theme=dark --ui-preview --guide-panel=face-cut
+  capture path-extrusion --guide-theme=dark --ui-preview --guide-panel=path-extrusion
+  capture boolean --guide-theme=dark --ui-preview --guide-panel=operand
+  capture materials --guide-theme=dark --ui-preview --guide-panel=materials
+  capture repeat --guide-theme=dark --ui-preview --guide-panel=repeat
+  capture mirror --guide-theme=dark --ui-preview --guide-panel=mirror
+  capture modifiers --guide-theme=dark --ui-preview --guide-panel=modifiers
+  capture camera --guide-theme=dark --guide-panel=camera
+  capture animation --guide-theme=dark --guide-panel=animation
+fi
+capture splat-object --guide-theme=dark --guide-panel=splat-object
+capture splat-selection --guide-theme=dark --guide-panel=splat-selection
+capture splat-cleanup --guide-theme=dark --guide-panel=splat-cleanup
 if $check; then
   exit "$changed"
 fi

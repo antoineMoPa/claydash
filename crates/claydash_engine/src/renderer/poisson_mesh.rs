@@ -158,9 +158,12 @@ pub(crate) fn mesh_at_pose(
         if reflected {
             mesh.triangles[index].swap(1, 2);
             normals.swap(1, 2);
+            if let Some(uvs) = mesh.uvs.get_mut(index) {
+                uvs.swap(1, 2);
+            }
         }
     }
-    if reflected {
+    if reflected && mesh.uvs.is_empty() {
         if let Some(texture) = &mut mesh.baked_texture {
             texture.reflect_triangle_uvs(mesh.triangles.len())?;
         }
@@ -231,6 +234,7 @@ impl PoissonMeshState {
             && mesh.triangles.len() <= 10_000_000
             && mesh.owners.len() == mesh.triangles.len()
             && mesh.normals.len() == mesh.triangles.len()
+            && (mesh.uvs.is_empty() || mesh.uvs.len() == mesh.triangles.len())
             && mesh.positions.iter().all(|point| point.is_finite())
             && mesh.triangles.iter().all(|triangle| {
                 triangle
@@ -242,19 +246,21 @@ impl PoissonMeshState {
                 .iter()
                 .flatten()
                 .all(|normal| normal.is_finite());
+        let valid_uvs = mesh.uvs.iter().flatten().flatten().all(|coordinate| coordinate.is_finite());
         let valid_colors = (mesh.colors.is_empty() || mesh.colors.len() == mesh.positions.len())
             && mesh.colors.iter().flatten().all(|color| color.is_finite())
             && mesh.baked_texture.as_ref().is_none_or(|texture| {
                 texture.size >= 64
                     && texture.size <= 4096
                     && texture.size.is_power_of_two()
-                    && geometry::baked_triangle_tile_size(mesh.triangles.len()).is_some_and(
-                        |tile| mesh.triangles.len() <= (texture.size as usize / tile).pow(2),
-                    )
+                    && (!mesh.uvs.is_empty()
+                        || geometry::baked_triangle_tile_size(mesh.triangles.len()).is_some_and(
+                            |tile| mesh.triangles.len() <= (texture.size as usize / tile).pow(2),
+                        ))
                     && texture.png.starts_with(b"\x89PNG\r\n\x1a\n")
                     && texture.png.len() <= 64 * 1024 * 1024
             });
-        if !valid_shape || !valid_colors {
+        if !valid_shape || !valid_colors || !valid_uvs {
             return false;
         }
         let ids: std::collections::HashSet<_> = source.iter().map(|member| member.uuid).collect();
@@ -849,11 +855,15 @@ impl PoissonMeshState {
                         // An assigned material uses the imported mesh's direct owner.
                         captured_color: if let Some(layer) = texture_layer {
                             let atlas = ready.mesh.baked_texture.as_ref().unwrap();
-                            let uv = geometry::baked_triangle_uv(
-                                triangle_index,
-                                atlas.size,
-                                ready.mesh.triangles.len(),
-                            )[corner];
+                            let uv = if let Some(face_uvs) = ready.mesh.uvs.get(triangle_index) {
+                                face_uvs[corner]
+                            } else {
+                                geometry::baked_triangle_uv(
+                                    triangle_index,
+                                    atlas.size,
+                                    ready.mesh.triangles.len(),
+                                )[corner]
+                            };
                             [
                                 uv[0] * atlas.size as f32 / texture_size,
                                 uv[1] * atlas.size as f32 / texture_size,
@@ -954,6 +964,25 @@ impl PoissonMeshState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reflected_textured_mesh_swaps_uv_corners_without_rewriting_custom_atlas() {
+        let mut mesh = geometry::Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            vec![[0, 1, 2]],
+            vec![uuid::Uuid::nil()],
+        );
+        mesh.uvs = vec![[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]];
+        mesh.baked_texture = Some(geometry::BakedTexture { size: 64, png: vec![1, 2, 3] });
+        let reflected = mesh_at_pose(
+            mesh,
+            glam::Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)),
+            &std::sync::atomic::AtomicBool::new(false),
+        ).unwrap();
+        assert_eq!(reflected.triangles, vec![[0, 2, 1]]);
+        assert_eq!(reflected.uvs, vec![[[0.1, 0.2], [0.5, 0.6], [0.3, 0.4]]]);
+        assert_eq!(reflected.baked_texture.unwrap().png, vec![1, 2, 3]);
+    }
 
     #[test]
     fn imported_mesh_restores_at_any_revision_without_rebuilding() {

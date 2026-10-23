@@ -46,12 +46,15 @@ impl Surface {
             .collect();
         let owners = vec![owner; triangles.len()];
         Mesh {
+            revision: 0,
             positions,
             triangles,
             owners,
             normals: vec![],
+            shading: Default::default(),
             colors: vec![],
-            baked_texture: None,
+            uvs: vec![],
+            baked_texture: None, sections: Vec::new(), section_caps: false,
         }
     }
     fn append(&mut self, other: Surface) {
@@ -605,23 +608,34 @@ fn loft(params: &LoftParams, n: usize, cancel: &AtomicBool) -> Result<Surface, S
             }
             check_cancel(cancel)?;
             let t = step as f32 / n as f32;
-            let smooth = t * t * (3.0 - 2.0 * t);
             let a = &pair[0];
             let b = &pair[1];
+            let previous = &params.sections[section.saturating_sub(1)];
+            let next = &params.sections[(section + 2).min(params.sections.len() - 1)];
+            let x = [previous.x, a.x, b.x, next.x];
+            let blend = |a, b, p, n| params.blend(a, b, p, n, t, x);
             positive(a.half_height, "Loft section height")?;
             positive(a.half_width, "Loft section width")?;
             positive(b.half_height, "Loft section height")?;
             positive(b.half_width, "Loft section width")?;
-            let center =
-                Vec2::new(a.center_y, a.center_z).lerp(Vec2::new(b.center_y, b.center_z), smooth);
-            let radii = Vec2::new(a.half_height, a.half_width)
-                .lerp(Vec2::new(b.half_height, b.half_width), smooth);
+            let center = Vec2::new(
+                blend(a.center_y, b.center_y, previous.center_y, next.center_y),
+                blend(a.center_z, b.center_z, previous.center_z, next.center_z),
+            );
+            let radii = Vec2::new(
+                blend(a.half_height, b.half_height, previous.half_height, next.half_height),
+                blend(a.half_width, b.half_width, previous.half_width, next.half_width),
+            ).max(Vec2::splat(0.001));
             let outline: Vec<_> = (0..count)
                 .map(|i| {
-                    center
-                        + LoftParams::profile_point(a, i, count)
-                            .lerp(LoftParams::profile_point(b, i, count), smooth)
-                            * radii
+                    let pa = LoftParams::profile_point(a, i, count);
+                    let pb = LoftParams::profile_point(b, i, count);
+                    let pp = LoftParams::profile_point(previous, i, count);
+                    let pn = LoftParams::profile_point(next, i, count);
+                    center + Vec2::new(
+                        blend(pa.x, pb.x, pp.x, pn.x),
+                        blend(pa.y, pb.y, pp.y, pn.y),
+                    ) * radii
                 })
                 .collect();
             if signed_area(&outline) <= 0.0 {

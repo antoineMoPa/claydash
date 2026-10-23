@@ -321,12 +321,15 @@ fn extract(
     let mut lower = vec![0.0f32; plane_size];
     let mut upper = vec![0.0f32; plane_size];
     let mut mesh = Mesh {
+        revision: 0,
         positions: vec![],
         triangles: vec![],
         owners: vec![],
         normals: vec![],
+        shading: Default::default(),
         colors: vec![],
-        baked_texture: None,
+        uvs: vec![],
+        baked_texture: None, sections: Vec::new(), section_caps: false,
     };
     let mut edges = HashMap::<(u64, u64), u32>::new();
     let mut budget = super::super::cooperative_work::WorkerBudget::new();

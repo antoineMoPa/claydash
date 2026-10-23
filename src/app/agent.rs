@@ -7,6 +7,7 @@ use std::{
     os::unix::{
         fs::PermissionsExt,
         net::{UnixListener, UnixStream},
+        ffi::OsStrExt,
     },
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
@@ -19,6 +20,8 @@ use serde_json::{json, Value};
 use winit::event_loop::EventLoopProxy;
 
 use super::{App, AppEvent};
+use super::mesh_actions as mesh;
+use super::mesh_sections;
 use crate::{
     camera::{Camera, ProjectionMode},
     commands, document,
@@ -40,9 +43,12 @@ pub struct Inbound {
 pub enum Request {
     GetState,
     GetSceneSummary,
+    GetUserView,
     GetSchema,
     GetActionSchema { action: String, primitive: Option<PrimitiveKind> },
     GetGaussianCloud { id: uuid::Uuid, space: Option<CloudSpace>, sample_count: Option<usize> },
+    GetMesh { id: uuid::Uuid },
+    PreviewMeshSections { sections: Vec<crate::renderer::poisson_mesh::geometry::MeshSection>, #[serde(default)] caps: bool },
     AdjustGaussianColors(color::AdjustGaussianColorsArgs),
     ListCommands,
     EnableSlowSmoothBlends,
@@ -84,6 +90,8 @@ fn cloud_bounds(points: impl Iterator<Item = Vec3>) -> Option<Value> {
 
 #[derive(Default, Deserialize)]
 pub struct CaptureViewportArgs {
+    #[serde(default)]
+    pub view: CaptureCameraSource,
     pub sheet_stage: Option<model::SheetStage>,
     pub object_ids: Option<Vec<uuid::Uuid>>,
     #[serde(default)]
@@ -121,6 +129,14 @@ pub enum CaptureMode {
     Outline,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureCameraSource {
+    #[default]
+    Agent,
+    User,
+}
+
 impl CaptureMode {
     fn from_options(mode: Option<Self>, refine: Option<bool>) -> Self {
         match (mode, refine) {
@@ -147,6 +163,8 @@ pub enum Action {
         position: Option<[f32; 3]>,
         params: Option<SdfParams>,
         render_representation: Option<GroupRenderRepresentation>,
+        color: Option<[f32; 4]>,
+        material_id: Option<uuid::Uuid>,
     },
     PutObject {
         object: SdfObject,
@@ -177,6 +195,14 @@ pub enum Action {
     DeleteObject {
         id: uuid::Uuid,
     },
+    CreateMesh { name: Option<String>, vertices: Vec<[f32; 3]>, faces: Vec<[u32; 3]>, shading: Option<crate::renderer::poisson_mesh::geometry::MeshShading> },
+    CreateSectionMesh { name: Option<String>, sections: Vec<crate::renderer::poisson_mesh::geometry::MeshSection>, #[serde(default)] caps: bool, shading: Option<crate::renderer::poisson_mesh::geometry::MeshShading> },
+    SetMeshSections { id: uuid::Uuid, sections: Vec<crate::renderer::poisson_mesh::geometry::MeshSection>, caps: bool },
+    AddMeshVertices { id: uuid::Uuid, vertices: Vec<[f32; 3]> },
+    AddMeshFaces { id: uuid::Uuid, faces: Vec<[u32; 3]> },
+    SetMeshShading { id: uuid::Uuid, shading: crate::renderer::poisson_mesh::geometry::MeshShading },
+    ProjectMeshUvs { id: uuid::Uuid, direction: [f32; 3], up: [f32; 3], scale: [f32; 2], offset: [f32; 2] },
+    SetMeshUvs { id: uuid::Uuid, uvs: Vec<[[f32; 2]; 3]> },
     CreateVectorVariable {
         id: Option<uuid::Uuid>,
         name: String,
@@ -271,14 +297,25 @@ pub struct ViewArgs {
 }
 
 fn socket_path() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("CLAYDASH_AGENT_SOCKET") {
-        return Ok(PathBuf::from(path));
+    let path = if let Some(path) = std::env::var_os("CLAYDASH_AGENT_SOCKET") {
+        PathBuf::from(path)
+    } else {
+        let home = std::env::var_os("HOME")
+            .ok_or("HOME must be set to use the local Claydash agent bridge")?;
+        PathBuf::from(home).join(".claydash-agent").join("agent.sock")
+    };
+    validate_socket_path(&path)?;
+    Ok(path)
+}
+
+fn validate_socket_path(path: &std::path::Path) -> Result<(), String> {
+    // 103 bytes plus the NUL fits Unix socket paths on supported Unix hosts.
+    const MAX_PORTABLE_SOCKET_PATH_BYTES: usize = 103;
+    if path.as_os_str().as_bytes().len() > MAX_PORTABLE_SOCKET_PATH_BYTES {
+        return Err(format!("agent socket path is too long ({} bytes; supported maximum {}): {}. Set CLAYDASH_AGENT_SOCKET to a shorter absolute path",
+            path.as_os_str().as_bytes().len(), MAX_PORTABLE_SOCKET_PATH_BYTES, path.display()));
     }
-    let home = std::env::var_os("HOME")
-        .ok_or("HOME must be set to use the local Claydash agent bridge")?;
-    Ok(PathBuf::from(home)
-        .join(".claydash-agent")
-        .join("agent.sock"))
+    Ok(())
 }
 
 pub(super) fn cleanup_socket() {
@@ -381,6 +418,29 @@ fn request_payload(op: &str, args: Value) -> Value {
     json!({"op": op, "args": args})
 }
 
+fn parse_agent_arguments(op: &str, remaining: &[String]) -> Result<(Value, Option<PathBuf>), String> {
+    let mut json = None;
+    let mut output = None;
+    let mut index = 0;
+    while index < remaining.len() {
+        if remaining[index] == "--output" {
+            if !matches!(op, "CaptureViewport" | "CaptureOrthographic") {
+                return Err("--output is only valid for capture operations".into());
+            }
+            if output.is_some() { return Err("--output may only be supplied once".into()); }
+            index += 1;
+            let path = remaining.get(index).ok_or("--output requires a file path")?;
+            output = Some(PathBuf::from(path));
+        } else {
+            if json.is_some() { return Err("expected a single JSON argument".into()); }
+            json = Some(serde_json::from_str(&remaining[index])
+                .map_err(|error| format!("invalid JSON arguments: {error}"))?);
+        }
+        index += 1;
+    }
+    Ok((request_payload(op, json.unwrap_or(Value::Null)), output))
+}
+
 pub fn run_from_args() -> bool {
     let mut args = std::env::args().skip(1);
     let Some(mode) = args.next() else {
@@ -416,13 +476,16 @@ pub fn run_from_args() -> bool {
                     eprintln!("unexpected argument: {extra}");
                     std::process::exit(2);
                 }
-                println!("Usage: claydash agent <operation> [JSON arguments]\n\nExamples:\n  claydash agent GetState\n  claydash agent GetSchema\n  claydash agent CaptureViewport --output viewport.png\n\nUse GetSchema to discover operations, including ExportGlb,\nGetGlbExportStatus, and CancelGlbExport. Requires a running server or desktop app.");
+                println!("Usage: claydash agent <operation> [JSON arguments] [--output PATH]\n\nExamples:\n  claydash agent GetState\n  claydash agent GetSchema\n  claydash agent CaptureViewport '{{\"mode\":\"outline\"}}' --output viewport.png\n  claydash agent CaptureOrthographic --output views.png\n\n--output works with both capture operations before or after JSON arguments.\nUse GetSchema to discover operations, including ExportGlb,\nGetGlbExportStatus, and CancelGlbExport. Requires a running server or desktop app.");
                 return true;
             }
             let remaining: Vec<_> = args.collect();
-            if op == "CaptureViewport" && remaining.len() == 2 && remaining[0] == "--output" {
-                let path = &remaining[1];
-                let result = call_socket(request_payload("CaptureViewport", Value::Null))
+            let (request, output) = parse_agent_arguments(&op, &remaining).unwrap_or_else(|error| {
+                eprintln!("{error}");
+                std::process::exit(2);
+            });
+            if let Some(path) = output {
+                let result = call_socket(request)
                     .and_then(|value| {
                         use base64::Engine;
                         let data = value
@@ -437,7 +500,7 @@ pub fn run_from_args() -> bool {
                         std::fs::write(&path, bytes).map_err(|error| error.to_string())
                     });
                 match result {
-                    Ok(()) => println!("{path}"),
+                    Ok(()) => println!("{}", path.display()),
                     Err(error) => {
                         eprintln!("{error}");
                         std::process::exit(1);
@@ -445,19 +508,6 @@ pub fn run_from_args() -> bool {
                 }
                 return true;
             }
-            if remaining.len() > 1 {
-                eprintln!("expected a single JSON argument");
-                std::process::exit(2);
-            }
-            let input = remaining
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "null".to_string());
-            let parsed: Value = serde_json::from_str(&input).unwrap_or_else(|error| {
-                eprintln!("invalid JSON arguments: {error}");
-                std::process::exit(2);
-            });
-            let request = request_payload(&op, parsed);
             match call_socket(request) {
                 Ok(value) => println!("{}", serde_json::to_string_pretty(&value).unwrap()),
                 Err(error) => {
@@ -472,8 +522,13 @@ pub fn run_from_args() -> bool {
 }
 
 impl App {
-    fn scene_revision(&self) -> u64 {
-        (self.agent_revision << 32) | (self.tree.path_version("scene") as u32 as u64)
+    pub(super) fn scene_revision(&self) -> u64 {
+        let key = (self.agent_revision, self.tree.path_version("scene"));
+        if self.agent_revision_key.get() != key {
+            self.agent_revision_key.set(key);
+            self.agent_revision_counter.set(self.agent_revision_counter.get().saturating_add(1));
+        }
+        self.agent_revision_counter.get()
     }
 
     pub(super) fn process_agent_requests(&mut self) {
@@ -494,7 +549,6 @@ impl App {
                 | Request::EnableSlowSmoothBlends
                 | Request::EnableBooleanOperations
                 | Request::ExecuteCommand { .. }
-                | Request::SetView(_)
                 | Request::SelectBox(_)
                 | Request::SelectCircle(_)
                 | Request::AdjustGaussianColors(_)
@@ -507,9 +561,15 @@ impl App {
         let result = match request {
             Request::GetState => self.agent_state(),
             Request::GetSceneSummary => self.agent_scene_summary(),
+            Request::GetUserView => Ok(json!({"view": {"position": self.camera.position,
+                "target": self.camera.target, "up": self.camera.up,
+                "projection_mode": self.camera.projection_mode,
+                "viewport": self.camera.viewport, "viewport_origin": self.camera.viewport_origin}})),
             Request::GetSchema => Ok(schema()),
             Request::GetActionSchema { action, primitive } => mcp::action_schema(&action, primitive),
             Request::GetGaussianCloud { id, space, sample_count } => self.agent_gaussian_cloud(id, space, sample_count),
+            Request::GetMesh { id } => mesh::get_mesh(&self.tree, id),
+            Request::PreviewMeshSections { sections, caps } => mesh_sections::preview(sections, caps),
             Request::AdjustGaussianColors(args) => self.agent_adjust_gaussian_colors(args),
             Request::ListCommands => Ok(Value::Array(self.commands.commands.iter().map(|(name, command)| {
                 json!({"name": name, "title": command.title, "description": command.docs, "shortcut": command.shortcut})
@@ -536,9 +596,13 @@ impl App {
                 } else {
                     match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage, args.isolation) {
                         Ok(objects) => {
+                            let camera = match args.view {
+                                CaptureCameraSource::Agent => self.agent_view_camera(),
+                                CaptureCameraSource::User => self.camera.clone(),
+                            };
                             self.agent_capture = Some(AgentCapture {
                                 reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
-                                view: CaptureView::Viewport,
+                                view: CaptureView::Viewport, camera, cancelled_retries: 0,
                             });
                             if let Some(renderer) = &mut self.renderer {
                                 renderer.invalidate_scene();
@@ -567,6 +631,7 @@ impl App {
                                 self.agent_capture = Some(AgentCapture {
                                     reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
                                     view: CaptureView::Orthographic { panel_size, distance, frames: Vec::with_capacity(3) },
+                                    camera: self.agent_view_camera(), cancelled_retries: 0,
                                 });
                                 if let Some(renderer) = &mut self.renderer {
                                     renderer.invalidate_scene();
@@ -601,7 +666,6 @@ impl App {
                 self.replace_scene(scene);
                 self.document.mark_opened(path.clone());
                 self.document.mark_scene_clean(&self.tree);
-                self.agent_revision += 1;
                 json!({"path": path, "revision": self.scene_revision()})
             }),
         };
@@ -699,8 +763,11 @@ impl App {
             "world": model::world(&self.tree),
             "post_processing": model::post_processing_ref(&self.tree),
             "animation": animation,
-            "view": {"position": self.camera.position, "target": self.camera.target,
-                "up": self.camera.up, "projection_mode": self.camera.projection_mode},
+            "view": {"position": self.agent_camera.position, "target": self.agent_camera.target,
+                "up": self.agent_camera.up, "projection_mode": self.agent_camera.projection_mode,
+                "viewport": self.agent_view_camera().viewport,
+                "viewport_size": self.agent_view_camera().viewport,
+                "fov_y_degrees": (self.agent_camera.projection_mode == ProjectionMode::Perspective).then_some(45.0)},
             "document": raw_scene,
         }))
     }
@@ -723,8 +790,11 @@ impl App {
         }).collect();
         Ok(json!({"revision": self.scene_revision(), "objects": entries,
             "selection": model::selected_ref(&self.tree),
-            "view": {"position": self.camera.position, "target": self.camera.target,
-                "up": self.camera.up, "projection_mode": self.camera.projection_mode},
+            "view": {"position": self.agent_camera.position, "target": self.agent_camera.target,
+                "up": self.agent_camera.up, "projection_mode": self.agent_camera.projection_mode,
+                "viewport": self.agent_view_camera().viewport,
+                "viewport_size": self.agent_view_camera().viewport,
+                "fov_y_degrees": (self.agent_camera.projection_mode == ProjectionMode::Perspective).then_some(45.0)},
             "document_path": self.document.current_path()}))
     }
 
@@ -779,18 +849,26 @@ impl App {
                     .to_string(),
             );
         }
-        self.camera.position = position;
-        self.camera.target = target;
-        self.camera.up = up.normalize();
+        self.agent_camera.position = position;
+        self.agent_camera.target = target;
+        self.agent_camera.up = up.normalize();
         if let Some(mode) = args.projection_mode {
-            self.camera.projection_mode = mode;
+            self.agent_camera.projection_mode = mode;
         }
         Ok(json!({"revision": self.scene_revision()}))
+    }
+
+    fn agent_view_camera(&self) -> Camera {
+        let mut camera = self.agent_camera.clone();
+        if let Some(renderer) = &self.renderer { camera.viewport = renderer.size(); }
+        camera.viewport_origin = Vec2::ZERO;
+        camera
     }
 }
 
 mod actions;
 mod capture;
+mod capture_overlay;
 mod color;
 mod export;
 mod headless;

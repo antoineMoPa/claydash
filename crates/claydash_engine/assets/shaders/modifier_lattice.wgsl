@@ -53,19 +53,11 @@ fn lattice_point(point: vec3<f32>, offset: u32) -> vec3<f32> {
         dot(modifier_params[offset + LATTICE_INVERSE + 0u], homogeneous),
         dot(modifier_params[offset + LATTICE_INVERSE + 1u], homogeneous),
         dot(modifier_params[offset + LATTICE_INVERSE + 2u], homogeneous));
-    let info = modifier_params[offset + LATTICE_INFO];
     var rest = cage_point;
-    if bitcast<u32>(info.w) <= 3u {
-        rest = cage_point - lattice_displacement(cage_point, offset);
+    // The direct mesh source field uses four fixed-point steps. A fixed count
+    // keeps the implicit surface continuous across former early-stop boundaries.
+    for (var iteration = 0; iteration < 4; iteration++) {
         rest = cage_point - lattice_control_displacement(rest, offset);
-    } else {
-        rest = cage_point;
-        for (var iteration = 0; iteration < 4; iteration++) {
-            let next = cage_point - lattice_control_displacement(rest, offset);
-            let change = next - rest;
-            rest = next;
-            if dot(change, change) < 0.00000001 { break; }
-        }
     }
     let displacement = cage_point - rest;
     return point - vec3(

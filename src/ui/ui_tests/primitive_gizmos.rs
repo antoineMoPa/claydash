@@ -631,6 +631,8 @@
                             &mut document,
                             None,
                             None,
+                            None,
+                            Vec2::new(width, 700.0),
                         );
                     },
                 );

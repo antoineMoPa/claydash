@@ -29,5 +29,11 @@ guide:
 guide-check:
 	scripts/capture-guide.sh --check
 
+guide-splats:
+	scripts/capture-guide.sh --splats
+
+guide-splats-check:
+	scripts/capture-guide.sh --check-splats
+
 run-native:
 	cargo run

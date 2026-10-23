@@ -45,7 +45,7 @@
     <p class="lede">Learn the basics of Claydash, an experimental 3D SDF modeler.</p>
     <p class="repository-link"><a href="https://github.com/antoineMoPa/claydash"><img src="github-icon.svg" alt="" width="28" height="28">claydash</a></p>
     <nav aria-label="Guide sections">
-      <span class="nav-title">On this page</span><a href="#window">App window</a><a href="#sdf">A word about SDF</a><a href="#shapes">Shapes</a><a href="#gizmos">Viewport gizmos</a><a href="#face-cut">Face cutting and extrusion</a><a href="#path-extrusion">Path extrusion</a><a href="#booleans">Boolean groups</a><a href="#materials">Materials</a><a href="#repeat">Repeat modifier</a><a href="#mirror">Mirror modifier</a><a href="#modifiers">Lattice modifier</a><a href="#camera">Cameras</a><a href="#animation">Animation</a><a href="#files">Files and renders</a><a href="#agents">Native app and MCP</a>
+      <span class="nav-title">On this page</span><a href="#window">App window</a><a href="#sdf">A word about SDF</a><a href="#shapes">Shapes</a><a href="#gizmos">Viewport gizmos</a><a href="#face-cut">Face cutting and extrusion</a><a href="#path-extrusion">Path extrusion</a><a href="#booleans">Boolean groups</a><a href="#splats">Gaussian splat cleanup</a><a href="#materials">Materials</a><a href="#repeat">Repeat modifier</a><a href="#mirror">Mirror modifier</a><a href="#modifiers">Lattice modifier</a><a href="#camera">Cameras</a><a href="#animation">Animation</a><a href="#files">Files and renders</a><a href="#agents">Native app and MCP</a>
     </nav>
   </header>
   <main>
@@ -101,6 +101,22 @@
       <p><strong>Union</strong> adds volumes, <strong>Subtract</strong> cuts one from another, and <strong>Intersect</strong> keeps only their shared volume. Select the target first and another object second, then use the combine buttons in the Scene panel or press <kbd class="key">+</kbd>, <kbd class="key">-</kbd>, or <kbd class="key">*</kbd>. With only one object selected, a shortcut waits for you to pick the operand in the viewport or Scene tree; press <kbd class="key">Esc</kbd> to cancel.</p>
       <p>In the Scene tree, drag a shape or group onto a target row and choose the operation. A child's colored badge shows its operation and lets you change or detach it. The row's <strong>−</strong> button adds a subtractive shape directly. Select a whole group to move, rotate, or scale it together; click again in the viewport to reach an individual shape. The <strong>Operand</strong> tab changes an operand's operation and the group's edge softness. Set softness to zero for a sharp edge.</p>
       <figure><img src="boolean.webp" alt="Boolean operands in the Scene tree with their operation settings in the Operand tab" width="1280" height="800"><figcaption>The Scene tree shows nested operands and their operation badges.</figcaption></figure>
+    </section>
+    <section id="splats">
+      <h2>Clean up and reshape Gaussian splats</h2>
+      <p>Import a Gaussian PLY with <strong>File → Import → Gaussian PLY…</strong>. The viewport frames the imported scan, which appears as one asset in the Scene tree. Select it once to work in <strong>Object mode</strong>, where the transform controls move, rotate, or scale the whole cloud. Click the selected cloud again in the viewport to enter <strong>Edit mode</strong> and select individual splats. The status bar names the current mode.</p>
+      <figure><img class="detail" src="splat-object.webp" alt="Claydash screenshot showing a selected duck scan and surrounding mat splats in Object mode" width="1280" height="800" loading="lazy"><figcaption>Object mode selects the duck scan as one asset. The Guide uses a focused crop of the source PLY so the edits are visible.</figcaption></figure>
+      <h3>Select and remove unwanted points</h3>
+      <ol>
+        <li>In Edit mode, click one unwanted splat or use <strong>Box select</strong> (<kbd class="key">B</kbd>) to drag a rectangle. <strong>Circle select</strong> (<kbd class="key">C</kbd>) lets you drag to paint a region. Hold <kbd class="key">Shift</kbd> to add points or <kbd class="key">Alt</kbd> to subtract them. With Circle select active, use <kbd class="key">Ctrl</kbd>+scroll to change the brush radius.</li>
+        <li>Check the highlight from another view before deleting: a screen-space selection can include splats behind the visible surface. Use <kbd class="key">Cmd/Ctrl</kbd>+<kbd class="key">A</kbd> to select every splat in Edit mode, or <kbd class="key">Cmd/Ctrl</kbd>+<kbd class="key">I</kbd> to invert the point selection.</li>
+        <li>Press <kbd class="key">Delete</kbd> or <kbd class="key">Backspace</kbd> to remove the selected splats. Undo restores them. Press <kbd class="key">Esc</kbd> to leave Edit mode.</li>
+      </ol>
+      <figure><img class="detail" src="splat-selection.webp" alt="Claydash screenshot showing surrounding mat splats selected around a duck in Edit mode" width="1280" height="800" loading="lazy"><figcaption>Edit mode highlights the unwanted scan surroundings before deletion.</figcaption></figure>
+      <h3>Reposition or reshape a region</h3>
+      <p>With splats selected in Edit mode, press <kbd class="key">G</kbd> to move, <kbd class="key">R</kbd> to rotate, or <kbd class="key">S</kbd> to scale them. Use the viewport gizmo for direct dragging. During a transform, <kbd class="key">X</kbd>, <kbd class="key">Y</kbd>, or <kbd class="key">Z</kbd> constrains an axis; press <kbd class="key">Enter</kbd> to accept or <kbd class="key">Esc</kbd> to cancel. Unselected splats stay in place.</p>
+      <figure><img class="detail" src="splat-cleanup.webp" alt="Claydash screenshot showing the duck after deleting surrounding mat splats and moving selected beak splats" width="1280" height="800" loading="lazy"><figcaption>After removing the surrounding mat, the selected beak splats can be moved without shifting the rest of the duck.</figcaption></figure>
+      <p>Save the project as <code>.claydash</code> to keep the editable cloud and its splat data. When the cleanup is finished and you need triangles, select the cloud and click <strong>Convert to mesh</strong> in the <strong>Object</strong> tab. Conversion reconstructs a textured surface, replaces the splat asset, and can be undone.</p>
     </section>
     <section id="materials">
       <h2>Choose and reuse materials</h2>

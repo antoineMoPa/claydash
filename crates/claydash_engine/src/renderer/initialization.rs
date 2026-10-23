@@ -421,31 +421,18 @@ impl Renderer {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader_features = SceneShaderFeatures::for_scene(&[], &[]);
-        let pipeline = create_scene_pipeline_for_materials(
+        // The opening scene can be raster-only. Keep a lightweight pipeline
+        // until an SDF scene is uploaded, then compile its actual variants.
+        // Compiling both full SDF variants here stalls Chrome before the UI
+        // can render, even though neither pipeline is used by the mesh scene.
+        let mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(
             &device,
-            &shader_source,
             &pipeline_layout,
             render_format,
-            use_bvh,
-            1,
-            false,
-            false,
-            shader_features,
             false,
         );
-        let fast_pipeline = create_scene_pipeline_for_materials(
-            &device,
-            &shader_source,
-            &pipeline_layout,
-            render_format,
-            use_bvh,
-            1,
-            false,
-            true,
-            shader_features,
-            false,
-        );
+        let pipeline = mesh_background_pipeline.clone();
+        let fast_pipeline = mesh_background_pipeline.clone();
         let (
             splat_pipeline,
             mesh_pipeline,
@@ -454,12 +441,6 @@ impl Renderer {
             splat_buffer,
             mesh_buffer,
         ) = hybrid_splats::create_splat_resources(&device, render_format);
-        let mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(
-            &device,
-            &pipeline_layout,
-            render_format,
-            false,
-        );
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
             render_format,
@@ -467,30 +448,7 @@ impl Renderer {
         );
         let viewport = crate::viewport::Viewport::new(&device, render_format, timestamps, &layout);
         let post_processing = post_processing::PostProcessor::new(&device, render_format);
-        let scene_pipeline_cache = std::collections::VecDeque::from([
-            (
-                ScenePipelineKey {
-                    kind: ScenePipelineKind::Shaded {
-                        capacity: 1,
-                        fast: false,
-                        hybrid: false,
-                    },
-                    features: shader_features,
-                },
-                pipeline.clone(),
-            ),
-            (
-                ScenePipelineKey {
-                    kind: ScenePipelineKind::Shaded {
-                        capacity: 1,
-                        fast: true,
-                        hybrid: false,
-                    },
-                    features: shader_features,
-                },
-                fast_pipeline.clone(),
-            ),
-        ]);
+        let scene_pipeline_cache = std::collections::VecDeque::new();
         let renderer = Self {
             viewport,
             post_processing,
