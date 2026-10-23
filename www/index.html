@@ -120,9 +120,8 @@
       }, true);
     </script>
     <script type="module">
-      import init, { web_mcp_request } from './target/app.js'
-      import { registerClayDashTools } from './webmcp.js'
-      init().then(() => registerClayDashTools(web_mcp_request)).catch(error => {
+      import init from './target/app.js'
+      init().catch(error => {
           console.error(error);
           document.querySelector('.loading-message').innerText = `Failed to start: ${error}`;
       })

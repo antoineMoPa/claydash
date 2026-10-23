@@ -298,7 +298,6 @@ impl ApplicationHandler<AppEvent> for App {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            web_mcp::set_window(window.clone());
             let renderer_tx = self.renderer_tx.clone();
             let renderer_window = window.clone();
             wasm_bindgen_futures::spawn_local(async move {

@@ -9,7 +9,9 @@ mod rendering;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod navigation_profile;
 mod mesh_export_options;
+#[cfg(not(target_arch = "wasm32"))]
 mod mesh_actions;
+#[cfg(not(target_arch = "wasm32"))]
 mod mesh_sections;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_export;
@@ -19,8 +21,6 @@ mod mesh_export;
 #[cfg(target_arch = "wasm32")]
 #[path = "app/web_ply_import.rs"]
 mod web_ply_import;
-#[cfg(target_arch = "wasm32")]
-mod web_mcp;
 use initialization::data_tree_with_scene;
 
 #[cfg(target_arch = "wasm32")]
@@ -74,7 +74,6 @@ use crate::document;
 
 #[cfg(target_arch = "wasm32")]
 enum WebDocumentMessage {
-    WebMcp(web_mcp::Inbound),
     PlyFile { request: Option<u64>, file: web_sys::File },
     PlyBatch { request: u64, data: Vec<u8>, count: usize, loaded: usize, total: usize },
     PlyProgress { request: u64, parsed: usize, total: usize },
@@ -916,7 +915,6 @@ impl App {
         for _ in 0..4 {
             let Ok(message) = self.document_rx.try_recv() else { break };
             match message {
-                WebDocumentMessage::WebMcp(inbound) => self.process_web_mcp(inbound),
                 WebDocumentMessage::PlyFile { request, file } => {
                     if request.is_some_and(|request| request != self.document_request) { continue; }
                     self.web_ply_import = None;

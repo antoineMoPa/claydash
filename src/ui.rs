@@ -160,7 +160,6 @@ impl EditorPane {
 }
 
 pub struct UiState {
-    agent_capture_clean: bool,
     animation: AnimationRuntime,
     frames: Frames,
     layout: Layout<EditorPane>,
@@ -198,7 +197,6 @@ impl Default for UiState {
         style.active_border = Color32::from_rgb(95, 142, 246);
         style.accent = Color32::from_rgb(95, 142, 246);
         Self {
-            agent_capture_clean: false,
             animation: AnimationRuntime::default(),
             frames: Frames::new().with_style(style),
             layout,
@@ -222,14 +220,6 @@ impl Default for UiState {
 }
 
 impl UiState {
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn set_agent_capture_clean(&mut self, clean: bool) {
-        self.agent_capture_clean = clean;
-    }
-
-    pub(crate) fn agent_capture_clean(&self) -> bool {
-        self.agent_capture_clean
-    }
     pub fn delete_active_polygon_point(&self, ctx: &egui::Context, tree: &mut DataTree) -> bool {
         if polygon_editor::active(tree).is_none() {
             return false;
@@ -442,10 +432,8 @@ impl UiState {
             let scale = viewport_ui.ctx().pixels_per_point();
             camera.viewport_origin = Vec2::new(rect.left(), rect.top()) * scale;
             camera.viewport = Vec2::new(rect.width().max(1.0), rect.height().max(1.0)) * scale;
-            if !self.agent_capture_clean {
-                self.draw_top_controls(viewport_ui.ctx(), tree, camera);
-                self.draw_view_gizmo(viewport_ui.ctx(), tree, camera);
-            }
+            self.draw_top_controls(viewport_ui.ctx(), tree, camera);
+            self.draw_view_gizmo(viewport_ui.ctx(), tree, camera);
             viewport_ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 if commands::outline_mode(tree) {
@@ -453,9 +441,6 @@ impl UiState {
                     // scene-only exports keep their normal shaded image.
                     ui.painter()
                         .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-                }
-                if self.agent_capture_clean {
-                    return;
                 }
                 self.regions.extend(camera_overlay::draw(ui, tree, camera));
                 let variable_pointer = if polygon_editor::active(tree).is_none()

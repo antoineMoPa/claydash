@@ -635,9 +635,7 @@ impl App {
         let agent_capture_active = self.agent_capture.is_some();
         #[cfg(any(target_arch = "wasm32", not(unix)))]
         let agent_capture_active = false;
-        let effective_selection = if self.pending_render.is_some()
-            || agent_capture_active
-            || self.ui.agent_capture_clean() {
+        let effective_selection = if self.pending_render.is_some() || agent_capture_active {
             Vec::new()
         } else {
             commands::effective_selected_ids(&self.tree)
@@ -711,13 +709,11 @@ impl App {
         // Pointer gizmos and modal G/R/S transforms can pause between motion
         // events. Do not queue expensive refinement ahead of their next edit.
         let interacting = !capture_render
-            && !self.ui.agent_capture_clean()
             && self.interactions.viewport_interaction_active(
                 self.egui.input(|input| input.pointer.any_down()),
                 &self.tree,
             );
         let transform_preview = !capture_render
-            && !self.ui.agent_capture_clean()
             && (self.ui.transform_gesture_active()
                 || matches!(
                     self.tree.get_path("editor.state"),
@@ -727,7 +723,7 @@ impl App {
                             | crate::model::EditorState::Scaling
                     )
                 ));
-        let cloud_edit = if (capture_render && !capture_ui) || self.ui.agent_capture_clean() {
+        let cloud_edit = if capture_render && !capture_ui {
             None
         } else {
             crate::model::cloud_edit(&self.tree)

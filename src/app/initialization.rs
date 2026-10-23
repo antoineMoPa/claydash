@@ -376,8 +376,6 @@ impl App {
         let (renderer_tx, renderer_rx) = channel();
         #[cfg(target_arch = "wasm32")]
         let (document_tx, document_rx) = channel();
-        #[cfg(target_arch = "wasm32")]
-        web_mcp::set_sender(document_tx.clone());
         let document = DocumentState::default();
         let egui = egui::Context::default();
         egui.style_mut_of(egui::Theme::Light, |style| {
