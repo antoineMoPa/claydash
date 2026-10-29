@@ -6,6 +6,7 @@ import io
 import hashlib
 import http.server
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -153,7 +154,9 @@ class ReleaseTests(unittest.TestCase):
         for system, arch, target in cases:
             with self.subTest(target=target):
                 dest = self.root / f"install space {arch} {system}"
+                apps = self.root / f"Applications space {arch} {system}"
                 env = dict(os.environ, CLAYDASH_INSTALL_DIR=str(dest), CLAYDASH_DOWNLOAD_BASE_URL=base,
+                           CLAYDASH_APP_DIR=str(apps),
                            PATH=f"{shims}{os.pathsep}{os.environ['PATH']}", TEST_OS=system, TEST_ARCH=arch)
                 def install():
                     # stdin exercises the actual curl | sh execution shape.
@@ -162,8 +165,23 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(first.returncode, 0, first.stderr)
                 self.assertEqual((dest / "claydash").read_bytes(), b"test executable\n")
                 self.assertTrue(os.access(dest / "claydash", os.X_OK))
+                app = apps / "Claydash.app"
+                app_binary = app / "Contents/MacOS/claydash"
+                if system == "Darwin":
+                    info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+                    self.assertEqual(info["CFBundleExecutable"], "claydash")
+                    self.assertEqual(info["CFBundlePackageType"], "APPL")
+                    self.assertEqual(info["CFBundleIdentifier"], "com.claydash.app")
+                    self.assertEqual(app_binary.read_bytes(), b"test executable\n")
+                    self.assertTrue(os.access(app_binary, os.X_OK))
+                    self.assertIn(str(app), first.stdout)
+                    app_binary.write_bytes(b"old app version")
+                else:
+                    self.assertFalse(apps.exists())
                 (dest / "claydash").write_bytes(b"old version")
                 self.assertEqual(install().returncode, 0)
+                if system == "Darwin":
+                    self.assertEqual(app_binary.read_bytes(), b"test executable\n")
                 archive = self.output / release.archive_name(target)
                 original = archive.read_bytes()
                 archive.write_bytes(b"corrupt")
@@ -171,6 +189,8 @@ class ReleaseTests(unittest.TestCase):
                 self.assertNotEqual(failed.returncode, 0)
                 self.assertIn("Checksum verification failed", failed.stderr)
                 self.assertEqual((dest / "claydash").read_bytes(), b"test executable\n")
+                if system == "Darwin":
+                    self.assertEqual(app_binary.read_bytes(), b"test executable\n")
                 archive.write_bytes(original)
         env["TEST_OS"], env["TEST_ARCH"] = "Darwin", "x86_64"
         failed = subprocess.run(["sh"], input=script, env=env, text=True, capture_output=True)

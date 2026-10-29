@@ -14,8 +14,14 @@ irm https://claydash.com/install.ps1 | iex
 
 The landing build serves these scripts from the Claydash repository. They are also
 available as `install.sh` / `install.ps1` assets on each GitHub release.
-Both installers check SHA-256 before installing. Unix installs to `~/.local/bin`
-and prints a PATH command if needed. Windows installs to `%LOCALAPPDATA%\Claydash\bin`
+Both installers check SHA-256 before installing. macOS installs `Claydash.app` in
+`/Applications` when writable, otherwise in `~/Applications`, and registers it
+with macOS so it can appear in Spotlight and app launchers. Open Claydash from
+Applications; Spotlight may take a moment to index a new installation. Set
+`CLAYDASH_APP_DIR` to choose a different Applications directory. Rerun the command
+above to add the app bundle if an earlier installation only installed the CLI.
+macOS and Linux also install the terminal command to `~/.local/bin`
+and print a PATH command if needed. Windows installs to `%LOCALAPPDATA%\Claydash\bin`
 and adds it to the user PATH. Set `CLAYDASH_INSTALL_DIR` to choose another directory,
 `CLAYDASH_VERSION=v0.1.0` to select a version, or `CLAYDASH_DOWNLOAD_BASE_URL` to use
 a release mirror. Pinned installations should fetch the installer from that tag's
