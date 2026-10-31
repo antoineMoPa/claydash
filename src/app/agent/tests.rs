@@ -635,3 +635,29 @@ fn targeted_action_schema_shows_tag_and_sheet_bends() {
     assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["minimum"], 96);
     assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["maximum"], 512);
 }
+
+#[test]
+fn import_glb_request_reports_transformed_geometry_and_is_atomic() {
+    let mut app = App::new();
+    let path = std::env::temp_dir().join(format!("claydash-{}.glb", uuid::Uuid::new_v4()));
+    std::fs::write(&path, super::super::file_action_tests::triangle_glb()).unwrap();
+    let request = |app: &mut App, path: std::path::PathBuf| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.process_agent_request(Inbound { request: Request::ImportGlb { path }, reply: tx });
+        rx.recv().unwrap()
+    };
+    let result = request(&mut app, path.clone()).unwrap();
+    assert_eq!(result["objects"][0]["vertex_count"], 3);
+    assert_eq!(result["objects"][0]["triangle_count"], 1);
+    assert_eq!(result["objects"][0]["bounds"]["min"], json!([2.0, 0.0, 0.0]));
+    assert_eq!(result["objects"][0]["bounds"]["max"], json!([3.0, 1.0, 0.0]));
+    let revision = app.scene_revision();
+    std::fs::write(&path, b"invalid").unwrap();
+    assert!(request(&mut app, path.clone()).is_err());
+    assert!(request(&mut app, "relative.glb".into()).is_err());
+    assert_eq!(app.scene_revision(), revision);
+    std::fs::remove_file(path).unwrap();
+    app.tree.undo();
+    let id: uuid::Uuid = serde_json::from_value(result["object_ids"][0].clone()).unwrap();
+    assert!(!model::objects(&app.tree).iter().any(|object| object.uuid == id));
+}

@@ -1042,7 +1042,7 @@ mod file_action_tests {
             crate::model::GroupRenderRepresentation::DirectMesh);
     }
 
-    fn triangle_glb() -> Vec<u8> {
+    pub(super) fn triangle_glb() -> Vec<u8> {
         let mut binary = Vec::new();
         for value in [0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
             binary.extend_from_slice(&value.to_le_bytes());

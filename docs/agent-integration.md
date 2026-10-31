@@ -185,6 +185,20 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
    `isolation`, and `mode`/`refine` options.
 6. Call `save` with a `.claydash` path, or use the current document path.
 
+For a mesh reference, call `import_glb` with an absolute local `path`. It creates one
+undoable, selected object per triangle primitive and returns object IDs, world-space bounds,
+vertex and triangle counts, and the scene revision. The default (or first) scene is used;
+node transforms are baked into positions, including reflected winding. Geometry must use the
+embedded GLB buffer. Non-triangle primitives are skipped. Base color factors are retained;
+textures, UVs, other material properties, skinning and animation are not imported. The mesh
+is embedded in saved projects. Import does not lock or mark reference objects: keep their IDs
+separate and pass only candidate IDs to `export_glb` to exclude them.
+
+For a basic comparison, capture reference and candidate IDs separately with the same camera,
+mode and viewport settings. `capture_orthographic` gives consistently framed origin-centered
+panels; `capture_viewport` uses the agent camera. These are separate images, not transparent
+overlays, and reference objects remain editable in the scene.
+
 For an imported Gaussian object, `get_gaussian_cloud` with `{"id":"<object UUID>","space":"world"}`
 returns exact center-position bounds, per-axis 2nd/50th/98th percentiles, and up to 256
 deterministic position/color/opacity samples (32 by default). Use `"space":"object"` for local

@@ -70,6 +70,7 @@ pub enum Request {
     Save { path: Option<PathBuf> },
     Open { path: PathBuf },
     ImportGaussianPly { path: PathBuf },
+    ImportGlb { path: PathBuf },
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -557,6 +558,7 @@ impl App {
                 | Request::Redo
                 | Request::Open { .. }
                 | Request::ImportGaussianPly { .. }
+                | Request::ImportGlb { .. }
         );
         let result = match request {
             Request::GetState => self.agent_state(),
@@ -576,6 +578,21 @@ impl App {
             }).collect())),
             Request::ImportGaussianPly { path } => {
                 self.import_gaussian_path(&path).map(|id| json!({"id": id, "revision": self.scene_revision()}))
+            }
+            Request::ImportGlb { path } => {
+                (|| {
+                    if !path.is_absolute() { return Err("path must be absolute".to_string()); }
+                    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+                    let name = path.file_stem().unwrap_or_default().to_string_lossy();
+                    let ids = self.import_glb(&name, &bytes)?;
+                    let objects = model::objects(&self.tree);
+                    let meshes = objects.iter().filter(|object| ids.contains(&object.uuid)).map(|object| {
+                        let mesh = object.imported_mesh.as_ref().expect("imported GLB mesh");
+                        let bounds = cloud_bounds(mesh.positions.iter().map(|point| *point + object.transform.translation));
+                        json!({"id": object.uuid, "bounds": bounds, "vertex_count": mesh.positions.len(), "triangle_count": mesh.triangles.len()})
+                    }).collect::<Vec<_>>();
+                    Ok(json!({"object_ids": ids, "objects": meshes, "revision": self.scene_revision()}))
+                })()
             }
             Request::Apply(args) => self.agent_apply(args),
             Request::EnableSlowSmoothBlends => self.agent_enable_slow_smooth_blends(),
