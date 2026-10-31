@@ -1,6 +1,9 @@
 use super::*;
 
+mod skills;
+
 const MODEL_ORGANIZATION: &str = concat!(
+    "Workflow skills are available through skills/list and skills/get, with SKILL.md content served by resources/read; legacy clients can use resources/list. ",
     "For efficient modeling, prefer arrangements of sheet bends using native sheet cuts and bends, independent parts, and primitive corner radii. ",
     "Boolean operations are disabled by default, including hard unions, subtraction and intersection. Do not create unions just to organize parts. ",
     "Use shared vector variables with Position bindings and per-part offsets to translate an assembly, or shared rigid frame bindings to translate and rotate it, without Boolean geometry. ",
@@ -15,7 +18,7 @@ const MODEL_ORGANIZATION: &str = concat!(
 pub(super) fn schema() -> Value {
     json!({
         "version": 26,
-        "operations": ["GetState", "GetSceneSummary", "GetUserView", "GetSchema", "GetActionSchema", "GetGaussianCloud", "GetMesh", "PreviewMeshSections", "AdjustGaussianColors", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "SelectBox", "SelectCircle", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "CaptureOrthographic", "Undo", "Redo", "Save", "Open", "ImportGaussianPly", "ImportGlb"],
+        "operations": ["GetState", "GetSceneSummary", "GetUserView", "GetSchema", "GetActionSchema", "GetGaussianCloud", "GetMesh", "PreviewMeshSections", "AdjustGaussianColors", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "SelectBox", "SelectCircle", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "PreviewPoints", "CaptureOrthographic", "CaptureComparison", "Undo", "Redo", "Save", "Open", "ImportGaussianPly", "ImportGlb"],
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "CreateMesh", "CreateSectionMesh", "SetMeshSections", "AddMeshVertices", "AddMeshFaces", "SetMeshShading", "ProjectMeshUvs", "SetMeshUvs", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "variable_spaces": ["Local", "World"],
         "vector_binding_targets": ["Position", "GroupPosition", {"BezierPoint": 0}],
@@ -93,13 +96,39 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
         let Ok(request): Result<Value, _> = serde_json::from_str(&line) else {
             continue;
         };
-        let Some(id) = request.get("id") else {
-            continue;
-        };
-        let method = request.get("method").and_then(Value::as_str).unwrap_or("");
-        let result = match method {
+        let Some(response) = mcp_response(&request, &mut call) else { continue };
+        if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+            break;
+        }
+    }
+}
+
+fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) -> Option<Value> {
+    let Some(id) = request.get("id") else {
+        return None;
+    };
+    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+    let params = request.get("params").unwrap_or(&Value::Null);
+    let version = params
+        .pointer("/_meta/io.modelcontextprotocol~1protocolVersion")
+        .and_then(Value::as_str);
+    let modern = version == Some(skills::MODERN_VERSION);
+    if let Some(version) = version {
+        if version != skills::MODERN_VERSION && version != skills::LEGACY_VERSION {
+            return Some(json!({"jsonrpc":"2.0", "id":id, "error": {
+                "code": -32022, "message": "Unsupported protocol version",
+                "data": {"supported": [skills::MODERN_VERSION, skills::LEGACY_VERSION], "requested": version}
+            }}));
+        }
+    }
+    let resource_result = skills::handle(method, params);
+    let resource_method = resource_result.is_some();
+    let result = if let Some(result) = resource_result {
+        result
+    } else {
+        match method {
             "initialize" => Ok(
-                json!({"protocolVersion": "2025-11-25", "capabilities": {"tools": {}}, "serverInfo": {"name": "claydash", "version": env!("CARGO_PKG_VERSION")}, "instructions": MODEL_ORGANIZATION}),
+                json!({"protocolVersion": "2025-11-25", "capabilities": {"tools": {}, "resources": {}}, "serverInfo": {"name": "claydash", "version": env!("CARGO_PKG_VERSION")}, "instructions": MODEL_ORGANIZATION}),
             ),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": mcp_tools()})),
@@ -131,7 +160,9 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
                     "get_glb_export_status" => "GetGlbExportStatus",
                     "cancel_glb_export" => "CancelGlbExport",
                     "capture_viewport" => "CaptureViewport",
+                    "preview_points" => "PreviewPoints",
                     "capture_orthographic" => "CaptureOrthographic",
+                    "capture_comparison" => "CaptureComparison",
                     "undo" => "Undo",
                     "redo" => "Redo",
                     "save" => "Save",
@@ -145,11 +176,20 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
                 } else {
                     match call(request_payload(op, arguments)) {
                         Ok(value)
-                            if name == "capture_viewport" || name == "capture_orthographic" =>
+                            if name == "capture_viewport"
+                                || name == "preview_points"
+                                || name == "capture_orthographic"
+                                || name == "capture_comparison" =>
                         {
-                            Ok(
-                                json!({"content": [{"type": "image", "data": value["data"], "mimeType": "image/png"}]}),
-                            )
+                            let mut content = vec![
+                                json!({"type": "image", "data": value["data"], "mimeType": "image/png"}),
+                            ];
+                            if name == "capture_comparison" || value.get("point_previews").is_some() {
+                                let mut metadata = value.clone();
+                                metadata.as_object_mut().unwrap().remove("data");
+                                content.push(json!({"type":"text", "text":metadata.to_string()}));
+                            }
+                            Ok(json!({"content":content}))
                         }
                         Ok(value) => {
                             Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
@@ -161,17 +201,23 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
                 }
             }
             _ => Err(format!("unsupported MCP method: {method}")),
-        };
-        let response = match result {
-            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-            Err(error) => {
-                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": error}})
-            }
-        };
-        if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
-            break;
         }
-    }
+    };
+    let response = match result {
+        Ok(mut result) => {
+            if modern {
+                result["resultType"] = json!("complete");
+                if method == "tools/list" {
+                    result = skills::cached(result);
+                }
+            }
+            json!({"jsonrpc": "2.0", "id": id, "result": result})
+        }
+        Err(error) => {
+            json!({"jsonrpc": "2.0", "id": id, "error": {"code": if resource_method { -32602 } else { -32601 }, "message": error}})
+        }
+    };
+    Some(response)
 }
 
 pub(super) fn mcp_tools() -> Vec<Value> {
@@ -240,7 +286,7 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         "shading":{"enum":["Auto","Flat","Smooth"]}},
         "required":["type","id","shading"]}));
     let empty = json!({"type": "object", "properties": {}, "additionalProperties": false});
-    [
+    let mut tools: Vec<Value> = [
         ("get_state", "Read the full live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene Boolean and smooth-blend opt-in flags, and revision.", empty.clone()),
         ("get_scene_summary", "Read scene revision, object IDs/names/transforms, selection, camera and Gaussian counts and bounds without embedded splat bytes.", empty.clone()),
         ("get_user_view", "Read the desktop user camera and viewport without changing the agent view.", empty.clone()),
@@ -288,12 +334,43 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         ("get_glb_export_status", "Read GLB export status by job id: running (stage and per-stage progress), completed (file published), failed (error), or cancelled. Retains the most recent 32 terminal jobs for this process.", json!({"type":"object","properties":{"id":uuid},"required":["id"],"additionalProperties":false})),
         ("cancel_glb_export", "Cancel a GLB export by job id. Returns cancelled, or the terminal result if already finished. A cancelled job cannot subsequently publish its file.", json!({"type":"object","properties":{"id":uuid},"required":["id"],"additionalProperties":false})),
         ("capture_viewport", "Render a viewport PNG from the agent camera by default. Set view:user to capture the desktop user camera. object_ids selects objects; isolation:groups (default) includes Boolean groups and inlays, while isolation:parts renders only those primitives at their world positions. Parts requires object_ids and cannot select an inlay without its host. sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"view":{"enum":["agent","user"],"default":"agent"}, "sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "isolation": {"enum": ["groups", "parts"], "default": "groups"}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
-        ("capture_orthographic", "Return a PNG with X, Y, Z orthographic views. object_ids selects objects; isolation:groups (default) includes Boolean groups and inlays, while isolation:parts renders only those primitives at their world positions. Parts requires object_ids and cannot select an inlay without its host. sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "isolation": {"enum": ["groups", "parts"], "default": "groups"}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 512, "default": 256, "description": "Pixels per orthographic panel; must also fit inside the current viewport."}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000, "default": 8.0}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
+        ("capture_comparison", "Capture aligned triangle-mesh reference, candidate and silhouette-overlay rows in one PNG, with one column per requested orthographic view. Explicit reference IDs must be triangle meshes; candidates use groups (default) or parts isolation. The cyan silhouette or outline is composited over the opaque candidate in image space, ignoring candidate depth. Reference-only and candidate-only rows retain shading. Read-only snapshots preserve both cameras and selection. Returns revision, view axes and reusable world-space framing {center,span}; reuse framing to compare iterations. Geometry depth must fit the camera clipping range per requested view; off-screen crops are allowed. Raster work is bounded to 8,000,000 projected bounding-box pixel tests per view; reduce panel_size or simplify the reference if exceeded. Gaussian and image references are currently unsupported. No texture import is required.", json!({"type":"object", "properties":{
+            "reference_ids":{"type":"array","items":uuid,"minItems":1},
+            "candidate_ids":{"type":"array","items":uuid,"minItems":1},
+            "reference_opacity":{"type":"number","minimum":0,"maximum":1,"default":0.5},
+            "reference_style":{"enum":["silhouette","outline"],"default":"silhouette"},
+            "isolation":{"enum":["groups","parts"],"default":"groups"},
+            "views":{"type":"array","items":{"enum":["front","side","top","three_quarter"]},"minItems":1,"maxItems":4,"uniqueItems":true},
+            "panel_size":{"type":"integer","minimum":96,"maximum":2048,"default":256},
+            "framing":{"type":"object","properties":{"center":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"span":{"type":"number","exclusiveMinimum":0}},"required":["center","span"],"additionalProperties":false}
+        },"required":["reference_ids","candidate_ids"],"additionalProperties":false})),
+        ("capture_orthographic", "Return a PNG with X, Y, Z orthographic views. object_ids selects objects; isolation:groups (default) includes Boolean groups and inlays, while isolation:parts renders only those primitives at their world positions. Parts requires object_ids and cannot select an inlay without its host. sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "isolation": {"enum": ["groups", "parts"], "default": "groups"}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 2048, "default": 256, "description": "Pixels per orthographic panel. Default 256 for iteration; opt in to 1024–2048 for precision or final passes. Independent of window size."}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000, "default": 8.0}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("undo", "Undo the last scene edit.", empty.clone()),
         ("redo", "Redo the last undone scene edit.", empty.clone()),
         ("save", "Save the live scene to the current path or a specified .claydash path.", json!({"type": "object", "properties": {"path": {"type": "string"}}})),
         ("open", "Open a .claydash project in the live window.", json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})),
-    ].into_iter().map(|(name, description, input_schema)| json!({"name": name, "description": description, "inputSchema": input_schema})).collect()
+    ].into_iter().map(|(name, description, input_schema)| json!({"name": name, "description": description, "inputSchema": input_schema})).collect();
+    let points = json!({"type":"array","maxItems":64,"items":{"type":"object","properties":{
+        "position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},
+        "label":{"type":"string","maxLength":24,"description":"Optional ASCII label"}
+    },"required":["position"],"additionalProperties":false}});
+    for tool in &mut tools {
+        if matches!(tool["name"].as_str(), Some("capture_viewport" | "capture_orthographic" | "capture_comparison")) {
+            tool["inputSchema"]["properties"]["points"] = points.clone();
+            let description = tool["description"].as_str().unwrap().to_owned();
+            tool["description"] = json!(format!("{description} Optional points previews world coordinates as red center pixels with translucent 4px-radius circles, always on top; returns local and sheet pixel positions plus visibility status. Use higher resolution explicitly for refinement/final passes; defaults stay fast."));
+        }
+        if tool["name"] == "capture_viewport" {
+            tool["inputSchema"]["properties"]["resolution"] = json!({"type":"array","items":{"type":"integer","minimum":96,"maximum":2048},"minItems":2,"maxItems":2,"description":"Optional [width,height] in pixels; independent of editor window. Omit for current viewport size; use 1024–2048 for refinement/final checks."});
+        }
+    }
+    let mut preview = tools.iter().find(|tool| tool["name"] == "capture_viewport").unwrap().clone();
+    preview["name"] = json!("preview_points");
+    preview["description"] = json!("Preview 1–64 proposed world-space coordinates on a read-only scene capture before placing vertices, curves or parts. Each point has a red center pixel and translucent 4px-radius circle, always visible on top of geometry (not a surface-hit or occlusion test). Optional ASCII labels. Returns PNG, scene revision, per-point projected/cropped pixel coordinates, sheet coordinates and visible/outside_frame/outside_depth_range/behind_camera status. Uses independent agent camera by default; set_view chooses camera, object_ids isolates context. Optional resolution [width,height], each 96–2048, opts in to high resolution for precise/final passes. Scene, selection and cameras remain unchanged.");
+    preview["inputSchema"]["required"] = json!(["points"]);
+    preview["inputSchema"]["properties"]["points"]["minItems"] = json!(1);
+    tools.push(preview);
+    tools
 }
 
 pub(super) fn action_schema(action: &str, primitive: Option<PrimitiveKind>) -> AgentResult {

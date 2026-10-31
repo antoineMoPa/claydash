@@ -279,3 +279,28 @@ fn imported_mesh_uses_live_material_instead_of_placeholder_box() {
     assert!(red.rgba[pixel] > red.rgba[pixel + 2], "mesh must show its red material");
     assert!(blue.rgba[pixel + 2] > blue.rgba[pixel], "mesh must update to blue material");
 }
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn offscreen_capture_uses_requested_extent_without_resizing_renderer() {
+    let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+        width: 97, height: 73, ..Default::default()
+    })).unwrap();
+    let original_size = renderer.size();
+    let context = egui::Context::default();
+    let mut camera = Camera::new();
+    for [width, height] in [[384,256],[97,73]] {
+        camera.viewport = glam::Vec2::new(width as f32, height as f32);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let image = loop {
+            assert!(Instant::now() < deadline, "offscreen extent capture timed out");
+            frame(&mut renderer, &context, &camera, &[], World::default(), false, true);
+            renderer.device.poll(wgpu::PollType::Wait { submission_index:None,
+                timeout:Some(Duration::from_secs(5)) }).unwrap();
+            if let Some(image) = renderer.take_capture() { break image.unwrap(); }
+        };
+        assert_eq!([image.width,image.height],[width,height]);
+        assert_eq!(image.rgba.len(),(width * height * 4) as usize);
+        assert_eq!(renderer.size(),original_size);
+    }
+}

@@ -232,6 +232,7 @@ fn sheet_mcp_edits_validate_atomically_and_capture_stages_do_not_mutate_scene() 
 fn orthographic_capture_uses_three_axes_and_combines_panels() {
     let (reply, _) = mpsc::channel();
     let mut capture = AgentCapture {
+        points: Vec::new(), point_metadata: Vec::new(), revision: 1,
         reply,
         objects: None,
         mode: CaptureMode::SimpleShading,
@@ -633,7 +634,7 @@ fn targeted_action_schema_shows_tag_and_sheet_bends() {
     assert!(mcp::action_schema("MissingAction", None).is_err());
     let orthographic = mcp::mcp_tools().into_iter().find(|tool| tool["name"] == "capture_orthographic").unwrap();
     assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["minimum"], 96);
-    assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["maximum"], 512);
+    assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["maximum"], 2048);
 }
 
 #[test]

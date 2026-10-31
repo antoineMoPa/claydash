@@ -64,7 +64,9 @@ pub enum Request {
     GetGlbExportStatus { id: uuid::Uuid },
     CancelGlbExport { id: uuid::Uuid },
     CaptureViewport(CaptureViewportArgs),
+    PreviewPoints(CaptureViewportArgs),
     CaptureOrthographic(CaptureOrthographicArgs),
+    CaptureComparison(comparison::ComparisonArgs),
     Undo,
     Redo,
     Save { path: Option<PathBuf> },
@@ -91,6 +93,9 @@ fn cloud_bounds(points: impl Iterator<Item = Vec3>) -> Option<Value> {
 
 #[derive(Default, Deserialize)]
 pub struct CaptureViewportArgs {
+    pub resolution: Option<[u32; 2]>,
+    #[serde(default)]
+    pub points: Vec<markers::PreviewPoint>,
     #[serde(default)]
     pub view: CaptureCameraSource,
     pub sheet_stage: Option<model::SheetStage>,
@@ -103,6 +108,8 @@ pub struct CaptureViewportArgs {
 
 #[derive(Default, Deserialize)]
 pub struct CaptureOrthographicArgs {
+    #[serde(default)]
+    pub points: Vec<markers::PreviewPoint>,
     pub sheet_stage: Option<model::SheetStage>,
     pub object_ids: Option<Vec<uuid::Uuid>>,
     #[serde(default)]
@@ -411,8 +418,8 @@ fn call_socket(request: Value) -> AgentResult {
 
 fn request_payload(op: &str, args: Value) -> Value {
     let args = match op {
-        "GetState" | "GetSceneSummary" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "EnableBooleanOperations" | "Undo" | "Redo" => Value::Null,
-        "CaptureViewport" | "CaptureOrthographic" if args.is_null() => json!({}),
+        "GetState" | "GetSceneSummary" | "GetUserView" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "EnableBooleanOperations" | "Undo" | "Redo" => Value::Null,
+        "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" if args.is_null() => json!({}),
         "Save" if args.is_null() => json!({}),
         _ => args,
     };
@@ -425,7 +432,7 @@ fn parse_agent_arguments(op: &str, remaining: &[String]) -> Result<(Value, Optio
     let mut index = 0;
     while index < remaining.len() {
         if remaining[index] == "--output" {
-            if !matches!(op, "CaptureViewport" | "CaptureOrthographic") {
+            if !matches!(op, "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" | "CaptureComparison") {
                 return Err("--output is only valid for capture operations".into());
             }
             if output.is_some() { return Err("--output may only be supplied once".into()); }
@@ -477,7 +484,7 @@ pub fn run_from_args() -> bool {
                     eprintln!("unexpected argument: {extra}");
                     std::process::exit(2);
                 }
-                println!("Usage: claydash agent <operation> [JSON arguments] [--output PATH]\n\nExamples:\n  claydash agent GetState\n  claydash agent GetSchema\n  claydash agent CaptureViewport '{{\"mode\":\"outline\"}}' --output viewport.png\n  claydash agent CaptureOrthographic --output views.png\n\n--output works with both capture operations before or after JSON arguments.\nUse GetSchema to discover operations, including ExportGlb,\nGetGlbExportStatus, and CancelGlbExport. Requires a running server or desktop app.");
+                println!("Usage: claydash agent <operation> [JSON arguments] [--output PATH]\n\nExamples:\n  claydash agent GetState\n  claydash agent GetSchema\n  claydash agent CaptureViewport '{{\"mode\":\"outline\"}}' --output viewport.png\n  claydash agent CaptureOrthographic --output views.png\n\n--output works with all capture operations before or after JSON arguments.\nUse GetSchema to discover operations, including ExportGlb,\nGetGlbExportStatus, and CancelGlbExport. Requires a running server or desktop app.");
                 return true;
             }
             let remaining: Vec<_> = args.collect();
@@ -560,6 +567,7 @@ impl App {
                 | Request::ImportGaussianPly { .. }
                 | Request::ImportGlb { .. }
         );
+        let preview_points = matches!(&request, Request::PreviewPoints(_));
         let result = match request {
             Request::GetState => self.agent_state(),
             Request::GetSceneSummary => self.agent_scene_summary(),
@@ -606,20 +614,26 @@ impl App {
             Request::ExportGlb(args) => self.agent_export_glb(args),
             Request::GetGlbExportStatus { id } => self.glb_export_status(id),
             Request::CancelGlbExport { id } => self.cancel_glb_export(id),
-            Request::CaptureViewport(args) => {
+            Request::CaptureViewport(args) | Request::PreviewPoints(args) => {
+                if let Err(error) = markers::validate(&args.points).and_then(|_| {
+                    if preview_points && args.points.is_empty() { Err("preview_points requires at least one point".into()) } else { Ok(()) }
+                }) { let _ = reply.send(Err(error)); return; }
                 if self.agent_capture.is_some() || self.pending_render.is_some() || self.guide_screenshot.is_some()
                     || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
                     Err("a render is already in progress".to_string())
                 } else {
                     match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage, args.isolation) {
                         Ok(objects) => {
-                            let camera = match args.view {
+                            let mut camera = match args.view {
                                 CaptureCameraSource::Agent => self.agent_view_camera(),
                                 CaptureCameraSource::User => self.camera.clone(),
                             };
+                            if let Err(error) = capture::set_resolution(&mut camera, args.resolution) { let _ = reply.send(Err(error)); return; }
+                            let objects = objects.or_else(|| (!args.points.is_empty()).then(|| model::objects_ref(&self.tree).to_vec()));
                             self.agent_capture = Some(AgentCapture {
                                 reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
                                 view: CaptureView::Viewport, camera, cancelled_retries: 0,
+                                points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
                             });
                             if let Some(renderer) = &mut self.renderer {
                                 renderer.invalidate_scene();
@@ -631,24 +645,26 @@ impl App {
                 }
             }
             Request::CaptureOrthographic(args) => {
+                if let Err(error) = markers::validate(&args.points) { let _ = reply.send(Err(error)); return; }
                 if self.agent_capture.is_some() || self.pending_render.is_some() || self.guide_screenshot.is_some()
                     || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
                     Err("a render is already in progress".to_string())
                 } else {
                     let panel_size = args.panel_size.unwrap_or(256);
                     let distance = args.distance.unwrap_or(8.0);
-                    if !(96..=512).contains(&panel_size)
-                        || self.renderer.as_ref().is_some_and(|renderer| panel_size as f32 > renderer.size().min_element()) {
-                        Err("panel_size must be 96–512 pixels and fit inside the viewport".into())
+                    if !(96..=capture::MAX_CAPTURE_SIZE).contains(&panel_size) {
+                        Err("panel_size must be 96–2048 pixels".into())
                     } else if !distance.is_finite() || !(0.1..=1000.0).contains(&distance) {
                         Err("distance must be between 0.1 and 1000".into())
                     } else {
                         match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage, args.isolation) {
                             Ok(objects) => {
+                                let objects = objects.or_else(|| (!args.points.is_empty()).then(|| model::objects_ref(&self.tree).to_vec()));
                                 self.agent_capture = Some(AgentCapture {
                                     reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
                                     view: CaptureView::Orthographic { panel_size, distance, frames: Vec::with_capacity(3) },
                                     camera: self.agent_view_camera(), cancelled_retries: 0,
+                                    points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
                                 });
                                 if let Some(renderer) = &mut self.renderer {
                                     renderer.invalidate_scene();
@@ -657,6 +673,26 @@ impl App {
                             }
                             Err(error) => Err(error),
                         }
+                    }
+                }
+            }
+            Request::CaptureComparison(args) => {
+                if self.agent_capture.is_some() || self.pending_render.is_some() || self.guide_screenshot.is_some()
+                    || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
+                    Err("a render is already in progress".into())
+                } else {
+                    let revision = self.scene_revision();
+                    match comparison::prepare(model::objects_ref(&self.tree), args, self.agent_view_camera(), revision) {
+                        Ok((comparison, camera)) => {
+                            self.agent_capture = Some(AgentCapture {
+                                reply, objects: Some(comparison.references.clone()), mode: CaptureMode::SimpleShading,
+                                view: CaptureView::Comparison(Box::new(comparison)), camera, cancelled_retries: 0,
+                                points: Vec::new(), point_metadata: Vec::new(), revision,
+                            });
+                            if let Some(renderer) = &mut self.renderer { renderer.invalidate_scene(); }
+                            return;
+                        }
+                        Err(error) => Err(error),
                     }
                 }
             }
@@ -904,5 +940,7 @@ mod smooth_blend_tests;
 #[cfg(test)]
 use capture::capture_objects;
 pub use capture::{AgentCapture, CaptureView};
+mod comparison;
+mod markers;
 use mcp::{run_mcp, schema};
 use validation::validate_scene;

@@ -205,3 +205,12 @@ mod tests {
         assert!((pixels_per_unit_at_target(&camera, 200) - 200.0 / 8.4).abs() < 0.001);
     }
 }
+
+pub(super) fn point_label(frame: &mut CapturedFrame, center: [u32; 2], label: &str) {
+    let label = label.to_ascii_uppercase();
+    let width = text_width(&label, 2);
+    let x = (center[0] as i32 + 7).min(frame.width as i32 - width - 3).max(0);
+    let y = if center[1] > 20 { center[1] as i32 - 18 } else { center[1] as i32 + 7 };
+    rectangle(frame, x - 2, y - 2, width + 4, 14, PANEL, 200);
+    write(frame, &label, x, y, 2, WHITE);
+}

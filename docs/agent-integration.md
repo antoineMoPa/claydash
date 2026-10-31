@@ -201,8 +201,8 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
    `refine: false` selects simple shading; an explicit `mode` takes precedence over `refine`.
    Repeat the edit and capture steps until the design looks right.
 5. Call `capture_orthographic` for one PNG with X (side), Y (top), and Z (front) orthographic views
-   aimed at the origin. Each panel is 256 px square by default. `panel_size` accepts 96–512 px
-   and must fit inside the viewport; `distance` accepts 0.1–1000. It accepts the same `object_ids`,
+   aimed at the origin. Each panel is 256 px square by default. `panel_size` accepts 96–2048 px
+   independently of the editor window; `distance` accepts 0.1–1000. It accepts the same `object_ids`,
    `isolation`, and `mode`/`refine` options.
 6. Call `save` with a `.claydash` path, or use the current document path.
 
@@ -215,10 +215,82 @@ textures, UVs, other material properties, skinning and animation are not importe
 is embedded in saved projects. Import does not lock or mark reference objects: keep their IDs
 separate and pass only candidate IDs to `export_glb` to exclude them.
 
-For a basic comparison, capture reference and candidate IDs separately with the same camera,
-mode and viewport settings. `capture_orthographic` gives consistently framed origin-centered
-panels; `capture_viewport` uses the agent camera. These are separate images, not transparent
-overlays, and reference objects remain editable in the scene.
+For visual fitting from a triangle-mesh reference, call `capture_comparison` with separate
+reference and candidate IDs. Its current overlay is a mesh silhouette:
+
+```json
+{"reference_ids":["<mesh-id>"],"candidate_ids":["<part-id-1>","<part-id-2>"],
+ "reference_opacity":0.5,"reference_style":"silhouette",
+ "views":["front","side","top","three_quarter"],"isolation":"parts"}
+```
+
+The PNG has one column per requested view and three rows: reference-only, candidate-only,
+and overlay. All panels use identical orthographic framing and include axes and a world-unit
+scale. The three-quarter view is also orthographic. The tool returns the snapshotted scene
+revision, camera/axis metadata, and world-space `framing: {center:[x,y,z],span:number}`.
+Pass that framing back on subsequent calls to keep the camera scale and center fixed while
+revising geometry. Otherwise framing is fitted to combined base bounds; procedural modifiers can extend beyond
+those bounds, so supply explicit framing for such candidates. `panel_size`
+is 96–2048 px (default 256), independent of the renderer/editor window. Higher resolution is
+opt-in: use `panel_size: 1024` or 2048 for refinement/perfection and final checks; keep the
+default for blockout and routine iteration. Geometry must fit the
+camera's 0.01–100 world-unit clipping range; large assemblies require smaller scene scale.
+
+References must be imported or agent-built triangle meshes, with at most 2,000,000 reference
+triangles in total. Rasterization also has a per-view budget of 8,000,000 projected triangle
+bounding-box pixel tests; overly expensive projections return an error. Reduce `panel_size` or
+simplify the reference to retry. Each reference ID selects that individual mesh at its world transform.
+Candidates support the existing `groups` (default) or `parts` isolation. Sets must be disjoint,
+including any objects brought in by group isolation. References and candidates are rendered
+separately, preserving their own internal depth occlusion. The overlay draws a cyan projected
+reference silhouette over the opaque candidate; it is an image-space composite and deliberately
+ignores depth between reference and candidate. `reference_style: "outline"` draws only the
+silhouette boundary, including holes, and `reference_opacity` accepts 0–1. The silhouette uses
+base mesh triangles and their world transforms, with both triangle sides included; procedural
+mesh modifiers are not applied to this mask. Candidate geometry beneath the overlay can be
+obscured, so inspect the other two rows too. This is a visual aid, not an error measurement.
+
+Capture uses geometry snapshots and changes neither scene selection nor either camera.
+Imported references remain ordinary editable objects; save preserves their geometry, and
+explicit candidate IDs in `export_glb` exclude reference objects. CLI callers can use
+`claydash agent CaptureComparison '<JSON arguments>' --output comparison.png`.
+
+The broader fitting workflow can also start from uncertain references such as Gaussian splats,
+blueprints and photographs. This comparison tool currently accepts triangle meshes only.
+Gaussian comparison needs opacity-aware reference rendering; blueprints and photographs need
+explicit plane/camera alignment and scale assumptions. A single photo cannot supply arbitrary
+orthographic reference views. Reference/candidate separation, candidate isolation and reusable
+framing remain useful across these sources; geometric silhouette guarantees apply only to the
+current mesh overlay. Cross-check generated meshes against the source evidence.
+
+To verify proposed coordinates before placing points, curve controls or attachments, call
+`preview_points`. It captures the selected context with a red center pixel and translucent
+4 px-radius circle at each projected world-space position. It does not add scene objects.
+
+```json
+{"object_ids":["<reference-id>"],
+ "points":[{"position":[0.2,0.3,0.0],"label":"P1"}],
+ "resolution":[1024,1024]}
+```
+
+`preview_points` uses the independent agent camera; use `set_view` first or `view: "user"`
+to explicitly preview the user camera without moving it. `resolution: [width,height]` is
+optional, accepts 96–2048 per dimension, and leaves the renderer/window size unchanged.
+Omit it for the current viewport resolution. Higher resolution is opt-in for precision or
+final passes. The MCP response contains both the PNG and text metadata with the scene revision,
+world positions, projected `pixel` coordinates in the cropped image (top-left origin), integer
+`center_pixel`, `sheet_pixels`, and `status`: `visible`, `outside_frame`, `outside_depth_range`
+or `behind_camera`. Outside points are reported, not clamped to the image border. The red
+center is painted into the pixel containing the projected coordinate; `pixel` retains its
+fractional position. Up to 64 points and optional 24-character ASCII labels are supported.
+
+Markers are drawn on top of geometry and are not a surface-hit or depth/occlusion test.
+Check at least two views to establish placement in 3D. The radius stays 4 output pixels at any
+resolution. The same optional `points` array works with `capture_viewport`, `capture_orthographic`
+and `capture_comparison`; comparison markers appear in all three aligned rows, with their
+sheet positions in the metadata. `capture_viewport` also accepts optional `resolution`.
+Camera, selection, scene geometry and undo history stay unchanged. Captures with points use
+object snapshots so a later edit cannot silently change their geometric context.
 
 For an imported Gaussian object, `get_gaussian_cloud` with `{"id":"<object UUID>","space":"world"}`
 returns exact center-position bounds, per-axis 2nd/50th/98th percentiles, and up to 256

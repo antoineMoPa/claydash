@@ -1,7 +1,21 @@
 use super::*;
 
+pub const MAX_CAPTURE_SIZE: u32 = 2048;
+
+pub fn set_resolution(camera: &mut Camera, resolution: Option<[u32; 2]>) -> Result<(), String> {
+    if let Some([width, height]) = resolution {
+        if !(96..=MAX_CAPTURE_SIZE).contains(&width) || !(96..=MAX_CAPTURE_SIZE).contains(&height) {
+            return Err("resolution dimensions must be 96–2048 pixels".into());
+        }
+        camera.viewport = Vec2::new(width as f32, height as f32);
+        camera.viewport_origin = Vec2::ZERO;
+    }
+    Ok(())
+}
+
 pub enum CaptureView {
     Viewport,
+    Comparison(Box<super::comparison::ComparisonCapture>),
     Orthographic {
         panel_size: u32,
         distance: f32,
@@ -16,11 +30,15 @@ pub struct AgentCapture {
     pub view: CaptureView,
     pub camera: Camera,
     pub cancelled_retries: u8,
+    pub points: Vec<super::markers::PreviewPoint>,
+    pub point_metadata: Vec<Value>,
+    pub revision: u64,
 }
 
 impl AgentCapture {
     pub fn camera(&self) -> Camera {
         let mut camera = self.camera.clone();
+        if let CaptureView::Comparison(comparison) = &self.view { return comparison.camera(&camera); }
         if let CaptureView::Orthographic {
             panel_size,
             distance,
@@ -48,7 +66,15 @@ impl AgentCapture {
         camera: &Camera,
     ) -> AgentResult {
         let mut cropped = crate::render_export::crop_to_viewport(frame, camera);
+        if let CaptureView::Comparison(comparison) = &mut self.view {
+            let result = comparison.accept_frame(cropped, camera);
+            if matches!(result, Ok(Value::Null)) {
+                self.objects = Some(comparison.current_objects().to_vec());
+            }
+            return result;
+        }
         let title = match &self.view {
+            CaptureView::Comparison(_) => unreachable!(),
             CaptureView::Viewport => match camera.projection_mode {
                 ProjectionMode::Perspective => "Perspective view",
                 ProjectionMode::Orthographic => "Orthographic view",
@@ -60,19 +86,30 @@ impl AgentCapture {
             },
         };
         super::capture_overlay::annotate(&mut cropped, camera, title);
+        let offset = match &self.view { CaptureView::Orthographic { panel_size, frames, .. } => [*panel_size * frames.len() as u32, 0], _ => [0, 0] };
+        self.point_metadata.extend(super::markers::annotate(&mut cropped, camera, &self.points, title, &[offset]));
         if let CaptureView::Orthographic { frames, .. } = &mut self.view {
             frames.push(cropped);
             if frames.len() < 3 {
                 return Ok(Value::Null);
             }
             let sheet = orthographic_sheet(frames)?;
-            return captured_image(&sheet);
+            return self.with_point_metadata(captured_image(&sheet)?);
         }
-        captured_image(&cropped)
+        self.with_point_metadata(captured_image(&cropped)?)
+    }
+
+    fn with_point_metadata(&self, mut result: Value) -> AgentResult {
+        if !self.points.is_empty() {
+            result["point_previews"] = json!(self.point_metadata);
+            result["revision"] = json!(self.revision);
+            result["point_display"] = json!("red center pixel with translucent 4px radius circle; drawn on top, without depth occlusion");
+        }
+        Ok(result)
     }
 }
 
-fn captured_image(frame: &crate::renderer::CapturedFrame) -> AgentResult {
+pub(super) fn captured_image(frame: &crate::renderer::CapturedFrame) -> AgentResult {
     use base64::Engine;
     let bytes = crate::render_export::png_bytes(frame)?;
     Ok(json!({"width": frame.width, "height": frame.height,
@@ -166,7 +203,9 @@ pub(super) fn capture_parts(
         part.boolean_parent = None;
         part.operation = BooleanOperation::Union;
         part.group_transform = group_transform;
-        part.render_representation = GroupRenderRepresentation::ExactSdf;
+        part.render_representation = if part.imported_mesh.is_some() {
+            GroupRenderRepresentation::DirectMesh
+        } else { GroupRenderRepresentation::ExactSdf };
         parts.push(part);
     }
     Ok(parts)

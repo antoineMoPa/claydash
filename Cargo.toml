@@ -51,6 +51,7 @@ mp4 = "0.14.0"
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sha2 = "0.10"
 pollster = "0.4.0"
 openh264 = "0.9.8"
 egui-winit = { version = "0.36.2", default-features = false }

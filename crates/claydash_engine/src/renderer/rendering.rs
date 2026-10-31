@@ -34,11 +34,18 @@ impl Renderer {
         outline_viewport: bool,
     ) -> bool {
         let offscreen_capture = offscreen_capture || self.surface.is_none();
+        let target_size = if offscreen_capture && !capture_ui {
+            [
+                (camera.viewport_origin.x.max(0.0) + camera.viewport.x).ceil().max(1.0) as u32,
+                (camera.viewport_origin.y.max(0.0) + camera.viewport.y).ceil().max(1.0) as u32,
+            ]
+        } else { [self.config.width, self.config.height] };
+
         self.advance_computations(camera, objects, selected, scene_versions,
             mesh_source_revision, world, egui, !outline_viewport);
         let clipped = egui.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
         let screen = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [self.config.width, self.config.height],
+            size_in_pixels: [target_size[0], target_size[1]],
             pixels_per_point: output.pixels_per_point,
         };
         for (id, image_deltas) in output.textures_delta.set.drain() {
@@ -79,8 +86,8 @@ impl Renderer {
                 self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("guide screenshot target"),
                     size: wgpu::Extent3d {
-                        width: self.config.width,
-                        height: self.config.height,
+                        width: target_size[0],
+                        height: target_size[1],
                         depth_or_array_layers: 1,
                     },
                     mip_level_count: 1,
@@ -302,7 +309,7 @@ impl Renderer {
             self.post_processing.prepare(
                 &self.device,
                 post_processing,
-                [self.config.width, self.config.height],
+                [target_size[0], target_size[1]],
             );
         }
         let scene_view = if post_enabled {
@@ -396,7 +403,7 @@ impl Renderer {
                 &self.queue,
                 &mut encoder,
                 &view,
-                [self.config.width, self.config.height],
+                [target_size[0], target_size[1]],
                 camera,
                 objects,
             );
@@ -404,12 +411,12 @@ impl Renderer {
         // Copy the scene before egui is composited so exports never contain
         // editor chrome, transform gizmos, camera wireframes, or labels.
         let mut capture_buffer = capture.then(|| {
-            let unpadded = self.config.width * 4;
+            let unpadded = target_size[0] * 4;
             let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
                 * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
             let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("render export readback"),
-                size: (padded * self.config.height) as u64,
+                size: (padded * target_size[1]) as u64,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
@@ -426,12 +433,12 @@ impl Renderer {
                         layout: wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(padded),
-                            rows_per_image: Some(self.config.height),
+                            rows_per_image: Some(target_size[1]),
                         },
                     },
                     wgpu::Extent3d {
-                        width: self.config.width,
-                        height: self.config.height,
+                        width: target_size[0],
+                        height: target_size[1],
                         depth_or_array_layers: 1,
                     },
                 );
@@ -473,12 +480,12 @@ impl Renderer {
                         layout: wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(*padded),
-                            rows_per_image: Some(self.config.height),
+                            rows_per_image: Some(target_size[1]),
                         },
                     },
                     wgpu::Extent3d {
-                        width: self.config.width,
-                        height: self.config.height,
+                        width: target_size[0],
+                        height: target_size[1],
                         depth_or_array_layers: 1,
                     },
                 );
@@ -505,8 +512,8 @@ impl Renderer {
             let cancelled = self.capture_cancel.clone();
             let result_slot = self.capture_result.clone();
             let mapped_buffer = buffer.clone();
-            let width = self.config.width;
-            let height = self.config.height;
+            let width = target_size[0];
+            let height = target_size[1];
             let swap_channels = matches!(
                 self.config.format,
                 wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
