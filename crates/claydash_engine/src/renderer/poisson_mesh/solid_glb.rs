@@ -167,7 +167,7 @@ mod tests {
             vec![object.uuid; 2],
         );
         let materials = materials_for_mesh(&[object.clone()], &mesh).unwrap();
-        let page = Page {
+        let page = Page { detail_maps: None,
             name: "Solid".into(),
             root: object.uuid,
             mesh: Arc::new(mesh),
@@ -227,7 +227,7 @@ mod tests {
         mesh.uvs = vec![[[0., 0.], [1., 0.], [0., 1.]],
             [[2., 0.], [2., 1.], [1., 1.]]];
         let materials = materials_for_mesh(&[object.clone()], &mesh).unwrap();
-        let page = Page { name: "Patch".into(), root: object.uuid,
+        let page = Page { detail_maps: None, name: "Patch".into(), root: object.uuid,
             mesh: Arc::new(mesh), first: 0, count: 2, size: 64,
             png: vec![], colors: None, materials: Some(Arc::new(materials)) };
         let bytes = super::super::textured_glb::encode_textured(&[page]).unwrap();

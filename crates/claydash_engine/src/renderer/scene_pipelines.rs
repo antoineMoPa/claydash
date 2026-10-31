@@ -20,6 +20,13 @@ impl Renderer {
             return pipeline;
         }
         let pipeline = match kind {
+            ScenePipelineKind::MeshBackground => hybrid_splats::create_mesh_background_pipeline(
+                &self.device, &self.pipeline_layout, self.render_format, features.bloom,
+            ),
+            ScenePipelineKind::MeshMaterial { capacity } => poisson_material::create_pipeline(
+                &self.device, Some(&self.pipeline_layout), &self.shader_source,
+                self.render_format, capacity, features,
+            ),
             ScenePipelineKind::Shaded {
                 capacity,
                 fast,
@@ -96,14 +103,9 @@ impl Renderer {
         let raster_only = self.node_count == 0;
         if raster_only {
             self.viewport.set_contact_pipeline(None);
-            self.mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(
-                &self.device, &self.pipeline_layout, self.render_format, features.bloom,
-            );
+            self.mesh_background_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshBackground, features);
             if self.mesh_vertex_count > 0 {
-                self.mesh_pipeline = poisson_material::create_pipeline(
-                    &self.device, Some(&self.pipeline_layout), &self.shader_source,
-                    self.render_format, capacity, features,
-                );
+                self.mesh_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshMaterial { capacity }, features);
             }
             self.deferred_geometry_pipeline = None;
             self.hybrid_depth_pipeline = None;
@@ -123,23 +125,9 @@ impl Renderer {
             None
         };
         self.viewport.set_contact_pipeline(contact);
-        {
-            self.mesh_background_pipeline = hybrid_splats::create_mesh_background_pipeline(
-                &self.device,
-                &self.pipeline_layout,
-                self.render_format,
-                features.bloom,
-            );
-        }
+        self.mesh_background_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshBackground, features);
         if self.mesh_vertex_count > 0 {
-            self.mesh_pipeline = poisson_material::create_pipeline(
-                &self.device,
-                Some(&self.pipeline_layout),
-                &self.shader_source,
-                self.render_format,
-                capacity,
-                features,
-            );
+            self.mesh_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshMaterial { capacity }, features);
         }
         if world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported
@@ -233,5 +221,38 @@ impl Renderer {
         } else {
             None
         };
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn mesh_pipeline_cache_reuses_compilation_and_keys_bloom_variants() {
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 32, height: 32, ..Default::default()
+        })).unwrap();
+        renderer.mesh_vertex_count = 3;
+        let features = SceneShaderFeatures::for_scene(&[], &[]);
+        renderer.prepare_scene_pipelines(World::default(), 1, features);
+        let material = renderer.mesh_pipeline.clone();
+        let background = renderer.mesh_background_pipeline.clone();
+        let entries = renderer.scene_pipeline_cache.len();
+        for _ in 0..32 { renderer.prepare_scene_pipelines(World::default(), 1, features); }
+        assert_eq!(renderer.mesh_pipeline, material);
+        assert_eq!(renderer.mesh_background_pipeline, background);
+        assert_eq!(renderer.scene_pipeline_cache.len(), entries);
+        let mut bloom = features;
+        bloom.bloom = true;
+        renderer.prepare_scene_pipelines(World::default(), 1, bloom);
+        assert_ne!(renderer.mesh_pipeline, material);
+        assert_ne!(renderer.mesh_background_pipeline, background);
+        renderer.prepare_scene_pipelines(World::default(), 1, features);
+        assert_eq!(renderer.mesh_pipeline, material);
+        assert_eq!(renderer.mesh_background_pipeline, background);
+        renderer.scene_pipeline_cache.clear();
+        renderer.prepare_scene_pipelines(World::default(), 1, features);
+        assert_ne!(renderer.mesh_pipeline, material, "source invalidation must rebuild material shaders");
     }
 }

@@ -132,6 +132,8 @@ struct SceneShaderFeatures {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScenePipelineKind {
+    MeshBackground,
+    MeshMaterial { capacity: u32 },
     Shaded { capacity: u32, fast: bool, hybrid: bool },
     Deferred { capacity: u32, hybrid: bool },
     HybridDepth { capacity: u32, skip_splats: bool },
@@ -447,6 +449,7 @@ mod neural_sdf;
 pub use neural_jobs::NeuralStatus;
 mod hybrid_splats;
 pub mod poisson_mesh;
+pub mod detail_bake;
 pub mod direct_mesh;
 pub mod voxels;
 mod material_previews;

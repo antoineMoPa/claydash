@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 pub(crate) const TILE: u32 = 16;
 pub const PAGE_TRIANGLES: usize = 128 * 128;
 pub struct Page {
+    pub detail_maps: Option<super::super::detail_bake::Maps>,
     pub name: String,
     pub root: uuid::Uuid,
     pub mesh: std::sync::Arc<Mesh>,
@@ -186,6 +187,22 @@ pub fn encode_textured(pages: &[Page]) -> Result<Vec<u8>, String> {
                 }
             }
             materials.push(json!({"name":"Baked materials","pbrMetallicRoughness":{"baseColorTexture":{"index":index},"metallicFactor":0,"roughnessFactor":1},"doubleSided":true,"alphaMode":if transparent {"BLEND"} else {"OPAQUE"}}));
+            if let Some(maps) = &page.detail_maps {
+                let mut indices = Vec::new();
+                for png in [&maps.normal_png, &maps.orm_png] {
+                    let view = buffer_view(&mut binary, &mut views, png);
+                    let image_index = images.len();
+                    let texture_index = textures.len();
+                    images.push(json!({"bufferView":view,"mimeType":"image/png"}));
+                    textures.push(json!({"source":image_index,"sampler":0}));
+                    indices.push(texture_index);
+                }
+                let material = materials.last_mut().unwrap();
+                material["normalTexture"] = json!({"index":indices[0]});
+                material["occlusionTexture"] = json!({"index":indices[1]});
+                material["pbrMetallicRoughness"]["metallicRoughnessTexture"] = json!({"index":indices[1]});
+                material["pbrMetallicRoughness"]["metallicFactor"] = json!(1);
+            }
         }
         let mut attributes = json!({"POSITION":base,"NORMAL":base+1});
         attributes[if page.colors.is_some() {
@@ -257,7 +274,7 @@ mod tests {
         );
         mesh.uvs = vec![[[0.25, 0.75], [0.75, 0.75], [0.25, 0.25]]];
         mesh.baked_texture = Some(super::super::geometry::BakedTexture { size: 64, png: png.clone() });
-        let bytes = encode_textured(&[Page {
+        let bytes = encode_textured(&[Page { detail_maps: None,
             name: "Custom UV".into(), root: uuid::Uuid::nil(),
             mesh: std::sync::Arc::new(mesh), first: 0, count: 1,
             size: 64, png, colors: None, materials: None,
@@ -294,7 +311,7 @@ mod tests {
             vec![[0, 1, 2], [1, 0, 3]],
             vec![uuid::Uuid::nil(); 2],
         ));
-        let bytes = encode_textured(&[Page {
+        let bytes = encode_textured(&[Page { detail_maps: None,
             name: "Material test".into(),
             root: uuid::Uuid::nil(),
             mesh,
@@ -383,7 +400,7 @@ mod voxel_tests {
             .into_world(&source, object.uuid, &AtomicBool::new(false))
             .unwrap();
         let count = world.mesh.triangles.len();
-        let bytes = encode_textured(&[Page {
+        let bytes = encode_textured(&[Page { detail_maps: None,
             name: "Voxel box".into(),
             root: object.uuid,
             mesh: Arc::new(world.mesh),
@@ -456,7 +473,7 @@ mod voxel_tests {
                 .write_image_data(&vec![255; 64 * 64 * 4])
                 .unwrap();
         }
-        let colored = Page {
+        let colored = Page { detail_maps: None,
             name: "Cubes".into(),
             root: uuid::Uuid::new_v4(),
             mesh: mesh.clone(),
@@ -467,7 +484,7 @@ mod voxel_tests {
             materials: None,
             colors: Some(Arc::new(vec![[0.1, 0.2, 0.3, 1.0]])),
         };
-        let smooth = Page {
+        let smooth = Page { detail_maps: None,
             name: "Smooth".into(),
             root: uuid::Uuid::new_v4(),
             mesh,

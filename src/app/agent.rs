@@ -61,6 +61,7 @@ pub enum Request {
     BuildPoissonMesh { id: uuid::Uuid },
     GetPoissonMeshStatus { id: uuid::Uuid },
     ExportGlb(export::ExportGlbArgs),
+    BakeDetailSubtree(export::BakeDetailSubtreeArgs),
     GetGlbExportStatus { id: uuid::Uuid },
     CancelGlbExport { id: uuid::Uuid },
     CaptureViewport(CaptureViewportArgs),
@@ -612,6 +613,7 @@ impl App {
             Request::BuildPoissonMesh { id } => self.agent_build_poisson_mesh(id),
             Request::GetPoissonMeshStatus { id } => self.agent_poisson_mesh_status(id),
             Request::ExportGlb(args) => self.agent_export_glb(args),
+            Request::BakeDetailSubtree(args) => self.agent_bake_detail_subtree(args),
             Request::GetGlbExportStatus { id } => self.glb_export_status(id),
             Request::CancelGlbExport { id } => self.cancel_glb_export(id),
             Request::CaptureViewport(args) | Request::PreviewPoints(args) => {
@@ -785,8 +787,15 @@ impl App {
     }
 
     fn agent_state(&self) -> AgentResult {
-        let raw_scene: Value = serde_json::from_slice(&document::serialize_scene(&self.tree)?)
-            .map_err(|error| error.to_string())?;
+        // Render caches are reproducible and can dwarf the editable scene.
+        // Remove them before serialization, rather than expanding them into
+        // JSON twice (the object list and the round-trippable document).
+        let mut objects = model::objects(&self.tree);
+        for object in &mut objects { object.saved_mesh = None; }
+        let mut scene = self.tree.get_tree("scene")
+            .ok_or_else(|| "the document has no scene".to_string())?;
+        scene.set_path("sdf_objects", model::ClaydashValue::VecSDFObject(objects.clone()));
+        let raw_scene = serde_json::to_value(&scene).map_err(|error| error.to_string())?;
         let animation = match self.tree.get_path("scene.animation") {
             model::ClaydashValue::Animation(value) => Some(value),
             _ => None,
@@ -806,7 +815,8 @@ impl App {
             "full_material_rendering": commands::full_material_rendering(&self.tree),
             "outline_mode": commands::outline_mode(&self.tree),
             "document_path": self.document.current_path(),
-            "objects": model::objects_ref(&self.tree),
+            "objects": objects,
+            "render_caches_omitted": true,
             "selection": model::selected_ref(&self.tree),
             "cloud_edit_selection": model::cloud_edit(&self.tree),
             "materials": model::material_assets(&self.tree),

@@ -82,3 +82,55 @@ mod tests {
         assert_eq!(crate::document::serialize_scene(&app.tree).unwrap(),source);
     }
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BakeDetailSubtreeArgs {
+    path: PathBuf,
+    #[serde(flatten)]
+    settings: crate::renderer::detail_bake::Settings,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+impl App {
+    pub(super) fn agent_bake_detail_subtree(&mut self, args: BakeDetailSubtreeArgs) -> AgentResult {
+        args.settings.validate(model::objects_ref(&self.tree))?;
+        let id = self.start_mesh_export_with_detail(ExportOptions::default(),
+            vec![args.settings.parent_id], args.path, args.overwrite, Some(args.settings))?;
+        self.glb_export_status(id)
+    }
+}
+
+#[cfg(test)]
+mod detail_tests {
+    use super::*;
+    #[test]
+    fn detail_export_mcp_arguments_start_a_pollable_source_preserving_job() {
+        let mut app = App::new();
+        let object = model::SdfObject::create_kind(model::PrimitiveKind::Box);
+        model::set_objects(&mut app.tree, vec![object.clone()]);
+        let before = document::serialize_scene(&app.tree).unwrap();
+        let path = std::env::temp_dir().join(format!("claydash-detail-{}.glb", uuid::Uuid::new_v4()));
+        let args = json!({"path":path,"parent_id":object.uuid,"source_id":object.uuid,
+            "projection_distance":0.2,"texture_size":64});
+        let request: Request = serde_json::from_value(json!({"op":"BakeDetailSubtree","args":args})).unwrap();
+        let Request::BakeDetailSubtree(args) = request else { panic!("wrong request") };
+        let status = app.agent_bake_detail_subtree(args).unwrap();
+        let id = serde_json::from_value(status["id"].clone()).unwrap();
+        let deadline = std::time::Instant::now()+std::time::Duration::from_secs(15);
+        loop {
+            app.poll_mesh_export();
+            let status = app.glb_export_status(id).unwrap();
+            if status["status"] != "running" { assert_eq!(status["status"], "completed", "{status}"); break; }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let glb = gltf::Gltf::from_slice(&bytes).unwrap();
+        assert_eq!(glb.meshes().count(), 1);
+        assert_eq!(glb.images().count(), 3);
+        assert_eq!(document::serialize_scene(&app.tree).unwrap(), before);
+    }
+}

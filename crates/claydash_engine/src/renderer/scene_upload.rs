@@ -381,7 +381,7 @@ impl Renderer {
         let ordered = boolean_postorder(scene_objects);
         let objects = &ordered;
         if manage_scene_jobs && (self.mesh_vertex_count > 0 || self.mesh_is_visible()) {
-            self.poisson_mesh.rebuild_buffer(&self.device, scene_objects,
+            self.poisson_mesh.rebuild_buffer(&self.device, &self.queue, scene_objects,
                 &mut self.mesh_buffer, &mut self.mesh_vertex_count, &self.voxels);
         }
         let mut atlases = self.upload_scene_atlases(objects, source_objects, prepared_scene.as_ref());

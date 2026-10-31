@@ -18,8 +18,11 @@ with proposed world-space positions before committing geometry. Compare the red 
 in at least two useful views; inspect the returned pixel coordinates and visibility status.
 Markers are drawn on top of geometry and do not prove surface contact or depth alignment.
 
-Keep normal capture resolution for blockout and routine iteration. Opt in to higher resolution
-for perfection/refinement and final checks: use `panel_size: 1024` (up to 2048) for orthographic
-or comparison panels, or `resolution: [1024,1024]` on `preview_points`/`capture_viewport`.
-Isolate the relevant parts and retain the same camera/framing when comparing revisions.
-Prefer one comparison view per high-resolution call to keep the returned image manageable.
+Keep normal capture resolution for blockout and routine iteration.
+
+Opt in to higher resolution for perfection/refinement and final checks.
+
+For a lightweight GLB and rich details, use primitives with more detailed subtrees of geometry that
+you bake into the base shapes.
+
+For tiny flat surface details, consider a shader before adding geometry.

@@ -7,7 +7,6 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
 };
-use wgpu::util::DeviceExt;
 
 pub mod geometry;
 pub mod glb;
@@ -798,6 +797,7 @@ impl PoissonMeshState {
     pub fn rebuild_buffer(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         source: &[SdfObject],
         buffer: &mut wgpu::Buffer,
         count: &mut u32,
@@ -882,13 +882,28 @@ impl PoissonMeshState {
         }
         voxels.append_vertices(source, &mut vertices);
         *count = vertices.len() as u32;
-        if !vertices.is_empty() {
-            *buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        if vertices.is_empty() {
+            // Deleting the last mesh should release a large retained allocation.
+            if buffer.size() > std::mem::size_of::<super::hybrid_splats::GpuMeshVertex>() as u64 {
+                *buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("empty Poisson mesh vertices"),
+                    size: std::mem::size_of::<super::hybrid_splats::GpuMeshVertex>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            return;
+        }
+        let bytes = bytemuck::cast_slice(&vertices);
+        if buffer.size() < bytes.len() as u64 || !buffer.usage().contains(wgpu::BufferUsages::COPY_DST) {
+            *buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Poisson mesh vertices"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                size: (bytes.len() as u64).next_power_of_two().min(device.limits().max_buffer_size),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
         }
+        queue.write_buffer(buffer, 0, bytes);
     }
 
     pub fn baked_texture_pages(&self) -> Vec<(uuid::Uuid, &geometry::BakedTexture)> {

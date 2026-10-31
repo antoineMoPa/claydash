@@ -21,6 +21,7 @@ enum ExportOutcome { Completed, Cancelled, Failed { error: String } }
 enum Publication { #[default] Pending, Written, Cancelled }
 
 enum ExportResult {
+    Pages(Vec<Page>),
     Meshes(Vec<(uuid::Uuid, crate::renderer::poisson_mesh::glb::ObjectMesh, Option<Arc<Vec<[f32; 4]>>>)>),
     Written,
 }
@@ -111,6 +112,12 @@ impl App {
 
     pub(super) fn start_mesh_export_to(&mut self, options: ExportOptions,
         selection: Vec<uuid::Uuid>, path: std::path::PathBuf, overwrite: bool) -> Result<uuid::Uuid, String> {
+        self.start_mesh_export_with_detail(options, selection, path, overwrite, None)
+    }
+
+    pub(super) fn start_mesh_export_with_detail(&mut self, options: ExportOptions,
+        selection: Vec<uuid::Uuid>, path: std::path::PathBuf, overwrite: bool,
+        detail: Option<crate::renderer::detail_bake::Settings>) -> Result<uuid::Uuid, String> {
         if self.mesh_export.is_some() { return Err("a GLB export is already in progress".into()); }
         let source = crate::model::objects(&self.tree);
         for id in &selection {
@@ -151,6 +158,11 @@ impl App {
         std::thread::spawn(move || {
             crate::renderer::cooperative_work::background_priority();
             let result = std::panic::catch_unwind(|| {
+                if let Some(settings) = detail {
+                    *worker_stage.lock().unwrap() = ExportStage::Baking { index: 1, total: 1 };
+                    let page = crate::renderer::detail_bake::bake(&worker_source, settings, &worker_cancel, &worker_progress)?;
+                    return Ok(ExportResult::Pages(vec![page]));
+                }
                 let mut objects = Vec::with_capacity(roots.len());
                 for (index, root) in roots.iter().enumerate() {
                     if worker_cancel.load(Ordering::Relaxed) { return Err("Export cancelled".into()); }
@@ -219,6 +231,10 @@ impl App {
             finish = Some(Err("Export cancelled".to_owned()));
         } else if let Some(receiver) = &job.completed {
             match receiver.try_recv() {
+                Ok(Ok(ExportResult::Pages(pages))) => {
+                    job.completed = None;
+                    job.pages = pages;
+                }
                 Ok(Ok(ExportResult::Meshes(objects))) => {
                     job.completed = None;
                     for (root, object, colors) in objects {
@@ -232,7 +248,7 @@ impl App {
                         let page_triangles = if baked.is_some() || colors.is_some() || materials.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
                         for first in (0..mesh.triangles.len()).step_by(page_triangles) {
                             let count = (mesh.triangles.len() - first).min(page_triangles);
-                            job.pages.push(Page { name: object.name.clone(), root,
+                            job.pages.push(Page { detail_maps: None, name: object.name.clone(), root,
                                 mesh: mesh.clone(), first, count,
                                 size: if colors.is_some() { 64 } else { baked.as_ref().map_or_else(|| crate::renderer::poisson_mesh::textured_glb::page_size(count), |texture| texture.size) },
                                 png: baked.as_ref().map_or_else(Vec::new, |texture| texture.png.clone()), colors: colors.clone(), materials: materials.clone() });

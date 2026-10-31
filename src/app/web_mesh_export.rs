@@ -48,7 +48,7 @@ impl MeshExportJob {
         let page_triangles = if colors.is_some() || materials.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
         for first in (0..mesh.triangles.len()).step_by(page_triangles) {
             let count = (mesh.triangles.len() - first).min(page_triangles);
-            self.pages.push(Page { name: name.clone(), root, mesh: mesh.clone(), first, count,
+            self.pages.push(Page { detail_maps: None, name: name.clone(), root, mesh: mesh.clone(), first, count,
                 size: if colors.is_some() { 64 } else { crate::renderer::poisson_mesh::textured_glb::page_size(count) }, png: Vec::new(), colors: colors.clone(), materials: materials.clone() });
         }
         self.index += 1;

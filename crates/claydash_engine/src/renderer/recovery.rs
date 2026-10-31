@@ -60,6 +60,7 @@ impl Renderer {
         self.voxels = resources.voxels;
         self.poisson_mesh.rebuild_buffer(
             &self.device,
+            &self.queue,
             objects,
             &mut self.mesh_buffer,
             &mut self.mesh_vertex_count,

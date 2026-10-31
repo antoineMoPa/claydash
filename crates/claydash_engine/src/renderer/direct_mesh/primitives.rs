@@ -146,6 +146,9 @@ pub(super) fn build_with_quality(scene: &[SdfObject], object: &SdfObject, resolu
                 return Ok(Surface::default().finish(object.uuid));
             };
             positive(modifier.radius, "Curve extrusion radius")?;
+            let profile_quality = super::TessellationQuality {
+                position_error: quality.position_error * 0.5, ..quality
+            };
             let outline = if let Some(profile) = modifier.profile_curve {
                 crate::model::profile_curve_vertices(scene, profile)
                     .ok_or_else(|| "Curve profile reference is missing or invalid".to_owned())?
@@ -154,7 +157,7 @@ pub(super) fn build_with_quality(scene: &[SdfObject], object: &SdfObject, resolu
                     .collect()
             } else {
                 match modifier.profile {
-                    BezierProfile::Round => circle(modifier.radius, n),
+                    BezierProfile::Round => circle(modifier.radius, profile_quality.circle_segments(modifier.radius)),
                     BezierProfile::Square => vec![
                         Vec2::new(-1., -1.),
                         Vec2::new(1., -1.),
@@ -171,7 +174,7 @@ pub(super) fn build_with_quality(scene: &[SdfObject], object: &SdfObject, resolu
                 &outline,
                 modifier.profile == BezierProfile::Round && modifier.profile_curve.is_none(),
                 modifier.radius,
-                n,
+                quality,
                 cancel,
             )?
         }
@@ -694,12 +697,53 @@ fn curve_frame(
     };
     Ok((side, tangent.cross(side), tangent))
 }
+// Bound centerline chord error analytically and transported-profile error at
+// quarter points. Flat/straight spans need no uniform resolution subdivision.
+fn curve_interval_samples(
+    curve: &crate::model::BezierCurveParams, outline: &[Vec2], segment: usize,
+    from: f32, to: f32, quality: super::TessellationQuality, depth: u32,
+    samples: &mut Vec<(usize, f32)>, cancel: &AtomicBool,
+) -> Result<(), String> {
+    check_cancel(cancel)?;
+    let controls = &curve.points[segment * 3..segment * 3 + 4];
+    let second = |t: f32| ((controls[2] - controls[1] * 2.0 + controls[0]) * (1.0 - t)
+        + (controls[3] - controls[2] * 2.0 + controls[1]) * t) * 6.0;
+    let chord_error = second(from).length().max(second(to).length()) * (to-from).powi(2) / 8.0;
+    let (side_a, up_a, tangent_a) = curve_frame(curve, curve.tangent(segment, from))?;
+    let (side_b, up_b, tangent_b) = curve_frame(curve, curve.tangent(segment, to))?;
+    let mut acceptable = chord_error <= quality.position_error * 0.25
+        && tangent_a.dot(tangent_b) >= quality.normal_angle.cos();
+    if acceptable {
+        for fraction in [0.25, 0.5, 0.75] {
+            let t = from + (to-from) * fraction;
+            let (side, up, tangent) = curve_frame(curve, curve.tangent(segment, t))?;
+            if tangent.dot(tangent_a) < quality.normal_angle.cos()
+                || tangent.dot(tangent_b) < quality.normal_angle.cos()
+                || outline.iter().any(|p| {
+                    let a = side_a*p.x + up_a*p.y;
+                    let b = side_b*p.x + up_b*p.y;
+                    (side*p.x + up*p.y).distance(a.lerp(b, fraction)) > quality.position_error * 0.25
+                }) {
+                acceptable = false;
+                break;
+            }
+        }
+    }
+    if acceptable { samples.push((segment, to)); return Ok(()); }
+    if depth >= 20 || samples.len() >= 32_768 {
+        return Err("Curve tessellation exceeds its sampling budget at the requested error".into());
+    }
+    let middle = (from+to)*0.5;
+    curve_interval_samples(curve, outline, segment, from, middle, quality, depth+1, samples, cancel)?;
+    curve_interval_samples(curve, outline, segment, middle, to, quality, depth+1, samples, cancel)
+}
+
 fn curve_surface(
     curve: &crate::model::BezierCurveParams,
     outline: &[Vec2],
     round: bool,
     radius: f32,
-    n: usize,
+    quality: super::TessellationQuality,
     cancel: &AtomicBool,
 ) -> Result<Surface, String> {
     let outline = contour(outline)?;
@@ -720,14 +764,16 @@ fn curve_surface(
     }
     let mut s = Surface::default();
     let mut rings = Vec::new();
-    let steps = segments * n;
-    for step in 0..=steps {
-        if curve.closed && step == steps {
-            break;
-        }
+    let mut samples = vec![(0, 0.0)];
+    for segment in 0..segments {
+        // Match the outgoing frame at shared segment endpoints.
+        *samples.last_mut().unwrap() = (segment, 0.0);
+        curve_interval_samples(curve, &outline, segment, 0.0, 1.0, quality, 0,
+            &mut samples, cancel)?;
+    }
+    if curve.closed { samples.pop(); }
+    for (segment, t) in samples {
         check_cancel(cancel)?;
-        let segment = (step / n).min(segments - 1);
-        let t = (step - segment * n) as f32 / n as f32;
         let center = curve.point(segment, t);
         let (side, up, _) = curve_frame(curve, curve.tangent(segment, t))?;
         rings.push(
@@ -762,8 +808,10 @@ fn curve_surface(
                 } else {
                     rings[0].clone()
                 };
-                for j in 1..(n / 4).max(2) {
-                    let angle = std::f32::consts::FRAC_PI_2 * j as f32 / (n / 4).max(2) as f32;
+                let cap_quality = super::TessellationQuality { position_error: quality.position_error * 0.5, ..quality };
+                let cap_steps = cap_quality.circle_segments(radius).div_ceil(4).max(2);
+                for j in 1..cap_steps {
+                    let angle = std::f32::consts::FRAC_PI_2 * j as f32 / cap_steps as f32;
                     let ring: Vec<_> = outline
                         .iter()
                         .map(|p| {

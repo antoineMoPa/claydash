@@ -461,6 +461,13 @@ impl Viewport {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn contact_pipeline(&self) -> Option<&wgpu::RenderPipeline> { self.contact_pipeline.as_ref() }
     #[cfg(test)]
+    pub(crate) fn hold_submission_for_test(&mut self) -> impl FnOnce() {
+        self.scheduler.encoded(Work::Preview, Stage::Preview, 1, 1, self.target_ms);
+        let completion = self.scheduler.submitted(Work::Preview);
+        move || completion.finish()
+    }
+
+    #[cfg(test)]
     pub(crate) fn fail_receipt_for_test(&mut self, device: &wgpu::Device) {
         self.receipt_source = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("failed GPU receipt injection"), size: 8,

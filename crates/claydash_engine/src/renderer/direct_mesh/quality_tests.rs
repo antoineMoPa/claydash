@@ -102,3 +102,29 @@ fn crown_refines_with_tolerance_and_keeps_closed_topology() {
     assert!(fine.triangles.len() > coarse.triangles.len());
     assert!(fine.triangles.len() < 10000);
 }
+
+#[test]
+fn curved_tubes_follow_error_and_world_scale_without_uniform_resolution_grid() {
+    let mut object = SdfObject::create_kind(PrimitiveKind::BezierCurve);
+    if let SdfParams::BezierCurveParams(p) = &mut object.params {
+        p.points = vec![Vec3::ZERO, Vec3::new(0.,1.,0.), Vec3::new(1.,2.,0.), Vec3::new(2.,2.,0.)];
+    }
+    object.path_extrusion = Some(crate::model::PathExtrusion { radius: 0.12, ..Default::default() });
+    object.transform.scale = Vec3::splat(0.4);
+    let coarse = mesh(&object, 0.004);
+    let fine = mesh(&object, 0.0005);
+    closed(&coarse);
+    closed(&fine);
+    assert!(fine.triangles.len() > coarse.triangles.len());
+    assert!(fine.triangles.len() < 8_000, "{} triangles", fine.triangles.len());
+    let curve = match &object.params { SdfParams::BezierCurveParams(p) => p, _ => unreachable!() };
+    for face in &fine.triangles {
+        let [a,b,c] = face.map(|i| fine.positions[i as usize] / 0.4);
+        for point in [(a+b+c)/3., (a+b)/2., (b+c)/2., (c+a)/2.] {
+            let error = (curve.closest(point).unwrap().0.distance(point) - 0.12).abs() * 0.4;
+            assert!(error <= 0.00051, "world surface error {error}");
+        }
+    }
+    object.transform.scale = Vec3::splat(4.0);
+    assert!(mesh(&object, 0.0005).triangles.len() > fine.triangles.len());
+}

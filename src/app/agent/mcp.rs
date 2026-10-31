@@ -18,7 +18,7 @@ const MODEL_ORGANIZATION: &str = concat!(
 pub(super) fn schema() -> Value {
     json!({
         "version": 26,
-        "operations": ["GetState", "GetSceneSummary", "GetUserView", "GetSchema", "GetActionSchema", "GetGaussianCloud", "GetMesh", "PreviewMeshSections", "AdjustGaussianColors", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "SelectBox", "SelectCircle", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "PreviewPoints", "CaptureOrthographic", "CaptureComparison", "Undo", "Redo", "Save", "Open", "ImportGaussianPly", "ImportGlb"],
+        "operations": ["GetState", "GetSceneSummary", "GetUserView", "GetSchema", "GetActionSchema", "GetGaussianCloud", "GetMesh", "PreviewMeshSections", "AdjustGaussianColors", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "SelectBox", "SelectCircle", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "BakeDetailSubtree", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "PreviewPoints", "CaptureOrthographic", "CaptureComparison", "Undo", "Redo", "Save", "Open", "ImportGaussianPly", "ImportGlb"],
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "CreateMesh", "CreateSectionMesh", "SetMeshSections", "AddMeshVertices", "AddMeshFaces", "SetMeshShading", "ProjectMeshUvs", "SetMeshUvs", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "variable_spaces": ["Local", "World"],
         "vector_binding_targets": ["Position", "GroupPosition", {"BezierPoint": 0}],
@@ -157,6 +157,7 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
                     "build_poisson_mesh" => "BuildPoissonMesh",
                     "get_poisson_mesh_status" => "GetPoissonMeshStatus",
                     "export_glb" => "ExportGlb",
+                    "bake_detail_subtree" => "BakeDetailSubtree",
                     "get_glb_export_status" => "GetGlbExportStatus",
                     "cancel_glb_export" => "CancelGlbExport",
                     "capture_viewport" => "CaptureViewport",
@@ -287,7 +288,7 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         "required":["type","id","shading"]}));
     let empty = json!({"type": "object", "properties": {}, "additionalProperties": false});
     let mut tools: Vec<Value> = [
-        ("get_state", "Read the full live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene Boolean and smooth-blend opt-in flags, and revision.", empty.clone()),
+        ("get_state", "Read the editable live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene Boolean and smooth-blend opt-in flags, and revision. Rebuildable saved_mesh render caches are omitted from both objects and document; authored imported meshes and splats are retained. Use get_mesh for authored mesh data and get_poisson_mesh_status for computed mesh status.", empty.clone()),
         ("get_scene_summary", "Read scene revision, object IDs/names/transforms, selection, camera and Gaussian counts and bounds without embedded splat bytes.", empty.clone()),
         ("get_user_view", "Read the desktop user camera and viewport without changing the agent view.", empty.clone()),
         ("get_schema", "Get action names and example serialized objects for each primitive type.", empty.clone()),
@@ -323,6 +324,12 @@ pub(super) fn mcp_tools() -> Vec<Value> {
             "cloud_object_id":uuid},"required":["start","radius"],"additionalProperties":false})),
         ("build_poisson_mesh", "Queue a Poisson mesh cache build or recompute for a standalone object or Boolean root already set to PoissonMesh or DirectMesh. Poll get_poisson_mesh_status for completion. Runtime caches are invalidated by source edits.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
         ("get_poisson_mesh_status", "Read mesh cache progress and completion (direct stages: tessellating/mesh_booleans) for a PoissonMesh or DirectMesh root. Ready includes vertices, triangles, showing, available, and built sample/mesh resolutions.", json!({"type": "object", "properties": {"id": uuid}, "required": ["id"], "additionalProperties": false})),
+        ("bake_detail_subtree", "Project a detailed SDF subtree onto the parent surface and export only the low-poly parent as GLB. Asynchronous: poll get_glb_export_status or cancel_glb_export. Sources stay editable and unchanged. Solid/metallic hard SDF sources supported; custom/procedural materials, imported sources and smooth blends are rejected. Bakes color, tangent normal and occlusion/roughness/metallic maps. Optional shadow_direction (surface toward light, world coordinates) fixes local self-shadows into color. Parent silhouette stays unchanged; hidden/overhanging details can be missed. projection_distance is the world-space cage offset; misses retain parent color. Existing files require overwrite:true.", json!({"type":"object","properties":{
+            "path":{"type":"string"},"parent_id":uuid,"source_id":uuid,
+            "projection_distance":{"type":"number","exclusiveMinimum":0},
+            "texture_size":{"type":"integer","enum":[64,128,256,512,1024,2048],"default":512},
+            "shadow_direction":vector,"overwrite":{"type":"boolean","default":false}
+        },"required":["path","parent_id","source_id","projection_distance"],"additionalProperties":false})),
         ("export_glb", "Start an asynchronous GLB export to an absolute path on the Claydash host. Returns a job id; poll get_glb_export_status. Geometry: current_representation preserves voxel and direct roots/resolution and uses smooth meshes for other roots; smooth uses Poisson meshes and does not enable smooth Boolean blends; direct tessellates source geometry and meshes smooth blends, repetition, mirror, lattice and inlay with baked materials; voxels uses surface cubes with sampled colors. Omit object_ids to use the current selection or whole scene. Captures a scene snapshot; existing files require overwrite:true. Works in desktop and headless sessions.", json!({"type":"object","properties":{
             "path":{"type":"string","minLength":1,"description":"Absolute output file path; parent directory must exist."},
             "geometry":{"enum":["current_representation","smooth","direct","voxels"],"default":"current_representation","description":"Mesh export representation. smooth selects Poisson meshing and does not enable smooth Boolean blends."},

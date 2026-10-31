@@ -151,7 +151,10 @@ fn run_requests(app: &mut App, requests: Receiver<Inbound>) {
             );
             app.agent_redraw_pending = false;
         }
-        busy = app.advance_background_computations() || app.agent_capture.is_some();
+        // An isolated capture advances its own scene in render_agent_offscreen.
+        // Reconciling the full scene here would invalidate those mesh jobs every
+        // tick and keep the capture from completing. Resume global jobs afterward.
+        busy = app.agent_capture.is_some() || app.advance_background_computations();
     }
 }
 

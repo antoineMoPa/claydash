@@ -662,3 +662,34 @@ fn import_glb_request_reports_transformed_geometry_and_is_atomic() {
     let id: uuid::Uuid = serde_json::from_value(result["object_ids"][0].clone()).unwrap();
     assert!(!model::objects(&app.tree).iter().any(|object| object.uuid == id));
 }
+
+#[test]
+fn state_omits_rebuildable_mesh_cache_before_serializing_and_preserves_authored_mesh() {
+    use crate::renderer::poisson_mesh::geometry::Mesh;
+    let mut app = App::new();
+    let mut cached = SdfObject::create_kind(PrimitiveKind::Box);
+    cached.saved_mesh = Some(std::sync::Arc::new(model::SavedMesh {
+        version: 1, source_revision: 1,
+        representation: GroupRenderRepresentation::DirectMesh,
+        sample_resolution: 64, mesh_resolution: 64,
+        baked_frame_inverse: glam::Mat4::IDENTITY,
+        mesh: std::sync::Arc::new(Mesh::from_parts(vec![Vec3::ZERO; 20_000], vec![], vec![])),
+    }));
+    let mut authored = SdfObject::create_kind(PrimitiveKind::Box);
+    authored.imported_mesh = Some(std::sync::Arc::new(Mesh::from_parts(
+        vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0,1,2]], vec![authored.uuid])));
+    model::set_objects(&mut app.tree, vec![cached, authored]);
+    let revision = app.scene_revision();
+    let state = app.agent_state().unwrap();
+    assert_eq!(state["render_caches_omitted"], true);
+    assert!(state["objects"][0].get("saved_mesh").is_none());
+    assert_eq!(state["objects"][1]["imported_mesh"]["triangles"][0], json!([0,1,2]));
+    assert!(serde_json::to_vec(&state).unwrap().len() < 25_000);
+    let mut restored = model::DataTree::default();
+    restored.set_tree("scene", document::deserialize_scene(&serde_json::to_vec(&state["document"]).unwrap()).unwrap());
+    assert_eq!(model::objects_ref(&restored).len(), 2);
+    assert!(model::objects_ref(&restored)[0].saved_mesh.is_none());
+    assert_eq!(model::objects_ref(&restored)[1].imported_mesh.as_ref().unwrap().triangles, vec![[0,1,2]]);
+    assert!(model::objects_ref(&app.tree)[0].saved_mesh.is_some());
+    assert_eq!(app.scene_revision(), revision);
+}

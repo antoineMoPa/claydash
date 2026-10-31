@@ -175,7 +175,7 @@ pub fn run_poisson_encode_glb(pages: &str) -> Result<Vec<u8>, wasm_bindgen::JsVa
     let pages: Vec<_> = request.pages.into_iter().map(|page| {
         let mesh = request.meshes.get(page.mesh)
             .ok_or_else(|| wasm_bindgen::JsValue::from_str("GLB page references a missing mesh"))?;
-        Ok(super::textured_glb::Page { name: page.name, root: page.root, mesh: mesh.clone(),
+        Ok(super::textured_glb::Page { detail_maps: None, name: page.name, root: page.root, mesh: mesh.clone(),
             first: page.first, count: page.count, size: page.size, png: page.png, materials: page.materials, colors: page.colors })
     }).collect::<Result<_, wasm_bindgen::JsValue>>()?;
     super::textured_glb::encode_textured(&pages)

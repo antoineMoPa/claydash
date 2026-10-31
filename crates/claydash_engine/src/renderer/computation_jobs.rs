@@ -8,6 +8,13 @@ impl Renderer {
         scene_versions: [i32; 2], mesh_source_revision: i32, world: World,
         egui: &egui::Context, upload_scene: bool,
     ) {
+        // A pending scene batch also owns its input buffers. Poll first and
+        // defer rebuilding/uploading mesh buffers until that fence completes.
+        // Otherwise slow frames can accumulate large replacement buffers even
+        // though presentation itself is correctly limited to one batch.
+        if self.viewport.gpu_work_pending(&self.device) || self.viewport.gpu_fault().is_some() {
+            return;
+        }
         {
             let voxel_actions = egui.data_mut(|data| data.remove_temp::<Vec<super::voxels::VoxelAction>>(
                 egui::Id::new("voxel-actions"))).unwrap_or_default();
@@ -24,7 +31,8 @@ impl Renderer {
             mesh_changed |= self.poisson_mesh.poll(mesh_source_revision);
             self.poisson_mesh.queue_missing_direct_meshes(objects, mesh_source_revision);
             if mesh_changed {
-                self.poisson_mesh.rebuild_buffer(&self.device, objects, &mut self.mesh_buffer, &mut self.mesh_vertex_count, &self.voxels);
+                // Scene upload rebuilds the buffer once, with the final owner
+                // ordering and poses. Rebuilding here too duplicates all vertices.
                 self.rebuild_mesh_color_atlas();
                 self.invalidate_scene();
             }
@@ -148,5 +156,49 @@ impl Renderer {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn poll_background_gpu(&self) {
         let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn pending_submission_defers_mesh_buffer_rebuild_and_scene_upload() {
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 32, height: 32, ..Default::default()
+        })).unwrap();
+        let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+        object.imported_mesh = Some(std::sync::Arc::new(poisson_mesh::geometry::Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0,1,2]], vec![object.uuid])));
+        let source = vec![object];
+        let context = egui::Context::default();
+        let camera = Camera::new();
+        let old_vertices = renderer.mesh_vertex_count;
+        let old_objects = renderer.uploaded_object_count;
+        let complete = renderer.viewport.hold_submission_for_test();
+        for _ in 0..100 {
+            renderer.advance_computations(&camera, &source, &[], [1,1], 1,
+                World::default(), &context, true);
+        }
+        assert_eq!(renderer.mesh_vertex_count, old_vertices);
+        assert_eq!(renderer.uploaded_object_count, old_objects);
+        assert!(!renderer.poisson_mesh.shown_components().contains(&source[0].uuid));
+        complete();
+        renderer.advance_computations(&camera, &source, &[], [1,1], 1,
+            World::default(), &context, true);
+        assert!(renderer.poisson_mesh.shown_components().contains(&source[0].uuid));
+        assert_eq!(renderer.mesh_vertex_count, 3);
+        let uploaded = renderer.mesh_buffer.clone();
+        for _ in 0..10 {
+            renderer.poisson_mesh.rebuild_buffer(&renderer.device, &renderer.queue,
+                &source, &mut renderer.mesh_buffer, &mut renderer.mesh_vertex_count, &renderer.voxels);
+        }
+        assert_eq!(renderer.mesh_buffer, uploaded, "same-size rebuilds reuse the GPU allocation");
+        renderer.advance_computations(&camera, &[], &[], [2,2], 2,
+            World::default(), &context, true);
+        assert_eq!(renderer.mesh_vertex_count, 0);
+        assert!(renderer.mesh_buffer.size() <= 48, "empty scenes release retained vertex capacity");
     }
 }

@@ -390,6 +390,12 @@ change fields, and finish with `return surface;`. The editor accepts up to 8192 
 and 16 custom materials per scene. Invalid WGSL makes the entire `apply` call fail without
 changing the live scene. The Material panel offers the same editor and a sphere preview.
 
+`get_state` omits rebuildable `saved_mesh` caches from both its `objects` list and
+`document`, and reports `render_caches_omitted: true`. Authored imported meshes and splats
+remain intact. This keeps cache-heavy scenes from expanding into two copies of the same
+large render mesh in JSON. Use `get_mesh` for authored mesh data and `get_poisson_mesh_status` for computed mesh status.
+Normal project saves retain their existing cache behavior.
+
 `ReplaceScene` accepts the complete `document` value returned by `get_state` and must be its only
 action. `list_commands` and `execute_command` expose the existing command palette; some palette
 commands initiate a mouse gesture, so typed actions are the reliable way to model geometry.
@@ -459,3 +465,37 @@ Operations are `desaturate` (blend toward grayscale, 0–1), `saturation` (facto
 at zero, with no highlight clipping. Opacity and higher-order coefficients stay intact.
 
 Property mapping follows the [Graphdeco Gaussian model format](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/scene/gaussian_model.py).
+
+### Bake a detail subtree onto a simple parent
+
+`bake_detail_subtree` starts an asynchronous GLB export containing only the parent's
+low-poly surface. The editable scene is snapshotted and stays unchanged. `parent_id`
+chooses the low-poly surface; `source_id` chooses the detailed Boolean subtree (often
+the same parent with attached children). Parent tessellation omits its children, while
+source sampling retains them and their ancestor transforms.
+
+```json
+{"parent_id":"<parent uuid>","source_id":"<detail subtree uuid>","projection_distance":0.2,"texture_size":512,"path":"/absolute/model.glb"}
+```
+
+Poll `get_glb_export_status` with the returned `id`; `cancel_glb_export` cancels it.
+Existing destinations require `overwrite:true`. Opening/replacing the document cancels
+pending work. This uses the same job lifecycle and atomic file publication as `export_glb`.
+
+The bake writes color plus tangent-space normal and linear AO/roughness/metallic PNG maps
+inside the GLB. `texture_size` is a power of two from 64 to 2048 (default 512); each parent
+triangle gets a separate UV tile with a filtering gutter. Use a simple parent and increase
+texture size if its triangles leave too little room for detail. The silhouette and triangle
+count stay those of the parent. Each inward projection ray starts `projection_distance`
+world units outside the parent and searches twice that distance. Misses retain the parent's
+solid color; an entirely missed source fails the job. Occluded layers and overhangs may be
+lost. AO uses a local five-distance normal probe; it is an approximation of contact shading.
+
+Optional `shadow_direction:[x,y,z]` points from the surface toward a light in world space.
+It bakes local self-shadow visibility into color over eight projection distances; the shadow
+stays fixed when lighting changes. Omit it for relightable color, normal and AO maps.
+
+Supported sources are hard SDF subtrees with solid/metallic materials. Procedural/custom
+materials, image stencils, imported mesh/splat sources, emission and smooth blends are
+rejected explicitly. The parent can be an existing mesh or primitive. The source model remains
+the editable master; inspect the exported GLB before using it as the final asset.
