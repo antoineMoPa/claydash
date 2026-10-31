@@ -78,6 +78,27 @@ The configuration follows each client's current local MCP documentation:
 [Claude Code](https://code.claude.com/docs/en/mcp), and
 [OpenCode](https://opencode.ai/v2/docs/mcp-servers).
 
+## Workflow skills over MCP
+
+Claydash embeds two concise skills with the server binary:
+
+- `claydash-basics`: choosing primitives, materials, and render modes.
+- `claydash-modeling`: building one subpart at a time, checking four to six views,
+  adding appearance, and confirming alignment with adjacent parts before continuing.
+
+Clients supporting the [MCP Skills extension](https://modelcontextprotocol.io/extensions/skills/overview)
+discover `io.modelcontextprotocol/skills` through `server/discover`, then use `skills/list`
+or `skills/get` with `{"uri":"skill://claydash-modeling/SKILL.md"}`. Read instructions
+with `resources/read` using the same URI. Entries include SHA-256 digests and byte sizes
+of the exact embedded Markdown; discovery returns metadata without loading instructions.
+The catalog is fixed for each binary build, so editing `skills/*/SKILL.md` requires a rebuild.
+
+The adapter supports revision `2026-07-28` per-request metadata alongside the existing
+`2025-11-25` initialization handshake. Clients without Skills support can discover and
+read the same files through standard `resources/list` and `resources/read`; their host
+decides whether and how to load them as skills. Directory reading is not advertised.
+Both socket-backed `mcp` and private `mcp --headless` sessions serve the same catalog.
+
 ## Editable mesh shading
 
 `CreateMesh` accepts optional `shading`: `Auto` (default, 60° creases), `Flat`, or
