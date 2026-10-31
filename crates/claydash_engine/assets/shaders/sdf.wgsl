@@ -2394,7 +2394,7 @@ var<private> bloom_emission: vec3<f32>;
                 let alpha = composite.alpha
                     * clamp(surface.opacity, 0.0, 1.0);
                 if FAST_PREVIEW {
-                    let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
+                    let light = select(normalize(vec3(2.0, 3.0, 2.0)),
                         normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
                     let header = material_headers[material_capture(point, -direction, object).index];
                     let ambient = diffuse_ambient_fill(surface.normal,
@@ -2432,7 +2432,7 @@ var<private> bloom_emission: vec3<f32>;
             let entering = dot(direction, outward) < 0.0;
             let normal = select(-outward, outward, entering);
             if FAST_PREVIEW {
-                let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
+                let light = select(normalize(vec3(2.0, 3.0, 2.0)),
                     normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
                 var surface = material_surface(point, normal, -direction, object);
                 let decal = material_stencil_color(point, normal, object);

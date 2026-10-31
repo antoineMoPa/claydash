@@ -199,6 +199,10 @@ claydash agent CancelGlbExport '{"id":"<job UUID>"}'
    dark background. The scene, selection, and
    live viewport mode stay unchanged. Legacy `refine: true` selects full material rendering and
    `refine: false` selects simple shading; an explicit `mode` takes precedence over `refine`.
+   Studio lighting uses a distant directional key, so moving a model does not change the
+   direction of its illumination. For presentation captures with contact AO, request
+   `mode: "full_material"`; the exact renderer blends near and broad AO probes for a softer
+   falloff. Simple shading omits contact AO. These are real-time shading approximations.
    Repeat the edit and capture steps until the design looks right.
 5. Call `capture_orthographic` for one PNG with X (side), Y (top), and Z (front) orthographic views
    aimed at the origin. Each panel is 256 px square by default. `panel_size` accepts 96–2048 px

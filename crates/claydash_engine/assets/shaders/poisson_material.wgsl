@@ -61,7 +61,7 @@ fn poisson_shade(point: vec3<f32>, normal: vec3<f32>, owner: u32, imported: bool
     if input.captured_color.a > 0.0 {
         // Voxel faces retain their captured albedo and geometric cube normal.
         // No source SDF traversal or surface-normal query is needed here.
-        let light = select(normalize(vec3(2.0, 3.0, 2.0) - input.point),
+        let light = select(normalize(vec3(2.0, 3.0, 2.0)),
             normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
         let diffuse = max(dot(normal, light), 0.0);
         // Authored image colors need enough studio fill to stay legible when

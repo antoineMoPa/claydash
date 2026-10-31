@@ -75,7 +75,7 @@ fn view_direction(position: vec3<f32>) -> vec3<f32> {
 }
 
 fn lit(position: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, roughness: f32, metallic: f32, reflectivity: f32, ao: f32) -> vec3<f32> {
-    let light = select(normalize(vec3(2.0, 3.0, 2.0) - position), normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
+    let light = select(normalize(vec3(2.0, 3.0, 2.0)), normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
     let view = view_direction(position);
     let halfway = normalize(light + view);
     let diffuse = max(dot(normal, light), 0.0);
@@ -116,7 +116,7 @@ fn lit(position: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, roughness: f32
         * (1.0 - surface.w * 0.7);
     var alpha = 1.0;
     let optical = textureLoad(optics, coordinates, 0);
-    let light = select(normalize(vec3(2.0, 3.0, 2.0) - position.xyz),
+    let light = select(normalize(vec3(2.0, 3.0, 2.0)),
         normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
     shaded += color.xyz * optical.w * (0.05 + 0.22 * pow(1.0 - max(dot(surface.xyz, view), 0.0), 1.5))
         * max(dot(surface.xyz, light), 0.0) * 0.65;

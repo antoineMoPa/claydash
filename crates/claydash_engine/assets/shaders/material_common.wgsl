@@ -88,7 +88,9 @@ fn surface_light(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: O
     let coat = surface.coat;
     let sheen = surface.sheen;
     let fiber = surface.fiber;
-    let light = select(normalize(vec3(2.0, 3.0, 2.0) - point),
+    // A distant studio key keeps architectural models evenly lit regardless
+    // of their size or position. The sky retains its solar direction.
+    let light = select(normalize(vec3(2.0, 3.0, 2.0)),
         normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
     let halfway = normalize(light + view);
     let metallic = surface.metallic;

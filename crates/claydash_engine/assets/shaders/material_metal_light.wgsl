@@ -44,7 +44,7 @@ fn metal_light(point: vec3<f32>, view: vec3<f32>, surface: Surface, ao: f32) -> 
         let d = vec3(sqrt(u) * cos(phi), sqrt(u) * sin(phi), sqrt(1.0 - u));
         diffuse += background(basis * d);
     }
-    let light = select(normalize(vec3(2.0, 3.0, 2.0) - point), normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
+    let light = select(normalize(vec3(2.0, 3.0, 2.0)), normalize(camera.sun_direction.xyz), camera.world_mode.x == 1u);
     let l = transpose(basis) * light;
     let h = normalize(v + l);
     let daylight = smoothstep(-0.18, 0.16, camera.sun_direction.y);

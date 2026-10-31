@@ -141,7 +141,7 @@ fn evaluate_brick(point: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, object: 
     let local_view = normalize(vec3(dot(object.inverse_rows[0].xyz, view) * object.scale.x,
         dot(object.inverse_rows[1].xyz, view) * object.scale.y,
         dot(object.inverse_rows[2].xyz, view) * object.scale.z));
-    let light = normalize(vec3(2.0, 3.0, 2.0) - point);
+    let light = normalize(vec3(2.0, 3.0, 2.0));
     let local_light = normalize(vec3(dot(object.inverse_rows[0].xyz, light) * object.scale.x,
         dot(object.inverse_rows[1].xyz, light) * object.scale.y,
         dot(object.inverse_rows[2].xyz, light) * object.scale.z));
