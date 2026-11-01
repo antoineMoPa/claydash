@@ -1,8 +1,10 @@
 //! Native launch routing. Validate arguments before creating a window or GPU.
+pub mod render;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Launch {
     Desktop,
     Help,
+    Render(render::RenderArgs),
     #[cfg(unix)]
     Agent,
 }
@@ -17,6 +19,12 @@ pub fn parse(args: &[String]) -> Result<Launch, String> {
                 return Err(format!("unexpected argument: {extra}"));
             }
             return Ok(Launch::Help);
+        }
+        "render" => {
+            if args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h") {
+                return Ok(Launch::Help);
+            }
+            return render::RenderArgs::parse(&args[1..]).map(Launch::Render);
         }
         #[cfg(unix)]
         "serve" | "--headless" | "--agent-headless" | "mcp" | "agent" => return Ok(Launch::Agent),
@@ -73,6 +81,7 @@ pub fn parse(args: &[String]) -> Result<Launch, String> {
 
 pub fn print_help() {
     println!("Claydash — 3D modeling and local automation\n\nUsage: claydash [COMMAND] [OPTIONS]\n\nRun without arguments to open the desktop app.\n\nOptions:\n  -h, --help        Print this help");
+    println!("\nScene rendering:\n  render FILE.claydef  Render a scene file directly to FILE.png\n    -o, --output PNG    Output path\n    --size WIDTHxHEIGHT Image size (default: 1024x768)\n    --view VIEW        isometric (default), top, left, or right\n\nExample:\n  claydash render scene.claydef --output scene.png --size 1024x768");
     #[cfg(unix)]
     println!("\nCommands:\n  serve            Run a server with no app window\n  mcp              Connect an MCP stdio client to an existing instance\n  mcp --headless   Run a private, window-free MCP session\n  agent OP [JSON]  Send an operation to an existing instance\n\nServer aliases:\n  --headless, --agent-headless\n\nHeadless options:\n  --scene PATH         Load a .claydash document\n  --size WIDTHxHEIGHT  Capture size (default: 640x480)\n\nEnvironment:\n  CLAYDASH_AGENT_SOCKET  Override the local server/client socket path\n\nExamples:\n  claydash --headless\n  claydash serve --scene duck.claydash --size 1024x768\n  claydash mcp --headless\n  claydash agent GetState\n\nUse claydash agent --help for operation examples.");
     println!("\nDeveloper workflows:\n  --stress-benchmark, --stress-benchmark-suite, --stress-ui-benchmark\n  --ui-preview --guide-screenshot=PATH");
@@ -105,6 +114,15 @@ mod tests {
             launch(&["--ui-preview", "--guide-screenshot=/tmp/guide.png"]),
             Ok(Launch::Desktop)
         );
+    }
+    #[test]
+    fn scene_rendering_routes_without_an_agent_session() {
+        assert!(matches!(
+            launch(&["render", "scene.claydef"]),
+            Ok(Launch::Render(_))
+        ));
+        assert!(launch(&["render"]).is_err());
+        assert_eq!(launch(&["render", "--help"]), Ok(Launch::Help));
     }
     #[test]
     fn help_and_headless_have_explicit_routes() {

@@ -544,3 +544,25 @@ fn history_matches_a_value_model_across_many_branches() {
         }
     }
 }
+
+#[test]
+fn clearing_subtree_values_is_one_undoable_edit() {
+    let mut tree = ObservableKVTree::<Option<i32>>::default();
+    tree.set_path("scene", Some(1));
+    tree.set_path("scene.object", Some(2));
+    tree.set_path("scene.object.child", Some(3));
+    tree.set_path("editor", Some(4));
+    tree.make_undo_redo_snapshot();
+    tree.clear_subtree_values("scene");
+    tree.set_path("scene.object", Some(9));
+    tree.make_undo_redo_snapshot();
+    assert_eq!(tree.get_path("scene.object.child"), None);
+    assert_eq!(tree.get_path("editor"), Some(4));
+    tree.undo();
+    assert_eq!(tree.get_path("scene"), Some(1));
+    assert_eq!(tree.get_path("scene.object"), Some(2));
+    assert_eq!(tree.get_path("scene.object.child"), Some(3));
+    tree.redo();
+    assert_eq!(tree.get_path("scene.object"), Some(9));
+    assert_eq!(tree.get_path("scene.object.child"), None);
+}

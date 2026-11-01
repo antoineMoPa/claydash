@@ -1,0 +1,9 @@
+object table({ width: number, height: number }):
+ top = box(size: [width, 0.15, 1], at: [0, height, 0], color: "#a66b42");
+ leg = box(size: [0.12, height, 0.12], color: "#70452e");
+ place(leg, at: [-width / 2 + 0.1, height / 2, -0.4]);
+ place(leg, at: [width / 2 - 0.1, height / 2, -0.4]);
+ place(leg, at: [-width / 2 + 0.1, height / 2, 0.4]);
+ place(leg, at: [width / 2 - 0.1, height / 2, 0.4]);
+end
+place(table(width: 2, height: 1), at: [5, 0, 0]);

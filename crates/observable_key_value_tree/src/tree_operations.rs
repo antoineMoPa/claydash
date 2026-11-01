@@ -48,6 +48,20 @@ impl<ValueType: Default + Clone + CanBeNone<ValueType>> ObservableKVTree<ValueTy
         );
     }
 
+    /// Clear every value in a subtree as one undoable set of path edits.
+    /// Nodes are retained so undo can restore their previous values.
+    pub fn clear_subtree_values(&mut self, path: &str) {
+        fn paths<T: Default + Clone + CanBeNone<T>>(tree: &ObservableKVTree<T>, prefix: &str, out: &mut Vec<String>) {
+            out.push(prefix.to_owned());
+            for (key, child) in &tree.subtree {
+                paths(child, &format!("{prefix}.{key}"), out);
+            }
+        }
+        let mut keys = Vec::new();
+        if let Some(tree) = self.get_tree_ref(path) { paths(tree, path, &mut keys); }
+        for key in keys { self.set_path(&key, ValueType::none()); }
+    }
+
     /// Replaces persisted subtree data, removing absent keys.
     /// This load boundary resets this tree's entire history and pending edits;
     /// replacement is not undoable and does not emit channel notifications.

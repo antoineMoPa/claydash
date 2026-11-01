@@ -375,6 +375,7 @@ dependencies = [
  "sdf_consts",
  "serde",
  "serde_json",
+ "sha2",
  "spade",
  "ttf-parser",
  "uuid",

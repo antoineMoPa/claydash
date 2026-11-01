@@ -42,6 +42,11 @@ pub struct Inbound {
 #[serde(tag = "op", content = "args")]
 pub enum Request {
     GetState,
+    ValidateSceneDsl { source: String },
+    ApplySceneDsl { source: String, expected_revision: Option<u64> },
+    GetSceneDsl,
+    GetSceneDslGuide,
+    CaptureSceneDsl { path: Option<String>, panel_size: Option<u32> },
     GetSceneSummary,
     GetUserView,
     GetSchema,
@@ -419,8 +424,8 @@ fn call_socket(request: Value) -> AgentResult {
 
 fn request_payload(op: &str, args: Value) -> Value {
     let args = match op {
-        "GetState" | "GetSceneSummary" | "GetUserView" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "EnableBooleanOperations" | "Undo" | "Redo" => Value::Null,
-        "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" if args.is_null() => json!({}),
+        "GetSceneDslGuide" | "GetSceneDsl" | "GetState" | "GetSceneSummary" | "GetUserView" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "EnableBooleanOperations" | "Undo" | "Redo" => Value::Null,
+        "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" | "CaptureSceneDsl" if args.is_null() => json!({}),
         "Save" if args.is_null() => json!({}),
         _ => args,
     };
@@ -433,7 +438,7 @@ fn parse_agent_arguments(op: &str, remaining: &[String]) -> Result<(Value, Optio
     let mut index = 0;
     while index < remaining.len() {
         if remaining[index] == "--output" {
-            if !matches!(op, "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" | "CaptureComparison") {
+            if !matches!(op, "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" | "CaptureComparison" | "CaptureSceneDsl") {
                 return Err("--output is only valid for capture operations".into());
             }
             if output.is_some() { return Err("--output may only be supplied once".into()); }
@@ -555,6 +560,7 @@ impl App {
         let changes_view = matches!(
             &request,
             Request::Apply(_)
+                | Request::ApplySceneDsl { .. }
                 | Request::EnableSlowSmoothBlends
                 | Request::EnableBooleanOperations
                 | Request::ExecuteCommand { .. }
@@ -571,6 +577,10 @@ impl App {
         let preview_points = matches!(&request, Request::PreviewPoints(_));
         let result = match request {
             Request::GetState => self.agent_state(),
+            Request::ValidateSceneDsl { source } => self.agent_validate_scene_dsl(&source),
+            Request::ApplySceneDsl { source, expected_revision } => self.agent_apply_scene_dsl(source, expected_revision),
+            Request::GetSceneDsl => self.agent_get_scene_dsl(),
+            Request::GetSceneDslGuide => Ok(json!({"guide": include_str!("../../docs/scene-definition-language.md")})),
             Request::GetSceneSummary => self.agent_scene_summary(),
             Request::GetUserView => Ok(json!({"view": {"position": self.camera.position,
                 "target": self.camera.target, "up": self.camera.up,
@@ -675,6 +685,23 @@ impl App {
                             }
                             Err(error) => Err(error),
                         }
+                    }
+                }
+            }
+            Request::CaptureSceneDsl { path, panel_size } => {
+                if self.agent_capture.is_some() || self.pending_render.is_some() || self.guide_screenshot.is_some()
+                    || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
+                    Err("a render is already in progress".into())
+                } else {
+                    match self.prepare_dsl_capture(path.as_deref(), panel_size) {
+                        Ok((objects,center,span,panel_size)) => {
+                            self.agent_capture = Some(AgentCapture { reply, objects: Some(objects), mode: CaptureMode::SimpleShading,
+                                view: CaptureView::SceneViews { panel_size, center, span, frames: Vec::with_capacity(4) }, camera: self.agent_view_camera(), cancelled_retries: 0,
+                                points: Vec::new(), point_metadata: Vec::new(), revision: self.scene_revision() });
+                            if let Some(renderer) = &mut self.renderer { renderer.invalidate_scene(); }
+                            return;
+                        }
+                        Err(error)=>Err(error),
                     }
                 }
             }
@@ -929,6 +956,7 @@ impl App {
     }
 }
 
+mod scene_dsl;
 mod actions;
 mod capture;
 mod capture_overlay;

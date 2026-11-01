@@ -10,6 +10,7 @@ use crate::camera::SceneCamera;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ClaydashValue {
+    SceneDslRecipe(SceneDslRecipe),
     SceneVariables(super::SceneVariables),
     Animation(AnimationData),
     Material(Material),
@@ -38,6 +39,12 @@ pub enum ClaydashValue {
     #[serde(skip)]
     Fn(fn(&mut ObservableKVTree<ClaydashValue>)),
     None,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SceneDslRecipe {
+    pub source: String,
+    pub scene_digest: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

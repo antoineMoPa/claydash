@@ -17,8 +17,8 @@ const MODEL_ORGANIZATION: &str = concat!(
 
 pub(super) fn schema() -> Value {
     json!({
-        "version": 26,
-        "operations": ["GetState", "GetSceneSummary", "GetUserView", "GetSchema", "GetActionSchema", "GetGaussianCloud", "GetMesh", "PreviewMeshSections", "AdjustGaussianColors", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "SelectBox", "SelectCircle", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "BakeDetailSubtree", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "PreviewPoints", "CaptureOrthographic", "CaptureComparison", "Undo", "Redo", "Save", "Open", "ImportGaussianPly", "ImportGlb"],
+        "version": 27,
+        "operations": ["ValidateSceneDsl", "ApplySceneDsl", "GetSceneDsl", "GetSceneDslGuide", "CaptureSceneDsl", "GetState", "GetSceneSummary", "GetUserView", "GetSchema", "GetActionSchema", "GetGaussianCloud", "GetMesh", "PreviewMeshSections", "AdjustGaussianColors", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "SelectBox", "SelectCircle", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "BakeDetailSubtree", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "PreviewPoints", "CaptureOrthographic", "CaptureComparison", "Undo", "Redo", "Save", "Open", "ImportGaussianPly", "ImportGlb"],
         "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "CreateMesh", "CreateSectionMesh", "SetMeshSections", "AddMeshVertices", "AddMeshFaces", "SetMeshShading", "ProjectMeshUvs", "SetMeshUvs", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "variable_spaces": ["Local", "World"],
         "vector_binding_targets": ["Position", "GroupPosition", {"BezierPoint": 0}],
@@ -137,6 +137,11 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
                 let name = params.get("name").and_then(Value::as_str).unwrap_or("");
                 let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                 let op = match name {
+                    "validate_scene_dsl" => "ValidateSceneDsl",
+                    "apply_scene_dsl" => "ApplySceneDsl",
+                    "get_scene_dsl" => "GetSceneDsl",
+                    "get_scene_dsl_guide" => "GetSceneDslGuide",
+                    "capture_scene_dsl" => "CaptureSceneDsl",
                     "get_state" => "GetState",
                     "get_scene_summary" => "GetSceneSummary",
                     "get_user_view" => "GetUserView",
@@ -177,7 +182,7 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
                 } else {
                     match call(request_payload(op, arguments)) {
                         Ok(value)
-                            if name == "capture_viewport"
+                            if name == "capture_scene_dsl" || name == "capture_viewport"
                                 || name == "preview_points"
                                 || name == "capture_orthographic"
                                 || name == "capture_comparison" =>
@@ -185,7 +190,7 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
                             let mut content = vec![
                                 json!({"type": "image", "data": value["data"], "mimeType": "image/png"}),
                             ];
-                            if name == "capture_comparison" || value.get("point_previews").is_some() {
+                            if name == "capture_scene_dsl" || name == "capture_comparison" || value.get("point_previews").is_some() {
                                 let mut metadata = value.clone();
                                 metadata.as_object_mut().unwrap().remove("data");
                                 content.push(json!({"type":"text", "text":metadata.to_string()}));
@@ -288,6 +293,11 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         "required":["type","id","shading"]}));
     let empty = json!({"type": "object", "properties": {}, "additionalProperties": false});
     let mut tools: Vec<Value> = [
+        ("validate_scene_dsl", "Parse and validate a complete DSL scene without changing it. Returns deterministic part paths and IDs.", json!({"type":"object","properties":{"source":{"type":"string"}},"required":["source"],"additionalProperties":false})),
+        ("apply_scene_dsl", "Atomically replace the scene with an authored DSL recipe as one undoable edit. expected_revision rejects stale edits. Returns part paths and IDs.", json!({"type":"object","properties":{"source":{"type":"string"},"expected_revision":{"type":"integer"}},"required":["source"],"additionalProperties":false})),
+        ("get_scene_dsl", "Get the saved recipe and whether the live scene still matches it.", empty.clone()),
+        ("get_scene_dsl_guide", "Read the scene DSL syntax, supported shapes, curve and sheet bend examples, and agent workflow.", empty.clone()),
+        ("capture_scene_dsl", "Capture automatically framed front, side, top and three-quarter views of the DSL scene or a path prefix. Does not change the scene or cameras.", json!({"type":"object","properties":{"path":{"type":"string"},"panel_size":{"type":"integer","minimum":96,"maximum":2048}},"additionalProperties":false})),
         ("get_state", "Read the editable live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene Boolean and smooth-blend opt-in flags, and revision. Rebuildable saved_mesh render caches are omitted from both objects and document; authored imported meshes and splats are retained. Use get_mesh for authored mesh data and get_poisson_mesh_status for computed mesh status.", empty.clone()),
         ("get_scene_summary", "Read scene revision, object IDs/names/transforms, selection, camera and Gaussian counts and bounds without embedded splat bytes.", empty.clone()),
         ("get_user_view", "Read the desktop user camera and viewport without changing the agent view.", empty.clone()),

@@ -15,6 +15,7 @@ pub fn set_resolution(camera: &mut Camera, resolution: Option<[u32; 2]>) -> Resu
 
 pub enum CaptureView {
     Viewport,
+    SceneViews { panel_size: u32, center: Vec3, span: f32, frames: Vec<crate::renderer::CapturedFrame> },
     Comparison(Box<super::comparison::ComparisonCapture>),
     Orthographic {
         panel_size: u32,
@@ -39,6 +40,15 @@ impl AgentCapture {
     pub fn camera(&self) -> Camera {
         let mut camera = self.camera.clone();
         if let CaptureView::Comparison(comparison) = &self.view { return comparison.camera(&camera); }
+        if let CaptureView::SceneViews { panel_size, center, span, frames } = &self.view {
+            let (direction, up) = match frames.len() { 0 => (Vec3::Z, Vec3::Y), 1 => (Vec3::X, Vec3::Y), 2 => (Vec3::Y, Vec3::NEG_Z), _ => (Vec3::splat(1.0) / 3.0_f32.sqrt(), Vec3::Y) };
+            camera.target = *center;
+            camera.position = *center + direction * (*span / 0.84);
+            camera.up = up;
+            camera.projection_mode = ProjectionMode::Orthographic;
+            camera.viewport = Vec2::splat(*panel_size as f32);
+            camera.viewport_origin = Vec2::ZERO;
+        }
         if let CaptureView::Orthographic {
             panel_size,
             distance,
@@ -75,6 +85,7 @@ impl AgentCapture {
         }
         let title = match &self.view {
             CaptureView::Comparison(_) => unreachable!(),
+            CaptureView::SceneViews { frames, .. } => match frames.len() { 0 => "Front view", 1 => "Side view", 2 => "Top view", _ => "Three-quarter view" },
             CaptureView::Viewport => match camera.projection_mode {
                 ProjectionMode::Perspective => "Perspective view",
                 ProjectionMode::Orthographic => "Orthographic view",
@@ -86,8 +97,16 @@ impl AgentCapture {
             },
         };
         super::capture_overlay::annotate(&mut cropped, camera, title);
-        let offset = match &self.view { CaptureView::Orthographic { panel_size, frames, .. } => [*panel_size * frames.len() as u32, 0], _ => [0, 0] };
+        let offset = match &self.view { CaptureView::SceneViews { panel_size, frames, .. } | CaptureView::Orthographic { panel_size, frames, .. } => [*panel_size * frames.len() as u32, 0], _ => [0, 0] };
         self.point_metadata.extend(super::markers::annotate(&mut cropped, camera, &self.points, title, &[offset]));
+        if let CaptureView::SceneViews { frames, .. } = &mut self.view {
+            frames.push(cropped);
+            if frames.len() < 4 { return Ok(Value::Null); }
+            let sheet = image_sheet(frames)?;
+            let mut image = captured_image(&sheet)?;
+            image["revision"] = json!(self.revision);
+            return self.with_point_metadata(image);
+        }
         if let CaptureView::Orthographic { frames, .. } = &mut self.view {
             frames.push(cropped);
             if frames.len() < 3 {
@@ -119,13 +138,16 @@ pub(super) fn captured_image(frame: &crate::renderer::CapturedFrame) -> AgentRes
 pub(super) fn orthographic_sheet(
     frames: &[crate::renderer::CapturedFrame],
 ) -> Result<crate::renderer::CapturedFrame, String> {
-    let [x, y, z] = frames else {
-        return Err("expected three orthographic views".into());
-    };
-    if x.width != y.width || x.width != z.width || x.height != y.height || x.height != z.height {
-        return Err("orthographic views have different sizes".into());
+    if frames.len() != 3 { return Err("expected three orthographic views".into()); }
+    image_sheet(frames)
+}
+
+fn image_sheet(frames: &[crate::renderer::CapturedFrame]) -> Result<crate::renderer::CapturedFrame, String> {
+    let x = frames.first().ok_or("no views")?;
+    if frames.iter().any(|frame| frame.width != x.width || frame.height != x.height) {
+        return Err("views have different sizes".into());
     }
-    let width = x.width * 3;
+    let width = x.width * frames.len() as u32;
     let height = x.height;
     let mut rgba = vec![0; (width * height * 4) as usize];
     for (column, frame) in frames.iter().enumerate() {

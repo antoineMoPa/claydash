@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
+sha2 = "0.10"
 base64 = "0.22"
 sdf_consts = { workspace = true }
 screened_poisson = { path = "../screened_poisson" }

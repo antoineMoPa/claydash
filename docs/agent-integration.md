@@ -159,6 +159,10 @@ claydash agent GetGlbExportStatus '{"id":"<job UUID>"}'
 claydash agent CancelGlbExport '{"id":"<job UUID>"}'
 ```
 
+## Scene definition language
+
+Agents can author reusable text recipes for complete scenes and capture automatically framed multi-view images. See [Scene definition language](scene-definition-language.md) for syntax, curves, sheet bends and MCP usage.
+
 ## Agent workflow
 
 1. Call `get_scene_summary` for the revision, object IDs, names, transforms, selection, camera,

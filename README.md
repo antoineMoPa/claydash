@@ -18,6 +18,7 @@ For the web build, install the WebAssembly target and the project's `wasm-bindge
 
 - [Features, workflows, development, and roadmap](docs.md)
 - [User guide](docs/guide/index.html)
+- [Scene definition language and CLI rendering](docs/scene-definition-language.md)
 - [Agent and MCP integration](docs/agent-integration.md)
 - [Rendering performance](docs/rendering-performance.md)
 - [Engine crate](crates/claydash_engine/README.md)

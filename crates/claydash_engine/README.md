@@ -12,6 +12,18 @@ editor state, documents, input and UI.
 the selection query retains the editor's existing 100 unit range and hit tolerance.
 These CPU scene queries are the shared foundation for future SDF physics.
 
+`scene_language::compile(source)` parses `.claydef` recipes into deterministic
+part paths and editable `SdfObject` values. `scene_language::bounds(objects)`
+returns the generated geometry's world bounds, including curves and formed
+sheets. These APIs are available on native and WebAssembly targets and require
+no editor, agent session, file access or GPU. See the [language guide](../../docs/scene-definition-language.md).
+
+```rust
+let parts = claydash_engine::scene_language::compile("part = box(size: [2,1,1]);")?;
+let objects: Vec<_> = parts.into_iter().map(|(_, object)| object).collect();
+let (min, max) = claydash_engine::scene_language::bounds(&objects)?;
+```
+
 Run a standalone consumer with:
 
 ```sh

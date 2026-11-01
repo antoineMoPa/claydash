@@ -69,6 +69,12 @@ fn main() {
     match cli::parse(&args) {
         Ok(cli::Launch::Help) => cli::print_help(),
         Ok(cli::Launch::Desktop) => app::run(),
+        Ok(cli::Launch::Render(args)) => {
+            if let Err(error) = args.run() {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
         #[cfg(unix)]
         Ok(cli::Launch::Agent) => {
             app::agent::run_from_args();

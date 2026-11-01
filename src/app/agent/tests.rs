@@ -693,3 +693,34 @@ fn state_omits_rebuildable_mesh_cache_before_serializing_and_preserves_authored_
     assert!(model::objects_ref(&app.tree)[0].saved_mesh.is_some());
     assert_eq!(app.scene_revision(), revision);
 }
+
+#[test]
+fn dsl_capture_frames_off_origin_assembly_in_four_views() {
+    let mut app=App::new(); app.new_document();
+    let source="part = box(size: [2,1,1], at: [12,3,5]);";
+    app.agent_apply_scene_dsl(source.into(),None).unwrap();
+    let revision=app.scene_revision();
+    let (objects,center,span,panel_size)=app.prepare_dsl_capture(Some("part"),Some(96)).unwrap();
+    assert_eq!(objects.len(),1); assert_eq!(center,Vec3::new(12.,3.,5.)); assert!(span>2.);
+    assert!(app.prepare_dsl_capture(Some("missing"),None).is_err());
+    let (reply,_)=mpsc::channel();
+    let mut capture=AgentCapture {reply,objects:Some(objects),mode:CaptureMode::SimpleShading,
+        view:CaptureView::SceneViews {panel_size,center,span,frames:Vec::new()},camera:Camera::new(),cancelled_retries:0,points:Vec::new(),point_metadata:Vec::new(),revision};
+    for i in 0..4 {
+        let camera=capture.camera(); assert_eq!(camera.target,center);
+        let frame=crate::renderer::CapturedFrame {width:96,height:96,rgba:[50,60,70,255].repeat(96*96)};
+        let output=capture.accept_frame(frame,&camera).unwrap();
+        if i<3 { assert!(output.is_null()); } else { assert_eq!(output["width"],384); assert_eq!(output["height"],96); assert_eq!(output["revision"],revision); }
+    }
+    assert_eq!(app.scene_revision(),revision);
+}
+
+#[test]
+fn dsl_tools_are_advertised_and_accept_requests() {
+    for name in ["validate_scene_dsl","apply_scene_dsl","get_scene_dsl","get_scene_dsl_guide","capture_scene_dsl"] {
+        assert!(mcp::mcp_tools().iter().any(|tool|tool["name"]==name));
+    }
+    for (op,args) in [("ValidateSceneDsl",json!({"source":"a = box();"})),("ApplySceneDsl",json!({"source":"a = box();"})),("GetSceneDsl",json!({})),("CaptureSceneDsl",json!({}))] {
+        assert!(serde_json::from_value::<Request>(request_payload(op,args)).is_ok(),"{op}");
+    }
+}

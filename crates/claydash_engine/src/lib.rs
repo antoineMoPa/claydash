@@ -4,6 +4,7 @@ pub mod gaussian_ply;
 pub mod gaussian_surface;
 pub mod camera;
 pub mod model;
+pub mod scene_language;
 pub mod renderer;
 pub mod viewport;
 pub mod wireframe;
