@@ -1,5 +1,5 @@
 use super::{check_cancel, sheet, Mesh};
-use crate::model::{BezierProfile, LoftParams, SdfObject, SdfParams};
+use crate::model::{BezierProfile, SdfObject, SdfParams};
 use glam::{Vec2, Vec3};
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 use uuid::Uuid;
@@ -54,7 +54,7 @@ impl Surface {
             shading: Default::default(),
             colors: vec![],
             uvs: vec![],
-            baked_texture: None, sections: Vec::new(), section_caps: false,
+            baked_texture: None,
         }
     }
     fn append(&mut self, other: Surface) {
@@ -140,7 +140,6 @@ pub(super) fn build_with_quality(scene: &[SdfObject], object: &SdfObject, resolu
                 extrude(&p.vertices, p.half_depth)?
             }
         }
-        SdfParams::LoftParams(p) => loft(p, n, cancel)?,
         SdfParams::BezierCurveParams(curve) => {
             let Some(modifier) = object.path_extrusion else {
                 return Ok(Surface::default().finish(object.uuid));
@@ -589,86 +588,6 @@ fn ring_cap(
     }
     Ok(())
 }
-fn loft(params: &LoftParams, n: usize, cancel: &AtomicBool) -> Result<Surface, String> {
-    if params.sections.len() < 2 {
-        return Err("Loft requires at least two sections".into());
-    }
-    if params.sections.windows(2).any(|p| p[1].x <= p[0].x) {
-        return Err("Loft section X coordinates must increase".into());
-    }
-    let count = if params.profile_count() >= 3 {
-        params.profile_count()
-    } else {
-        n
-    };
-    let mut s = Surface::default();
-    let mut rings = Vec::new();
-    let mut outlines = Vec::new();
-    for (section, pair) in params.sections.windows(2).enumerate() {
-        for step in 0..=n {
-            if section > 0 && step == 0 {
-                continue;
-            }
-            check_cancel(cancel)?;
-            let t = step as f32 / n as f32;
-            let a = &pair[0];
-            let b = &pair[1];
-            let previous = &params.sections[section.saturating_sub(1)];
-            let next = &params.sections[(section + 2).min(params.sections.len() - 1)];
-            let x = [previous.x, a.x, b.x, next.x];
-            let blend = |a, b, p, n| params.blend(a, b, p, n, t, x);
-            positive(a.half_height, "Loft section height")?;
-            positive(a.half_width, "Loft section width")?;
-            positive(b.half_height, "Loft section height")?;
-            positive(b.half_width, "Loft section width")?;
-            let center = Vec2::new(
-                blend(a.center_y, b.center_y, previous.center_y, next.center_y),
-                blend(a.center_z, b.center_z, previous.center_z, next.center_z),
-            );
-            let radii = Vec2::new(
-                blend(a.half_height, b.half_height, previous.half_height, next.half_height),
-                blend(a.half_width, b.half_width, previous.half_width, next.half_width),
-            ).max(Vec2::splat(0.001));
-            let outline: Vec<_> = (0..count)
-                .map(|i| {
-                    let pa = LoftParams::profile_point(a, i, count);
-                    let pb = LoftParams::profile_point(b, i, count);
-                    let pp = LoftParams::profile_point(previous, i, count);
-                    let pn = LoftParams::profile_point(next, i, count);
-                    center + Vec2::new(
-                        blend(pa.x, pb.x, pp.x, pn.x),
-                        blend(pa.y, pb.y, pp.y, pn.y),
-                    ) * radii
-                })
-                .collect();
-            if signed_area(&outline) <= 0.0 {
-                return Err("Loft profiles must be counterclockwise and have positive area".into());
-            }
-            let x = a.x + (b.x - a.x) * t;
-            rings.push(
-                outline
-                    .iter()
-                    .map(|p| s.vertex(Vec3::new(x, p.x, p.y)))
-                    .collect::<Vec<_>>(),
-            );
-            outlines.push(outline);
-        }
-    }
-    for j in 0..rings.len() - 1 {
-        for i in 0..count {
-            let k = (i + 1) % count;
-            s.quad(rings[j][i], rings[j][k], rings[j + 1][i], rings[j + 1][k]);
-        }
-    }
-    ring_cap(&mut s, &outlines[0], &rings[0], true)?;
-    ring_cap(
-        &mut s,
-        outlines.last().unwrap(),
-        rings.last().unwrap(),
-        false,
-    )?;
-    Ok(s)
-}
 fn curve_frame(
     curve: &crate::model::BezierCurveParams,
     tangent: Vec3,
@@ -951,21 +870,8 @@ mod tests {
         }
     }
     #[test]
-    fn loft_custom_profile_and_square_curve_caps_are_closed() {
+    fn custom_profile_and_square_curve_caps_are_closed() {
         let cancel = AtomicBool::new(false);
-        let mut object = SdfObject::create_kind(PrimitiveKind::Loft);
-        if let SdfParams::LoftParams(p) = &mut object.params {
-            for section in &mut p.sections {
-                section.profile = Some(vec![
-                    Vec2::new(-1., -1.),
-                    Vec2::new(1., -1.),
-                    Vec2::new(1., 1.),
-                    Vec2::new(-1., 1.),
-                ]);
-            }
-        }
-        let mesh = build(&[object.clone()], &object, 16, &cancel).unwrap();
-        assert!(super::super::manifold(&mesh).unwrap().is_manifold());
         let mut curve = SdfObject::create_kind(PrimitiveKind::BezierCurve);
         curve.path_extrusion = Some(crate::model::PathExtrusion {
             profile: BezierProfile::Square,

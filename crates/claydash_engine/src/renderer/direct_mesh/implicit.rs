@@ -329,7 +329,7 @@ fn extract(
         shading: Default::default(),
         colors: vec![],
         uvs: vec![],
-        baked_texture: None, sections: Vec::new(), section_caps: false,
+        baked_texture: None,
     };
     let mut edges = HashMap::<(u64, u64), u32>::new();
     let mut budget = super::super::cooperative_work::WorkerBudget::new();

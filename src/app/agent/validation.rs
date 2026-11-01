@@ -13,7 +13,6 @@ pub(super) fn params_match(kind: PrimitiveKind, params: &SdfParams) -> bool {
             )
             | (PrimitiveKind::BezierCurve, SdfParams::BezierCurveParams(_))
             | (PrimitiveKind::Text, SdfParams::TextParams(_))
-            | (PrimitiveKind::Loft, SdfParams::LoftParams(_))
             | (PrimitiveKind::SheetPanel, SdfParams::SheetPanelParams(_))
     )
 }
@@ -60,7 +59,6 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
             sdf_consts::TYPE_TORUS => PrimitiveKind::Torus,
             sdf_consts::TYPE_POLYGON_PRISM => PrimitiveKind::PolygonPrism,
             sdf_consts::TYPE_BEZIER_CURVE => PrimitiveKind::BezierCurve,
-            sdf_consts::TYPE_LOFT => PrimitiveKind::Loft,
             sdf_consts::TYPE_SHEET_PANEL => PrimitiveKind::SheetPanel,
             sdf_consts::TYPE_TEXT => PrimitiveKind::Text,
             _ => return Err(format!("unknown primitive type on {}", object.uuid)),
@@ -81,28 +79,6 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
         }
         if let SdfParams::SheetPanelParams(panel) = &object.params {
             panel.validate().map_err(|error| format!("{error} on {}", object.uuid))?;
-        }
-        if let SdfParams::LoftParams(loft) = &object.params {
-            let profile_count = loft.profile_count();
-            if !(2..=model::LoftParams::MAX_SECTIONS).contains(&loft.sections.len())
-                || loft.sections.iter().any(|section| {
-                    !section.x.is_finite()
-                        || !section.center_y.is_finite()
-                        || !section.center_z.is_finite()
-                        || !section.half_height.is_finite()
-                        || !section.half_width.is_finite()
-                        || section.half_height <= 0.0
-                        || section.half_width <= 0.0
-                        || section.profile.as_ref().is_some_and(|profile| {
-                            !(3..=model::LoftParams::MAX_PROFILE_POINTS).contains(&profile.len())
-                                || profile.len() != profile_count
-                                || profile.iter().any(|point| !point.is_finite())
-                        })
-                })
-                || loft.sections.windows(2).any(|pair| pair[0].x >= pair[1].x)
-            {
-                return Err(format!("invalid loft sections on {}", object.uuid));
-            }
         }
         if let Some(inlay) = object.surface_inlay {
             let Some(host) = objects

@@ -606,7 +606,6 @@ fn primitive(name: &str) -> Option<PrimitiveKind> {
         "torus" => Some(PrimitiveKind::Torus),
         "polygon_prism" => Some(PrimitiveKind::PolygonPrism),
         "bezier_curve" => Some(PrimitiveKind::BezierCurve),
-        "loft" => Some(PrimitiveKind::Loft),
         "sheet_panel" => Some(PrimitiveKind::SheetPanel),
         "text" => Some(PrimitiveKind::Text),
         _ => None,

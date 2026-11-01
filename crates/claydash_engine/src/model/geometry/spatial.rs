@@ -459,7 +459,6 @@ fn subtree_bounds(
                 let softness = p.edge_softness.max(0.0).min(p.half_depth);
                 Vec3::new(planar.x + softness, planar.y + softness, p.half_depth)
             }
-            SdfParams::LoftParams(p) => p.local_extent(),
             SdfParams::SheetPanelParams(p) => p.local_extent(),
             SdfParams::BezierCurveParams(p) => p.local_extent(
                 object

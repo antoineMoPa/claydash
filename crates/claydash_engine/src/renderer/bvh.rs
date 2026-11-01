@@ -59,7 +59,7 @@ pub(super) fn append_operand_bvhs(
         }
         // For small undeformed groups the extra exception scan costs more
         // than it saves. Large groups still benefit from a partial tree when
-        // a loft or another operand has no conservative sphere bound.
+        // an operand has no conservative sphere bound.
         if parent.modifier[0] == 0 && bounds.len() != children.len()
             && children.len() < 32 {
             continue;

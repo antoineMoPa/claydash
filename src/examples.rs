@@ -92,12 +92,11 @@ fn fusca_is_one_movable_car_with_original_world_geometry_and_inlays() {
             assert!((actual - expected).abs() < 1e-5, "{} moved", object.name);
         }
     }
-    // These sums pin the saved part transforms independently of the new
-    // hierarchy; grouping only changes Boolean parent links.
+    // Pin the authored part origins independently of the assembly hierarchy.
     let translation_sum = objects.iter().fold(glam::DVec3::ZERO, |sum, object| {
         sum + object.transform.translation.as_dvec3()
     });
-    let expected = glam::DVec3::new(23.508, 38.83208, 13.887);
+    let expected = glam::DVec3::new(23.508, 39.55208, 14.1944026893);
     assert!((translation_sum - expected).length() < 1e-4);
     let inlays: Vec<_> = objects.iter().filter_map(|object| object.surface_inlay.as_ref()).collect();
     assert_eq!(inlays.len(), 40);
@@ -149,6 +148,46 @@ pub fn open_guide() -> std::io::Result<()> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formed_example_parts_remain_editable_sheets_after_save_open() {
+        use crate::model::{self, SdfParams, SheetStage};
+        for (bytes, ids) in [
+            (include_bytes!("../examples/astra_car.claydash").as_slice(), vec![
+                "a5700000-0000-4000-8000-000000000007",
+            ]),
+            (include_bytes!("../examples/fusca.claydash").as_slice(), vec![
+                "090da98a-3b0b-411e-8542-e0ac428856b0",
+                "5ba2ebfe-67d2-48e7-85b2-1a221d4e5b8d",
+            ]),
+            (include_bytes!("../examples/sword.claydash").as_slice(), vec![
+                "fda92f23-645e-40bb-996c-5f350e8610d4",
+                "e0b3f81a-2a6d-4a85-81e1-b22fbb5bda47",
+                "ffdf8d5c-b1ad-4276-80e0-1648ab36d957",
+            ]),
+        ] {
+            let mut tree = model::DataTree::default();
+            tree.set_tree("scene", crate::document::deserialize_scene(bytes).unwrap());
+            let before = model::objects(&tree);
+            for id in ids {
+                let id = uuid::Uuid::parse_str(id).unwrap();
+                let object = before.iter().find(|o| o.uuid == id).expect("authored part");
+                let SdfParams::SheetPanelParams(panel) = &object.params else {
+                    panic!("{} must be an editable sheet", object.name);
+                };
+                panel.validate().expect("valid forming recipe");
+                assert_eq!(panel.stage, SheetStage::Formed);
+                assert!(!panel.bends.is_empty(), "{} needs its bend recipe", object.name);
+                assert!(object.imported_mesh.is_none());
+            }
+            let saved = crate::document::serialize_scene(&tree).unwrap();
+            let mut reopened = model::DataTree::default();
+            reopened.set_tree("scene", crate::document::deserialize_scene(&saved).unwrap());
+            assert_eq!(serde_json::to_value(&before).unwrap(),
+                serde_json::to_value(model::objects(&reopened)).unwrap(),
+                "forming recipes, material, transforms and hierarchy must survive Save/Open");
+        }
+    }
 
     #[test]
     fn flying_sedan_preserves_native_panels_paint_and_assembly_on_save_open() {

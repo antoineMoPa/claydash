@@ -60,7 +60,6 @@ pub(super) fn create_pipeline(device: &wgpu::Device, layout: Option<&wgpu::Pipel
         ("HAS_DIAGNOSTIC_MATERIAL", f64::from(features.materials.diagnostic)),
         ("HAS_POLYGON_PRISMS", f64::from(features.primitives.polygon_prisms)),
         ("HAS_BEZIER_CURVES", f64::from(features.primitives.bezier_curves)),
-        ("HAS_LOFTS", f64::from(features.primitives.lofts)),
         ("HAS_TEXT", f64::from(features.primitives.text)),
         ("HAS_LATTICE_MODIFIERS", f64::from(features.spatial.lattice)),
         ("HAS_MIRRORS", f64::from(features.spatial.mirror)),
@@ -207,13 +206,12 @@ mod tests {
             let (device, _) = adapter.request_device(&Default::default()).await.expect("GPU device");
             let scene = super::super::material_gpu::shader_source();
             let mut features = super::super::SceneShaderFeatures::for_scene(&[], &[]);
-            for (label, capacity) in [("simple", 1), ("Astra-like polygon/loft", 2)] {
+            for (label, capacity) in [("simple", 1), ("polygon and metal", 2)] {
                 let start = std::time::Instant::now();
                 let _pipeline = super::create_pipeline(&device, None, &scene,
                     wgpu::TextureFormat::Rgba8Unorm, capacity, features);
                 eprintln!("Poisson material Metal pipeline ({label}): {:?}", start.elapsed());
                 features.primitives.polygon_prisms = true;
-                features.primitives.lofts = true;
                 features.materials.metal = true;
                 features.spatial.mirror = true;
                 features.spatial.repetition = true;

@@ -12,7 +12,6 @@ mod mesh_export_options;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_actions;
 #[cfg(not(target_arch = "wasm32"))]
-mod mesh_sections;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_export;
 #[cfg(target_arch = "wasm32")]

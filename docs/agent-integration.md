@@ -368,11 +368,7 @@ editable. Hard nested unions use the exact renderer's flat-union acceleration wh
 set `softness` to `0` on every group root for that path. Older saved choices that have been removed
 load as `exact_sdf`.
 
-`BoxParams` accepts `corner_radius` in addition to `box_q`. `LoftParams` accepts 2–16 ordered
-sections with `x`, `center_y`, `center_z`, `half_height`, and `half_width` fields. Each section
-can also have a `profile` array of 3–32 `[Y,Z]` points in unit ellipse coordinates. The points
-form a closed curve and scale by half height and half width. All custom profiles in a loft must
-have the same point count and matching point order; sections without a profile remain elliptical.
+`BoxParams` accepts `corner_radius` in addition to `box_q`.
 For a surface inlay, put `surface_inlay: {"host":"<uuid>","offset":0.018,"thickness":0.012}`
 on a separate mask object whose volume crosses the host surface. The host may be a smooth Boolean
 group. The mask and host group cannot have spatial modifiers, and the mask cannot be a curve.

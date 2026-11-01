@@ -52,9 +52,6 @@ fn profile_navigation_gpu() {
         "no_ao" => {}
         "one_action" => {}
         "fast_native" => {}
-        "no_lofts" => {
-            scene.retain(|object| !matches!(object.params, crate::model::SdfParams::LoftParams(_)))
-        }
         "no_sheets" => scene.retain(|object| {
             !matches!(object.params, crate::model::SdfParams::SheetPanelParams(_))
         }),

@@ -192,7 +192,7 @@ pub(crate) fn get_mesh(tree: &model::DataTree, id: uuid::Uuid) -> AgentResult {
         .ok_or_else(|| format!("object {id} is not an editable mesh"))?;
     Ok(json!({"id": id, "revision": mesh.revision, "vertices": mesh.positions,
         "faces": mesh.triangles, "uvs": mesh.uvs, "shading": mesh.shading,
-        "normals": mesh.normals, "sections": mesh.sections, "section_caps": mesh.section_caps,
+        "normals": mesh.normals,
         "texture": mesh.baked_texture.as_ref().map(|texture| json!({
             "size": texture.size, "png_bytes": texture.png.len()
         }))}))

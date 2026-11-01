@@ -21,21 +21,6 @@ pub struct Mesh {
     pub colors: Vec<[f32; 3]>,
     #[serde(default)]
     pub baked_texture: Option<BakedTexture>,
-    /// Authored section templates retained for editing a generated loft.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sections: Vec<MeshSection>,
-    #[serde(default)]
-    pub section_caps: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct MeshSection {
-    pub station: f32,
-    pub origin: [f32; 3],
-    pub right: [f32; 3],
-    pub up: [f32; 3],
-    /// Closed contour without a repeated final point, in section-frame coordinates.
-    pub points: Vec<[f32; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -173,8 +158,6 @@ impl Mesh {
             uvs: Vec::new(),
             colors: Vec::new(),
             baked_texture: None,
-            sections: Vec::new(),
-            section_caps: false,
         }
     }
 
@@ -183,31 +166,6 @@ impl Mesh {
     }
 
     pub fn regenerate_normals(&mut self) {
-        let section_side_faces = self.sections.first().and_then(|first| {
-            let side_faces = self.sections.len().checked_sub(1)?
-                .checked_mul(first.points.len())?.checked_mul(2)?;
-            let cap_faces = first.points.len().checked_mul(2)?;
-            (self.section_caps && self.sections.len() >= 2
-                && side_faces.checked_add(cap_faces) == Some(self.triangles.len())
-                && self.owners.len() == self.triangles.len())
-                .then_some(side_faces)
-        });
-        if let Some(side_faces) = section_side_faces {
-            if self.shading != MeshShading::Flat {
-                let mut normals = match self.shading {
-                    MeshShading::Auto => corner_normals(
-                        &self.positions, &self.triangles[..side_faces], &self.owners[..side_faces],
-                    ),
-                    MeshShading::Smooth => smooth_corner_normals(
-                        &self.positions, &self.triangles[..side_faces],
-                    ),
-                    MeshShading::Flat => unreachable!(),
-                };
-                normals.extend(flat_corner_normals(&self.positions, &self.triangles[side_faces..]));
-                self.normals = normals;
-                return;
-            }
-        }
         self.normals = match self.shading {
             MeshShading::Auto => corner_normals(&self.positions, &self.triangles, &self.owners),
             MeshShading::Flat => flat_corner_normals(&self.positions, &self.triangles),

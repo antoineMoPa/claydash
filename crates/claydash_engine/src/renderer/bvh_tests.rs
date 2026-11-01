@@ -172,7 +172,7 @@ fn operand_bvh_keeps_acceleration_with_shared_cage_and_exceptional_operands() {
         object.modifier[0] = 7;
     }
     objects[12].meta[3] = FLAT_UNION_ROOT;
-    objects[3].distance_bound[3] = -1.0; // e.g. a loft
+    objects[3].distance_bound[3] = -1.0;
     objects[8].modifier[0] = 9; // separate deformation frame
     let mut nodes = Vec::new();
     append_operand_bvhs(&mut nodes, &mut objects, &[0; 13]);

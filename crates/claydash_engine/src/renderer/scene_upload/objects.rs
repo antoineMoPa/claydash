@@ -250,7 +250,6 @@ impl Renderer {
                             polygon.half_depth,
                         )
                     }
-                    SdfParams::LoftParams(ref loft) => loft.local_extent(),
                     SdfParams::SheetPanelParams(ref panel) => panel.local_extent(),
                     SdfParams::BezierCurveParams(ref curve) => {
                         curve.local_extent(path_radius * path_profile_extent)
@@ -486,8 +485,6 @@ impl Renderer {
                             && path_profile_count != 0.0
                         {
                             march_factor.min(0.5)
-                        } else if let SdfParams::LoftParams(loft) = &object.params {
-                            march_factor.min(loft.march_factor())
                         } else if matches!(object.params, SdfParams::SheetPanelParams(_)) {
                             march_factor.min(0.35)
                         } else {

@@ -21,7 +21,6 @@ use winit::event_loop::EventLoopProxy;
 
 use super::{App, AppEvent};
 use super::mesh_actions as mesh;
-use super::mesh_sections;
 use crate::{
     camera::{Camera, ProjectionMode},
     commands, document,
@@ -53,7 +52,6 @@ pub enum Request {
     GetActionSchema { action: String, primitive: Option<PrimitiveKind> },
     GetGaussianCloud { id: uuid::Uuid, space: Option<CloudSpace>, sample_count: Option<usize> },
     GetMesh { id: uuid::Uuid },
-    PreviewMeshSections { sections: Vec<crate::renderer::poisson_mesh::geometry::MeshSection>, #[serde(default)] caps: bool },
     AdjustGaussianColors(color::AdjustGaussianColorsArgs),
     ListCommands,
     EnableSlowSmoothBlends,
@@ -210,8 +208,6 @@ pub enum Action {
         id: uuid::Uuid,
     },
     CreateMesh { name: Option<String>, vertices: Vec<[f32; 3]>, faces: Vec<[u32; 3]>, shading: Option<crate::renderer::poisson_mesh::geometry::MeshShading> },
-    CreateSectionMesh { name: Option<String>, sections: Vec<crate::renderer::poisson_mesh::geometry::MeshSection>, #[serde(default)] caps: bool, shading: Option<crate::renderer::poisson_mesh::geometry::MeshShading> },
-    SetMeshSections { id: uuid::Uuid, sections: Vec<crate::renderer::poisson_mesh::geometry::MeshSection>, caps: bool },
     AddMeshVertices { id: uuid::Uuid, vertices: Vec<[f32; 3]> },
     AddMeshFaces { id: uuid::Uuid, faces: Vec<[u32; 3]> },
     SetMeshShading { id: uuid::Uuid, shading: crate::renderer::poisson_mesh::geometry::MeshShading },
@@ -590,7 +586,6 @@ impl App {
             Request::GetActionSchema { action, primitive } => mcp::action_schema(&action, primitive),
             Request::GetGaussianCloud { id, space, sample_count } => self.agent_gaussian_cloud(id, space, sample_count),
             Request::GetMesh { id } => mesh::get_mesh(&self.tree, id),
-            Request::PreviewMeshSections { sections, caps } => mesh_sections::preview(sections, caps),
             Request::AdjustGaussianColors(args) => self.agent_adjust_gaussian_colors(args),
             Request::ListCommands => Ok(Value::Array(self.commands.commands.iter().map(|(name, command)| {
                 json!({"name": name, "title": command.title, "description": command.docs, "shortcut": command.shortcut})

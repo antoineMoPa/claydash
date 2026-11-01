@@ -224,7 +224,6 @@ fn execute_command_uses_hard_spawn_defaults_and_cannot_duplicate_legacy_blends()
         "spawn-cylinder",
         "spawn-torus",
         "spawn-polygon-prism",
-        "spawn-loft",
         "spawn-text",
     ] {
         request(&mut app, "ExecuteCommand", json!({"name":name})).unwrap();
@@ -327,7 +326,6 @@ fn command_spawn_undo_redo_never_restores_positive_softness_intermediate_snapsho
         "spawn-cylinder",
         "spawn-torus",
         "spawn-polygon-prism",
-        "spawn-loft",
         "spawn-text",
         "add-image-plane",
     ] {

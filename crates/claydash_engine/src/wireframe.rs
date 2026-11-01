@@ -427,49 +427,6 @@ fn primitive_segments(
                 }
             }
         }
-        SdfParams::LoftParams(loft) => {
-            let steps = if loft.profile_count() > 0 {
-                loft.profile_count()
-            } else {
-                24
-            };
-            for section in &loft.sections {
-                let point = |step: usize| {
-                    let profile = if loft.profile_count() > 0 {
-                        crate::model::LoftParams::profile_point(section, step % steps, steps)
-                    } else {
-                        let angle = std::f32::consts::TAU * step as f32 / steps as f32;
-                        Vec2::new(angle.cos(), angle.sin())
-                    };
-                    Vec3::new(
-                        section.x,
-                        section.center_y + section.half_height * profile.x,
-                        section.center_z + section.half_width * profile.y,
-                    )
-                };
-                for step in 0..steps {
-                    result.push([point(step), point(step + 1)]);
-                }
-            }
-            for pair in loft.sections.windows(2) {
-                for step in (0..steps).step_by(4) {
-                    let point = |section: &crate::model::LoftSection| {
-                        let profile = if loft.profile_count() > 0 {
-                            crate::model::LoftParams::profile_point(section, step, steps)
-                        } else {
-                            let angle = std::f32::consts::TAU * step as f32 / steps as f32;
-                            Vec2::new(angle.cos(), angle.sin())
-                        };
-                        Vec3::new(
-                            section.x,
-                            section.center_y + section.half_height * profile.x,
-                            section.center_z + section.half_width * profile.y,
-                        )
-                    };
-                    result.push([point(&pair[0]), point(&pair[1])]);
-                }
-            }
-        }
         SdfParams::TextParams(text) => {
             let prepared = prepared_text
                 .cloned()

@@ -175,48 +175,6 @@ pub(super) fn pack_primitive(
             ([f32::from_bits(offset), f32::from_bits(count as u32), if directional { 1.0 } else { 0.0 }, distance_scale],
                 panel.local_extent().length() * abs_scale.max_element())
         }
-        SdfParams::LoftParams(ref loft) => {
-            let offset = polygon_points.len() as u32;
-            let profile_count = loft.profile_count();
-            for section in loft
-                .sections
-                .iter()
-                .take(crate::model::LoftParams::MAX_SECTIONS)
-            {
-                polygon_points.push(GpuPolygonPoint {
-                    position: [section.x, section.center_y],
-                });
-                polygon_points.push(GpuPolygonPoint {
-                    position: [section.center_z, section.half_height],
-                });
-                polygon_points.push(GpuPolygonPoint {
-                    position: [section.half_width, if loft.interpolation == crate::model::LoftInterpolation::Smooth { 1.0 } else { 0.0 }],
-                });
-                for index in 0..profile_count {
-                    polygon_points.push(GpuPolygonPoint {
-                        position: crate::model::LoftParams::profile_point(
-                            section,
-                            index,
-                            profile_count,
-                        )
-                        .to_array(),
-                    });
-                }
-            }
-            let count = loft
-                .sections
-                .len()
-                .min(crate::model::LoftParams::MAX_SECTIONS) as u32;
-            (
-                [
-                    f32::from_bits(offset),
-                    f32::from_bits(count),
-                    f32::from_bits(profile_count as u32),
-                    distance_scale,
-                ],
-                loft.local_extent().length() * abs_scale.max_element(),
-            )
-        }
         SdfParams::BezierCurveParams(ref curve) => {
             let offset = polygon_points.len() as u32;
             for (index, &point) in curve.points.iter().take(25).enumerate() {

@@ -1,6 +1,6 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use sdf_consts::{
-    TYPE_BEZIER_CURVE, TYPE_BOX, TYPE_CYLINDER, TYPE_LOFT, TYPE_POLYGON_PRISM, TYPE_SPHERE,
+    TYPE_BEZIER_CURVE, TYPE_BOX, TYPE_CYLINDER, TYPE_POLYGON_PRISM, TYPE_SPHERE,
     TYPE_TEXT, TYPE_TORUS, TYPE_SHEET_PANEL,
 };
 use serde::{Deserialize, Serialize};
@@ -83,31 +83,28 @@ pub enum PrimitiveKind {
     Torus,
     PolygonPrism,
     BezierCurve,
-    Loft,
     SheetPanel,
     Text,
 }
 
 impl PrimitiveKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::Sphere,
         Self::Box,
         Self::Cylinder,
         Self::Torus,
         Self::PolygonPrism,
         Self::BezierCurve,
-        Self::Loft,
         Self::SheetPanel,
         Self::Text,
     ];
-    pub const SPAWNABLE: [Self; 9] = [
+    pub const SPAWNABLE: [Self; 8] = [
         Self::Sphere,
         Self::Box,
         Self::Cylinder,
         Self::Torus,
         Self::PolygonPrism,
         Self::BezierCurve,
-        Self::Loft,
         Self::SheetPanel,
         Self::Text,
     ];
@@ -120,7 +117,6 @@ impl PrimitiveKind {
             Self::Torus => "Torus",
             Self::PolygonPrism => "Polygon prism",
             Self::BezierCurve => "Bézier curve",
-            Self::Loft => "Loft",
             Self::SheetPanel => "Sheet panel",
             Self::Text => "Text",
         }
@@ -134,7 +130,6 @@ impl PrimitiveKind {
             Self::Torus => TYPE_TORUS,
             Self::PolygonPrism => TYPE_POLYGON_PRISM,
             Self::BezierCurve => TYPE_BEZIER_CURVE,
-            Self::Loft => TYPE_LOFT,
             Self::SheetPanel => TYPE_SHEET_PANEL,
             Self::Text => TYPE_TEXT,
         }
@@ -147,7 +142,6 @@ impl PrimitiveKind {
             TYPE_TORUS => Self::Torus,
             TYPE_POLYGON_PRISM => Self::PolygonPrism,
             TYPE_BEZIER_CURVE => Self::BezierCurve,
-            TYPE_LOFT => Self::Loft,
             TYPE_SHEET_PANEL => Self::SheetPanel,
             TYPE_TEXT => Self::Text,
             _ => Self::Sphere,
@@ -349,43 +343,6 @@ impl SdfObject {
                     closed: false,
                 }),
                 PrimitiveKind::SheetPanel => SdfParams::SheetPanelParams(SheetPanelParams::default()),
-                PrimitiveKind::Loft => SdfParams::LoftParams(LoftParams {
-                    interpolation: LoftInterpolation::SectionEase,
-                    sections: vec![
-                        LoftSection {
-                            x: -1.0,
-                            center_y: 0.0,
-                            center_z: 0.0,
-                            half_height: 0.12,
-                            half_width: 0.18,
-                            profile: None,
-                        },
-                        LoftSection {
-                            x: -0.65,
-                            center_y: 0.0,
-                            center_z: 0.0,
-                            half_height: 0.38,
-                            half_width: 0.55,
-                            profile: None,
-                        },
-                        LoftSection {
-                            x: 0.65,
-                            center_y: 0.0,
-                            center_z: 0.0,
-                            half_height: 0.38,
-                            half_width: 0.55,
-                            profile: None,
-                        },
-                        LoftSection {
-                            x: 1.0,
-                            center_y: 0.0,
-                            center_z: 0.0,
-                            half_height: 0.12,
-                            half_width: 0.18,
-                            profile: None,
-                        },
-                    ],
-                }),
                 PrimitiveKind::Text => SdfParams::TextParams(TextParams::default()),
             },
             name: kind.label().to_string(),
@@ -539,7 +496,6 @@ impl SdfObject {
                 let outside = Vec2::new(polygon.max(0.0), depth.max(0.0)).length();
                 outside + polygon.max(depth).min(0.0) - softness
             }
-            SdfParams::LoftParams(ref params) => params.distance(local),
             SdfParams::SheetPanelParams(ref params) => params.distance(local),
             SdfParams::TextParams(ref params) => text.map_or_else(
                 || params.prepared(None).distance(local),

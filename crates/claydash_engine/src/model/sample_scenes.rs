@@ -454,7 +454,6 @@ impl<'a> PreparedSubtreeSampler<'a> {
             }
             if belongs {
                 match &object.params {
-                    SdfParams::LoftParams(loft) => factor = factor.min(loft.march_factor()),
                     SdfParams::SheetPanelParams(_) => factor = factor.min(0.35),
                     SdfParams::BezierCurveParams(_) => factor = factor.min(0.5),
                     SdfParams::TextParams(_) if object.path_extrusion.is_some() => {

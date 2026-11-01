@@ -257,7 +257,6 @@ pub(super) fn scene_feature_constants(
                 "HAS_BEZIER_CURVES",
                 f64::from(features.primitives.bezier_curves),
             ),
-            ("HAS_LOFTS", f64::from(features.primitives.lofts)),
             ("HAS_TEXT", f64::from(features.primitives.text)),
         ]);
     }

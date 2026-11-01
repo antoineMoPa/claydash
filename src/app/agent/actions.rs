@@ -194,12 +194,6 @@ impl App {
                 Action::CreateMesh { name, vertices, faces, shading } => {
                     created.push(mesh::create_mesh(&mut draft, name, vertices, faces, shading)?);
                 }
-                Action::CreateSectionMesh { name, sections, caps, shading } => {
-                    created.push(mesh_sections::create(&mut draft, name, sections, caps, shading)?);
-                }
-                Action::SetMeshSections { id, sections, caps } => {
-                    mesh_sections::rebuild(&mut draft, id, sections, caps)?;
-                }
                 Action::AddMeshVertices { id, vertices } => {
                     mesh::add_vertices(&mut draft, id, vertices)?;
                 }

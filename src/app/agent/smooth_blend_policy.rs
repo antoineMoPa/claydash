@@ -158,7 +158,6 @@ fn spawn_kind(name: &str) -> Option<PrimitiveKind> {
         "spawn-cylinder" => Some(PrimitiveKind::Cylinder),
         "spawn-polygon-prism" => Some(PrimitiveKind::PolygonPrism),
         "spawn-torus" => Some(PrimitiveKind::Torus),
-        "spawn-loft" => Some(PrimitiveKind::Loft),
         "spawn-text" => Some(PrimitiveKind::Text),
         _ => None,
     }

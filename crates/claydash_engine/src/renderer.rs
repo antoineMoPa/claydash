@@ -69,7 +69,6 @@ impl BuiltinMaterialFeatures {
 struct PrimitiveFeatures {
     polygon_prisms: bool,
     bezier_curves: bool,
-    lofts: bool,
     text: bool,
 }
 
@@ -101,14 +100,12 @@ impl PrimitiveFeatures {
         let mut features = Self {
             polygon_prisms: false,
             bezier_curves: false,
-            lofts: false,
             text: false,
         };
         for object in objects {
             match object.meta[1] {
                 sdf_consts::TYPE_POLYGON_PRISM => features.polygon_prisms = true,
                 sdf_consts::TYPE_BEZIER_CURVE => features.bezier_curves = true,
-                sdf_consts::TYPE_LOFT => features.lofts = true,
                 sdf_consts::TYPE_TEXT => features.text = true,
                 _ => {}
             }
@@ -493,7 +490,7 @@ mod tests {
         assert!(!features.materials.wood && !features.materials.brick
             && !features.materials.fabric && !features.materials.diagnostic);
         assert!(!features.primitives.polygon_prisms && !features.primitives.bezier_curves
-            && !features.primitives.lofts && !features.primitives.text);
+            && !features.primitives.text);
         assert!(!features.spatial.lattice && !features.spatial.mirror && !features.spatial.repetition);
         assert!(!features.flat_unions && !features.neural_sdf);
     }
