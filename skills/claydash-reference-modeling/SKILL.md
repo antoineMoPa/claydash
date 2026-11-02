@@ -18,3 +18,13 @@ Use in conjunction with claydash-modeling skill when a reference is available.
 11. Assess wheter model looks like reference and have corrections done by fresh sub agents.
 
 Have fresh sub agents (not forks) build parts in parallel, with a 1 feedback cycle for model quality.
+
+For vehicle refinement, exposed bodywork should use fitted native SheetPanels with
+deliberate folds/returns and compound crowns. Do not leave box proxies, thick
+polygon-prism slabs or fat curve tubes as body skins, pillars, rails or rockers.
+Use native bends for folds and returns, surface/lattice shaping for stamped crowns,
+and practical shared seams for compatible edges. Functional wheel/fixture solids
+and hidden support remain appropriate; rough outline masses stay construction-only.
+Review a construction manifest against actual native source and close formed-edge
+captures. A SheetPanel count or prettier render alone does not establish neat sheet
+construction.
