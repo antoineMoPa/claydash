@@ -1,30 +1,20 @@
 ---
-name: claydash-modeling
-description: Build a multi-part Claydash model with per-part placement, appearance, and assembly alignment checks.
+name: claydash-reference-modeling
+description: Rebuild reference GLBs with Claydash's independent seam, sheet and lattice tools.
 ---
 
-# Model one part at a time
+Use in conjunction with claydash-modeling skill when a reference is available.
 
-1. Break the target object into a short list of physical subparts, with their relative sizes and attachment points.
-2. Place a new subpart. Check its shape and placement from four to six useful views; mask unrelated objects using capture isolation. Include the assembly context where needed to judge placement.
-3. Add the part's color or texture, then inspect it in full-material mode.
-4. Show adjacent parts together and confirm alignment: contact, gaps, overlap, and shared edges. Correct discrepancies before moving on.
-5. Pick the next subpart and repeat. Finish by checking the whole assembly from multiple views.
+1. Analyse the object for natural boudaries between sub parts. Start paying attention to how sub parts are shaped and curved.
+2. Trace and close source seams (`PutSeam`, `SnapSeamPoint`).
+3. Create sheets and bends. 
+4. Add lattices (resolution 3); bind adjoining boundaries/edges to shared seams (`SetSeamBinding`). 4. Refine in isolation; check joins from multiple views.
+5. Mirror optionally; keep wheels separate SDFs. 
+6. Inspect with `--show-seams`; omit it for final renders.
+7. Review work, inspect the model for unintended gaps or curve and repeat process.
+8. Study which part of the reference is bent / curved and make sur modelled result reflects that.
+9. Model holes and cavities with subtractive SDF geometry than additive instead of snapping objects to create details.
+10. Remove leftover scaffold sdfs.
+11. Assess wheter model looks like reference and have corrections done by fresh sub agents.
 
-Perform these checks as part of modeling; do not defer them until every part is built. Use the capture tools' documented isolation and view options rather than hiding or deleting scene objects.
-
-For precise placement of vertices, curve control points or attachment points, call `preview_points`
-with proposed world-space positions before committing geometry. Compare the red center markers
-in at least two useful views; inspect the returned pixel coordinates and visibility status.
-Markers are drawn on top of geometry and do not prove surface contact or depth alignment.
-
-Keep normal capture resolution for blockout and routine iteration.
-
-Opt in to higher resolution for perfection/refinement and final checks.
-
-For a lightweight GLB and rich details, use primitives with more detailed subtrees of geometry that
-you bake into the base shapes.
-
-For tiny flat surface details, consider a shader before adding geometry.
-
-If a reference is available, use claydash-reference-modeling skill as well.
+Have fresh sub agents (not forks) build parts in parallel, with a 1 feedback cycle for model quality.
