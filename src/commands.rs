@@ -1,6 +1,7 @@
 use command_central::{CommandBuilder, CommandMap};
 use sdf_consts::{
-    TYPE_BOX, TYPE_CYLINDER, TYPE_POLYGON_PRISM, TYPE_SPHERE, TYPE_TEXT, TYPE_TORUS,
+    TYPE_BOX, TYPE_CYLINDER, TYPE_POLYGON_PRISM, TYPE_SHEET_PANEL, TYPE_SPHERE, TYPE_TEXT,
+    TYPE_TORUS,
 };
 
 use crate::{
@@ -205,6 +206,14 @@ pub fn register_all(commands: &mut Commands) {
     );
     register(
         commands,
+        "spawn-sheet-panel",
+        "Add Sheet Panel",
+        "Add an editable sheet with native cuts and bends.",
+        "",
+        |tree| spawn(tree, TYPE_SHEET_PANEL),
+    );
+    register(
+        commands,
         "spawn-text",
         "Add Text",
         "Add editable extruded text. Edit its content and placement in Object settings.",
@@ -285,6 +294,18 @@ pub fn execute(commands: &Commands, name: &str, tree: &mut DataTree) {
 }
 
 fn delete(tree: &mut DataTree) {
+    let selection = selected(tree);
+    let mut seams = crate::model::scene_seams(tree);
+    if selection.len() == 1 && seams.seams.iter().any(|s| s.id == selection[0]) {
+        seams.seams.retain(|s| s.id != selection[0]);
+        seams.bindings.retain(|b| b.seam != selection[0]);
+        if crate::model::try_set_seams(tree, seams).is_ok() {
+            set_selected(tree, Vec::new());
+            tree.make_undo_redo_snapshot();
+        }
+        return;
+    }
+
     if crate::cloud_edit::delete_selected(tree) {
         return;
     }
@@ -422,16 +443,22 @@ fn select_all(tree: &mut DataTree) {
 
 fn invert_selection(tree: &mut DataTree) {
     if let Some(mut edit) = crate::model::cloud_edit(tree) {
-        if let Some(cloud) = crate::model::objects_ref(tree).iter()
+        if let Some(cloud) = crate::model::objects_ref(tree)
+            .iter()
             .find(|object| object.uuid == edit.object)
             .and_then(|object| object.imported_splats.as_ref())
         {
             let mut selected = vec![false; cloud.splats.len()];
             for index in &edit.indices {
-                if let Some(slot) = selected.get_mut(*index) { *slot = true; }
+                if let Some(slot) = selected.get_mut(*index) {
+                    *slot = true;
+                }
             }
-            edit.indices = selected.into_iter().enumerate()
-                .filter_map(|(index, was_selected)| (!was_selected).then_some(index)).collect();
+            edit.indices = selected
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, was_selected)| (!was_selected).then_some(index))
+                .collect();
             crate::model::set_cloud_edit(tree, Some(edit));
         }
         return;

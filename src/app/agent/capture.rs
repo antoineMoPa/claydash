@@ -15,7 +15,12 @@ pub fn set_resolution(camera: &mut Camera, resolution: Option<[u32; 2]>) -> Resu
 
 pub enum CaptureView {
     Viewport,
-    SceneViews { panel_size: u32, center: Vec3, span: f32, frames: Vec<crate::renderer::CapturedFrame> },
+    SceneViews {
+        panel_size: u32,
+        center: Vec3,
+        span: f32,
+        frames: Vec<crate::renderer::CapturedFrame>,
+    },
     Comparison(Box<super::comparison::ComparisonCapture>),
     Orthographic {
         panel_size: u32,
@@ -31,6 +36,7 @@ pub struct AgentCapture {
     pub view: CaptureView,
     pub camera: Camera,
     pub cancelled_retries: u8,
+    pub seam_lines: Vec<(Vec<Vec3>, bool)>,
     pub points: Vec<super::markers::PreviewPoint>,
     pub point_metadata: Vec<Value>,
     pub revision: u64,
@@ -39,9 +45,22 @@ pub struct AgentCapture {
 impl AgentCapture {
     pub fn camera(&self) -> Camera {
         let mut camera = self.camera.clone();
-        if let CaptureView::Comparison(comparison) = &self.view { return comparison.camera(&camera); }
-        if let CaptureView::SceneViews { panel_size, center, span, frames } = &self.view {
-            let (direction, up) = match frames.len() { 0 => (Vec3::Z, Vec3::Y), 1 => (Vec3::X, Vec3::Y), 2 => (Vec3::Y, Vec3::NEG_Z), _ => (Vec3::splat(1.0) / 3.0_f32.sqrt(), Vec3::Y) };
+        if let CaptureView::Comparison(comparison) = &self.view {
+            return comparison.camera(&camera);
+        }
+        if let CaptureView::SceneViews {
+            panel_size,
+            center,
+            span,
+            frames,
+        } = &self.view
+        {
+            let (direction, up) = match frames.len() {
+                0 => (Vec3::Z, Vec3::Y),
+                1 => (Vec3::X, Vec3::Y),
+                2 => (Vec3::Y, Vec3::NEG_Z),
+                _ => (Vec3::splat(1.0) / 3.0_f32.sqrt(), Vec3::Y),
+            };
             camera.target = *center;
             camera.position = *center + direction * (*span / 0.84);
             camera.up = up;
@@ -85,7 +104,12 @@ impl AgentCapture {
         }
         let title = match &self.view {
             CaptureView::Comparison(_) => unreachable!(),
-            CaptureView::SceneViews { frames, .. } => match frames.len() { 0 => "Front view", 1 => "Side view", 2 => "Top view", _ => "Three-quarter view" },
+            CaptureView::SceneViews { frames, .. } => match frames.len() {
+                0 => "Front view",
+                1 => "Side view",
+                2 => "Top view",
+                _ => "Three-quarter view",
+            },
             CaptureView::Viewport => match camera.projection_mode {
                 ProjectionMode::Perspective => "Perspective view",
                 ProjectionMode::Orthographic => "Orthographic view",
@@ -96,12 +120,44 @@ impl AgentCapture {
                 _ => "Front view",
             },
         };
+        if !self.seam_lines.is_empty() {
+            let seams = model::SceneSeams {
+                seams: self
+                    .seam_lines
+                    .iter()
+                    .map(|(points, closed)| model::Seam {
+                        id: uuid::Uuid::nil(),
+                        name: String::new(),
+                        closed: *closed,
+                        points: points.iter().map(|p| model::SeamPoint::World(*p)).collect(),
+                    })
+                    .collect(),
+                bindings: Vec::new(),
+            };
+            claydash_engine::seam_guides::annotate(&mut cropped, &seams, &[], camera);
+        }
         super::capture_overlay::annotate(&mut cropped, camera, title);
-        let offset = match &self.view { CaptureView::SceneViews { panel_size, frames, .. } | CaptureView::Orthographic { panel_size, frames, .. } => [*panel_size * frames.len() as u32, 0], _ => [0, 0] };
-        self.point_metadata.extend(super::markers::annotate(&mut cropped, camera, &self.points, title, &[offset]));
+        let offset = match &self.view {
+            CaptureView::SceneViews {
+                panel_size, frames, ..
+            }
+            | CaptureView::Orthographic {
+                panel_size, frames, ..
+            } => [*panel_size * frames.len() as u32, 0],
+            _ => [0, 0],
+        };
+        self.point_metadata.extend(super::markers::annotate(
+            &mut cropped,
+            camera,
+            &self.points,
+            title,
+            &[offset],
+        ));
         if let CaptureView::SceneViews { frames, .. } = &mut self.view {
             frames.push(cropped);
-            if frames.len() < 4 { return Ok(Value::Null); }
+            if frames.len() < 4 {
+                return Ok(Value::Null);
+            }
             let sheet = image_sheet(frames)?;
             let mut image = captured_image(&sheet)?;
             image["revision"] = json!(self.revision);
@@ -138,13 +194,20 @@ pub(super) fn captured_image(frame: &crate::renderer::CapturedFrame) -> AgentRes
 pub(super) fn orthographic_sheet(
     frames: &[crate::renderer::CapturedFrame],
 ) -> Result<crate::renderer::CapturedFrame, String> {
-    if frames.len() != 3 { return Err("expected three orthographic views".into()); }
+    if frames.len() != 3 {
+        return Err("expected three orthographic views".into());
+    }
     image_sheet(frames)
 }
 
-fn image_sheet(frames: &[crate::renderer::CapturedFrame]) -> Result<crate::renderer::CapturedFrame, String> {
+fn image_sheet(
+    frames: &[crate::renderer::CapturedFrame],
+) -> Result<crate::renderer::CapturedFrame, String> {
     let x = frames.first().ok_or("no views")?;
-    if frames.iter().any(|frame| frame.width != x.width || frame.height != x.height) {
+    if frames
+        .iter()
+        .any(|frame| frame.width != x.width || frame.height != x.height)
+    {
         return Err("views have different sizes".into());
     }
     let width = x.width * frames.len() as u32;
@@ -166,24 +229,36 @@ fn image_sheet(frames: &[crate::renderer::CapturedFrame]) -> Result<crate::rende
 }
 
 pub(super) fn capture_scene(
-    scene: &[SdfObject], requested: Option<&[uuid::Uuid]>, stage: Option<model::SheetStage>,
+    scene: &[SdfObject],
+    requested: Option<&[uuid::Uuid]>,
+    stage: Option<model::SheetStage>,
     isolation: CaptureIsolation,
 ) -> Result<Option<Vec<SdfObject>>, String> {
     let mut objects = match (requested, isolation) {
         (Some(ids), CaptureIsolation::Groups) => Some(capture_objects(scene, ids)?),
         (Some(ids), CaptureIsolation::Parts) => Some(capture_parts(scene, ids)?),
-        (None, CaptureIsolation::Parts) => return Err("isolation: parts requires object_ids".into()),
+        (None, CaptureIsolation::Parts) => {
+            return Err("isolation: parts requires object_ids".into())
+        }
         (None, CaptureIsolation::Groups) if stage.is_some() => Some(scene.to_vec()),
         (None, CaptureIsolation::Groups) => None,
     };
     if let (Some(objects), Some(stage)) = (&mut objects, stage) {
         // A recipe snapshot must use source geometry rather than saved formed captures.
-        let parents: HashMap<_, _> = objects.iter().map(|object| (object.uuid, object.boolean_parent)).collect();
+        let parents: HashMap<_, _> = objects
+            .iter()
+            .map(|object| (object.uuid, object.boolean_parent))
+            .collect();
         let mut affected = HashSet::new();
-        for sheet in objects.iter().filter(|object| matches!(object.params, SdfParams::SheetPanelParams(_))) {
+        for sheet in objects
+            .iter()
+            .filter(|object| matches!(object.params, SdfParams::SheetPanelParams(_)))
+        {
             let mut cursor = Some(sheet.uuid);
             while let Some(id) = cursor {
-                if !affected.insert(id) { break; }
+                if !affected.insert(id) {
+                    break;
+                }
                 cursor = parents.get(&id).copied().flatten();
             }
         }
@@ -191,7 +266,9 @@ pub(super) fn capture_scene(
             if affected.contains(&object.uuid) {
                 object.render_representation = GroupRenderRepresentation::ExactSdf;
             }
-            if let SdfParams::SheetPanelParams(panel) = &mut object.params { panel.stage = stage; }
+            if let SdfParams::SheetPanelParams(panel) = &mut object.params {
+                panel.stage = stage;
+            }
         }
     }
     Ok(objects)
@@ -208,18 +285,28 @@ pub(super) fn capture_parts(
     let mut parts = Vec::new();
     let mut seen = HashSet::new();
     for id in requested {
-        let object = lookup.get(id).ok_or_else(|| format!("object not found: {id}"))?;
+        let object = lookup
+            .get(id)
+            .ok_or_else(|| format!("object not found: {id}"))?;
         if !seen.insert(*id) {
             continue;
         }
         if object.surface_inlay.is_some() {
-            return Err(format!("surface inlay {id} requires its host; use isolation: groups"));
+            return Err(format!(
+                "surface inlay {id} requires its host; use isolation: groups"
+            ));
         }
         let world_group = model::group_world_matrix(scene, *id);
         let (scale, rotation, translation) = world_group.to_scale_rotation_translation();
-        let group_transform = Transform { scale, rotation, translation };
+        let group_transform = Transform {
+            scale,
+            rotation,
+            translation,
+        };
         if !group_transform.matrix().abs_diff_eq(world_group, 1e-4) {
-            return Err(format!("part {id} has a sheared group transform that cannot be captured alone"));
+            return Err(format!(
+                "part {id} has a sheared group transform that cannot be captured alone"
+            ));
         }
         let mut part = (*object).clone();
         part.boolean_parent = None;
@@ -227,7 +314,9 @@ pub(super) fn capture_parts(
         part.group_transform = group_transform;
         part.render_representation = if part.imported_mesh.is_some() {
             GroupRenderRepresentation::DirectMesh
-        } else { GroupRenderRepresentation::ExactSdf };
+        } else {
+            GroupRenderRepresentation::ExactSdf
+        };
         parts.push(part);
     }
     Ok(parts)

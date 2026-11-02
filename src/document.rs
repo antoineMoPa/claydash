@@ -143,7 +143,9 @@ impl DocumentState {
         self.observed_authored_version = version;
         if !self.imported_clouds_since_save.is_empty()
             && self.imported_clouds_since_save.iter().any(|id| {
-                crate::model::objects_ref(tree).iter().any(|object| object.uuid == *id)
+                crate::model::objects_ref(tree)
+                    .iter()
+                    .any(|object| object.uuid == *id)
             })
         {
             self.dirty = true;
@@ -272,19 +274,24 @@ mod new_document_tests {
     fn imported_cloud_stays_dirty_without_serializing_on_each_edit() {
         let mut tree = DataTree::default();
         crate::model::set_objects(&mut tree, Vec::new());
-        tree.set_path("scene.cursor_position", ClaydashValue::Vec3(glam::Vec3::ZERO));
+        tree.set_path(
+            "scene.cursor_position",
+            ClaydashValue::Vec3(glam::Vec3::ZERO),
+        );
         let mut document = DocumentState::default();
         document.mark_scene_clean(&tree);
         let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
         object.imported_splats = Some(std::sync::Arc::new(
-            claydash_engine::gaussian_ply::GaussianCloud { splats: vec![
-                claydash_engine::gaussian_ply::Gaussian {
+            claydash_engine::gaussian_ply::GaussianCloud {
+                splats: vec![claydash_engine::gaussian_ply::Gaussian {
                     position: glam::Vec3::ZERO,
                     scale: glam::Vec3::ONE,
                     rotation: glam::Quat::IDENTITY,
-                    color: [1.; 3], opacity: 1., sh_rest: Vec::new(),
-                }
-            ] }
+                    color: [1.; 3],
+                    opacity: 1.,
+                    sh_rest: Vec::new(),
+                }],
+            },
         ));
         let id = object.uuid;
         crate::model::set_objects(&mut tree, vec![object]);
@@ -293,7 +300,10 @@ mod new_document_tests {
         document.refresh_dirty(&tree);
         assert!(document.is_dirty());
         crate::model::set_objects(&mut tree, Vec::new());
-        tree.set_path("scene.cursor_position", ClaydashValue::Vec3(glam::Vec3::ZERO));
+        tree.set_path(
+            "scene.cursor_position",
+            ClaydashValue::Vec3(glam::Vec3::ZERO),
+        );
         document.refresh_dirty(&tree);
         assert!(!document.is_dirty());
     }
@@ -314,14 +324,29 @@ pub fn deserialize_scene(bytes: &[u8]) -> Result<ObservableKVTree<ClaydashValue>
         let mut repaired = false;
         for object in &mut objects {
             if let Some(mesh) = &object.imported_mesh {
-                if mesh.positions.len() > 10_000_000 || mesh.triangles.len() > 10_000_000
+                if mesh.positions.len() > 10_000_000
+                    || mesh.triangles.len() > 10_000_000
                     || mesh.owners.len() != mesh.triangles.len()
                     || mesh.normals.len() != mesh.triangles.len()
                     || (!mesh.uvs.is_empty() && mesh.uvs.len() != mesh.triangles.len())
                     || mesh.positions.iter().any(|point| !point.is_finite())
-                    || mesh.triangles.iter().flatten().any(|index| *index as usize >= mesh.positions.len())
-                    || mesh.normals.iter().flatten().any(|normal| !normal.is_finite())
-                    || mesh.uvs.iter().flatten().flatten().any(|coordinate| !coordinate.is_finite()) {
+                    || mesh
+                        .triangles
+                        .iter()
+                        .flatten()
+                        .any(|index| *index as usize >= mesh.positions.len())
+                    || mesh
+                        .normals
+                        .iter()
+                        .flatten()
+                        .any(|normal| !normal.is_finite())
+                    || mesh
+                        .uvs
+                        .iter()
+                        .flatten()
+                        .flatten()
+                        .any(|coordinate| !coordinate.is_finite())
+                {
                     return Err("Project contains invalid imported mesh data".into());
                 }
             }
@@ -336,8 +361,15 @@ pub fn deserialize_scene(bytes: &[u8]) -> Result<ObservableKVTree<ClaydashValue>
             }
         }
         let has_seams = objects.iter().any(|o| matches!(&o.params, crate::model::SdfParams::SheetPanelParams(p) if p.seam.is_some()));
-        if has_seams { crate::model::resolve_sheet_seams(&mut objects)?; }
-        if repaired || has_seams {
+        if has_seams {
+            crate::model::resolve_sheet_seams(&mut objects)?;
+        }
+        let seams = match scene.get_path("seams") {
+            ClaydashValue::Seams(value) => value,
+            _ => crate::model::SceneSeams::default(),
+        };
+        crate::model::resolve_seam_bindings(&seams, &mut objects)?;
+        if repaired || has_seams || !seams.bindings.is_empty() {
             scene.set_path("sdf_objects", ClaydashValue::VecSDFObject(objects));
         }
     }

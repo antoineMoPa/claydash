@@ -1,6 +1,6 @@
 //! MCP adapters for the shared scene language. Parsing and expansion live in the engine.
 use crate::model::SdfObject;
-use claydash_engine::scene_language::compile;
+use claydash_engine::scene_language::compile_with_assets;
 use glam::Vec3;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -23,9 +23,28 @@ impl super::App {
     fn dsl_draft(
         &self,
         source: &str,
-    ) -> Result<(crate::model::DataTree, Vec<(String, uuid::Uuid)>), String> {
+        base_dir: Option<&std::path::Path>,
+    ) -> Result<
+        (
+            crate::model::DataTree,
+            Vec<(String, uuid::Uuid)>,
+            Vec<(String, uuid::Uuid)>,
+        ),
+        String,
+    > {
         use crate::model::ClaydashValue;
-        let parts = compile(source)?;
+        let scene = compile_with_assets(source, &mut |path| {
+            let path = std::path::Path::new(path);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                base_dir
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(path)
+            };
+            crate::mesh_assets::load_glb(&path)
+        })?;
+        let parts = scene.parts;
         let paths = parts
             .iter()
             .map(|(path, object)| (path.clone(), object.uuid))
@@ -37,6 +56,7 @@ impl super::App {
             "scene.sdf_objects",
             ClaydashValue::VecSDFObject(parts.into_iter().map(|(_, object)| object).collect()),
         );
+        draft.set_path("scene.seams", ClaydashValue::Seams(scene.seams));
         draft.set_path("scene.dsl_recipe", ClaydashValue::None);
         draft.set_path(
             super::boolean_policy::FLAG_PATH,
@@ -49,18 +69,23 @@ impl super::App {
         super::validate_scene(&draft)?;
         super::boolean_policy::validate_transition(&self.tree, &draft)?;
         super::smooth_blend_policy::validate_transition(&self.tree, &draft)?;
-        Ok((draft, paths))
+        Ok((draft, paths, scene.seam_paths))
     }
-    pub(super) fn agent_validate_scene_dsl(&self, source: &str) -> super::AgentResult {
-        let (_, paths) = self.dsl_draft(source)?;
+    pub(super) fn agent_validate_scene_dsl(
+        &self,
+        source: &str,
+        base_dir: Option<&std::path::Path>,
+    ) -> super::AgentResult {
+        let (_, paths, seams) = self.dsl_draft(source, base_dir)?;
         Ok(
-            serde_json::json!({"valid":true,"objects":paths.iter().map(|(path,id)|serde_json::json!({"path":path,"id":id})).collect::<Vec<_>>(),"revision":self.scene_revision()}),
+            serde_json::json!({"valid":true,"objects":paths.iter().map(|(path,id)|serde_json::json!({"path":path,"id":id})).collect::<Vec<_>>(),"seams":seams.iter().map(|(path,id)|serde_json::json!({"path":path,"id":id})).collect::<Vec<_>>(),"revision":self.scene_revision()}),
         )
     }
     pub(super) fn agent_apply_scene_dsl(
         &mut self,
         source: String,
         expected_revision: Option<u64>,
+        base_dir: Option<std::path::PathBuf>,
     ) -> super::AgentResult {
         if expected_revision.is_some_and(|expected| expected != self.scene_revision()) {
             return Err(format!(
@@ -68,13 +93,15 @@ impl super::App {
                 self.scene_revision()
             ));
         }
-        let (mut draft, paths) = self.dsl_draft(&source)?;
+        let (mut draft, paths, seams) = self.dsl_draft(&source, base_dir.as_deref())?;
         let digest = digest_scene(&draft)?;
         draft.set_path(
             "scene.dsl_recipe",
             crate::model::ClaydashValue::SceneDslRecipe(crate::model::SceneDslRecipe {
                 source,
                 scene_digest: digest,
+                base_dir,
+                part_paths: paths.clone(),
             }),
         );
         crate::model::set_selected_exact(&mut draft, Vec::new());
@@ -86,13 +113,13 @@ impl super::App {
         self.clear_document_egui_state();
         self.ui.reset_animation(&self.tree);
         Ok(
-            serde_json::json!({"revision":self.scene_revision(),"objects":paths.iter().map(|(path,id)|serde_json::json!({"path":path,"id":id})).collect::<Vec<_>>()}),
+            serde_json::json!({"revision":self.scene_revision(),"objects":paths.iter().map(|(path,id)|serde_json::json!({"path":path,"id":id})).collect::<Vec<_>>(),"seams":seams.iter().map(|(path,id)|serde_json::json!({"path":path,"id":id})).collect::<Vec<_>>()}),
         )
     }
     pub(super) fn agent_get_scene_dsl(&self) -> super::AgentResult {
         match self.tree.get_path("scene.dsl_recipe") {
             crate::model::ClaydashValue::SceneDslRecipe(recipe) => Ok(
-                serde_json::json!({"source":recipe.source,"in_sync":digest_scene(&self.tree)?==recipe.scene_digest,"revision":self.scene_revision()}),
+                serde_json::json!({"source":recipe.source,"base_dir":recipe.base_dir,"parts":recipe.part_paths,"in_sync":digest_scene(&self.tree)?==recipe.scene_digest,"revision":self.scene_revision()}),
             ),
             _ => Ok(
                 serde_json::json!({"source":null,"in_sync":null,"revision":self.scene_revision()}),
@@ -119,10 +146,30 @@ impl super::App {
                 return Err("no DSL recipe is stored".into());
             };
             let prefix = format!("{}/", path.trim_end_matches('/'));
-            let ids: HashSet<_> = compile(&recipe.source)?
+            let paths = if !recipe.part_paths.is_empty() {
+                recipe.part_paths
+            } else {
+                compile_with_assets(&recipe.source, &mut |asset| {
+                    let asset = std::path::Path::new(asset);
+                    crate::mesh_assets::load_glb(&if asset.is_absolute() {
+                        asset.to_path_buf()
+                    } else {
+                        recipe
+                            .base_dir
+                            .as_deref()
+                            .unwrap_or_else(|| std::path::Path::new("."))
+                            .join(asset)
+                    })
+                })?
+                .parts
+                .into_iter()
+                .map(|(path, o)| (path, o.uuid))
+                .collect()
+            };
+            let ids: HashSet<_> = paths
                 .into_iter()
                 .filter(|(p, _)| p == path || p.starts_with(&prefix))
-                .map(|(_, o)| o.uuid)
+                .map(|(_, id)| id)
                 .collect();
             if ids.is_empty() {
                 return Err(format!("no objects match path '{path}'"));
@@ -166,10 +213,10 @@ place(table(width: 2, height: 1), at: [5, 0, 0]);
         let original = crate::model::objects(&app.tree);
         let revision = app.scene_revision();
         assert!(app
-            .agent_validate_scene_dsl("a = box(size: [0,1,1]);")
+            .agent_validate_scene_dsl("a = box(size: [0,1,1]);", None)
             .is_err());
         assert_eq!(app.scene_revision(), revision);
-        app.agent_apply_scene_dsl(TABLE.into(), Some(revision))
+        app.agent_apply_scene_dsl(TABLE.into(), Some(revision), None)
             .unwrap();
         assert_eq!(crate::model::objects(&app.tree).len(), 5);
         assert_eq!(app.agent_get_scene_dsl().unwrap()["in_sync"], true);
@@ -191,7 +238,90 @@ place(table(width: 2, height: 1), at: [5, 0, 0]);
         app.tree.redo();
         assert_eq!(crate::model::objects(&app.tree).len(), 5);
         assert!(app
-            .agent_apply_scene_dsl(TABLE.into(), Some(revision))
+            .agent_apply_scene_dsl(TABLE.into(), Some(revision), None)
             .is_err());
+    }
+    #[test]
+    fn asset_recipe_roundtrips_and_named_capture_survives_missing_source() {
+        let dir = std::env::temp_dir().join(format!("claydash-dsl-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("reference.glb"),
+            crate::app::file_action_tests::triangle_glb(),
+        )
+        .unwrap();
+        let source = r#"reference=mesh_asset(path:"reference.glb"); panel=sheet_panel(size:[2,1],lattice:lattice()); edge=seam(points:[[-1,-0.5,0],[-1,0.5,0]]); bind(object:"panel",seam:"edge",target:sheet_edge("MinX"));"#;
+        let mut app = super::super::App::new();
+        app.new_document();
+        let a = app
+            .agent_apply_scene_dsl(source.into(), None, Some(dir.clone()))
+            .unwrap();
+        let b = app
+            .agent_apply_scene_dsl(source.into(), None, Some(dir.clone()))
+            .unwrap();
+        assert_eq!(a["objects"], b["objects"]);
+        assert_eq!(a["seams"], b["seams"]);
+        assert!(a.get("document").is_none());
+        assert_eq!(crate::model::scene_seams(&app.tree).bindings.len(), 1);
+        assert_eq!(app.agent_get_scene_dsl().unwrap()["in_sync"], true);
+        let bytes = crate::document::serialize_scene(&app.tree).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let mut reopened = super::super::App::new();
+        reopened.replace_scene(crate::document::deserialize_scene(&bytes).unwrap());
+        assert_eq!(reopened.agent_get_scene_dsl().unwrap()["in_sync"], true);
+        let (parts, _, _, _) = reopened
+            .prepare_dsl_capture(Some("reference"), Some(128))
+            .unwrap();
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].imported_mesh.is_some());
+        let before = reopened.scene_revision();
+        assert!(reopened
+            .agent_apply_scene_dsl(source.into(), None, Some(dir))
+            .is_err());
+        assert_eq!(reopened.scene_revision(), before);
+        assert_eq!(crate::model::scene_seams(&reopened.tree).bindings.len(), 1);
+    }
+    #[test]
+    fn detailed_sheet_recipe_is_atomic_and_persists_native_operations() {
+        let source = include_str!("../../../examples/sheet-relief.claydef");
+        let mut app = super::super::App::new();
+        app.new_document();
+        app.agent_apply_scene_dsl(source.into(), None, None)
+            .unwrap();
+        let original = serde_json::to_value(crate::model::objects(&app.tree)).unwrap();
+        let revision = app.scene_revision();
+        assert!(app
+            .agent_apply_scene_dsl(
+                source.replace("transition: 0.12", "transition: 0"),
+                None,
+                None
+            )
+            .is_err());
+        assert_eq!(app.scene_revision(), revision);
+        let bytes = crate::document::serialize_scene(&app.tree).unwrap();
+        app.replace_scene(crate::document::deserialize_scene(&bytes).unwrap());
+        assert_eq!(
+            serde_json::to_value(crate::model::objects(&app.tree)).unwrap(),
+            original
+        );
+        assert_eq!(app.agent_get_scene_dsl().unwrap()["in_sync"], true);
+    }
+    #[test]
+    fn saved_source_bindings_keep_exact_controls_on_reopen() {
+        let source = r#"panel=sheet_panel(size:[2,1],lattice:lattice(min:[-1,-0.5,-0.1],max:[1,0.5,0.1])); join=seam(points:[[-1,-0.5,0],[-1,0,0.04],[-1,0.5,0]]); bind(object:"panel",seam:"join",target:sheet_edge("MinX"));"#;
+        let mut app = super::super::App::new();
+        app.new_document();
+        app.agent_apply_scene_dsl(source.into(), None, None)
+            .unwrap();
+        let original = serde_json::to_value(crate::model::objects(&app.tree)).unwrap();
+        for _ in 0..3 {
+            let bytes = crate::document::serialize_scene(&app.tree).unwrap();
+            app.replace_scene(crate::document::deserialize_scene(&bytes).unwrap());
+            assert_eq!(
+                serde_json::to_value(crate::model::objects(&app.tree)).unwrap(),
+                original
+            );
+            assert_eq!(app.agent_get_scene_dsl().unwrap()["in_sync"], true);
+        }
     }
 }

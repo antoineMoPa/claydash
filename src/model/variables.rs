@@ -400,6 +400,7 @@ pub fn try_set_scene_variables(
         rigid_binding_pose(&variables, &objects, binding)?;
     }
     super::resolve_sheet_seams(&mut objects)?;
+    super::resolve_seam_bindings(&super::scene_seams(tree), &mut objects)?;
     set_scene_variables(tree, variables);
     Ok(())
 }
@@ -487,7 +488,11 @@ pub fn set_scene_variables(tree: &mut DataTree, mut variables: SceneVariables) {
     evaluate_derived_variables(&mut variables);
     let mut objects = super::objects(tree);
     apply_vector_bindings(&variables, &mut objects);
-    if super::resolve_sheet_seams(&mut objects).is_err() { return; }
+    if super::resolve_sheet_seams(&mut objects).is_err()
+        || super::resolve_seam_bindings(&super::scene_seams(tree), &mut objects).is_err()
+    {
+        return;
+    }
     tree.set_path("scene.variables", ClaydashValue::SceneVariables(variables));
     super::set_objects(tree, objects);
 }

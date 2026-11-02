@@ -1,7 +1,7 @@
 //! Surface deformation matching the native four-step cage inverse.
 use super::{check_cancel, Mesh};
 use crate::model::{Lattice, SdfObject, SdfParams};
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat4, Vec3};
 use std::{collections::BTreeMap, sync::atomic::AtomicBool};
 
 struct Cage<'a> {
@@ -11,51 +11,21 @@ struct Cage<'a> {
     inverse: Mat4,
 }
 impl Cage<'_> {
+    #[cfg(test)]
     fn native_rest(&self, point: Vec3) -> Vec3 {
-        let mut rest = point;
-        for _ in 0..4 {
-            rest = point - self.lattice.displacement_with_offsets(rest, &self.offsets);
-        }
-        rest
+        self.lattice.native_rest_with_offsets(point, &self.offsets)
     }
     fn deform(&self, world: Vec3) -> Result<Vec3, String> {
         let rest = self.inverse.transform_point3(world);
-        let mut point = rest + self.lattice.displacement_with_offsets(rest, &self.offsets);
-        let epsilon = (self.lattice.max - self.lattice.min).min_element() * 1e-4;
-        for _ in 0..12 {
-            let error = rest - self.native_rest(point);
-            if error.length() <= 2e-6 {
-                let result = self.frame.transform_point3(point);
-                if result.is_finite() {
-                    return Ok(result);
-                }
-                break;
-            }
-            let column = |axis: Vec3| {
-                (self.native_rest(point + axis * epsilon)
-                    - self.native_rest(point - axis * epsilon))
-                    / (2.0 * epsilon)
-            };
-            let jacobian = Mat3::from_cols(column(Vec3::X), column(Vec3::Y), column(Vec3::Z));
-            if !jacobian.is_finite() || jacobian.determinant() <= 1e-8 {
-                break;
-            }
-            let step = jacobian.inverse() * error;
-            let before = error.length_squared();
-            let mut accepted = false;
-            for factor in [1.0, 0.5, 0.25, 0.125] {
-                let candidate = point + step * factor;
-                if (rest - self.native_rest(candidate)).length_squared() < before {
-                    point = candidate;
-                    accepted = true;
-                    break;
-                }
-            }
-            if !accepted {
-                break;
-            }
+        let point = self
+            .lattice
+            .deformed_point_with_offsets(rest, &self.offsets)?;
+        let result = self.frame.transform_point3(point);
+        if result.is_finite() {
+            Ok(result)
+        } else {
+            Err("nonfinite lattice world point".into())
         }
-        Err("Direct lattice cannot match native cage inversion to surface precision; reduce cage deformation".into())
     }
 }
 
@@ -67,10 +37,24 @@ pub(super) fn apply(
     resolution: u32,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    apply_with_error(scene,object,mesh,resolution,0.032/resolution.max(8) as f32,cancel)
+    apply_with_error(
+        scene,
+        object,
+        mesh,
+        resolution,
+        0.032 / resolution.max(8) as f32,
+        cancel,
+    )
 }
 
-pub(super) fn apply_with_error(scene:&[SdfObject],object:&SdfObject,mesh:&mut Mesh,_resolution:u32,error:f32,cancel:&AtomicBool)->Result<(),String> {
+pub(super) fn apply_with_error(
+    scene: &[SdfObject],
+    object: &SdfObject,
+    mesh: &mut Mesh,
+    _resolution: u32,
+    error: f32,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
     let mut ancestor = Some(object.uuid);
     let mut cage = None;
     for _ in 0..scene.len() {
@@ -176,11 +160,14 @@ fn refine(
                 check_cancel(cancel)?;
             }
             for (a, b) in [(a, b), (b, c), (c, a)] {
-                let pa=mesh.positions[a as usize];let pb=mesh.positions[b as usize];
-                let da=cage.deform(pa)?;let db=cage.deform(pb)?;
-                let split=[0.25,0.5,0.75].into_iter().any(|t| {
-                    let p=sheet_midpoint(object,matrix,pa.lerp(pb,t));
-                    cage.deform(p).map_or(true,|deformed|deformed.distance(da.lerp(db,t))>target)
+                let pa = mesh.positions[a as usize];
+                let pb = mesh.positions[b as usize];
+                let da = cage.deform(pa)?;
+                let db = cage.deform(pb)?;
+                let split = [0.25, 0.5, 0.75].into_iter().any(|t| {
+                    let p = sheet_midpoint(object, matrix, pa.lerp(pb, t));
+                    cage.deform(p)
+                        .map_or(true, |deformed| deformed.distance(da.lerp(db, t)) > target)
                 });
                 if split {
                     midpoints.entry(edge(a, b)).or_insert(0);

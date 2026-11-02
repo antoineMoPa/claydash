@@ -1,16 +1,17 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use sdf_consts::{
-    TYPE_BEZIER_CURVE, TYPE_BOX, TYPE_CYLINDER, TYPE_POLYGON_PRISM, TYPE_SPHERE,
-    TYPE_TEXT, TYPE_TORUS, TYPE_SHEET_PANEL,
+    TYPE_BEZIER_CURVE, TYPE_BOX, TYPE_CYLINDER, TYPE_POLYGON_PRISM, TYPE_SHEET_PANEL, TYPE_SPHERE,
+    TYPE_TEXT, TYPE_TORUS,
 };
 use serde::{Deserialize, Serialize};
 
+mod lattice_mapping;
 mod materials;
 mod optimization;
 mod primitives;
+mod sheet;
 mod spatial;
 mod text;
-mod sheet;
 pub use sheet::*;
 mod sheet_seams;
 pub use sheet_seams::resolve_sheet_seams;
@@ -342,7 +343,9 @@ impl SdfObject {
                     ],
                     closed: false,
                 }),
-                PrimitiveKind::SheetPanel => SdfParams::SheetPanelParams(SheetPanelParams::default()),
+                PrimitiveKind::SheetPanel => {
+                    SdfParams::SheetPanelParams(SheetPanelParams::default())
+                }
                 PrimitiveKind::Text => SdfParams::TextParams(TextParams::default()),
             },
             name: kind.label().to_string(),
@@ -377,7 +380,9 @@ impl SdfObject {
         if let Some(mesh) = &self.imported_mesh {
             let mut duplicated = (**mesh).clone();
             for owner in &mut duplicated.owners {
-                if *owner == self.uuid { *owner = copy.uuid; }
+                if *owner == self.uuid {
+                    *owner = copy.uuid;
+                }
             }
             copy.imported_mesh = Some(std::sync::Arc::new(duplicated));
         }
@@ -437,7 +442,9 @@ impl SdfObject {
         text: Option<&PreparedText>,
     ) -> f32 {
         // Imported radiance has no solid surface for Boolean or mesh queries.
-        if self.imported_splats.is_some() || self.imported_mesh.is_some() { return f32::INFINITY; }
+        if self.imported_splats.is_some() || self.imported_mesh.is_some() {
+            return f32::INFINITY;
+        }
         if repeat && self.repetition.enabled {
             if let RepetitionMode::Radial { axis, count, pivot } = self.repetition.mode {
                 let mut distance = f32::INFINITY;

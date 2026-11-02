@@ -4,11 +4,6 @@ use std::sync::Arc;
 pub(crate) mod agent;
 mod events;
 mod initialization;
-mod pointer_input;
-mod rendering;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod navigation_profile;
-mod mesh_export_options;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_actions;
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,6 +12,11 @@ mod mesh_export;
 #[cfg(target_arch = "wasm32")]
 #[path = "app/web_mesh_export.rs"]
 mod mesh_export;
+mod mesh_export_options;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod navigation_profile;
+mod pointer_input;
+mod rendering;
 #[cfg(target_arch = "wasm32")]
 #[path = "app/web_ply_import.rs"]
 mod web_ply_import;
@@ -73,12 +73,34 @@ use crate::document;
 
 #[cfg(target_arch = "wasm32")]
 enum WebDocumentMessage {
-    PlyFile { request: Option<u64>, file: web_sys::File },
-    PlyBatch { request: u64, data: Vec<u8>, count: usize, loaded: usize, total: usize },
-    PlyProgress { request: u64, parsed: usize, total: usize },
-    PlyComplete { request: u64, total: usize },
-    PlyError { request: u64, message: String },
-    DroppedFile { name: String, bytes: Vec<u8> },
+    PlyFile {
+        request: Option<u64>,
+        file: web_sys::File,
+    },
+    PlyBatch {
+        request: u64,
+        data: Vec<u8>,
+        count: usize,
+        loaded: usize,
+        total: usize,
+    },
+    PlyProgress {
+        request: u64,
+        parsed: usize,
+        total: usize,
+    },
+    PlyComplete {
+        request: u64,
+        total: usize,
+    },
+    PlyError {
+        request: u64,
+        message: String,
+    },
+    DroppedFile {
+        name: String,
+        bytes: Vec<u8>,
+    },
     Opened {
         request: u64,
         name: std::path::PathBuf,
@@ -259,7 +281,8 @@ impl App {
         let mut tree = self.tree.clone();
         if let Some(renderer) = &self.renderer {
             let source = objects_ref(&self.tree);
-            let objects = renderer.optimized_objects_for_save(source, rendering::mesh_source_revision(source));
+            let objects = renderer
+                .optimized_objects_for_save(source, rendering::mesh_source_revision(source));
             crate::model::set_objects(&mut tree, objects);
         }
         tree
@@ -268,7 +291,9 @@ impl App {
     fn cancel_document_work(&mut self) {
         self.mesh_export_options = None;
         #[cfg(target_arch = "wasm32")]
-        { self.web_ply_import = None; }
+        {
+            self.web_ply_import = None;
+        }
         self.cancel_render();
         self.cancel_mesh_export_for_document_change();
         // The worker retains its cancellation token. Its eventual completion
@@ -286,7 +311,9 @@ impl App {
         self.cancel_document_work();
         self.tree = data_tree_with_scene(scene);
         #[cfg(all(not(target_arch = "wasm32"), unix))]
-        { self.agent_revision = self.agent_revision.saturating_add(1); }
+        {
+            self.agent_revision = self.agent_revision.saturating_add(1);
+        }
         self.interactions = InteractionState::default();
         self.ui.reset_document_gestures();
         self.clear_document_egui_state();
@@ -298,15 +325,21 @@ impl App {
         Ok(self.install_gaussian_cloud(name, cloud))
     }
 
-    fn install_gaussian_cloud(&mut self, name: &str, cloud: claydash_engine::gaussian_ply::GaussianCloud) -> uuid::Uuid {
-        let bounds = cloud.splats.iter().filter_map(|splat| {
-            splat.position.is_finite().then_some(splat.position)
-        }).fold(None, |bounds: Option<(glam::Vec3, glam::Vec3)>, point| {
-            Some(match bounds {
-                Some((min, max)) => (min.min(point), max.max(point)),
-                None => (point, point),
-            })
-        });
+    fn install_gaussian_cloud(
+        &mut self,
+        name: &str,
+        cloud: claydash_engine::gaussian_ply::GaussianCloud,
+    ) -> uuid::Uuid {
+        let bounds = cloud
+            .splats
+            .iter()
+            .filter_map(|splat| splat.position.is_finite().then_some(splat.position))
+            .fold(None, |bounds: Option<(glam::Vec3, glam::Vec3)>, point| {
+                Some(match bounds {
+                    Some((min, max)) => (min.min(point), max.max(point)),
+                    None => (point, point),
+                })
+            });
         let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
         object.name = name.to_owned();
         object.imported_splats = Some(std::sync::Arc::new(cloud));
@@ -323,8 +356,8 @@ impl App {
             let aspect = (self.camera.viewport.x / self.camera.viewport.y.max(1.0)).max(0.01);
             let vertical_half_angle = 22.5_f32.to_radians();
             let horizontal_half_angle = (vertical_half_angle.tan() * aspect).atan();
-            let distance = (radius * 1.15 / vertical_half_angle.min(horizontal_half_angle).sin())
-                .max(0.5);
+            let distance =
+                (radius * 1.15 / vertical_half_angle.min(horizontal_half_angle).sin()).max(0.5);
             let offset = self.camera.position - self.camera.target;
             let direction = if offset.length_squared() > 0.0 {
                 offset / offset.length()
@@ -343,8 +376,11 @@ impl App {
         }
         image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
         let mut object = crate::model::SdfObject::create_image_plane();
-        object.name = std::path::Path::new(name).file_stem()
-            .unwrap_or_default().to_string_lossy().into_owned();
+        object.name = std::path::Path::new(name)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let stencil = crate::model::ImageStencil::new(name.to_owned(), bytes, true);
         if let crate::model::SdfParams::BoxParams(params) = &mut object.params {
             params.box_q.x = stencil.size.x * 0.5;
@@ -361,60 +397,11 @@ impl App {
     }
 
     fn import_glb(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<uuid::Uuid>, String> {
-        let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| error.to_string())?;
-        let blob = gltf.blob.as_deref().ok_or("GLB has no embedded geometry buffer")?;
-        let scene = gltf.default_scene().or_else(|| gltf.scenes().next())
-            .ok_or("GLB has no scene")?;
-        let mut imported = Vec::new();
-        let mut pending = scene.nodes().map(|node| (node, glam::Mat4::IDENTITY)).collect::<Vec<_>>();
-        while let Some((node, parent)) = pending.pop() {
-            let transform = parent * glam::Mat4::from_cols_array_2d(&node.transform().matrix());
-            pending.extend(node.children().map(|child| (child, transform)));
-            let Some(mesh) = node.mesh() else { continue };
-            for (primitive_index, primitive) in mesh.primitives().enumerate() {
-                if primitive.mode() != gltf::mesh::Mode::Triangles {
-                    continue;
-                }
-                let reader = primitive.reader(|buffer| (buffer.index() == 0).then_some(blob));
-                let mut positions = reader.read_positions().ok_or("GLB mesh has no positions")?
-                    .map(|point| transform.transform_point3(glam::Vec3::from_array(point)))
-                    .collect::<Vec<_>>();
-                let indices = reader.read_indices().map(|indices| indices.into_u32().collect::<Vec<_>>())
-                    .unwrap_or_else(|| (0..positions.len() as u32).collect());
-                if positions.len() > 10_000_000 || indices.len() / 3 > 10_000_000
-                    || indices.len() % 3 != 0 || indices.iter().any(|index| *index as usize >= positions.len())
-                    || positions.iter().any(|position| !position.is_finite()) {
-                    return Err("GLB has invalid triangle geometry".into());
-                }
-                if indices.is_empty() { continue; }
-                let (minimum, maximum) = positions.iter().fold(
-                    (glam::Vec3::splat(f32::INFINITY), glam::Vec3::splat(f32::NEG_INFINITY)),
-                    |(minimum, maximum), point| (minimum.min(*point), maximum.max(*point)),
-                );
-                let center = (minimum + maximum) * 0.5;
-                for position in &mut positions { *position -= center; }
-                let mut object = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
-                object.transform.translation = center;
-                object.name = mesh.name().or_else(|| node.name()).map(str::to_owned)
-                    .unwrap_or_else(|| format!("{name} mesh {}", primitive_index + 1));
-                object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
-                let reflected = transform.determinant() < 0.0;
-                let triangles = indices.chunks_exact(3).map(|face| {
-                    if reflected { [face[0], face[2], face[1]] }
-                    else { [face[0], face[1], face[2]] }
-                })
-                    .collect::<Vec<_>>();
-                let owners = vec![object.uuid; triangles.len()];
-                object.imported_mesh = Some(Arc::new(
-                    crate::renderer::poisson_mesh::geometry::Mesh::from_parts(positions, triangles, owners)
-                ));
-                let color = primitive.material().pbr_metallic_roughness().base_color_factor();
-                object.color = glam::Vec4::from_array(color);
-                imported.push(object);
-            }
-        }
-        if imported.is_empty() { return Err("GLB contains no triangle meshes".into()); }
-        let ids = imported.iter().map(|object| object.uuid).collect::<Vec<_>>();
+        let imported = crate::mesh_assets::decode_glb(name, bytes)?;
+        let ids = imported
+            .iter()
+            .map(|object| object.uuid)
+            .collect::<Vec<_>>();
         let mut objects = crate::model::objects(&self.tree);
         objects.extend(imported);
         self.tree.make_undo_redo_snapshot();
@@ -433,24 +420,33 @@ impl App {
         if incoming.is_empty() && cameras.is_empty() {
             return Err("Project contains no objects or cameras".into());
         }
-        let ids = incoming.iter().map(|object| object.uuid)
+        let ids = incoming
+            .iter()
+            .map(|object| object.uuid)
             .chain(cameras.iter().map(|camera| camera.uuid))
             .chain(materials.iter().map(|material| material.uuid))
             .map(|id| (id, uuid::Uuid::new_v4()))
             .collect::<std::collections::HashMap<_, _>>();
-        let selected = incoming.iter().map(|object| ids[&object.uuid])
-            .chain(cameras.iter().map(|camera| ids[&camera.uuid])).collect::<Vec<_>>();
+        let selected = incoming
+            .iter()
+            .map(|object| ids[&object.uuid])
+            .chain(cameras.iter().map(|camera| ids[&camera.uuid]))
+            .collect::<Vec<_>>();
         for object in &mut incoming {
             let old_id = object.uuid;
             object.uuid = ids[&old_id];
             object.boolean_parent = object.boolean_parent.and_then(|id| ids.get(&id).copied());
             object.material_id = object.material_id.and_then(|id| ids.get(&id).copied());
             if let Some(inlay) = &mut object.surface_inlay {
-                if let Some(id) = ids.get(&inlay.host) { inlay.host = *id; }
-                else { object.surface_inlay = None; }
+                if let Some(id) = ids.get(&inlay.host) {
+                    inlay.host = *id;
+                } else {
+                    object.surface_inlay = None;
+                }
             }
             if let Some(extrusion) = &mut object.path_extrusion {
-                extrusion.profile_curve = extrusion.profile_curve.and_then(|id| ids.get(&id).copied());
+                extrusion.profile_curve =
+                    extrusion.profile_curve.and_then(|id| ids.get(&id).copied());
             }
             match &mut object.params {
                 crate::model::SdfParams::TextParams(params) => {
@@ -458,8 +454,11 @@ impl App {
                 }
                 crate::model::SdfParams::SheetPanelParams(params) => {
                     if let Some(seam) = &mut params.seam {
-                        if let Some(id) = ids.get(&seam.source) { seam.source = *id; }
-                        else { params.seam = None; }
+                        if let Some(id) = ids.get(&seam.source) {
+                            seam.source = *id;
+                        } else {
+                            params.seam = None;
+                        }
                     }
                 }
                 _ => {}
@@ -467,15 +466,21 @@ impl App {
             if let Some(mesh) = &mut object.imported_mesh {
                 let mesh = Arc::make_mut(mesh);
                 for owner in &mut mesh.owners {
-                    if let Some(id) = ids.get(owner) { *owner = *id; }
+                    if let Some(id) = ids.get(owner) {
+                        *owner = *id;
+                    }
                 }
             }
             object.saved_mesh = None;
             object.saved_group_capture = None;
             object.saved_neural_field = None;
         }
-        for camera in &mut cameras { camera.uuid = ids[&camera.uuid]; }
-        for material in &mut materials { material.uuid = ids[&material.uuid]; }
+        for camera in &mut cameras {
+            camera.uuid = ids[&camera.uuid];
+        }
+        for material in &mut materials {
+            material.uuid = ids[&material.uuid];
+        }
         let mut objects = crate::model::objects(&self.tree);
         objects.extend(incoming);
         let mut destination_cameras = crate::model::scene_cameras(&self.tree);
@@ -491,13 +496,21 @@ impl App {
     }
 
     fn handle_dropped_bytes(&mut self, name: &str, bytes: Vec<u8>) {
-        let extension = std::path::Path::new(name).extension()
-            .and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase();
+        let extension = std::path::Path::new(name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         let result = match extension.as_str() {
-            "ply" => self.import_gaussian_ply(
-                std::path::Path::new(name).file_stem().and_then(|stem| stem.to_str()).unwrap_or(name),
-                &bytes,
-            ).map(|_| ()),
+            "ply" => self
+                .import_gaussian_ply(
+                    std::path::Path::new(name)
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or(name),
+                    &bytes,
+                )
+                .map(|_| ()),
             "png" | "jpg" | "jpeg" | "webp" => self.import_image_plane(name, bytes).map(|_| ()),
             "claydash" => self.import_project_contents(&bytes).map(|_| ()),
             "glb" => self.import_glb(name, &bytes).map(|_| ()),
@@ -511,46 +524,68 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn install_web_file_drop(&self, _window: &Window) {
         use wasm_bindgen::JsCast;
-        let Some(document) = web_sys::window().and_then(|window| window.document()) else { return };
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+            return;
+        };
         let dragover = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::DragEvent)>::new(
             |event: web_sys::DragEvent| event.prevent_default(),
         );
-        document.add_event_listener_with_callback("dragover", dragover.as_ref().unchecked_ref()).ok();
+        document
+            .add_event_listener_with_callback("dragover", dragover.as_ref().unchecked_ref())
+            .ok();
         dragover.forget();
         let tx = self.document_tx.clone();
         let ctx = self.egui.clone();
-        let drop = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::DragEvent)>::new(move |event: web_sys::DragEvent| {
-            event.prevent_default();
-            let Some(files) = event.data_transfer().and_then(|transfer| transfer.files()) else { return };
-            for index in 0..files.length() {
-                let Some(file) = files.get(index) else { continue };
-                let tx = tx.clone();
-                let ctx = ctx.clone();
-                if file.name().to_ascii_lowercase().ends_with(".ply") {
-                    let _ = tx.send(WebDocumentMessage::PlyFile { request: None, file });
-                    ctx.request_repaint();
-                    continue;
+        let drop = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::DragEvent)>::new(
+            move |event: web_sys::DragEvent| {
+                event.prevent_default();
+                let Some(files) = event.data_transfer().and_then(|transfer| transfer.files())
+                else {
+                    return;
+                };
+                for index in 0..files.length() {
+                    let Some(file) = files.get(index) else {
+                        continue;
+                    };
+                    let tx = tx.clone();
+                    let ctx = ctx.clone();
+                    if file.name().to_ascii_lowercase().ends_with(".ply") {
+                        let _ = tx.send(WebDocumentMessage::PlyFile {
+                            request: None,
+                            file,
+                        });
+                        ctx.request_repaint();
+                        continue;
+                    }
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let name = file.name();
+                        let promise = file.array_buffer();
+                        let Ok(buffer) = wasm_bindgen_futures::JsFuture::from(promise).await else {
+                            return;
+                        };
+                        let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+                        let _ = tx.send(WebDocumentMessage::DroppedFile { name, bytes });
+                        ctx.request_repaint();
+                    });
                 }
-                wasm_bindgen_futures::spawn_local(async move {
-                    let name = file.name();
-                    let promise = file.array_buffer();
-                    let Ok(buffer) = wasm_bindgen_futures::JsFuture::from(promise).await else { return };
-                    let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-                    let _ = tx.send(WebDocumentMessage::DroppedFile { name, bytes });
-                    ctx.request_repaint();
-                });
-            }
-        });
-        document.add_event_listener_with_callback("drop", drop.as_ref().unchecked_ref()).ok();
+            },
+        );
+        document
+            .add_event_listener_with_callback("drop", drop.as_ref().unchecked_ref())
+            .ok();
         drop.forget();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_dropped_path(&mut self, path: &std::path::Path) {
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return };
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return;
+        };
         match std::fs::read(path) {
             Ok(bytes) => self.handle_dropped_bytes(name, bytes),
-            Err(error) => self.document.set_error("read dropped file", error.to_string()),
+            Err(error) => self
+                .document
+                .set_error("read dropped file", error.to_string()),
         }
     }
 
@@ -598,29 +633,38 @@ impl App {
 
     fn clear_document_egui_state(&self) {
         self.egui.data_mut(|data| {
-            data.remove_temp::<crate::renderer::computation::Statuses>(crate::renderer::computation::status_id());
-            data.remove_temp::<Vec<crate::renderer::voxels::VoxelAction>>(
-                egui::Id::new("voxel-actions"));
+            data.remove_temp::<crate::renderer::computation::Statuses>(
+                crate::renderer::computation::status_id(),
+            );
+            data.remove_temp::<Vec<crate::renderer::voxels::VoxelAction>>(egui::Id::new(
+                "voxel-actions",
+            ));
             data.remove_temp::<std::collections::HashMap<uuid::Uuid,
                 crate::renderer::voxels::VoxelStatus>>(egui::Id::new("voxel-status"));
             data.remove_temp::<Vec<crate::renderer::poisson_mesh::PoissonMeshAction>>(
-                egui::Id::new("poisson-mesh-actions"));
-            data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(
-                egui::Id::new("group-optimization-recompute"));
-            data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(
-                egui::Id::new("group-optimization-cancel"));
-            data.remove_temp::<std::collections::HashMap<uuid::Uuid,
-                crate::renderer::poisson_mesh::PoissonMeshStatus>>(
-                egui::Id::new("poisson-mesh-status"));
+                egui::Id::new("poisson-mesh-actions"),
+            );
+            data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(
+                "group-optimization-recompute",
+            ));
+            data.remove_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(
+                "group-optimization-cancel",
+            ));
+            data.remove_temp::<std::collections::HashMap<
+                uuid::Uuid,
+                crate::renderer::poisson_mesh::PoissonMeshStatus,
+            >>(egui::Id::new("poisson-mesh-status"));
             data.remove_temp::<std::collections::HashMap<uuid::Uuid,
                 crate::renderer::NeuralStatus>>(egui::Id::new("neural-sdf-status"));
             data.remove_temp::<std::collections::HashMap<uuid::Uuid,
                 crate::model::NeuralTrainingSettings>>(
                 egui::Id::new("neural-sdf-applied-settings"));
-            data.remove_temp::<std::collections::HashMap<uuid::Uuid, u64>>(
-                egui::Id::new("depth-accelerator-ready"));
-            data.remove_temp::<std::collections::HashMap<uuid::Uuid, (i32, u32)>>(
-                egui::Id::new("depth-accelerator-progress"));
+            data.remove_temp::<std::collections::HashMap<uuid::Uuid, u64>>(egui::Id::new(
+                "depth-accelerator-ready",
+            ));
+            data.remove_temp::<std::collections::HashMap<uuid::Uuid, (i32, u32)>>(egui::Id::new(
+                "depth-accelerator-progress",
+            ));
         });
     }
 
@@ -659,8 +703,13 @@ impl App {
     fn handle_file_action(&mut self, action: FileMenuAction) {
         match action {
             FileMenuAction::ImportGaussianPly => {
-                if let Some(path) = rfd::FileDialog::new().add_filter("Gaussian PLY", &["ply"]).pick_file() {
-                    if let Err(error) = self.import_gaussian_path(&path) { self.document.set_error("import Gaussian PLY", error); }
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Gaussian PLY", &["ply"])
+                    .pick_file()
+                {
+                    if let Err(error) = self.import_gaussian_path(&path) {
+                        self.document.set_error("import Gaussian PLY", error);
+                    }
                 }
             }
             FileMenuAction::New => self.new_document(),
@@ -771,8 +820,15 @@ impl App {
                 let tx = self.document_tx.clone();
                 let ctx = self.egui.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    if let Some(file) = rfd::AsyncFileDialog::new().add_filter("Gaussian PLY", &["ply"]).pick_file().await {
-                        let _ = tx.send(WebDocumentMessage::PlyFile { request: Some(request), file: file.inner().clone() });
+                    if let Some(file) = rfd::AsyncFileDialog::new()
+                        .add_filter("Gaussian PLY", &["ply"])
+                        .pick_file()
+                        .await
+                    {
+                        let _ = tx.send(WebDocumentMessage::PlyFile {
+                            request: Some(request),
+                            file: file.inner().clone(),
+                        });
                         ctx.request_repaint();
                     }
                 });
@@ -912,27 +968,52 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn process_web_document_messages(&mut self) {
         for _ in 0..4 {
-            let Ok(message) = self.document_rx.try_recv() else { break };
+            let Ok(message) = self.document_rx.try_recv() else {
+                break;
+            };
             match message {
                 WebDocumentMessage::PlyFile { request, file } => {
-                    if request.is_some_and(|request| request != self.document_request) { continue; }
+                    if request.is_some_and(|request| request != self.document_request) {
+                        continue;
+                    }
                     self.web_ply_import = None;
                     self.web_ply_generation = self.web_ply_generation.wrapping_add(1);
                     let request = self.web_ply_generation;
-                    match web_ply_import::WebPlyImport::start(file, request, self.document_tx.clone(), self.egui.clone()) {
+                    match web_ply_import::WebPlyImport::start(
+                        file,
+                        request,
+                        self.document_tx.clone(),
+                        self.egui.clone(),
+                    ) {
                         Ok(job) => self.web_ply_import = Some(job),
                         Err(error) => self.document.set_error("import Gaussian PLY", error),
                     }
                 }
-                WebDocumentMessage::PlyBatch { request, data, count, loaded, total } => {
-                    if let Some(job) = self.web_ply_import.as_mut().filter(|job| job.request == request) {
+                WebDocumentMessage::PlyBatch {
+                    request,
+                    data,
+                    count,
+                    loaded,
+                    total,
+                } => {
+                    if let Some(job) = self
+                        .web_ply_import
+                        .as_mut()
+                        .filter(|job| job.request == request)
+                    {
                         match claydash_engine::gaussian_ply::decode_batch(&data, count) {
                             Ok(batch) => {
                                 if job.splats.capacity() < total
-                                    && job.splats.try_reserve_exact(total.saturating_sub(job.splats.len())).is_err()
+                                    && job
+                                        .splats
+                                        .try_reserve_exact(total.saturating_sub(job.splats.len()))
+                                        .is_err()
                                 {
                                     self.web_ply_import = None;
-                                    self.document.set_error("import Gaussian PLY", "not enough memory for the cloud");
+                                    self.document.set_error(
+                                        "import Gaussian PLY",
+                                        "not enough memory for the cloud",
+                                    );
                                 } else {
                                     job.splats.extend(batch);
                                     job.loaded = loaded;
@@ -946,24 +1027,46 @@ impl App {
                         }
                     }
                 }
-                WebDocumentMessage::PlyProgress { request, parsed, total } => {
-                    if let Some(job) = self.web_ply_import.as_mut().filter(|job| job.request == request) {
+                WebDocumentMessage::PlyProgress {
+                    request,
+                    parsed,
+                    total,
+                } => {
+                    if let Some(job) = self
+                        .web_ply_import
+                        .as_mut()
+                        .filter(|job| job.request == request)
+                    {
                         job.parsed = parsed;
                         job.total = total;
                     }
                 }
                 WebDocumentMessage::PlyComplete { request, total } => {
-                    if self.web_ply_import.as_ref().is_some_and(|job| job.request == request) {
+                    if self
+                        .web_ply_import
+                        .as_ref()
+                        .is_some_and(|job| job.request == request)
+                    {
                         let mut job = self.web_ply_import.take().unwrap();
                         if job.splats.len() == total {
-                            self.install_gaussian_cloud(&job.name, claydash_engine::gaussian_ply::GaussianCloud { splats: std::mem::take(&mut job.splats) });
+                            self.install_gaussian_cloud(
+                                &job.name,
+                                claydash_engine::gaussian_ply::GaussianCloud {
+                                    splats: std::mem::take(&mut job.splats),
+                                },
+                            );
                         } else {
-                            self.document.set_error("import Gaussian PLY", "incomplete worker result");
+                            self.document
+                                .set_error("import Gaussian PLY", "incomplete worker result");
                         }
                     }
                 }
                 WebDocumentMessage::PlyError { request, message } => {
-                    if self.web_ply_import.as_ref().is_some_and(|job| job.request == request) {
+                    if self
+                        .web_ply_import
+                        .as_ref()
+                        .is_some_and(|job| job.request == request)
+                    {
                         self.web_ply_import = None;
                         self.document.set_error("import Gaussian PLY", message);
                     }
@@ -1024,7 +1127,9 @@ impl App {
                 }
             }
         }
-        if self.web_ply_import.is_some() { self.egui.request_repaint(); }
+        if self.web_ply_import.is_some() {
+            self.egui.request_repaint();
+        }
     }
 }
 
@@ -1037,8 +1142,10 @@ mod file_action_tests {
         let app = App::new();
         let objects = objects_ref(&app.tree);
         assert_eq!(objects.len(), 1);
-        assert_eq!(objects[0].render_representation,
-            crate::model::GroupRenderRepresentation::DirectMesh);
+        assert_eq!(
+            objects[0].render_representation,
+            crate::model::GroupRenderRepresentation::DirectMesh
+        );
     }
 
     pub(super) fn triangle_glb() -> Vec<u8> {
@@ -1076,41 +1183,71 @@ mod file_action_tests {
     fn dropped_glb_creates_persistent_transformable_mesh() {
         let mut app = App::new();
         let id = app.import_glb("triangle.glb", &triangle_glb()).unwrap()[0];
-        let object = crate::model::objects(&app.tree).into_iter().find(|object| object.uuid == id).unwrap();
+        let object = crate::model::objects(&app.tree)
+            .into_iter()
+            .find(|object| object.uuid == id)
+            .unwrap();
         let mesh = object.imported_mesh.as_ref().unwrap();
         assert_eq!(mesh.triangles, vec![[0, 1, 2]]);
         assert_eq!(mesh.positions[0], glam::Vec3::new(-0.5, -0.5, 0.0));
         assert_eq!(object.transform.translation, glam::Vec3::new(2.5, 0.5, 0.0));
-        assert_eq!(crate::model::raymarch(
-            glam::Vec3::new(2.2, 0.2, 1.0), glam::Vec3::NEG_Z, &[object.clone()]), Some(id));
+        assert_eq!(
+            crate::model::raymarch(
+                glam::Vec3::new(2.2, 0.2, 1.0),
+                glam::Vec3::NEG_Z,
+                &[object.clone()]
+            ),
+            Some(id)
+        );
         let duplicate = object.duplicate();
-        assert_eq!(duplicate.imported_mesh.unwrap().owners, vec![duplicate.uuid]);
+        assert_eq!(
+            duplicate.imported_mesh.unwrap().owners,
+            vec![duplicate.uuid]
+        );
         let bytes = crate::document::serialize_scene(&app.tree).unwrap();
         let scene = crate::document::deserialize_scene(&bytes).unwrap();
         let mut restored = DataTree::default();
         restored.set_tree("scene", scene);
-        assert_eq!(crate::model::objects(&restored).into_iter().find(|object| object.uuid == id)
-            .unwrap().imported_mesh.unwrap().triangles, vec![[0, 1, 2]]);
+        assert_eq!(
+            crate::model::objects(&restored)
+                .into_iter()
+                .find(|object| object.uuid == id)
+                .unwrap()
+                .imported_mesh
+                .unwrap()
+                .triangles,
+            vec![[0, 1, 2]]
+        );
     }
 
     #[test]
     fn dropped_image_uses_pixel_aspect_ratio_for_plane() {
         let mut png = Vec::new();
-        image::DynamicImage::new_rgba8(4, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        image::DynamicImage::new_rgba8(4, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
         let mut app = App::new();
         let id = app.import_image_plane("wide.png", png).unwrap();
-        let object = crate::model::objects(&app.tree).into_iter().find(|object| object.uuid == id).unwrap();
+        let object = crate::model::objects(&app.tree)
+            .into_iter()
+            .find(|object| object.uuid == id)
+            .unwrap();
         let stencil = object.image_stencil.unwrap();
         assert!(stencil.image_plane);
         assert_eq!(stencil.size, glam::Vec2::new(1.0, 0.5));
-        let crate::model::SdfParams::BoxParams(params) = object.params else { panic!("image plane must be a box") };
+        let crate::model::SdfParams::BoxParams(params) = object.params else {
+            panic!("image plane must be a box")
+        };
         assert_eq!(params.box_q.x, 0.5);
         assert_eq!(params.box_q.y, 0.25);
     }
 
     #[test]
     fn dropped_ply_adds_selected_splat_asset() {
-        let names = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
+        let names = [
+            "x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3",
+            "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
+        ];
         let ply = format!("ply\nformat ascii 1.0\nelement vertex 1\n{}end_header\n0 0 0 -2 -3 -4 1 0 0 0 1 0 0 3\n",
             names.map(|name| format!("property float {name}\n")).join(""));
         let mut app = App::new();
@@ -1118,26 +1255,48 @@ mod file_action_tests {
         app.handle_dropped_bytes("cloud.PLY", ply.into_bytes());
         let objects = objects_ref(&app.tree);
         assert_eq!(objects.len(), before + 1);
-        assert_eq!(objects.last().unwrap().imported_splats.as_ref().unwrap().splats.len(), 1);
-        assert_eq!(crate::model::selected_ref(&app.tree), &[objects.last().unwrap().uuid]);
+        assert_eq!(
+            objects
+                .last()
+                .unwrap()
+                .imported_splats
+                .as_ref()
+                .unwrap()
+                .splats
+                .len(),
+            1
+        );
+        assert_eq!(
+            crate::model::selected_ref(&app.tree),
+            &[objects.last().unwrap().uuid]
+        );
     }
 
     #[test]
     fn dropped_project_merges_objects_without_replacing_current_document() {
         let mut app = App::new();
         let old_objects = objects_ref(&app.tree).to_vec();
-        let old_path = app.document.current_path().map(std::path::Path::to_path_buf);
+        let old_path = app
+            .document
+            .current_path()
+            .map(std::path::Path::to_path_buf);
         let mut scene = DataTree::default();
         let parent = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Box);
         let mut child = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
         child.boolean_parent = Some(parent.uuid);
-        scene.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(vec![parent, child]));
+        scene.set_path(
+            "scene.sdf_objects",
+            ClaydashValue::VecSDFObject(vec![parent, child]),
+        );
         let bytes = crate::document::serialize_scene(&scene).unwrap();
         app.handle_dropped_bytes("empty.claydash", bytes);
         let objects = objects_ref(&app.tree);
         assert_eq!(objects.len(), old_objects.len() + 2);
         assert_eq!(objects[0].uuid, old_objects[0].uuid);
-        assert_eq!(objects.last().unwrap().boolean_parent, Some(objects[objects.len() - 2].uuid));
+        assert_eq!(
+            objects.last().unwrap().boolean_parent,
+            Some(objects[objects.len() - 2].uuid)
+        );
         assert_eq!(app.document.current_path(), old_path.as_deref());
     }
 
@@ -1145,8 +1304,10 @@ mod file_action_tests {
     #[test]
     fn opening_suspension_example_has_no_camera() {
         let mut app = App::new();
-        let example = crate::examples::EXAMPLES.iter()
-            .find(|example| example.file == "single_wheel_suspension.claydash").unwrap();
+        let example = crate::examples::EXAMPLES
+            .iter()
+            .find(|example| example.file == "single_wheel_suspension.claydash")
+            .unwrap();
         app.handle_file_action(FileMenuAction::OpenExample(*example));
         assert!(crate::model::scene_cameras(&app.tree).is_empty());
         assert!(crate::model::active_camera_id(&app.tree).is_none());
@@ -1157,69 +1318,119 @@ mod file_action_tests {
     fn opening_another_scene_discards_old_document_actions() {
         let mut app = App::new();
         let old = objects_ref(&app.tree)[0].uuid;
-        app.tree.set_path("scene.old_document_marker", ClaydashValue::Bool(true));
-        app.tree.set_transient_path("editor.old_document_marker", ClaydashValue::Bool(true));
+        app.tree
+            .set_path("scene.old_document_marker", ClaydashValue::Bool(true));
+        app.tree
+            .set_transient_path("editor.old_document_marker", ClaydashValue::Bool(true));
         app.tree.make_undo_redo_snapshot();
-        app.tree.set_path("scene.pending_old_marker", ClaydashValue::Bool(true));
+        app.tree
+            .set_path("scene.pending_old_marker", ClaydashValue::Bool(true));
         app.tree.undo(); // Leave old forward history as well as a pending edit.
-        app.tree.set_path("scene.pending_old_marker", ClaydashValue::Bool(true));
+        app.tree
+            .set_path("scene.pending_old_marker", ClaydashValue::Bool(true));
         app.egui.data_mut(|data| {
-            data.insert_temp(egui::Id::new("voxel-actions"),
-                vec![crate::renderer::voxels::VoxelAction::Build(old)]);
-            data.insert_temp(egui::Id::new("voxel-status"),
-                std::collections::HashMap::from([(old,
-                    crate::renderer::voxels::VoxelStatus::Sampling { percent: 1 })]));
-            data.insert_temp(egui::Id::new("poisson-mesh-actions"),
-                vec![crate::renderer::poisson_mesh::PoissonMeshAction::Build(old)]);
-            data.insert_temp(egui::Id::new("group-optimization-recompute"),
-                std::collections::HashSet::from([old]));
-            data.insert_temp(egui::Id::new("group-optimization-cancel"),
-                std::collections::HashSet::from([old]));
-            data.insert_temp(egui::Id::new("neural-sdf-status"),
-                std::collections::HashMap::<uuid::Uuid, crate::renderer::NeuralStatus>::new());
-            data.insert_temp(egui::Id::new("depth-accelerator-ready"),
-                std::collections::HashMap::from([(old, 1u64)]));
-            data.insert_temp(egui::Id::new("poisson-mesh-status"),
-                std::collections::HashMap::from([(old,
-                    crate::renderer::poisson_mesh::PoissonMeshStatus::Sampling {
-                        percent: 1,
-                    })]));
+            data.insert_temp(
+                egui::Id::new("voxel-actions"),
+                vec![crate::renderer::voxels::VoxelAction::Build(old)],
+            );
+            data.insert_temp(
+                egui::Id::new("voxel-status"),
+                std::collections::HashMap::from([(
+                    old,
+                    crate::renderer::voxels::VoxelStatus::Sampling { percent: 1 },
+                )]),
+            );
+            data.insert_temp(
+                egui::Id::new("poisson-mesh-actions"),
+                vec![crate::renderer::poisson_mesh::PoissonMeshAction::Build(old)],
+            );
+            data.insert_temp(
+                egui::Id::new("group-optimization-recompute"),
+                std::collections::HashSet::from([old]),
+            );
+            data.insert_temp(
+                egui::Id::new("group-optimization-cancel"),
+                std::collections::HashSet::from([old]),
+            );
+            data.insert_temp(
+                egui::Id::new("neural-sdf-status"),
+                std::collections::HashMap::<uuid::Uuid, crate::renderer::NeuralStatus>::new(),
+            );
+            data.insert_temp(
+                egui::Id::new("depth-accelerator-ready"),
+                std::collections::HashMap::from([(old, 1u64)]),
+            );
+            data.insert_temp(
+                egui::Id::new("poisson-mesh-status"),
+                std::collections::HashMap::from([(
+                    old,
+                    crate::renderer::poisson_mesh::PoissonMeshStatus::Sampling { percent: 1 },
+                )]),
+            );
         });
         let mut next = DataTree::default();
         let replacement = crate::model::SdfObject::create_kind(crate::model::PrimitiveKind::Sphere);
         let replacement_id = replacement.uuid;
-        next.set_path("sdf_objects", ClaydashValue::VecSDFObject(vec![replacement]));
+        next.set_path(
+            "sdf_objects",
+            ClaydashValue::VecSDFObject(vec![replacement]),
+        );
         app.replace_scene(next);
         assert_eq!(objects_ref(&app.tree)[0].uuid, replacement_id);
-        assert!(matches!(app.tree.get_path("scene.old_document_marker"), ClaydashValue::None));
-        assert!(matches!(app.tree.get_path("editor.old_document_marker"), ClaydashValue::None));
+        assert!(matches!(
+            app.tree.get_path("scene.old_document_marker"),
+            ClaydashValue::None
+        ));
+        assert!(matches!(
+            app.tree.get_path("editor.old_document_marker"),
+            ClaydashValue::None
+        ));
         let scene_bytes = crate::document::serialize_scene(&app.tree).unwrap();
         for _ in 0..3 {
             app.tree.undo();
             app.tree.redo();
-            assert_eq!(crate::document::serialize_scene(&app.tree).unwrap(), scene_bytes);
+            assert_eq!(
+                crate::document::serialize_scene(&app.tree).unwrap(),
+                scene_bytes
+            );
         }
         assert!(app.tree.get_tree("scene.old_document_marker").is_none());
         assert!(app.tree.get_tree("scene.pending_old_marker").is_none());
         assert!(app.tree.get_tree("editor.old_document_marker").is_none());
         app.egui.data(|data| {
-            assert!(data.get_temp::<Vec<crate::renderer::voxels::VoxelAction>>(
-                egui::Id::new("voxel-actions")).is_none());
+            assert!(data
+                .get_temp::<Vec<crate::renderer::voxels::VoxelAction>>(egui::Id::new(
+                    "voxel-actions"
+                ))
+                .is_none());
             assert!(data.get_temp::<std::collections::HashMap<uuid::Uuid,
                 crate::renderer::voxels::VoxelStatus>>(egui::Id::new("voxel-status")).is_none());
-            assert!(data.get_temp::<Vec<crate::renderer::poisson_mesh::PoissonMeshAction>>(
-                egui::Id::new("poisson-mesh-actions")).is_none());
+            assert!(data
+                .get_temp::<Vec<crate::renderer::poisson_mesh::PoissonMeshAction>>(egui::Id::new(
+                    "poisson-mesh-actions"
+                ))
+                .is_none());
             for key in ["group-optimization-recompute", "group-optimization-cancel"] {
-                assert!(data.get_temp::<std::collections::HashSet<uuid::Uuid>>(
-                    egui::Id::new(key)).is_none());
+                assert!(data
+                    .get_temp::<std::collections::HashSet<uuid::Uuid>>(egui::Id::new(key))
+                    .is_none());
             }
-            assert!(data.get_temp::<std::collections::HashMap<uuid::Uuid,
-                crate::renderer::NeuralStatus>>(egui::Id::new("neural-sdf-status")).is_none());
-            assert!(data.get_temp::<std::collections::HashMap<uuid::Uuid, u64>>(
-                egui::Id::new("depth-accelerator-ready")).is_none());
-            assert!(data.get_temp::<std::collections::HashMap<uuid::Uuid,
-                crate::renderer::poisson_mesh::PoissonMeshStatus>>(
-                egui::Id::new("poisson-mesh-status")).is_none());
+            assert!(data
+                .get_temp::<std::collections::HashMap<uuid::Uuid, crate::renderer::NeuralStatus>>(
+                    egui::Id::new("neural-sdf-status")
+                )
+                .is_none());
+            assert!(data
+                .get_temp::<std::collections::HashMap<uuid::Uuid, u64>>(egui::Id::new(
+                    "depth-accelerator-ready"
+                ))
+                .is_none());
+            assert!(data
+                .get_temp::<std::collections::HashMap<
+                    uuid::Uuid,
+                    crate::renderer::poisson_mesh::PoissonMeshStatus,
+                >>(egui::Id::new("poisson-mesh-status"))
+                .is_none());
         });
     }
 
@@ -1230,10 +1441,15 @@ mod file_action_tests {
         let control = Arc::new(crate::render_export::EncodingControl::default());
         let (sender, completed) = channel();
         app.encoding = Some(NativeEncoding {
-            control: control.clone(), completed, total: 1, cancelling: false,
+            control: control.clone(),
+            completed,
+            total: 1,
+            cancelling: false,
             format: crate::document::RenderFormat::WebP,
         });
-        app.pending_render = Some(PendingRender::Still { path: "unused.webp".into() });
+        app.pending_render = Some(PendingRender::Still {
+            path: "unused.webp".into(),
+        });
         app.discard_capture = true;
         app.replace_scene(DataTree::default());
         assert!(control.cancelled.load(Ordering::Relaxed));
@@ -1242,13 +1458,19 @@ mod file_action_tests {
         assert!(!app.discard_capture);
         assert!(sender.send(Err("obsolete encoding error".into())).is_err());
 
-        let frames_directory = std::env::temp_dir().join(format!("claydash-cancel-test-{}", uuid::Uuid::new_v4()));
+        let frames_directory =
+            std::env::temp_dir().join(format!("claydash-cancel-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&frames_directory).unwrap();
         std::fs::write(frames_directory.join("frame"), b"partial frame").unwrap();
         app.pending_render = Some(PendingRender::Video {
-            path: "unused.mp4".into(), frames_directory: frames_directory.clone(),
-            start_frame: 0, next_frame: 1, end_frame: 2, output_index: 1,
-            fps: 24.0, restore_frame: 0.0,
+            path: "unused.mp4".into(),
+            frames_directory: frames_directory.clone(),
+            start_frame: 0,
+            next_frame: 1,
+            end_frame: 2,
+            output_index: 1,
+            fps: 24.0,
+            restore_frame: 0.0,
         });
         app.replace_scene(DataTree::default());
         assert!(app.pending_render.is_none());
@@ -1328,9 +1550,7 @@ pub fn run() {
     let event_loop = {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
         let mut builder = EventLoop::<AppEvent>::with_user_event();
-        if std::env::args().any(|argument| {
-            argument.starts_with("--guide-screenshot=")
-        }) {
+        if std::env::args().any(|argument| argument.starts_with("--guide-screenshot=")) {
             builder.with_activation_policy(ActivationPolicy::Prohibited);
         }
         builder.build().expect("create event loop")

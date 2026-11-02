@@ -49,7 +49,8 @@ impl App {
                     object.material_id = model::picked_material_id(&draft);
                     object.color = object.material.color;
                     if let Some(id) = material_id {
-                        let asset = model::material_assets(&draft).into_iter()
+                        let asset = model::material_assets(&draft)
+                            .into_iter()
                             .find(|asset| asset.uuid == id)
                             .ok_or_else(|| format!("material {id} does not exist"))?;
                         object.material_id = Some(id);
@@ -57,8 +58,12 @@ impl App {
                         object.color = asset.material.color;
                     }
                     if let Some(color) = color {
-                        if !color.iter().all(|component| component.is_finite() && (0.0..=1.0).contains(component)) {
-                            return Err("color components must be finite and between 0 and 1".into());
+                        if !color.iter().all(|component| {
+                            component.is_finite() && (0.0..=1.0).contains(component)
+                        }) {
+                            return Err(
+                                "color components must be finite and between 0 and 1".into()
+                            );
                         }
                         object.color = glam::Vec4::from_array(color);
                         object.material.color = object.color;
@@ -99,6 +104,72 @@ impl App {
                     }
                     *existing = object;
                     set_draft_objects(&mut draft, objects);
+                }
+                Action::PutSeam { seam } => {
+                    let mut seams = model::scene_seams(&draft);
+                    if let Some(existing) = seams.seams.iter_mut().find(|s| s.id == seam.id) {
+                        *existing = seam;
+                    } else {
+                        created.push(seam.id);
+                        seams.seams.push(seam);
+                    }
+                    draft.set_path("scene.seams", model::ClaydashValue::Seams(seams));
+                }
+                Action::SnapSeamPoint {
+                    seam,
+                    point,
+                    source,
+                    position,
+                } => {
+                    let attachment = model::seam_surface_point(
+                        model::objects_ref(&draft),
+                        source,
+                        Vec3::from_array(position),
+                    )?;
+                    let mut seams = model::scene_seams(&draft);
+                    let guide = seams
+                        .seams
+                        .iter_mut()
+                        .find(|s| s.id == seam)
+                        .ok_or("seam missing")?;
+                    if point > guide.points.len() {
+                        return Err("seam point index missing".into());
+                    }
+                    if point == guide.points.len() {
+                        guide.points.push(attachment);
+                    } else {
+                        guide.points[point] = attachment;
+                    }
+                    draft.set_path("scene.seams", model::ClaydashValue::Seams(seams));
+                }
+                Action::DeleteSeam { id } => {
+                    let mut seams = model::scene_seams(&draft);
+                    if !seams.seams.iter().any(|s| s.id == id) {
+                        return Err("seam missing".into());
+                    }
+                    seams.seams.retain(|s| s.id != id);
+                    seams.bindings.retain(|b| b.seam != id);
+                    draft.set_path("scene.seams", model::ClaydashValue::Seams(seams));
+                    let selection = model::selected(&draft)
+                        .into_iter()
+                        .filter(|selected| *selected != id)
+                        .collect();
+                    model::set_selected(&mut draft, selection);
+                }
+                Action::SetSeamBinding { binding } => {
+                    let mut seams = model::scene_seams(&draft);
+                    seams
+                        .bindings
+                        .retain(|b| b.object != binding.object || b.target != binding.target);
+                    seams.bindings.push(binding);
+                    draft.set_path("scene.seams", model::ClaydashValue::Seams(seams));
+                }
+                Action::RemoveSeamBinding { object, target } => {
+                    let mut seams = model::scene_seams(&draft);
+                    seams
+                        .bindings
+                        .retain(|b| b.object != object || b.target != target);
+                    draft.set_path("scene.seams", model::ClaydashValue::Seams(seams));
                 }
                 Action::SetObjectName { id, name } => {
                     let mut objects = model::objects(&draft);
@@ -177,6 +248,9 @@ impl App {
                         .rigid_bindings
                         .retain(|binding| binding.object != id);
                     set_draft_variables(&mut draft, variables);
+                    let mut seams = model::scene_seams(&draft);
+                    seams.bindings.retain(|b| b.object != id);
+                    draft.set_path("scene.seams", model::ClaydashValue::Seams(seams));
                     objects.retain(|object| object.uuid != id);
                     for object in &mut objects {
                         if object.boolean_parent == Some(id) {
@@ -191,8 +265,15 @@ impl App {
                         .collect();
                     model::set_selected(&mut draft, selection);
                 }
-                Action::CreateMesh { name, vertices, faces, shading } => {
-                    created.push(mesh::create_mesh(&mut draft, name, vertices, faces, shading)?);
+                Action::CreateMesh {
+                    name,
+                    vertices,
+                    faces,
+                    shading,
+                } => {
+                    created.push(mesh::create_mesh(
+                        &mut draft, name, vertices, faces, shading,
+                    )?);
                 }
                 Action::AddMeshVertices { id, vertices } => {
                     mesh::add_vertices(&mut draft, id, vertices)?;
@@ -203,7 +284,13 @@ impl App {
                 Action::SetMeshShading { id, shading } => {
                     mesh::set_shading(&mut draft, id, shading)?;
                 }
-                Action::ProjectMeshUvs { id, direction, up, scale, offset } => {
+                Action::ProjectMeshUvs {
+                    id,
+                    direction,
+                    up,
+                    scale,
+                    offset,
+                } => {
                     mesh::project_uvs(&mut draft, id, direction, up, scale, offset)?;
                 }
                 Action::SetMeshUvs { id, uvs } => {
@@ -316,9 +403,7 @@ impl App {
                     }
                     set_draft_variables(&mut draft, variables);
                 }
-                Action::SetVariables { variables } => {
-                    set_draft_variables(&mut draft, variables)
-                }
+                Action::SetVariables { variables } => set_draft_variables(&mut draft, variables),
                 Action::SetWorld { world } => {
                     draft.set_path("scene.world", model::ClaydashValue::World(world))
                 }
@@ -439,6 +524,10 @@ impl App {
                             && !model::scene_cameras(&draft)
                                 .iter()
                                 .any(|camera| camera.uuid == *id)
+                            && !model::scene_seams(&draft)
+                                .seams
+                                .iter()
+                                .any(|seam| seam.id == *id)
                         {
                             return Err(format!("selection target {id} does not exist"));
                         }
@@ -466,8 +555,10 @@ impl App {
                         smooth_blend_policy::FLAG_PATH,
                         model::ClaydashValue::Bool(smooth_blend_policy::enabled(&self.tree)),
                     );
-                    draft.set_path(boolean_policy::FLAG_PATH,
-                        model::ClaydashValue::Bool(boolean_policy::enabled(&self.tree)));
+                    draft.set_path(
+                        boolean_policy::FLAG_PATH,
+                        model::ClaydashValue::Bool(boolean_policy::enabled(&self.tree)),
+                    );
                     replace = true;
                 }
             }
@@ -475,6 +566,7 @@ impl App {
         let mut objects = model::objects(&draft);
         model::apply_vector_bindings(&model::scene_variables(&draft), &mut objects);
         model::resolve_sheet_seams(&mut objects)?;
+        model::resolve_seam_bindings(&model::scene_seams(&draft), &mut objects)?;
         set_draft_objects(&mut draft, objects);
         validate_scene(&draft)?;
         let variables = model::scene_variables(&draft);
@@ -486,6 +578,7 @@ impl App {
             let mut objects = model::objects(&draft);
             model::apply_vector_bindings(&model::scene_variables(&draft), &mut objects);
             model::resolve_sheet_seams(&mut objects)?;
+            model::resolve_seam_bindings(&model::scene_seams(&draft), &mut objects)?;
             set_draft_objects(&mut draft, objects);
             validate_scene(&draft)?;
         }
@@ -509,13 +602,19 @@ impl App {
 // MCP batches may create/transform both seam partners in either order. Resolve
 // dependencies once all actions exist, before the atomic transaction commits.
 fn set_draft_objects(tree: &mut model::DataTree, objects: Vec<SdfObject>) {
-    tree.set_path("scene.sdf_objects", model::ClaydashValue::VecSDFObject(objects));
+    tree.set_path(
+        "scene.sdf_objects",
+        model::ClaydashValue::VecSDFObject(objects),
+    );
 }
 
 fn set_draft_variables(tree: &mut model::DataTree, mut variables: model::SceneVariables) {
     model::evaluate_derived_variables(&mut variables);
-    let mut objects=model::objects(tree);
-    model::apply_vector_bindings(&variables,&mut objects);
-    tree.set_path("scene.variables",model::ClaydashValue::SceneVariables(variables));
-    set_draft_objects(tree,objects);
+    let mut objects = model::objects(tree);
+    model::apply_vector_bindings(&variables, &mut objects);
+    tree.set_path(
+        "scene.variables",
+        model::ClaydashValue::SceneVariables(variables),
+    );
+    set_draft_objects(tree, objects);
 }

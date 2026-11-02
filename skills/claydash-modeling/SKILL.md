@@ -26,3 +26,5 @@ For a lightweight GLB and rich details, use primitives with more detailed subtre
 you bake into the base shapes.
 
 For tiny flat surface details, consider a shader before adding geometry.
+
+If a reference is available, use claydash-reference-modeling skill as well.

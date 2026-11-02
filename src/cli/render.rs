@@ -46,6 +46,8 @@ pub struct RenderArgs {
     pub output: PathBuf,
     pub size: [u32; 2],
     pub view: RenderView,
+    pub show_seams: bool,
+    pub part: Option<String>,
 }
 
 impl RenderArgs {
@@ -54,10 +56,30 @@ impl RenderArgs {
         let mut output = None;
         let mut size = [1024, 768];
         let mut size_given = false;
+        let mut show_seams = false;
+        let mut part = None;
         let mut view = None;
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--part" => {
+                    if part.is_some() {
+                        return Err("--part may only be supplied once".into());
+                    }
+                    let value = args
+                        .next()
+                        .ok_or("--part requires a named part or assembly path")?;
+                    if value.is_empty() {
+                        return Err("--part requires a nonempty path".into());
+                    }
+                    part = Some(value.clone());
+                }
+                "--show-seams" => {
+                    if show_seams {
+                        return Err("--show-seams may only be supplied once".into());
+                    }
+                    show_seams = true;
+                }
                 "--output" | "-o" => {
                     if output.is_some() {
                         return Err("--output may only be supplied once".into());
@@ -114,36 +136,131 @@ impl RenderArgs {
             output,
             size,
             view: view.unwrap_or_default(),
+            show_seams,
+            part,
         })
     }
 
-    fn scene(&self) -> Result<(Vec<SdfObject>, Camera), String> {
+    fn scene(
+        &self,
+    ) -> Result<
+        (
+            Vec<SdfObject>,
+            Camera,
+            crate::model::SceneSeams,
+            World,
+            Vec<crate::model::PostProcessPass>,
+        ),
+        String,
+    > {
         let source = std::fs::read_to_string(&self.source)
             .map_err(|e| format!("read {}: {e}", self.source.display()))?;
-        let objects = scene_language::compile(&source)
-            .map_err(|e| format!("{}:{e}", self.source.display()))?
-            .into_iter()
-            .map(|(_, object)| object)
-            .collect::<Vec<_>>();
+        let (objects, seams, world, post) =
+            if self.source.extension().and_then(|s| s.to_str()) == Some("claydash") {
+                let scene = crate::document::deserialize_scene(source.as_bytes())?;
+                let mut tree = crate::model::DataTree::default();
+                tree.set_tree("scene", scene);
+                let mut objects = crate::model::objects(&tree);
+                let mut seams = crate::model::scene_seams(&tree);
+                if let Some(prefix) = &self.part {
+                    for seam in &mut seams.seams {
+                        seam.points = seam
+                            .positions(&objects)?
+                            .into_iter()
+                            .map(crate::model::SeamPoint::World)
+                            .collect();
+                    }
+                    let ids = match tree.get_path("scene.dsl_recipe") {
+                        crate::model::ClaydashValue::SceneDslRecipe(recipe)
+                            if !recipe.part_paths.is_empty() =>
+                        {
+                            Some(
+                                recipe
+                                    .part_paths
+                                    .into_iter()
+                                    .filter(|(path, _)| {
+                                        path == prefix || path.starts_with(&format!("{prefix}/"))
+                                    })
+                                    .map(|(_, id)| id)
+                                    .collect::<std::collections::HashSet<_>>(),
+                            )
+                        }
+                        _ => None,
+                    };
+                    objects.retain(|object| {
+                        ids.as_ref()
+                            .map_or(object.name == *prefix, |ids| ids.contains(&object.uuid))
+                    });
+                    if objects.is_empty() {
+                        return Err(format!("no saved objects match '{prefix}'"));
+                    }
+                }
+                (
+                    objects,
+                    seams,
+                    crate::model::world(&tree),
+                    crate::model::post_processing_ref(&tree).to_vec(),
+                )
+            } else {
+                let base_dir = self
+                    .source
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let compiled = scene_language::compile_with_assets(&source, &mut |asset| {
+                    let path = std::path::Path::new(asset);
+                    crate::mesh_assets::load_glb(&if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        base_dir.join(path)
+                    })
+                })
+                .map_err(|e| format!("{}:{e}", self.source.display()))?;
+                let all = compiled
+                    .parts
+                    .iter()
+                    .map(|(_, o)| o.clone())
+                    .collect::<Vec<_>>();
+                let mut seams = compiled.seams;
+                // Capture lines before filtering, so source attachments remain visible.
+                for seam in &mut seams.seams {
+                    seam.points = seam
+                        .positions(&all)?
+                        .into_iter()
+                        .map(crate::model::SeamPoint::World)
+                        .collect();
+                }
+                let objects = compiled
+                    .parts
+                    .into_iter()
+                    .filter(|(path, _)| {
+                        self.part.as_ref().is_none_or(|prefix| {
+                            path == prefix || path.starts_with(&format!("{prefix}/"))
+                        })
+                    })
+                    .map(|(_, o)| o)
+                    .collect::<Vec<_>>();
+                if objects.is_empty() {
+                    return Err("no geometry matches the requested part".into());
+                }
+                (objects, seams, World::default(), Vec::new())
+            };
         let camera = fitted_camera(&objects, self.size, self.view)?;
-        Ok((objects, camera))
+        Ok((objects, camera, seams, world, post))
     }
 
     pub fn run(self) -> Result<(), String> {
         // Read, compile and frame before requesting a GPU or writing the output.
-        let (objects, camera) = self.scene()?;
+        let (objects, camera, seams, world, post) = self.scene()?;
         let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
             width: self.size[0],
             height: self.size[1],
             ..Default::default()
         }))?;
-        let frame = renderer.render_offscreen(
-            &camera,
-            &objects,
-            World::default(),
-            &[],
-            Duration::from_secs(60),
-        )?;
+        let mut frame =
+            renderer.render_offscreen(&camera, &objects, world, &post, Duration::from_secs(60))?;
+        if self.show_seams {
+            claydash_engine::seam_guides::annotate(&mut frame, &seams, &objects, &camera);
+        }
         let png = crate::render_export::png_bytes(&frame)?;
         std::fs::write(&self.output, png)
             .map_err(|e| format!("write {}: {e}", self.output.display()))?;
@@ -197,6 +314,8 @@ mod tests {
                 output: "scene.png".into(),
                 size: [1024, 768],
                 view: RenderView::Isometric,
+                show_seams: false,
+                part: None,
             }
         );
         assert_eq!(
@@ -292,6 +411,8 @@ mod tests {
             output: output.clone(),
             size: [96, 96],
             view: RenderView::Isometric,
+            show_seams: false,
+            part: None,
         }
         .run();
         assert!(result
@@ -299,6 +420,42 @@ mod tests {
             .contains("size components must be positive"));
         assert_eq!(std::fs::read(&output).unwrap(), b"original output");
         std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn saved_dsl_assembly_can_render_without_loading_recipe_assets() {
+        let compiled = scene_language::compile_scene(r#"object group({}): a=box(); b=sphere(at:[2,0,0]); end place(group(),name:"assembly"); unrelated=box(at:[8,0,0]);"#).unwrap();
+        let mut tree = crate::model::DataTree::default();
+        let paths = compiled
+            .parts
+            .iter()
+            .map(|(path, o)| (path.clone(), o.uuid))
+            .collect();
+        crate::model::set_objects(
+            &mut tree,
+            compiled.parts.into_iter().map(|(_, o)| o).collect(),
+        );
+        tree.set_path(
+            "scene.dsl_recipe",
+            crate::model::ClaydashValue::SceneDslRecipe(crate::model::SceneDslRecipe {
+                source: r#"reference=mesh_asset(path:"missing.glb");"#.into(),
+                scene_digest: String::new(),
+                base_dir: None,
+                part_paths: paths,
+            }),
+        );
+        let source = std::env::temp_dir().join(format!("render-{}.claydash", uuid::Uuid::new_v4()));
+        crate::document::write_scene(&source, &tree).unwrap();
+        let args = RenderArgs {
+            source: source.clone(),
+            output: source.with_extension("png"),
+            size: [128, 128],
+            view: RenderView::Top,
+            show_seams: false,
+            part: Some("assembly".into()),
+        };
+        let (objects, _, _, _, _) = args.scene().unwrap();
+        assert_eq!(objects.len(), 2);
+        std::fs::remove_file(source).unwrap();
     }
     #[test]
     fn framing_follows_geometry_and_accounts_for_portrait_images() {
@@ -319,4 +476,18 @@ mod tests {
         );
         assert!(fitted_camera(&[], [256, 256], RenderView::Isometric).is_err());
     }
+}
+
+#[cfg(test)]
+#[test]
+fn seam_guides_are_an_explicit_render_option() {
+    let parse =
+        |args: &[&str]| RenderArgs::parse(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    assert!(!parse(&["scene.claydash"]).unwrap().show_seams);
+    assert!(
+        parse(&["scene.claydash", "--show-seams"])
+            .unwrap()
+            .show_seams
+    );
+    assert!(parse(&["scene.claydash", "--show-seams", "--show-seams"]).is_err());
 }

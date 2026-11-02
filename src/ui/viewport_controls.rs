@@ -1,12 +1,13 @@
 use super::*;
 
-const TOOLBAR_PRIMITIVES: [PrimitiveKind; 7] = [
+const TOOLBAR_PRIMITIVES: [PrimitiveKind; 8] = [
     PrimitiveKind::Sphere,
     PrimitiveKind::Box,
     PrimitiveKind::PolygonPrism,
     PrimitiveKind::Cylinder,
     PrimitiveKind::Torus,
     PrimitiveKind::BezierCurve,
+    PrimitiveKind::SheetPanel,
     PrimitiveKind::Text,
 ];
 

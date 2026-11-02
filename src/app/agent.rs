@@ -5,9 +5,9 @@ use std::{
     collections::{HashMap, HashSet},
     io::{BufRead, BufReader, Write},
     os::unix::{
+        ffi::OsStrExt,
         fs::PermissionsExt,
         net::{UnixListener, UnixStream},
-        ffi::OsStrExt,
     },
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
@@ -19,8 +19,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use winit::event_loop::EventLoopProxy;
 
-use super::{App, AppEvent};
 use super::mesh_actions as mesh;
+use super::{App, AppEvent};
 use crate::{
     camera::{Camera, ProjectionMode},
     commands, document,
@@ -41,47 +41,89 @@ pub struct Inbound {
 #[serde(tag = "op", content = "args")]
 pub enum Request {
     GetState,
-    ValidateSceneDsl { source: String },
-    ApplySceneDsl { source: String, expected_revision: Option<u64> },
+    ValidateSceneDsl {
+        source: String,
+        base_dir: Option<PathBuf>,
+    },
+    ApplySceneDsl {
+        source: String,
+        expected_revision: Option<u64>,
+        base_dir: Option<PathBuf>,
+    },
     GetSceneDsl,
     GetSceneDslGuide,
-    CaptureSceneDsl { path: Option<String>, panel_size: Option<u32> },
+    CaptureSceneDsl {
+        path: Option<String>,
+        panel_size: Option<u32>,
+        #[serde(default)]
+        show_seams: bool,
+    },
     GetSceneSummary,
     GetUserView,
     GetSchema,
-    GetActionSchema { action: String, primitive: Option<PrimitiveKind> },
-    GetGaussianCloud { id: uuid::Uuid, space: Option<CloudSpace>, sample_count: Option<usize> },
-    GetMesh { id: uuid::Uuid },
+    GetActionSchema {
+        action: String,
+        primitive: Option<PrimitiveKind>,
+    },
+    GetGaussianCloud {
+        id: uuid::Uuid,
+        space: Option<CloudSpace>,
+        sample_count: Option<usize>,
+    },
+    GetMesh {
+        id: uuid::Uuid,
+    },
     AdjustGaussianColors(color::AdjustGaussianColorsArgs),
     ListCommands,
     EnableSlowSmoothBlends,
     EnableBooleanOperations,
     Apply(ApplyArgs),
-    ExecuteCommand { name: String },
+    ExecuteCommand {
+        name: String,
+    },
     SetView(ViewArgs),
     SelectBox(selection::SelectBoxArgs),
     SelectCircle(selection::SelectCircleArgs),
-    BuildPoissonMesh { id: uuid::Uuid },
-    GetPoissonMeshStatus { id: uuid::Uuid },
+    BuildPoissonMesh {
+        id: uuid::Uuid,
+    },
+    GetPoissonMeshStatus {
+        id: uuid::Uuid,
+    },
     ExportGlb(export::ExportGlbArgs),
     BakeDetailSubtree(export::BakeDetailSubtreeArgs),
-    GetGlbExportStatus { id: uuid::Uuid },
-    CancelGlbExport { id: uuid::Uuid },
+    GetGlbExportStatus {
+        id: uuid::Uuid,
+    },
+    CancelGlbExport {
+        id: uuid::Uuid,
+    },
     CaptureViewport(CaptureViewportArgs),
     PreviewPoints(CaptureViewportArgs),
     CaptureOrthographic(CaptureOrthographicArgs),
     CaptureComparison(comparison::ComparisonArgs),
     Undo,
     Redo,
-    Save { path: Option<PathBuf> },
-    Open { path: PathBuf },
-    ImportGaussianPly { path: PathBuf },
-    ImportGlb { path: PathBuf },
+    Save {
+        path: Option<PathBuf>,
+    },
+    Open {
+        path: PathBuf,
+    },
+    ImportGaussianPly {
+        path: PathBuf,
+    },
+    ImportGlb {
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CloudSpace { Object, World }
+pub enum CloudSpace {
+    Object,
+    World,
+}
 
 fn cloud_bounds(points: impl Iterator<Item = Vec3>) -> Option<Value> {
     let mut min = Vec3::splat(f32::INFINITY);
@@ -97,6 +139,8 @@ fn cloud_bounds(points: impl Iterator<Item = Vec3>) -> Option<Value> {
 
 #[derive(Default, Deserialize)]
 pub struct CaptureViewportArgs {
+    #[serde(default)]
+    pub show_seams: bool,
     pub resolution: Option<[u32; 2]>,
     #[serde(default)]
     pub points: Vec<markers::PreviewPoint>,
@@ -112,6 +156,8 @@ pub struct CaptureViewportArgs {
 
 #[derive(Default, Deserialize)]
 pub struct CaptureOrthographicArgs {
+    #[serde(default)]
+    pub show_seams: bool,
     #[serde(default)]
     pub points: Vec<markers::PreviewPoint>,
     pub sheet_stage: Option<model::SheetStage>,
@@ -181,6 +227,25 @@ pub enum Action {
     PutObject {
         object: SdfObject,
     },
+    PutSeam {
+        seam: model::Seam,
+    },
+    SnapSeamPoint {
+        seam: uuid::Uuid,
+        point: usize,
+        source: uuid::Uuid,
+        position: [f32; 3],
+    },
+    DeleteSeam {
+        id: uuid::Uuid,
+    },
+    SetSeamBinding {
+        binding: model::SeamBinding,
+    },
+    RemoveSeamBinding {
+        object: uuid::Uuid,
+        target: model::SeamTarget,
+    },
     SetObjectName {
         id: uuid::Uuid,
         name: String,
@@ -207,12 +272,35 @@ pub enum Action {
     DeleteObject {
         id: uuid::Uuid,
     },
-    CreateMesh { name: Option<String>, vertices: Vec<[f32; 3]>, faces: Vec<[u32; 3]>, shading: Option<crate::renderer::poisson_mesh::geometry::MeshShading> },
-    AddMeshVertices { id: uuid::Uuid, vertices: Vec<[f32; 3]> },
-    AddMeshFaces { id: uuid::Uuid, faces: Vec<[u32; 3]> },
-    SetMeshShading { id: uuid::Uuid, shading: crate::renderer::poisson_mesh::geometry::MeshShading },
-    ProjectMeshUvs { id: uuid::Uuid, direction: [f32; 3], up: [f32; 3], scale: [f32; 2], offset: [f32; 2] },
-    SetMeshUvs { id: uuid::Uuid, uvs: Vec<[[f32; 2]; 3]> },
+    CreateMesh {
+        name: Option<String>,
+        vertices: Vec<[f32; 3]>,
+        faces: Vec<[u32; 3]>,
+        shading: Option<crate::renderer::poisson_mesh::geometry::MeshShading>,
+    },
+    AddMeshVertices {
+        id: uuid::Uuid,
+        vertices: Vec<[f32; 3]>,
+    },
+    AddMeshFaces {
+        id: uuid::Uuid,
+        faces: Vec<[u32; 3]>,
+    },
+    SetMeshShading {
+        id: uuid::Uuid,
+        shading: crate::renderer::poisson_mesh::geometry::MeshShading,
+    },
+    ProjectMeshUvs {
+        id: uuid::Uuid,
+        direction: [f32; 3],
+        up: [f32; 3],
+        scale: [f32; 2],
+        offset: [f32; 2],
+    },
+    SetMeshUvs {
+        id: uuid::Uuid,
+        uvs: Vec<[[f32; 2]; 3]>,
+    },
     CreateVectorVariable {
         id: Option<uuid::Uuid>,
         name: String,
@@ -239,8 +327,13 @@ pub enum Action {
         object: uuid::Uuid,
         target: model::VectorBindingTarget,
     },
-    SetRigidBinding { binding: model::RigidBinding },
-    RemoveRigidBinding { object: uuid::Uuid, target: model::RigidBindingTarget },
+    SetRigidBinding {
+        binding: model::RigidBinding,
+    },
+    RemoveRigidBinding {
+        object: uuid::Uuid,
+        target: model::RigidBindingTarget,
+    },
     SetVariables {
         variables: model::SceneVariables,
     },
@@ -312,7 +405,9 @@ fn socket_path() -> Result<PathBuf, String> {
     } else {
         let home = std::env::var_os("HOME")
             .ok_or("HOME must be set to use the local Claydash agent bridge")?;
-        PathBuf::from(home).join(".claydash-agent").join("agent.sock")
+        PathBuf::from(home)
+            .join(".claydash-agent")
+            .join("agent.sock")
     };
     validate_socket_path(&path)?;
     Ok(path)
@@ -396,8 +491,10 @@ pub(super) fn listen(proxy: Option<EventLoopProxy<AppEvent>>) -> Result<Receiver
 }
 
 fn call_socket(request: Value) -> AgentResult {
-    let mut stream = UnixStream::connect(socket_path()?)
-        .map_err(|_| "No Claydash instance is connected. Start claydash serve or the desktop app first.".to_string())?;
+    let mut stream = UnixStream::connect(socket_path()?).map_err(|_| {
+        "No Claydash instance is connected. Start claydash serve or the desktop app first."
+            .to_string()
+    })?;
     stream
         .set_read_timeout(Some(Duration::from_secs(120)))
         .map_err(|error| error.to_string())?;
@@ -420,35 +517,120 @@ fn call_socket(request: Value) -> AgentResult {
 
 fn request_payload(op: &str, args: Value) -> Value {
     let args = match op {
-        "GetSceneDslGuide" | "GetSceneDsl" | "GetState" | "GetSceneSummary" | "GetUserView" | "GetSchema" | "ListCommands" | "EnableSlowSmoothBlends" | "EnableBooleanOperations" | "Undo" | "Redo" => Value::Null,
-        "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" | "CaptureSceneDsl" if args.is_null() => json!({}),
+        "GetSceneDslGuide"
+        | "GetSceneDsl"
+        | "GetState"
+        | "GetSceneSummary"
+        | "GetUserView"
+        | "GetSchema"
+        | "ListCommands"
+        | "EnableSlowSmoothBlends"
+        | "EnableBooleanOperations"
+        | "Undo"
+        | "Redo" => Value::Null,
+        "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" | "CaptureSceneDsl"
+            if args.is_null() =>
+        {
+            json!({})
+        }
         "Save" if args.is_null() => json!({}),
         _ => args,
     };
     json!({"op": op, "args": args})
 }
 
-fn parse_agent_arguments(op: &str, remaining: &[String]) -> Result<(Value, Option<PathBuf>), String> {
+fn parse_agent_arguments(
+    op: &str,
+    remaining: &[String],
+) -> Result<(Value, Option<PathBuf>), String> {
     let mut json = None;
+    let mut show_seams = false;
+    let mut recipe_file = None;
     let mut output = None;
     let mut index = 0;
     while index < remaining.len() {
-        if remaining[index] == "--output" {
-            if !matches!(op, "CaptureViewport" | "PreviewPoints" | "CaptureOrthographic" | "CaptureComparison" | "CaptureSceneDsl") {
+        if remaining[index] == "--file" {
+            if !matches!(op, "ApplySceneDsl" | "ValidateSceneDsl") {
+                return Err("--file is for scene DSL validation/application".into());
+            }
+            if recipe_file.is_some() {
+                return Err("--file may only be supplied once".into());
+            }
+            index += 1;
+            recipe_file = Some(PathBuf::from(
+                remaining
+                    .get(index)
+                    .ok_or("--file requires a .claydef path")?,
+            ));
+        } else if remaining[index] == "--show-seams" {
+            if !matches!(
+                op,
+                "CaptureViewport" | "CaptureOrthographic" | "CaptureSceneDsl"
+            ) {
+                return Err(
+                    "--show-seams is only available for viewport, orthographic and DSL captures"
+                        .into(),
+                );
+            }
+            if show_seams {
+                return Err("--show-seams may only be supplied once".into());
+            }
+            show_seams = true;
+        } else if remaining[index] == "--output" {
+            if !matches!(
+                op,
+                "CaptureViewport"
+                    | "PreviewPoints"
+                    | "CaptureOrthographic"
+                    | "CaptureComparison"
+                    | "CaptureSceneDsl"
+            ) {
                 return Err("--output is only valid for capture operations".into());
             }
-            if output.is_some() { return Err("--output may only be supplied once".into()); }
+            if output.is_some() {
+                return Err("--output may only be supplied once".into());
+            }
             index += 1;
-            let path = remaining.get(index).ok_or("--output requires a file path")?;
+            let path = remaining
+                .get(index)
+                .ok_or("--output requires a file path")?;
             output = Some(PathBuf::from(path));
         } else {
-            if json.is_some() { return Err("expected a single JSON argument".into()); }
-            json = Some(serde_json::from_str(&remaining[index])
-                .map_err(|error| format!("invalid JSON arguments: {error}"))?);
+            if json.is_some() {
+                return Err("expected a single JSON argument".into());
+            }
+            json = Some(
+                serde_json::from_str(&remaining[index])
+                    .map_err(|error| format!("invalid JSON arguments: {error}"))?,
+            );
         }
         index += 1;
     }
-    Ok((request_payload(op, json.unwrap_or(Value::Null)), output))
+    let mut args = json.unwrap_or(Value::Null);
+    if let Some(path) = recipe_file {
+        let absolute = std::fs::canonicalize(&path)
+            .map_err(|e| format!("read recipe {}: {e}", path.display()))?;
+        let source = std::fs::read_to_string(&absolute).map_err(|e| e.to_string())?;
+        if args.is_null() {
+            args = json!({});
+        }
+        let args = args
+            .as_object_mut()
+            .ok_or("--file requires object arguments")?;
+        if args.contains_key("source") {
+            return Err("provide source text or --file, not both".into());
+        }
+        args.insert("source".into(), json!(source));
+        args.insert("base_dir".into(), json!(absolute.parent()));
+    }
+    let mut payload = request_payload(op, args);
+    if show_seams {
+        payload["args"]
+            .as_object_mut()
+            .ok_or("--show-seams requires object arguments")?
+            .insert("show_seams".into(), json!(true));
+    }
+    Ok((payload, output))
 }
 
 pub fn run_from_args() -> bool {
@@ -490,10 +672,11 @@ pub fn run_from_args() -> bool {
                 return true;
             }
             let remaining: Vec<_> = args.collect();
-            let (request, output) = parse_agent_arguments(&op, &remaining).unwrap_or_else(|error| {
-                eprintln!("{error}");
-                std::process::exit(2);
-            });
+            let (request, output) =
+                parse_agent_arguments(&op, &remaining).unwrap_or_else(|error| {
+                    eprintln!("{error}");
+                    std::process::exit(2);
+                });
             if let Some(path) = output {
                 let result = call_socket(request)
                     .and_then(|value| {
@@ -536,7 +719,8 @@ impl App {
         let key = (self.agent_revision, self.tree.path_version("scene"));
         if self.agent_revision_key.get() != key {
             self.agent_revision_key.set(key);
-            self.agent_revision_counter.set(self.agent_revision_counter.get().saturating_add(1));
+            self.agent_revision_counter
+                .set(self.agent_revision_counter.get().saturating_add(1));
         }
         self.agent_revision_counter.get()
     }
@@ -573,8 +757,8 @@ impl App {
         let preview_points = matches!(&request, Request::PreviewPoints(_));
         let result = match request {
             Request::GetState => self.agent_state(),
-            Request::ValidateSceneDsl { source } => self.agent_validate_scene_dsl(&source),
-            Request::ApplySceneDsl { source, expected_revision } => self.agent_apply_scene_dsl(source, expected_revision),
+            Request::ValidateSceneDsl { source,base_dir } => self.agent_validate_scene_dsl(&source,base_dir.as_deref()),
+            Request::ApplySceneDsl { source, expected_revision,base_dir } => self.agent_apply_scene_dsl(source, expected_revision,base_dir),
             Request::GetSceneDsl => self.agent_get_scene_dsl(),
             Request::GetSceneDslGuide => Ok(json!({"guide": include_str!("../../docs/scene-definition-language.md")})),
             Request::GetSceneSummary => self.agent_scene_summary(),
@@ -640,6 +824,7 @@ impl App {
                             self.agent_capture = Some(AgentCapture {
                                 reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
                                 view: CaptureView::Viewport, camera, cancelled_retries: 0,
+                                seam_lines: if args.show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|seam.positions(model::objects_ref(&self.tree))).collect::<Result<Vec<_>,_>>().unwrap_or_default().into_iter().zip(model::scene_seams(&self.tree).seams).map(|(points,seam)|(points,seam.closed)).collect()}else{Vec::new()},
                                 points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
                             });
                             if let Some(renderer) = &mut self.renderer {
@@ -671,7 +856,8 @@ impl App {
                                     reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
                                     view: CaptureView::Orthographic { panel_size, distance, frames: Vec::with_capacity(3) },
                                     camera: self.agent_view_camera(), cancelled_retries: 0,
-                                    points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
+                                    seam_lines: if args.show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|seam.positions(model::objects_ref(&self.tree))).collect::<Result<Vec<_>,_>>().unwrap_or_default().into_iter().zip(model::scene_seams(&self.tree).seams).map(|(points,seam)|(points,seam.closed)).collect()}else{Vec::new()},
+                                points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
                                 });
                                 if let Some(renderer) = &mut self.renderer {
                                     renderer.invalidate_scene();
@@ -683,7 +869,7 @@ impl App {
                     }
                 }
             }
-            Request::CaptureSceneDsl { path, panel_size } => {
+            Request::CaptureSceneDsl { path, panel_size, show_seams } => {
                 if self.agent_capture.is_some() || self.pending_render.is_some() || self.guide_screenshot.is_some()
                     || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
                     Err("a render is already in progress".into())
@@ -692,7 +878,7 @@ impl App {
                         Ok((objects,center,span,panel_size)) => {
                             self.agent_capture = Some(AgentCapture { reply, objects: Some(objects), mode: CaptureMode::SimpleShading,
                                 view: CaptureView::SceneViews { panel_size, center, span, frames: Vec::with_capacity(4) }, camera: self.agent_view_camera(), cancelled_retries: 0,
-                                points: Vec::new(), point_metadata: Vec::new(), revision: self.scene_revision() });
+                                seam_lines: if show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|Ok((seam.positions(model::objects_ref(&self.tree))?,seam.closed))).collect::<Result<Vec<_>,String>>().unwrap_or_default()}else{Vec::new()}, points: Vec::new(), point_metadata: Vec::new(), revision: self.scene_revision() });
                             if let Some(renderer) = &mut self.renderer { renderer.invalidate_scene(); }
                             return;
                         }
@@ -711,7 +897,7 @@ impl App {
                             self.agent_capture = Some(AgentCapture {
                                 reply, objects: Some(comparison.references.clone()), mode: CaptureMode::SimpleShading,
                                 view: CaptureView::Comparison(Box::new(comparison)), camera, cancelled_retries: 0,
-                                points: Vec::new(), point_metadata: Vec::new(), revision,
+                                seam_lines: Vec::new(), points: Vec::new(), point_metadata: Vec::new(), revision,
                             });
                             if let Some(renderer) = &mut self.renderer { renderer.invalidate_scene(); }
                             return;
@@ -753,13 +939,22 @@ impl App {
     }
 
     fn agent_poisson_mesh_target(&self, id: uuid::Uuid) -> Result<(), String> {
-        let object = model::objects_ref(&self.tree).iter().find(|object| object.uuid == id)
+        let object = model::objects_ref(&self.tree)
+            .iter()
+            .find(|object| object.uuid == id)
             .ok_or_else(|| format!("unknown object: {id}"))?;
         if object.boolean_parent.is_some() {
-            return Err("Poisson mesh cache requires a Boolean group root or standalone object".into());
+            return Err(
+                "Poisson mesh cache requires a Boolean group root or standalone object".into(),
+            );
         }
-        if !matches!(object.render_representation, GroupRenderRepresentation::PoissonMesh | GroupRenderRepresentation::DirectMesh) {
-            return Err("set the root render_representation to PoissonMesh or DirectMesh first".into());
+        if !matches!(
+            object.render_representation,
+            GroupRenderRepresentation::PoissonMesh | GroupRenderRepresentation::DirectMesh
+        ) {
+            return Err(
+                "set the root render_representation to PoissonMesh or DirectMesh first".into(),
+            );
         }
         Ok(())
     }
@@ -769,8 +964,13 @@ impl App {
         self.agent_poisson_mesh_target(id)?;
         self.egui.data_mut(|data| {
             let key = egui::Id::new("poisson-mesh-actions");
-            let mut actions = data.get_temp::<Vec<PoissonMeshAction>>(key).unwrap_or_default();
-            if !actions.iter().any(|action| matches!(action, PoissonMeshAction::Build(root) if *root == id)) {
+            let mut actions = data
+                .get_temp::<Vec<PoissonMeshAction>>(key)
+                .unwrap_or_default();
+            if !actions
+                .iter()
+                .any(|action| matches!(action, PoissonMeshAction::Build(root) if *root == id))
+            {
                 actions.push(PoissonMeshAction::Build(id));
             }
             data.insert_temp(key, actions);
@@ -783,25 +983,51 @@ impl App {
         use crate::renderer::poisson_mesh::{PoissonMeshAction, PoissonMeshStatus};
         self.agent_poisson_mesh_target(id)?;
         let (queued, status) = self.egui.data(|data| {
-            let queued = data.get_temp::<Vec<PoissonMeshAction>>(egui::Id::new("poisson-mesh-actions"))
-                .is_some_and(|actions| actions.iter().any(|action| matches!(action,
-                    PoissonMeshAction::Build(root) if *root == id)));
-            let status = data.get_temp::<HashMap<uuid::Uuid, PoissonMeshStatus>>(egui::Id::new("poisson-mesh-status"))
+            let queued = data
+                .get_temp::<Vec<PoissonMeshAction>>(egui::Id::new("poisson-mesh-actions"))
+                .is_some_and(|actions| {
+                    actions.iter().any(|action| {
+                        matches!(action,
+                    PoissonMeshAction::Build(root) if *root == id)
+                    })
+                });
+            let status = data
+                .get_temp::<HashMap<uuid::Uuid, PoissonMeshStatus>>(egui::Id::new(
+                    "poisson-mesh-status",
+                ))
                 .and_then(|statuses| statuses.get(&id).cloned());
             (queued, status)
         });
-        let direct = model::objects_ref(&self.tree).iter().find(|object| object.uuid == id)
-            .is_some_and(|object| object.render_representation == GroupRenderRepresentation::DirectMesh);
-        let mut result = if queued { json!({"status": "queued"}) } else {
+        let direct = model::objects_ref(&self.tree)
+            .iter()
+            .find(|object| object.uuid == id)
+            .is_some_and(|object| {
+                object.render_representation == GroupRenderRepresentation::DirectMesh
+            });
+        let mut result = if queued {
+            json!({"status": "queued"})
+        } else {
             match status {
                 None => json!({"status": "not_built"}),
-                Some(PoissonMeshStatus::Sampling { percent }) => json!({"status": if direct { "tessellating" } else { "sampling" }, "percent": percent}),
-                Some(PoissonMeshStatus::Reconstructing { percent }) => json!({"status": if direct { "mesh_booleans" } else { "reconstructing" }, "percent": percent}),
-                Some(PoissonMeshStatus::Ready { vertices, triangles, showing, available, sample_resolution, mesh_resolution }) =>
-                    json!({"status": "ready", "vertices": vertices, "triangles": triangles,
+                Some(PoissonMeshStatus::Sampling { percent }) => {
+                    json!({"status": if direct { "tessellating" } else { "sampling" }, "percent": percent})
+                }
+                Some(PoissonMeshStatus::Reconstructing { percent }) => {
+                    json!({"status": if direct { "mesh_booleans" } else { "reconstructing" }, "percent": percent})
+                }
+                Some(PoissonMeshStatus::Ready {
+                    vertices,
+                    triangles,
+                    showing,
+                    available,
+                    sample_resolution,
+                    mesh_resolution,
+                }) => json!({"status": "ready", "vertices": vertices, "triangles": triangles,
                         "showing": showing, "available": available, "sample_resolution": sample_resolution,
                         "mesh_resolution": mesh_resolution}),
-                Some(PoissonMeshStatus::Failed(error)) => json!({"status": "failed", "error": error}),
+                Some(PoissonMeshStatus::Failed(error)) => {
+                    json!({"status": "failed", "error": error})
+                }
             }
         };
         result["id"] = json!(id);
@@ -813,10 +1039,17 @@ impl App {
         // Remove them before serialization, rather than expanding them into
         // JSON twice (the object list and the round-trippable document).
         let mut objects = model::objects(&self.tree);
-        for object in &mut objects { object.saved_mesh = None; }
-        let mut scene = self.tree.get_tree("scene")
+        for object in &mut objects {
+            object.saved_mesh = None;
+        }
+        let mut scene = self
+            .tree
+            .get_tree("scene")
             .ok_or_else(|| "the document has no scene".to_string())?;
-        scene.set_path("sdf_objects", model::ClaydashValue::VecSDFObject(objects.clone()));
+        scene.set_path(
+            "sdf_objects",
+            model::ClaydashValue::VecSDFObject(objects.clone()),
+        );
         let raw_scene = serde_json::to_value(&scene).map_err(|error| error.to_string())?;
         let animation = match self.tree.get_path("scene.animation") {
             model::ClaydashValue::Animation(value) => Some(value),
@@ -838,6 +1071,7 @@ impl App {
             "outline_mode": commands::outline_mode(&self.tree),
             "document_path": self.document.current_path(),
             "objects": objects,
+            "seams": model::scene_seams(&self.tree),
             "render_caches_omitted": true,
             "selection": model::selected_ref(&self.tree),
             "cloud_edit_selection": model::cloud_edit(&self.tree),
@@ -868,54 +1102,94 @@ impl App {
                         matrix.transform_point3(splat.position)))})
             });
             json!({"id": object.uuid, "name": object.name,
-                "kind": if object.imported_splats.is_some() { json!("GaussianCloud") } else { json!(PrimitiveKind::from_object_type(object.object_type)) },
+                "kind": if object.imported_splats.is_some() { json!("GaussianCloud") } else if object.imported_mesh.is_some(){json!("TriangleMesh")} else { json!(PrimitiveKind::from_object_type(object.object_type)) },
+                "mesh": object.imported_mesh.as_ref().map(|mesh|json!({"vertices":mesh.positions.len(),"triangles":mesh.triangles.len(),"world_bounds":cloud_bounds(mesh.positions.iter().map(|point|matrix.transform_point3(*point)))})),
+                "lattice": object.lattice.as_ref().map(|cage|json!({"resolution":cage.resolution,"min":cage.min,"max":cage.max})),
                 "transform": object.transform, "group_transform": object.group_transform,
                 "boolean_parent": object.boolean_parent, "operation": object.operation,
                 "imported_gaussian": cloud})
         }).collect();
-        Ok(json!({"revision": self.scene_revision(), "objects": entries,
+        Ok(
+            json!({"revision": self.scene_revision(), "objects": entries,
+            "seams": model::scene_seams(&self.tree).seams.iter().map(|seam|json!({"id":seam.id,"name":seam.name,"point_count":seam.points.len(),"closed":seam.closed})).collect::<Vec<_>>(),
+            "seam_bindings": model::scene_seams(&self.tree).bindings,
             "selection": model::selected_ref(&self.tree),
             "view": {"position": self.agent_camera.position, "target": self.agent_camera.target,
                 "up": self.agent_camera.up, "projection_mode": self.agent_camera.projection_mode,
                 "viewport": self.agent_view_camera().viewport,
                 "viewport_size": self.agent_view_camera().viewport,
                 "fov_y_degrees": (self.agent_camera.projection_mode == ProjectionMode::Perspective).then_some(45.0)},
-            "document_path": self.document.current_path()}))
+            "document_path": self.document.current_path()}),
+        )
     }
 
-    fn agent_gaussian_cloud(&self, id: uuid::Uuid, space: Option<CloudSpace>, sample_count: Option<usize>) -> AgentResult {
+    fn agent_gaussian_cloud(
+        &self,
+        id: uuid::Uuid,
+        space: Option<CloudSpace>,
+        sample_count: Option<usize>,
+    ) -> AgentResult {
         let count = sample_count.unwrap_or(32);
-        if count > 256 { return Err("sample_count must be 0–256".into()); }
+        if count > 256 {
+            return Err("sample_count must be 0–256".into());
+        }
         let objects = model::objects_ref(&self.tree);
-        let object = objects.iter().find(|object| object.uuid == id)
+        let object = objects
+            .iter()
+            .find(|object| object.uuid == id)
             .ok_or_else(|| format!("object {id} not found"))?;
-        let cloud = object.imported_splats.as_ref().ok_or_else(|| format!("object {id} has no imported Gaussian cloud"))?;
+        let cloud = object
+            .imported_splats
+            .as_ref()
+            .ok_or_else(|| format!("object {id} has no imported Gaussian cloud"))?;
         let world = matches!(space, Some(CloudSpace::World));
         let matrix = model::object_world_matrix(objects, id);
-        let positions: Vec<Vec3> = cloud.splats.iter().map(|splat| {
-            if world { matrix.transform_point3(splat.position) } else { splat.position }
-        }).collect();
+        let positions: Vec<Vec3> = cloud
+            .splats
+            .iter()
+            .map(|splat| {
+                if world {
+                    matrix.transform_point3(splat.position)
+                } else {
+                    splat.position
+                }
+            })
+            .collect();
         let bounds = cloud_bounds(positions.iter().copied());
-        let mut axes = [Vec::with_capacity(positions.len()), Vec::with_capacity(positions.len()), Vec::with_capacity(positions.len())];
+        let mut axes = [
+            Vec::with_capacity(positions.len()),
+            Vec::with_capacity(positions.len()),
+            Vec::with_capacity(positions.len()),
+        ];
         for position in &positions {
-            for (axis, values) in axes.iter_mut().enumerate() { values.push(position[axis]); }
+            for (axis, values) in axes.iter_mut().enumerate() {
+                values.push(position[axis]);
+            }
         }
-        for values in &mut axes { values.sort_unstable_by(f32::total_cmp); }
+        for values in &mut axes {
+            values.sort_unstable_by(f32::total_cmp);
+        }
         let percentiles = [0.02, 0.5, 0.98].map(|quantile| {
-            if positions.is_empty() { return None; }
+            if positions.is_empty() {
+                return None;
+            }
             let index = ((positions.len() - 1) as f32 * quantile).round() as usize;
             Some([axes[0][index], axes[1][index], axes[2][index]])
         });
-        let samples: Vec<Value> = (0..count.min(cloud.splats.len())).map(|slot| {
-            let index = slot * cloud.splats.len() / count.min(cloud.splats.len());
-            let splat = &cloud.splats[index];
-            json!({"index": index, "position": positions[index], "color": splat.color,
+        let samples: Vec<Value> = (0..count.min(cloud.splats.len()))
+            .map(|slot| {
+                let index = slot * cloud.splats.len() / count.min(cloud.splats.len());
+                let splat = &cloud.splats[index];
+                json!({"index": index, "position": positions[index], "color": splat.color,
                 "opacity": splat.opacity})
-        }).collect();
-        Ok(json!({"id": id, "space": if world { "world" } else { "object" },
+            })
+            .collect();
+        Ok(
+            json!({"id": id, "space": if world { "world" } else { "object" },
             "count": cloud.splats.len(), "bounds": bounds,
             "percentiles": {"p02": percentiles[0], "p50": percentiles[1], "p98": percentiles[2]},
-            "samples": samples}))
+            "samples": samples}),
+        )
     }
 
     fn agent_set_view(&mut self, args: ViewArgs) -> AgentResult {
@@ -945,30 +1219,32 @@ impl App {
 
     fn agent_view_camera(&self) -> Camera {
         let mut camera = self.agent_camera.clone();
-        if let Some(renderer) = &self.renderer { camera.viewport = renderer.size(); }
+        if let Some(renderer) = &self.renderer {
+            camera.viewport = renderer.size();
+        }
         camera.viewport_origin = Vec2::ZERO;
         camera
     }
 }
 
-mod scene_dsl;
 mod actions;
+mod boolean_policy;
+#[cfg(test)]
+mod boolean_policy_tests;
 mod capture;
 mod capture_overlay;
 mod color;
 mod export;
 mod headless;
 mod mcp;
+mod scene_dsl;
 mod selection;
+mod smooth_blend_policy;
+#[cfg(test)]
+mod smooth_blend_tests;
 #[cfg(test)]
 mod tests;
 mod validation;
-mod smooth_blend_policy;
-mod boolean_policy;
-#[cfg(test)]
-mod boolean_policy_tests;
-#[cfg(test)]
-mod smooth_blend_tests;
 
 #[cfg(test)]
 use capture::capture_objects;

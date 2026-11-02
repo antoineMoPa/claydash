@@ -24,11 +24,16 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
     let objects = model::objects_ref(tree);
     let mut seam_objects = objects.to_vec();
     model::resolve_sheet_seams(&mut seam_objects)?;
+    model::resolve_seam_bindings(&model::scene_seams(tree), &mut seam_objects)?;
     let mut ids = std::collections::HashSet::new();
     for object in objects {
-        if object.imported_splats.is_some() && (object.boolean_parent.is_some()
-            || objects.iter().any(|child| child.boolean_parent == Some(object.uuid))
-            || !object.render_representation.is_exact()) {
+        if object.imported_splats.is_some()
+            && (object.boolean_parent.is_some()
+                || objects
+                    .iter()
+                    .any(|child| child.boolean_parent == Some(object.uuid))
+                || !object.render_representation.is_exact())
+        {
             return Err("Imported Gaussian assets support object transforms, not Boolean operations or SDF representations".into());
         }
         if object.material.kind == model::MaterialKind::Custom
@@ -78,7 +83,9 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
             }
         }
         if let SdfParams::SheetPanelParams(panel) = &object.params {
-            panel.validate().map_err(|error| format!("{error} on {}", object.uuid))?;
+            panel
+                .validate()
+                .map_err(|error| format!("{error} on {}", object.uuid))?;
         }
         if let Some(inlay) = object.surface_inlay {
             let Some(host) = objects

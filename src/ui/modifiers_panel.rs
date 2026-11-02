@@ -461,8 +461,8 @@ pub(super) fn modifiers_panel(
         snapshot = true;
     }
     let show_repeat = object.repetition.enabled;
-    if changed {
-        set_objects(tree, scene);
+    if changed && !super::seams::commit_objects(ui, tree, scene) {
+        return;
     }
     if remove_lattice {
         animation::remove_lattice_track(tree, target);

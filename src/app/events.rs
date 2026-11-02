@@ -310,8 +310,14 @@ impl ApplicationHandler<AppEvent> for App {
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         if !self.benchmark && self.ui_benchmark.is_none() && self.guide_screenshot.is_none() {
             match super::agent::listen(self.agent_proxy.clone()) {
-                Ok(receiver) => { self.agent_requests = Some(receiver); self.agent_bridge_error = None; }
-                Err(error) => { eprintln!("Claydash agent bridge unavailable: {error}"); self.agent_bridge_error = Some(error); }
+                Ok(receiver) => {
+                    self.agent_requests = Some(receiver);
+                    self.agent_bridge_error = None;
+                }
+                Err(error) => {
+                    eprintln!("Claydash agent bridge unavailable: {error}");
+                    self.agent_bridge_error = Some(error);
+                }
             }
         }
     }
@@ -337,8 +343,14 @@ impl ApplicationHandler<AppEvent> for App {
             return;
         };
         // Input may repaint immediately even while background refinement is paced.
-        if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::MouseInput { .. }
-            | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_)) {
+        if matches!(
+            event,
+            WindowEvent::CursorMoved { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::KeyboardInput { .. }
+                | WindowEvent::Ime(_)
+        ) {
             window.request_redraw();
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -394,7 +406,10 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 #[cfg(not(target_arch = "wasm32"))]
-                { self.next_refinement_redraw = std::time::Instant::now() + std::time::Duration::from_millis(16); }
+                {
+                    self.next_refinement_redraw =
+                        std::time::Instant::now() + std::time::Duration::from_millis(16);
+                }
                 #[cfg(all(not(target_arch = "wasm32"), unix))]
                 self.process_agent_requests();
                 #[cfg(not(target_arch = "wasm32"))]
@@ -450,10 +465,16 @@ impl ApplicationHandler<AppEvent> for App {
                             let center = self.camera.viewport_origin + self.camera.viewport * 0.5;
                             if benchmark.frames == 1 {
                                 self.interactions.cursor_moved(center, false);
-                                self.interactions.set_right_button(true, false, &self.camera, &self.tree);
+                                self.interactions.set_right_button(
+                                    true,
+                                    false,
+                                    &self.camera,
+                                    &self.tree,
+                                );
                             }
                             let offset = (benchmark.frames as f32 * 0.08).sin() * 50.0;
-                            self.interactions.cursor_moved(center + Vec2::new(offset, offset * 0.25), false);
+                            self.interactions
+                                .cursor_moved(center + Vec2::new(offset, offset * 0.25), false);
                         }
                     } else if !benchmark.selection_click {
                         let angle = (benchmark.frames as f32 * 0.08).sin() * 0.3;
@@ -538,7 +559,8 @@ impl ApplicationHandler<AppEvent> for App {
                 window.request_redraw();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
-                self.interactions.release_inactive_modifiers(modifiers.state());
+                self.interactions
+                    .release_inactive_modifiers(modifiers.state());
                 window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -589,7 +611,8 @@ impl ApplicationHandler<AppEvent> for App {
                 ..
             } if !(cfg!(target_arch = "wasm32")
                 && self.ui.face_cut_mode()
-                && self.interactions.control_down()) => {
+                && self.interactions.control_down()) =>
+            {
                 let over_ui = self.ui.selection_gesture_active()
                     || self.pointer_over_ui(self.interactions.mouse_position, egui_consumed);
                 self.interactions.set_right_button(
@@ -612,10 +635,12 @@ impl ApplicationHandler<AppEvent> for App {
                 state: ElementState::Pressed,
                 ..
             } if !self.ui.selection_gesture_active()
+                && !self.ui.seam_editing(&self.tree)
                 && !self.pointer_over_ui(self.interactions.mouse_position, egui_consumed) =>
             {
                 if self.ui.box_selection_enabled(&self.tree)
-                    || self.ui.circle_selection_enabled(&self.tree) {
+                    || self.ui.circle_selection_enabled(&self.tree)
+                {
                     return;
                 }
                 let ghost = self.ui.ghost_at(
@@ -664,8 +689,12 @@ impl ApplicationHandler<AppEvent> for App {
                             && self
                                 .ui
                                 .delete_active_polygon_point(&self.egui, &mut self.tree);
-                        if !entered_box_selection && !entered_circle_selection
-                            && !entered_face_cut && !timeline_shortcut && !deleted_polygon_point {
+                        if !entered_box_selection
+                            && !entered_circle_selection
+                            && !entered_face_cut
+                            && !timeline_shortcut
+                            && !deleted_polygon_point
+                        {
                             self.interactions.key_pressed(
                                 key,
                                 wants_keyboard,
@@ -687,8 +716,12 @@ impl ApplicationHandler<AppEvent> for App {
         if !self.window_focused || self.window_occluded {
             let working = self.advance_background_computations();
             event_loop.set_control_flow(if working {
-                winit::event_loop::ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(50))
-            } else { winit::event_loop::ControlFlow::Wait });
+                winit::event_loop::ControlFlow::WaitUntil(
+                    std::time::Instant::now() + std::time::Duration::from_millis(50),
+                )
+            } else {
+                winit::event_loop::ControlFlow::Wait
+            });
         }
         #[cfg(all(not(target_arch = "wasm32"), unix))]
         if self.agent_capture.is_some() {
@@ -756,10 +789,17 @@ impl ApplicationHandler<AppEvent> for App {
                 return;
             };
             #[cfg(not(target_arch = "wasm32"))]
-            if !guide_capture && !agent_redraw_pending
-                && self.renderer.as_ref().is_some_and(|renderer| !renderer.viewport_refined())
-                && std::time::Instant::now() < self.next_refinement_redraw {
-                event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(self.next_refinement_redraw));
+            if !guide_capture
+                && !agent_redraw_pending
+                && self
+                    .renderer
+                    .as_ref()
+                    .is_some_and(|renderer| !renderer.viewport_refined())
+                && std::time::Instant::now() < self.next_refinement_redraw
+            {
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                    self.next_refinement_redraw,
+                ));
                 return;
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -767,7 +807,9 @@ impl ApplicationHandler<AppEvent> for App {
             window.request_redraw();
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if ((!self.window_focused && !agent_redraw_pending) || self.window_occluded) && !guide_capture {
+        if ((!self.window_focused && !agent_redraw_pending) || self.window_occluded)
+            && !guide_capture
+        {
             // Do not leave an expired refinement deadline spinning the event
             // loop while background rendering is intentionally suspended.
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);

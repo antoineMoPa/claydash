@@ -223,7 +223,7 @@ impl UiState {
                 lattice.add_shape_key();
             }
             lattice.save_selected_shape_key();
-            set_objects(tree, scene.clone());
+            super::super::seams::commit_objects(ui, tree, scene.clone());
         }
         if finished {
             tree.make_undo_redo_snapshot();

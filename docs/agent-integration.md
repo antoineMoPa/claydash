@@ -499,3 +499,69 @@ Supported sources are hard SDF subtrees with solid/metallic materials. Procedura
 materials, image stencils, imported mesh/splat sources, emission and smooth blends are
 rejected explicitly. The parent can be an existing mesh or primitive. The source model remains
 the editable master; inspect the exported GLB before using it as the final asset.
+
+## Seams and edge connections
+
+Seams are independent construction polylines: points joined by red lines. They are listed
+under **Seams** in the scene panel and create no geometry. Add a seam, select it, and edit
+world points in its inspector or choose a mesh and enable **Place surface points in viewport**.
+Click to append points; drag handles to move them. Surface points remain attached to source
+triangles. **Closed loop** joins the last point to the first without repeating the endpoint.
+
+Sheets and lattices remain ordinary tools. **Add Sheet Panel** is available in the viewport
+and command palette; Object settings expose size, thickness and native bend operations.
+Add/edit its existing **Lattice** modifier as usual. A density of three means the existing
+3×3×3 cage (27 controls), including 3×3 grids on its faces.
+
+The selected object's **Seam connections** controls explicitly connect a lattice edge or sheet
+boundary to a seam. A lattice edge has a varying axis and min/max sides on the other two
+axes in XYZ order: axis Y with sides [true,false] means x=max, z=min. Bindings may select an
+inclusive point span and reverse its direction. Closed seams require a span; spans can wrap
+around the last point. Every seam knot in a bound span must appear among a lattice edge's
+stations, so resolution−1 must be divisible by span-point-count−1. Additional cage stations
+interpolate between the seam points.
+
+Sheet boundary connections evaluate the existing bends and transforms. With a lattice,
+constraints adjust existing controls while preserving free controls that do not influence
+the connection. Without a lattice, the authored sheet must already match the seam. Connections
+never create a sheet or cage. Multiple boundaries solve together; conflicting constraints
+fail atomically. Final sheet boundary positions are checked against the native four-step
+lattice evaluator using world-space tolerance. Current sheet boundary connections support
+full edges of independent panels that survive any cuts; unsupported bend/cage fits report an error. Lattice
+edge bindings constrain the cage edge; use a sheet boundary binding to constrain the actual
+sheet edge. Mirror remains optional and independent: bindings refer to base geometry, and
+Mirror does not implicitly duplicate seam entities.
+
+MCP Apply actions (use `get_action_schema` for tagged action envelopes):
+
+- `PutSeam {seam:{id,name,points,closed}}` creates/replaces a construction line. Point values
+  are `{World:[x,y,z]}` or `{Surface:{object,triangle,barycentric:[w0,w1,w2]}}`.
+- `SnapSeamPoint {seam,point,source,position:[x,y,z]}` projects a world-space query onto the
+  nearest source triangle. `point` equal to current length appends; smaller indices replace.
+- `SetSeamBinding {binding:{object,seam,target,span,reverse,tolerance}}` creates/replaces a
+  target's connection. Targets are `{LatticeEdge:{axis:"Y",sides:[true,false]}}` or
+  `{SheetBoundary:"MaxX"}`. Span is null or `[first,last]`; indices start at zero.
+- `RemoveSeamBinding {object,target}` disconnects while retaining the current pose.
+- `DeleteSeam {id}` removes a seam and its bindings. Deleting a target object removes its
+  bindings. Detach/reassign surface points before deleting their source mesh.
+
+`GetState` includes `{seams,bindings}` under `seams`. `GetSceneSummary` lists seam IDs/names,
+point counts and connections. Save/Open and Undo/Redo preserve the entities and relationships.
+Point parameters are uniformly spaced by index; geometric segment lengths may differ.
+
+Construction lines are hidden in final renders, captures and GLB exports. To inspect them:
+
+```sh
+claydash render scene.claydash --show-seams --output guides.png
+claydash agent CaptureViewport --show-seams --output guides.png
+claydash agent CaptureOrthographic --show-seams --output guides.png
+```
+
+Omit the flag for a final render. MCP captures accept the equivalent `show_seams:true`, which
+defaults to false. The flag adds a red line overlay; it does not turn seams into exported geometry.
+
+### Declarative construction recipes
+
+Scene DSL supports declared `mesh_asset` references, `seam` points (`snap` or explicit `surface_point`), ordinary `lattice` modifiers and named `bind` connections to sheet boundaries/cage edges. Prefer `.claydef` files for full-scene authoring; `claydash agent ValidateSceneDsl --file recipe.claydef` and `ApplySceneDsl --file recipe.claydef` load source and resolve relative assets. Responses contain compact named paths/IDs. `CaptureSceneDsl` accepts a part/assembly `path` and optional `show_seams`; standalone `render` accepts `--part` and `--show-seams`. See [the language guide](scene-definition-language.md) for syntax and limitations.
+
+Sheet recipes in scene DSL now expose native `cut_circle`, `cut_line`, `emboss_circle`, `sheet_surface`, `emboss_station`/`path_emboss`, and explicit `Blank`/`Cut`/`Formed` stages. Use material-space cuts for real openings and surface/relief controls for crown and creases; they remain one native sheet object and require no Boolean opt-in. See `examples/sheet-relief.claydef` and the language guide for validation limits.

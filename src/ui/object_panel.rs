@@ -25,6 +25,9 @@ fn cloud_mesh_color(cloud: &claydash_engine::gaussian_ply::GaussianCloud) -> gla
 }
 
 pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut AnimationRuntime) {
+    if super::seams::inspector(ui, tree) {
+        return;
+    }
     let selection = selected(tree);
     if selection.len() == 1
         && crate::model::scene_cameras(tree)
@@ -397,7 +400,7 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
                 }
             }
         }
-        set_objects(tree, scene);
+        super::seams::commit_objects(ui, tree, scene);
         if reset_pose {
             tree.make_undo_redo_snapshot();
         }
@@ -405,6 +408,7 @@ pub(super) fn object_panel(ui: &mut egui::Ui, tree: &mut DataTree, runtime: &mut
     apply_keyframe_requests(tree, runtime, keyframes);
     ui.separator();
     modifiers_panel(ui, tree, runtime);
+    super::seams::connections(ui, tree, object_id);
     group_optimizations_panel(ui, tree);
     ui.separator();
     super::variables::variable_bindings_editor(ui, tree);
@@ -843,7 +847,82 @@ pub(super) fn params_editor(
                 .changed();
             depth_changed | softness_changed
         }
-        SdfParams::SheetPanelParams(_) => false,
+        SdfParams::SheetPanelParams(panel) => {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Sheet size");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut panel.size.x)
+                            .speed(0.01)
+                            .range(0.001..=1000.0),
+                    )
+                    .changed();
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut panel.size.y)
+                            .speed(0.01)
+                            .range(0.001..=1000.0),
+                    )
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Thickness");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut panel.thickness)
+                            .speed(0.001)
+                            .range(0.0001..=10.0),
+                    )
+                    .changed();
+            });
+            let mut remove = None;
+            for (i, bend) in panel.bends.iter_mut().enumerate() {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Bend {}", i + 1));
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                    for (label, value) in [
+                        ("Start", &mut bend.start),
+                        ("Direction (rad)", &mut bend.direction),
+                        ("Radius", &mut bend.radius),
+                        ("Angle (rad)", &mut bend.angle),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            changed |= ui.add(egui::DragValue::new(value).speed(0.01)).changed();
+                        });
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                panel.bends.remove(i);
+                changed = true;
+            }
+            if ui
+                .add_enabled(
+                    panel.bends.len() < crate::model::SheetPanelParams::MAX_BENDS,
+                    egui::Button::new("Add bend"),
+                )
+                .clicked()
+            {
+                panel.bends.push(crate::model::SheetBend {
+                    start: 0.0,
+                    direction: 0.0,
+                    radius: panel.size.x * 0.1,
+                    angle: 0.6,
+                });
+                changed = true;
+            }
+            if let Err(e) = panel.validate() {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+                return false;
+            }
+            changed
+        }
         SdfParams::BezierCurveParams(value) => {
             ui.label(format!(
                 "{} Bézier segment{}",

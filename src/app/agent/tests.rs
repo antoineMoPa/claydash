@@ -3,6 +3,7 @@ use super::capture::orthographic_sheet;
 use super::*;
 
 mod rendering;
+mod seams;
 mod variables;
 
 #[test]
@@ -47,13 +48,21 @@ fn scene_revision_is_compact_and_rejects_stale_edits_after_reopen() {
     let first = app.scene_revision();
     assert!(first > 0 && first <= u32::MAX as u64);
     assert_eq!(first, app.scene_revision());
-    model::set_objects(&mut app.tree, vec![SdfObject::create_kind(PrimitiveKind::Box)]);
+    model::set_objects(
+        &mut app.tree,
+        vec![SdfObject::create_kind(PrimitiveKind::Box)],
+    );
     let edited = app.scene_revision();
     assert!(edited > first);
     app.replace_scene(model::DataTree::default());
     let reopened = app.scene_revision();
     assert!(reopened > edited && reopened <= u32::MAX as u64);
-    let error = app.agent_apply(ApplyArgs { expected_revision: Some(edited), actions: Vec::new() }).unwrap_err();
+    let error = app
+        .agent_apply(ApplyArgs {
+            expected_revision: Some(edited),
+            actions: Vec::new(),
+        })
+        .unwrap_err();
     assert!(error.contains("scene changed"));
 }
 
@@ -66,114 +75,294 @@ fn create_object_accepts_color_and_material_in_one_action() {
     let action: Action = serde_json::from_value(json!({
         "type":"CreateObject", "kind":"Box", "material_id":asset.uuid,
         "color":[0.2,0.4,0.6,1.0]
-    })).unwrap();
-    app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![action] }).unwrap();
+    }))
+    .unwrap();
+    app.agent_apply(ApplyArgs {
+        expected_revision: None,
+        actions: vec![action],
+    })
+    .unwrap();
     let object = model::objects_ref(&app.tree).last().unwrap();
     assert_eq!(object.material_id, Some(asset.uuid));
     assert_eq!(object.color, glam::Vec4::new(0.2, 0.4, 0.6, 1.0));
     assert_eq!(object.material.color, object.color);
     let action: Action = serde_json::from_value(json!({
         "type":"CreateObject", "kind":"Box", "color":[1.2,0.4,0.6,1.0]
-    })).unwrap();
-    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![action] }).is_err());
+    }))
+    .unwrap();
+    assert!(app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![action]
+        })
+        .is_err());
     let action: Action = serde_json::from_value(json!({
         "type":"CreateObject", "kind":"Box", "material_id":uuid::Uuid::new_v4()
-    })).unwrap();
-    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![action] }).is_err());
+    }))
+    .unwrap();
+    assert!(app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![action]
+        })
+        .is_err());
 }
 
 #[test]
 fn sheet_surface_path_and_persistent_seams_apply_and_reload_atomically() {
-    let mut app=App::new(); app.new_document();
-    let mut source:model::SheetPanelParams=serde_json::from_value(mcp::schema()["sheet_surface_example"]["SheetPanelParams"].clone()).unwrap();
-    let make=|params:model::SheetPanelParams,position| Action::CreateObject {
-        kind:PrimitiveKind::SheetPanel,name:None,position:Some(position),transform:None,
-        params:Some(SdfParams::SheetPanelParams(params)),render_representation:None,
-        color: None, material_id: None,
+    let mut app = App::new();
+    app.new_document();
+    let mut source: model::SheetPanelParams =
+        serde_json::from_value(mcp::schema()["sheet_surface_example"]["SheetPanelParams"].clone())
+            .unwrap();
+    let make = |params: model::SheetPanelParams, position| Action::CreateObject {
+        kind: PrimitiveKind::SheetPanel,
+        name: None,
+        position: Some(position),
+        transform: None,
+        params: Some(SdfParams::SheetPanelParams(params)),
+        render_representation: None,
+        color: None,
+        material_id: None,
     };
-    let result=app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![make(source.clone(),[0.0,0.0,0.0])]}).unwrap();
-    let source_id:uuid::Uuid=serde_json::from_value(result["created_ids"][0].clone()).unwrap();
-    let target=model::SheetPanelParams {
-        size:source.size,thickness:source.thickness,
-        seam:Some(model::SheetSeam {source:source_id,source_edge:model::SheetEdge::MaxX,edge:model::SheetEdge::MinX,gap:0.005}),
+    let result = app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![make(source.clone(), [0.0, 0.0, 0.0])],
+        })
+        .unwrap();
+    let source_id: uuid::Uuid = serde_json::from_value(result["created_ids"][0].clone()).unwrap();
+    let target = model::SheetPanelParams {
+        size: source.size,
+        thickness: source.thickness,
+        seam: Some(model::SheetSeam {
+            source: source_id,
+            source_edge: model::SheetEdge::MaxX,
+            edge: model::SheetEdge::MinX,
+            gap: 0.005,
+        }),
         ..Default::default()
     };
-    let result=app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![make(target,[0.905,0.0,0.0])]}).unwrap();
-    let target_id:uuid::Uuid=serde_json::from_value(result["created_ids"][0].clone()).unwrap();
-    let check=|app:&App,source:&model::SheetPanelParams| {
-        let object=model::objects_ref(&app.tree).iter().find(|o|o.uuid==target_id).unwrap();
-        let SdfParams::SheetPanelParams(p)=&object.params else {panic!()};
+    let result = app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![make(target, [0.905, 0.0, 0.0])],
+        })
+        .unwrap();
+    let target_id: uuid::Uuid = serde_json::from_value(result["created_ids"][0].clone()).unwrap();
+    let check = |app: &App, source: &model::SheetPanelParams| {
+        let object = model::objects_ref(&app.tree)
+            .iter()
+            .find(|o| o.uuid == target_id)
+            .unwrap();
+        let SdfParams::SheetPanelParams(p) = &object.params else {
+            panic!()
+        };
         for row in 0..4 {
-            let heights=&p.surface.as_ref().unwrap().heights;
-            let original=&source.surface.as_ref().unwrap().heights;
-            assert!((heights[row*4]-original[row*4+3]).abs()<1e-6);
-            assert!((heights[row*4+1]-heights[row*4]-(original[row*4+3]-original[row*4+2])).abs()<1e-6);
+            let heights = &p.surface.as_ref().unwrap().heights;
+            let original = &source.surface.as_ref().unwrap().heights;
+            assert!((heights[row * 4] - original[row * 4 + 3]).abs() < 1e-6);
+            assert!(
+                (heights[row * 4 + 1]
+                    - heights[row * 4]
+                    - (original[row * 4 + 3] - original[row * 4 + 2]))
+                    .abs()
+                    < 1e-6
+            );
         }
     };
-    check(&app,&source);
+    check(&app, &source);
     // A compatible pair move is valid even when the target action comes first.
-    let source_transform=model::objects_ref(&app.tree).iter().find(|o|o.uuid==source_id).unwrap().transform;
-    let target_transform=model::objects_ref(&app.tree).iter().find(|o|o.uuid==target_id).unwrap().transform;
-    let mut moved_source=source_transform; moved_source.translation.x+=0.1;
-    let mut moved_target=target_transform; moved_target.translation.x+=0.1;
-    app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![
-        Action::SetObjectTransform {id:target_id,transform:moved_target},
-        Action::SetObjectTransform {id:source_id,transform:moved_source},
-    ]}).unwrap();
-    app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![
-        Action::SetObjectTransform {id:source_id,transform:source_transform},
-        Action::SetObjectTransform {id:target_id,transform:target_transform},
-    ]}).unwrap();
-    source.surface.as_mut().unwrap().heights[7]+=0.025;
-    app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![Action::SetObjectParams {id:source_id,params:SdfParams::SheetPanelParams(source.clone())}]}).unwrap();
-    check(&app,&source);
-    let before=serde_json::to_value(model::objects_ref(&app.tree)).unwrap(); let revision=app.scene_revision();
-    let mut invalid=source.clone(); invalid.path_embosses[0].stations[0].width=0.0;
-    let mut transform=model::objects_ref(&app.tree).iter().find(|o|o.uuid==target_id).unwrap().transform;
-    transform.translation.x+=0.01;
+    let source_transform = model::objects_ref(&app.tree)
+        .iter()
+        .find(|o| o.uuid == source_id)
+        .unwrap()
+        .transform;
+    let target_transform = model::objects_ref(&app.tree)
+        .iter()
+        .find(|o| o.uuid == target_id)
+        .unwrap()
+        .transform;
+    let mut moved_source = source_transform;
+    moved_source.translation.x += 0.1;
+    let mut moved_target = target_transform;
+    moved_target.translation.x += 0.1;
+    app.agent_apply(ApplyArgs {
+        expected_revision: None,
+        actions: vec![
+            Action::SetObjectTransform {
+                id: target_id,
+                transform: moved_target,
+            },
+            Action::SetObjectTransform {
+                id: source_id,
+                transform: moved_source,
+            },
+        ],
+    })
+    .unwrap();
+    app.agent_apply(ApplyArgs {
+        expected_revision: None,
+        actions: vec![
+            Action::SetObjectTransform {
+                id: source_id,
+                transform: source_transform,
+            },
+            Action::SetObjectTransform {
+                id: target_id,
+                transform: target_transform,
+            },
+        ],
+    })
+    .unwrap();
+    source.surface.as_mut().unwrap().heights[7] += 0.025;
+    app.agent_apply(ApplyArgs {
+        expected_revision: None,
+        actions: vec![Action::SetObjectParams {
+            id: source_id,
+            params: SdfParams::SheetPanelParams(source.clone()),
+        }],
+    })
+    .unwrap();
+    check(&app, &source);
+    let before = serde_json::to_value(model::objects_ref(&app.tree)).unwrap();
+    let revision = app.scene_revision();
+    let mut invalid = source.clone();
+    invalid.path_embosses[0].stations[0].width = 0.0;
+    let mut transform = model::objects_ref(&app.tree)
+        .iter()
+        .find(|o| o.uuid == target_id)
+        .unwrap()
+        .transform;
+    transform.translation.x += 0.01;
     for actions in [
-        vec![Action::SetObjectParams {id:source_id,params:SdfParams::SheetPanelParams(invalid)}],
-        vec![Action::SetObjectTransform {id:target_id,transform}],
-        vec![Action::DeleteObject {id:source_id}],
+        vec![Action::SetObjectParams {
+            id: source_id,
+            params: SdfParams::SheetPanelParams(invalid),
+        }],
+        vec![Action::SetObjectTransform {
+            id: target_id,
+            transform,
+        }],
+        vec![Action::DeleteObject { id: source_id }],
     ] {
-        assert!(app.agent_apply(ApplyArgs {expected_revision:None,actions}).is_err());
-        assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),before); assert_eq!(app.scene_revision(),revision);
+        assert!(app
+            .agent_apply(ApplyArgs {
+                expected_revision: None,
+                actions
+            })
+            .is_err());
+        assert_eq!(
+            serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),
+            before
+        );
+        assert_eq!(app.scene_revision(), revision);
     }
-    for stage in [model::SheetStage::Blank,model::SheetStage::Cut,model::SheetStage::Formed] {
-        let snapshot=capture::capture_scene(model::objects_ref(&app.tree),Some(&[source_id,target_id]),Some(stage),CaptureIsolation::Groups).unwrap().unwrap();
-        for object in snapshot {let SdfParams::SheetPanelParams(p)=object.params else {panic!()};assert_eq!(p.stage,stage);assert!(p.surface.is_some());}
+    for stage in [
+        model::SheetStage::Blank,
+        model::SheetStage::Cut,
+        model::SheetStage::Formed,
+    ] {
+        let snapshot = capture::capture_scene(
+            model::objects_ref(&app.tree),
+            Some(&[source_id, target_id]),
+            Some(stage),
+            CaptureIsolation::Groups,
+        )
+        .unwrap()
+        .unwrap();
+        for object in snapshot {
+            let SdfParams::SheetPanelParams(p) = object.params else {
+                panic!()
+            };
+            assert_eq!(p.stage, stage);
+            assert!(p.surface.is_some());
+        }
     }
-    assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),before);
-    let saved=crate::document::serialize_scene(&app.tree).unwrap();
-    let mut restored=model::DataTree::default(); restored.set_tree("scene",crate::document::deserialize_scene(&saved).unwrap());
-    assert_eq!(serde_json::to_value(model::objects_ref(&restored)).unwrap(),before);
+    assert_eq!(
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),
+        before
+    );
+    let saved = crate::document::serialize_scene(&app.tree).unwrap();
+    let mut restored = model::DataTree::default();
+    restored.set_tree("scene", crate::document::deserialize_scene(&saved).unwrap());
+    assert_eq!(
+        serde_json::to_value(model::objects_ref(&restored)).unwrap(),
+        before
+    );
     // Ordinary editor changes re-solve dependants and retain the last valid
     // object state if a transform breaks the declared seam.
-    let mut objects=model::objects(&app.tree); let old=objects.clone();
-    objects.iter_mut().find(|o|o.uuid==target_id).unwrap().transform.translation.x+=0.1;
-    model::set_objects(&mut app.tree,objects); assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),serde_json::to_value(old).unwrap());
-    let variable_id=uuid::Uuid::new_v4();
-    let variables=model::SceneVariables {
-        vectors:vec![model::VectorVariable {id:variable_id,name:"Seam source position".into(),value:Vec3::ZERO,space:model::VariableSpace::Local}],
-        bindings:vec![model::VectorBinding {object:source_id,target:model::VectorBindingTarget::Position,variable:variable_id,offset:Vec3::ZERO}],
+    let mut objects = model::objects(&app.tree);
+    let old = objects.clone();
+    objects
+        .iter_mut()
+        .find(|o| o.uuid == target_id)
+        .unwrap()
+        .transform
+        .translation
+        .x += 0.1;
+    model::set_objects(&mut app.tree, objects);
+    assert_eq!(
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),
+        serde_json::to_value(old).unwrap()
+    );
+    let variable_id = uuid::Uuid::new_v4();
+    let variables = model::SceneVariables {
+        vectors: vec![model::VectorVariable {
+            id: variable_id,
+            name: "Seam source position".into(),
+            value: Vec3::ZERO,
+            space: model::VariableSpace::Local,
+        }],
+        bindings: vec![model::VectorBinding {
+            object: source_id,
+            target: model::VectorBindingTarget::Position,
+            variable: variable_id,
+            offset: Vec3::ZERO,
+        }],
         ..Default::default()
     };
-    model::try_set_scene_variables(&mut app.tree,variables.clone()).unwrap();
-    let bound_before=serde_json::to_value(model::objects_ref(&app.tree)).unwrap();
-    let objects=model::objects(&app.tree).into_iter().filter(|o|o.uuid!=source_id).collect();
-    model::set_objects(&mut app.tree,objects);
-    assert_eq!(model::scene_variables(&app.tree),variables,"rejected deletion must retain bindings");
-    assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),bound_before);
-    let mut invalid_variables=variables.clone(); invalid_variables.vectors[0].value.x=0.1;
-    assert!(model::try_set_scene_variables(&mut app.tree,invalid_variables.clone()).is_err());
-    model::set_scene_variables(&mut app.tree,invalid_variables);
-    assert_eq!(model::scene_variables(&app.tree),variables);
-    assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),bound_before);
-    assert!(app.agent_apply(ApplyArgs {expected_revision:None,actions:vec![Action::UpdateVectorVariable {
-        id:variable_id,name:None,value:Some(Vec3::X*0.1),space:None,
-    }]}).is_err());
-    assert_eq!(model::scene_variables(&app.tree),variables);
-    assert_eq!(serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),bound_before);
+    model::try_set_scene_variables(&mut app.tree, variables.clone()).unwrap();
+    let bound_before = serde_json::to_value(model::objects_ref(&app.tree)).unwrap();
+    let objects = model::objects(&app.tree)
+        .into_iter()
+        .filter(|o| o.uuid != source_id)
+        .collect();
+    model::set_objects(&mut app.tree, objects);
+    assert_eq!(
+        model::scene_variables(&app.tree),
+        variables,
+        "rejected deletion must retain bindings"
+    );
+    assert_eq!(
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),
+        bound_before
+    );
+    let mut invalid_variables = variables.clone();
+    invalid_variables.vectors[0].value.x = 0.1;
+    assert!(model::try_set_scene_variables(&mut app.tree, invalid_variables.clone()).is_err());
+    model::set_scene_variables(&mut app.tree, invalid_variables);
+    assert_eq!(model::scene_variables(&app.tree), variables);
+    assert_eq!(
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),
+        bound_before
+    );
+    assert!(app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![Action::UpdateVectorVariable {
+                id: variable_id,
+                name: None,
+                value: Some(Vec3::X * 0.1),
+                space: None,
+            }]
+        })
+        .is_err());
+    assert_eq!(model::scene_variables(&app.tree), variables);
+    assert_eq!(
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap(),
+        bound_before
+    );
 }
 
 #[test]
@@ -181,58 +370,152 @@ fn sheet_mcp_edits_validate_atomically_and_capture_stages_do_not_mutate_scene() 
     let mut app = App::new();
     app.new_document();
     let mut panel = model::SheetPanelParams::default();
-    panel.cuts.push(model::SheetCut::Circle { center: Vec2::ZERO, radius: 0.2 });
-    panel.embosses.push(model::SheetEmboss::Circle { center: Vec2::ZERO, radius: 0.2, depth: 0.025, transition: 0.1 });
-    panel.bends.push(model::SheetBend { direction: 0.0, start: -0.5, radius: 0.3, angle: 1.0 });
-    panel.bends.push(model::SheetBend { direction: std::f32::consts::FRAC_PI_2, start: -0.1, radius: 0.3, angle: -1.0 });
-    let result = app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::CreateObject {
-        kind: PrimitiveKind::SheetPanel, name: Some("Fender".into()),
-        position: None, transform: None, params: Some(SdfParams::SheetPanelParams(panel.clone())),
-        render_representation: None, color: None, material_id: None,
-    }] }).unwrap();
+    panel.cuts.push(model::SheetCut::Circle {
+        center: Vec2::ZERO,
+        radius: 0.2,
+    });
+    panel.embosses.push(model::SheetEmboss::Circle {
+        center: Vec2::ZERO,
+        radius: 0.2,
+        depth: 0.025,
+        transition: 0.1,
+    });
+    panel.bends.push(model::SheetBend {
+        direction: 0.0,
+        start: -0.5,
+        radius: 0.3,
+        angle: 1.0,
+    });
+    panel.bends.push(model::SheetBend {
+        direction: std::f32::consts::FRAC_PI_2,
+        start: -0.1,
+        radius: 0.3,
+        angle: -1.0,
+    });
+    let result = app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![Action::CreateObject {
+                kind: PrimitiveKind::SheetPanel,
+                name: Some("Fender".into()),
+                position: None,
+                transform: None,
+                params: Some(SdfParams::SheetPanelParams(panel.clone())),
+                render_representation: None,
+                color: None,
+                material_id: None,
+            }],
+        })
+        .unwrap();
     let id: uuid::Uuid = serde_json::from_value(result["created_ids"][0].clone()).unwrap();
     let before = serde_json::to_value(model::objects_ref(&app.tree)).unwrap();
-    for stage in [model::SheetStage::Blank, model::SheetStage::Cut, model::SheetStage::Formed] {
-        let snapshot = capture::capture_scene(model::objects_ref(&app.tree), Some(&[id]), Some(stage), CaptureIsolation::Groups).unwrap().unwrap();
-        let SdfParams::SheetPanelParams(recipe) = &snapshot[0].params else { panic!("sheet recipe") };
+    for stage in [
+        model::SheetStage::Blank,
+        model::SheetStage::Cut,
+        model::SheetStage::Formed,
+    ] {
+        let snapshot = capture::capture_scene(
+            model::objects_ref(&app.tree),
+            Some(&[id]),
+            Some(stage),
+            CaptureIsolation::Groups,
+        )
+        .unwrap()
+        .unwrap();
+        let SdfParams::SheetPanelParams(recipe) = &snapshot[0].params else {
+            panic!("sheet recipe")
+        };
         assert_eq!(recipe.stage, stage);
         assert_eq!(recipe.cuts.len(), 1);
         assert_eq!(recipe.embosses.len(), 1);
         assert_eq!(recipe.bends.len(), 2);
         assert_eq!(recipe.bends[1].direction, std::f32::consts::FRAC_PI_2);
     }
-    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    assert_eq!(
+        before,
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap()
+    );
     let mut invalid_emboss = panel.clone();
     let model::SheetEmboss::Circle { transition, .. } = &mut invalid_emboss.embosses[0];
     *transition = 0.0;
-    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectParams { id, params: SdfParams::SheetPanelParams(invalid_emboss) }] }).is_err());
-    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    assert!(app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![Action::SetObjectParams {
+                id,
+                params: SdfParams::SheetPanelParams(invalid_emboss)
+            }]
+        })
+        .is_err());
+    assert_eq!(
+        before,
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap()
+    );
     let saved = crate::document::serialize_scene(&app.tree).unwrap();
     let mut restored = model::DataTree::default();
     restored.set_tree("scene", crate::document::deserialize_scene(&saved).unwrap());
-    assert_eq!(before, serde_json::to_value(model::objects_ref(&restored)).unwrap());
+    assert_eq!(
+        before,
+        serde_json::to_value(model::objects_ref(&restored)).unwrap()
+    );
     let schema = mcp::schema();
     assert!(schema["sheet_emboss_example"]["SheetPanelParams"]["embosses"].is_array());
     let mut singular = panel.clone();
     singular.bends[1].angle = 1.0;
     singular.bends[1].radius = 0.03;
-    let error = app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectParams { id, params: SdfParams::SheetPanelParams(singular) }] }).unwrap_err();
+    let error = app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![Action::SetObjectParams {
+                id,
+                params: SdfParams::SheetPanelParams(singular),
+            }],
+        })
+        .unwrap_err();
     assert!(error.contains("radial clearance"));
-    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    assert_eq!(
+        before,
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap()
+    );
     let mut excessive = panel.clone();
     excessive.bends.resize(5, panel.bends[0].clone());
-    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectParams { id, params: SdfParams::SheetPanelParams(excessive) }] }).is_err());
-    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    assert!(app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![Action::SetObjectParams {
+                id,
+                params: SdfParams::SheetPanelParams(excessive)
+            }]
+        })
+        .is_err());
+    assert_eq!(
+        before,
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap()
+    );
     panel.bends[0].radius = 0.001;
-    assert!(app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectParams { id, params: SdfParams::SheetPanelParams(panel) }] }).is_err());
-    assert_eq!(before, serde_json::to_value(model::objects_ref(&app.tree)).unwrap());
+    assert!(app
+        .agent_apply(ApplyArgs {
+            expected_revision: None,
+            actions: vec![Action::SetObjectParams {
+                id,
+                params: SdfParams::SheetPanelParams(panel)
+            }]
+        })
+        .is_err());
+    assert_eq!(
+        before,
+        serde_json::to_value(model::objects_ref(&app.tree)).unwrap()
+    );
 }
 
 #[test]
 fn orthographic_capture_uses_three_axes_and_combines_panels() {
     let (reply, _) = mpsc::channel();
     let mut capture = AgentCapture {
-        points: Vec::new(), point_metadata: Vec::new(), revision: 1,
+        seam_lines: Vec::new(),
+        points: Vec::new(),
+        point_metadata: Vec::new(),
+        revision: 1,
         reply,
         objects: None,
         mode: CaptureMode::SimpleShading,
@@ -322,27 +605,47 @@ fn part_capture_detaches_operands_without_moving_or_editing_them() {
     let scene = vec![root, child.clone(), unrelated];
     let original = serde_json::to_value(&scene).unwrap();
     let captured = capture::capture_scene(
-        &scene, Some(&[child.uuid, child.uuid]), None, CaptureIsolation::Parts,
-    ).unwrap().unwrap();
+        &scene,
+        Some(&[child.uuid, child.uuid]),
+        None,
+        CaptureIsolation::Parts,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].uuid, child.uuid);
     assert_eq!(captured[0].boolean_parent, None);
     assert_eq!(captured[0].operation, BooleanOperation::Union);
-    assert_eq!(captured[0].render_representation, GroupRenderRepresentation::ExactSdf);
+    assert_eq!(
+        captured[0].render_representation,
+        GroupRenderRepresentation::ExactSdf
+    );
     assert!(model::object_world_matrix(&captured, child.uuid)
         .abs_diff_eq(model::object_world_matrix(&scene, child.uuid), 1e-4));
     assert_eq!(serde_json::to_value(&scene).unwrap(), original);
     assert!(capture::capture_scene(&scene, None, None, CaptureIsolation::Parts).is_err());
     assert!(capture::capture_scene(&scene, Some(&[]), None, CaptureIsolation::Parts).is_err());
-    assert!(capture::capture_scene(&scene, Some(&[uuid::Uuid::nil()]), None, CaptureIsolation::Parts).is_err());
+    assert!(capture::capture_scene(
+        &scene,
+        Some(&[uuid::Uuid::nil()]),
+        None,
+        CaptureIsolation::Parts
+    )
+    .is_err());
 }
 
 #[test]
 fn part_capture_rejects_inlays_that_require_their_host() {
     let host = SdfObject::create_kind(PrimitiveKind::Box);
     let mut inlay = SdfObject::create_kind(PrimitiveKind::Box);
-    inlay.surface_inlay = Some(model::SurfaceInlay { host: host.uuid, offset: 0.01, thickness: 0.02 });
-    let error = capture::capture_parts(&[host, inlay.clone()], &[inlay.uuid]).err().unwrap();
+    inlay.surface_inlay = Some(model::SurfaceInlay {
+        host: host.uuid,
+        offset: 0.01,
+        thickness: 0.02,
+    });
+    let error = capture::capture_parts(&[host, inlay.clone()], &[inlay.uuid])
+        .err()
+        .unwrap();
     assert!(error.contains("requires its host"), "{error}");
 }
 
@@ -353,7 +656,9 @@ fn part_capture_rejects_sheared_parent_frames() {
     let mut child = SdfObject::create_kind(PrimitiveKind::Sphere);
     child.boolean_parent = Some(root.uuid);
     child.group_transform.rotation = glam::Quat::from_rotation_z(0.5);
-    let error = capture::capture_parts(&[root, child.clone()], &[child.uuid]).err().unwrap();
+    let error = capture::capture_parts(&[root, child.clone()], &[child.uuid])
+        .err()
+        .unwrap();
     assert!(error.contains("sheared group transform"), "{error}");
 }
 
@@ -372,7 +677,8 @@ fn agent_edits_are_undoable_and_reject_stale_revisions() {
                 position: None,
                 params: None,
                 render_representation: None,
-                color: None, material_id: None,
+                color: None,
+                material_id: None,
             }],
         })
         .unwrap();
@@ -388,7 +694,8 @@ fn agent_edits_are_undoable_and_reject_stale_revisions() {
                 position: None,
                 params: None,
                 render_representation: None,
-                color: None, material_id: None,
+                color: None,
+                material_id: None,
             }],
         })
         .is_err());
@@ -534,7 +841,8 @@ fn invalid_text_edit_is_atomic_and_valid_text_is_undoable() {
             ..model::TextParams::default()
         })),
         render_representation: None,
-        color: None, material_id: None,
+        color: None,
+        material_id: None,
     };
     let result = app.agent_apply(ApplyArgs {
         expected_revision: Some(app.scene_revision()),
@@ -552,7 +860,8 @@ fn invalid_text_edit_is_atomic_and_valid_text_is_undoable() {
             ..model::TextParams::default()
         })),
         render_representation: None,
-        color: None, material_id: None,
+        color: None,
+        material_id: None,
     };
     app.agent_apply(ApplyArgs {
         expected_revision: Some(app.scene_revision()),
@@ -574,12 +883,21 @@ fn invalid_text_edit_is_atomic_and_valid_text_is_undoable() {
 fn imported_gaussian_ply_is_embedded_undoable_and_failure_is_atomic() {
     let mut app = App::new();
     app.new_document();
-    let names = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
-    let ply = format!("ply\nformat ascii 1.0\nelement vertex 1\n{}end_header\n0 0 0 -2 -3 -4 1 0 0 0 1 0 0 3\n", names.map(|n| format!("property float {n}\n")).join(""));
+    let names = [
+        "x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3",
+        "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
+    ];
+    let ply = format!(
+        "ply\nformat ascii 1.0\nelement vertex 1\n{}end_header\n0 0 0 -2 -3 -4 1 0 0 0 1 0 0 3\n",
+        names.map(|n| format!("property float {n}\n")).join("")
+    );
     let path = std::env::temp_dir().join(format!("claydash-{}.ply", uuid::Uuid::new_v4()));
     std::fs::write(&path, ply).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
-    app.process_agent_request(Inbound { request: Request::ImportGaussianPly { path: path.clone() }, reply: tx });
+    app.process_agent_request(Inbound {
+        request: Request::ImportGaussianPly { path: path.clone() },
+        reply: tx,
+    });
     let response = rx.recv().unwrap().unwrap();
     std::fs::remove_file(&path).unwrap();
     let id: uuid::Uuid = serde_json::from_value(response["id"].clone()).unwrap();
@@ -593,7 +911,10 @@ fn imported_gaussian_ply_is_embedded_undoable_and_failure_is_atomic() {
     assert!(model::objects(&app.tree).iter().any(|o| o.uuid == id));
     let scene = document::deserialize_scene(&saved).unwrap();
     app.replace_scene(scene);
-    let object = model::objects(&app.tree).into_iter().find(|o| o.uuid == id).unwrap();
+    let object = model::objects(&app.tree)
+        .into_iter()
+        .find(|o| o.uuid == id)
+        .unwrap();
     assert_eq!(object.imported_splats.unwrap().splats.len(), 1);
 }
 
@@ -601,23 +922,46 @@ fn imported_gaussian_ply_is_embedded_undoable_and_failure_is_atomic() {
 fn compact_gaussian_queries_preserve_revision_and_transform_positions() {
     let mut app = App::new();
     app.new_document();
-    let names = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
+    let names = [
+        "x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3",
+        "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
+    ];
     let ply = format!("ply\nformat ascii 1.0\nelement vertex 3\n{}end_header\n-1 0 0 -2 -2 -2 1 0 0 0 1 0 0 3\n0 1 0 -2 -2 -2 1 0 0 0 0 1 0 3\n1 2 0 -2 -2 -2 1 0 0 0 0 0 1 3\n", names.map(|name| format!("property float {name}\n")).join(""));
     let id = app.import_gaussian_ply("sample", ply.as_bytes()).unwrap();
     assert!((app.camera.target - Vec3::new(0.0, 1.0, 0.0)).length() < 0.0001);
     assert!((app.camera.position - app.camera.target).length() > 3.0);
     assert_eq!(app.agent_camera.target, Vec3::ZERO);
-    let mut transform = model::objects_ref(&app.tree).iter().find(|object| object.uuid == id).unwrap().transform;
+    let mut transform = model::objects_ref(&app.tree)
+        .iter()
+        .find(|object| object.uuid == id)
+        .unwrap()
+        .transform;
     transform.translation = Vec3::new(10.0, 0.0, 0.0);
-    app.agent_apply(ApplyArgs { expected_revision: None, actions: vec![Action::SetObjectTransform { id, transform }] }).unwrap();
+    app.agent_apply(ApplyArgs {
+        expected_revision: None,
+        actions: vec![Action::SetObjectTransform { id, transform }],
+    })
+    .unwrap();
     let summary = app.agent_scene_summary().unwrap();
     assert_eq!(summary["revision"], app.scene_revision());
-    let entry = summary["objects"].as_array().unwrap().iter().find(|entry| entry["id"] == json!(id)).unwrap();
+    let entry = summary["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == json!(id))
+        .unwrap();
     assert_eq!(entry["imported_gaussian"]["count"], 3);
-    assert_eq!(entry["imported_gaussian"]["world_bounds"]["min"], json!([9.0, 0.0, 0.0]));
+    assert_eq!(
+        entry["imported_gaussian"]["world_bounds"]["min"],
+        json!([9.0, 0.0, 0.0])
+    );
     assert!(!summary.to_string().contains("gaussian-f32-le-v1"));
-    let local = app.agent_gaussian_cloud(id, Some(CloudSpace::Object), Some(2)).unwrap();
-    let world = app.agent_gaussian_cloud(id, Some(CloudSpace::World), Some(2)).unwrap();
+    let local = app
+        .agent_gaussian_cloud(id, Some(CloudSpace::Object), Some(2))
+        .unwrap();
+    let world = app
+        .agent_gaussian_cloud(id, Some(CloudSpace::World), Some(2))
+        .unwrap();
     assert_eq!(local["percentiles"]["p50"], json!([0.0, 1.0, 0.0]));
     assert_eq!(world["percentiles"]["p50"], json!([10.0, 1.0, 0.0]));
     assert_eq!(world["samples"].as_array().unwrap().len(), 2);
@@ -627,14 +971,30 @@ fn compact_gaussian_queries_preserve_revision_and_transform_positions() {
 #[test]
 fn targeted_action_schema_shows_tag_and_sheet_bends() {
     let result = mcp::action_schema("CreateObject", Some(PrimitiveKind::SheetPanel)).unwrap();
-    assert_eq!(result["action"]["properties"]["type"]["const"], "CreateObject");
+    assert_eq!(
+        result["action"]["properties"]["type"]["const"],
+        "CreateObject"
+    );
     assert_eq!(result["sheet_bend"]["example"]["direction"], 0.0);
     assert!(result["params_example"]["SheetPanelParams"].is_object());
-    assert!(serde_json::from_value::<Request>(request_payload("Apply", result["apply_example"].clone())).is_ok());
+    assert!(serde_json::from_value::<Request>(request_payload(
+        "Apply",
+        result["apply_example"].clone()
+    ))
+    .is_ok());
     assert!(mcp::action_schema("MissingAction", None).is_err());
-    let orthographic = mcp::mcp_tools().into_iter().find(|tool| tool["name"] == "capture_orthographic").unwrap();
-    assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["minimum"], 96);
-    assert_eq!(orthographic["inputSchema"]["properties"]["panel_size"]["maximum"], 2048);
+    let orthographic = mcp::mcp_tools()
+        .into_iter()
+        .find(|tool| tool["name"] == "capture_orthographic")
+        .unwrap();
+    assert_eq!(
+        orthographic["inputSchema"]["properties"]["panel_size"]["minimum"],
+        96
+    );
+    assert_eq!(
+        orthographic["inputSchema"]["properties"]["panel_size"]["maximum"],
+        2048
+    );
 }
 
 #[test]
@@ -644,14 +1004,23 @@ fn import_glb_request_reports_transformed_geometry_and_is_atomic() {
     std::fs::write(&path, super::super::file_action_tests::triangle_glb()).unwrap();
     let request = |app: &mut App, path: std::path::PathBuf| {
         let (tx, rx) = std::sync::mpsc::channel();
-        app.process_agent_request(Inbound { request: Request::ImportGlb { path }, reply: tx });
+        app.process_agent_request(Inbound {
+            request: Request::ImportGlb { path },
+            reply: tx,
+        });
         rx.recv().unwrap()
     };
     let result = request(&mut app, path.clone()).unwrap();
     assert_eq!(result["objects"][0]["vertex_count"], 3);
     assert_eq!(result["objects"][0]["triangle_count"], 1);
-    assert_eq!(result["objects"][0]["bounds"]["min"], json!([2.0, 0.0, 0.0]));
-    assert_eq!(result["objects"][0]["bounds"]["max"], json!([3.0, 1.0, 0.0]));
+    assert_eq!(
+        result["objects"][0]["bounds"]["min"],
+        json!([2.0, 0.0, 0.0])
+    );
+    assert_eq!(
+        result["objects"][0]["bounds"]["max"],
+        json!([3.0, 1.0, 0.0])
+    );
     let revision = app.scene_revision();
     std::fs::write(&path, b"invalid").unwrap();
     assert!(request(&mut app, path.clone()).is_err());
@@ -660,7 +1029,9 @@ fn import_glb_request_reports_transformed_geometry_and_is_atomic() {
     std::fs::remove_file(path).unwrap();
     app.tree.undo();
     let id: uuid::Uuid = serde_json::from_value(result["object_ids"][0].clone()).unwrap();
-    assert!(!model::objects(&app.tree).iter().any(|object| object.uuid == id));
+    assert!(!model::objects(&app.tree)
+        .iter()
+        .any(|object| object.uuid == id));
 }
 
 #[test]
@@ -669,58 +1040,152 @@ fn state_omits_rebuildable_mesh_cache_before_serializing_and_preserves_authored_
     let mut app = App::new();
     let mut cached = SdfObject::create_kind(PrimitiveKind::Box);
     cached.saved_mesh = Some(std::sync::Arc::new(model::SavedMesh {
-        version: 1, source_revision: 1,
+        version: 1,
+        source_revision: 1,
         representation: GroupRenderRepresentation::DirectMesh,
-        sample_resolution: 64, mesh_resolution: 64,
+        sample_resolution: 64,
+        mesh_resolution: 64,
         baked_frame_inverse: glam::Mat4::IDENTITY,
         mesh: std::sync::Arc::new(Mesh::from_parts(vec![Vec3::ZERO; 20_000], vec![], vec![])),
     }));
     let mut authored = SdfObject::create_kind(PrimitiveKind::Box);
     authored.imported_mesh = Some(std::sync::Arc::new(Mesh::from_parts(
-        vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0,1,2]], vec![authored.uuid])));
+        vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+        vec![[0, 1, 2]],
+        vec![authored.uuid],
+    )));
     model::set_objects(&mut app.tree, vec![cached, authored]);
     let revision = app.scene_revision();
     let state = app.agent_state().unwrap();
     assert_eq!(state["render_caches_omitted"], true);
     assert!(state["objects"][0].get("saved_mesh").is_none());
-    assert_eq!(state["objects"][1]["imported_mesh"]["triangles"][0], json!([0,1,2]));
+    assert_eq!(
+        state["objects"][1]["imported_mesh"]["triangles"][0],
+        json!([0, 1, 2])
+    );
     assert!(serde_json::to_vec(&state).unwrap().len() < 25_000);
     let mut restored = model::DataTree::default();
-    restored.set_tree("scene", document::deserialize_scene(&serde_json::to_vec(&state["document"]).unwrap()).unwrap());
+    restored.set_tree(
+        "scene",
+        document::deserialize_scene(&serde_json::to_vec(&state["document"]).unwrap()).unwrap(),
+    );
     assert_eq!(model::objects_ref(&restored).len(), 2);
     assert!(model::objects_ref(&restored)[0].saved_mesh.is_none());
-    assert_eq!(model::objects_ref(&restored)[1].imported_mesh.as_ref().unwrap().triangles, vec![[0,1,2]]);
+    assert_eq!(
+        model::objects_ref(&restored)[1]
+            .imported_mesh
+            .as_ref()
+            .unwrap()
+            .triangles,
+        vec![[0, 1, 2]]
+    );
     assert!(model::objects_ref(&app.tree)[0].saved_mesh.is_some());
     assert_eq!(app.scene_revision(), revision);
 }
 
 #[test]
 fn dsl_capture_frames_off_origin_assembly_in_four_views() {
-    let mut app=App::new(); app.new_document();
-    let source="part = box(size: [2,1,1], at: [12,3,5]);";
-    app.agent_apply_scene_dsl(source.into(),None).unwrap();
-    let revision=app.scene_revision();
-    let (objects,center,span,panel_size)=app.prepare_dsl_capture(Some("part"),Some(96)).unwrap();
-    assert_eq!(objects.len(),1); assert_eq!(center,Vec3::new(12.,3.,5.)); assert!(span>2.);
-    assert!(app.prepare_dsl_capture(Some("missing"),None).is_err());
-    let (reply,_)=mpsc::channel();
-    let mut capture=AgentCapture {reply,objects:Some(objects),mode:CaptureMode::SimpleShading,
-        view:CaptureView::SceneViews {panel_size,center,span,frames:Vec::new()},camera:Camera::new(),cancelled_retries:0,points:Vec::new(),point_metadata:Vec::new(),revision};
+    let mut app = App::new();
+    app.new_document();
+    let source = "part = box(size: [2,1,1], at: [12,3,5]);";
+    app.agent_apply_scene_dsl(source.into(), None, None)
+        .unwrap();
+    let revision = app.scene_revision();
+    let (objects, center, span, panel_size) =
+        app.prepare_dsl_capture(Some("part"), Some(96)).unwrap();
+    assert_eq!(objects.len(), 1);
+    assert_eq!(center, Vec3::new(12., 3., 5.));
+    assert!(span > 2.);
+    assert!(app.prepare_dsl_capture(Some("missing"), None).is_err());
+    let (reply, _) = mpsc::channel();
+    let mut capture = AgentCapture {
+        reply,
+        objects: Some(objects),
+        mode: CaptureMode::SimpleShading,
+        view: CaptureView::SceneViews {
+            panel_size,
+            center,
+            span,
+            frames: Vec::new(),
+        },
+        camera: Camera::new(),
+        cancelled_retries: 0,
+        seam_lines: Vec::new(),
+        points: Vec::new(),
+        point_metadata: Vec::new(),
+        revision,
+    };
     for i in 0..4 {
-        let camera=capture.camera(); assert_eq!(camera.target,center);
-        let frame=crate::renderer::CapturedFrame {width:96,height:96,rgba:[50,60,70,255].repeat(96*96)};
-        let output=capture.accept_frame(frame,&camera).unwrap();
-        if i<3 { assert!(output.is_null()); } else { assert_eq!(output["width"],384); assert_eq!(output["height"],96); assert_eq!(output["revision"],revision); }
+        let camera = capture.camera();
+        assert_eq!(camera.target, center);
+        let frame = crate::renderer::CapturedFrame {
+            width: 96,
+            height: 96,
+            rgba: [50, 60, 70, 255].repeat(96 * 96),
+        };
+        let output = capture.accept_frame(frame, &camera).unwrap();
+        if i < 3 {
+            assert!(output.is_null());
+        } else {
+            assert_eq!(output["width"], 384);
+            assert_eq!(output["height"], 96);
+            assert_eq!(output["revision"], revision);
+        }
     }
-    assert_eq!(app.scene_revision(),revision);
+    assert_eq!(app.scene_revision(), revision);
 }
 
 #[test]
 fn dsl_tools_are_advertised_and_accept_requests() {
-    for name in ["validate_scene_dsl","apply_scene_dsl","get_scene_dsl","get_scene_dsl_guide","capture_scene_dsl"] {
-        assert!(mcp::mcp_tools().iter().any(|tool|tool["name"]==name));
+    for name in [
+        "validate_scene_dsl",
+        "apply_scene_dsl",
+        "get_scene_dsl",
+        "get_scene_dsl_guide",
+        "capture_scene_dsl",
+    ] {
+        assert!(mcp::mcp_tools().iter().any(|tool| tool["name"] == name));
     }
-    for (op,args) in [("ValidateSceneDsl",json!({"source":"a = box();"})),("ApplySceneDsl",json!({"source":"a = box();"})),("GetSceneDsl",json!({})),("CaptureSceneDsl",json!({}))] {
-        assert!(serde_json::from_value::<Request>(request_payload(op,args)).is_ok(),"{op}");
+    for (op, args) in [
+        ("ValidateSceneDsl", json!({"source":"a = box();"})),
+        ("ApplySceneDsl", json!({"source":"a = box();"})),
+        ("GetSceneDsl", json!({})),
+        ("CaptureSceneDsl", json!({})),
+    ] {
+        assert!(
+            serde_json::from_value::<Request>(request_payload(op, args)).is_ok(),
+            "{op}"
+        );
     }
+}
+
+#[test]
+fn file_recipe_arguments_preserve_relative_asset_base_and_expected_revision() {
+    let file = std::env::temp_dir().join(format!("dsl-{}.claydef", uuid::Uuid::new_v4()));
+    std::fs::write(&file, "part=box();").unwrap();
+    let args = vec![
+        "--file".into(),
+        file.display().to_string(),
+        r#"{"expected_revision":42}"#.into(),
+    ];
+    let (request, _) = parse_agent_arguments("ApplySceneDsl", &args).unwrap();
+    assert_eq!(request["args"]["source"], "part=box();");
+    assert_eq!(request["args"]["expected_revision"], 42);
+    assert!(request["args"]["base_dir"]
+        .as_str()
+        .unwrap()
+        .starts_with('/'));
+    assert!(parse_agent_arguments("GetState", &args).is_err());
+    assert!(parse_agent_arguments(
+        "ValidateSceneDsl",
+        &[
+            "--file".into(),
+            file.display().to_string(),
+            r#"{"source":"part=box();"}"#.into()
+        ]
+    )
+    .is_err());
+    let (request, _) = parse_agent_arguments("CaptureSceneDsl", &["--show-seams".into()]).unwrap();
+    assert_eq!(request["args"]["show_seams"], true);
+    std::fs::remove_file(file).unwrap();
 }

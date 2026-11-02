@@ -493,6 +493,10 @@ use crate::model::{PrimitiveKind, SdfObject, SdfParams};
 use glam::{Quat, Vec3, Vec4};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
+mod construction;
+mod sheets;
+pub use construction::CompiledScene;
+use construction::{BindingSpec, CageSpec, CompileContext, PointSpec, SeamSpec};
 
 #[derive(Clone)]
 struct Part {
@@ -506,6 +510,17 @@ enum Value {
     List(Vec<Value>),
     Bool(bool),
     Bend(crate::model::SheetBend),
+    Cut(crate::model::SheetCut),
+    Emboss(crate::model::SheetEmboss),
+    Surface(crate::model::SheetSurface),
+    PathStation(crate::model::SheetPathStation),
+    PathEmboss(crate::model::SheetPathEmboss),
+    Point(PointSpec),
+    Seam(SeamSpec),
+    Cage(CageSpec),
+    Control([usize; 3], Vec3),
+    Target(crate::model::SeamTarget),
+    Binding(BindingSpec),
     Parts(Vec<Part>),
 }
 type Definitions = HashMap<String, (Vec<String>, Vec<Statement>)>;
@@ -531,11 +546,12 @@ fn arguments(
     defs: &Definitions,
     depth: usize,
     source: &str,
+    context: &mut CompileContext<'_>,
 ) -> Result<(Vec<Value>, BTreeMap<String, Value>), String> {
     let mut positional = Vec::new();
     let mut named = BTreeMap::new();
     for (key, expr) in args {
-        let value = evaluate(expr, env, defs, depth, source)?;
+        let value = evaluate(expr, env, defs, depth, source, context)?;
         if let Some(key) = key {
             if named.insert(key.clone(), value).is_some() {
                 return Err(format!("duplicate argument '{key}'"));
@@ -617,6 +633,7 @@ fn evaluate(
     defs: &Definitions,
     depth: usize,
     source: &str,
+    context: &mut CompileContext<'_>,
 ) -> Result<Value, String> {
     if depth > 32 {
         return Err("assembly nesting exceeds 32 levels or is recursive".into());
@@ -633,16 +650,16 @@ fn evaluate(
         Expr::Vector(items) => Ok(Value::List(
             items
                 .iter()
-                .map(|e| evaluate(e, env, defs, depth, source))
+                .map(|e| evaluate(e, env, defs, depth, source, context))
                 .collect::<Result<_, _>>()?,
         )),
         Expr::Unary('-', x) => Ok(Value::Number(-number(evaluate(
-            x, env, defs, depth, source,
+            x, env, defs, depth, source, context,
         )?)?)),
         Expr::Unary(_, _) => Err("unknown unary operator".into()),
         Expr::Binary(op, a, b) => {
-            let a = number(evaluate(a, env, defs, depth, source)?)?;
-            let b = number(evaluate(b, env, defs, depth, source)?)?;
+            let a = number(evaluate(a, env, defs, depth, source, context)?)?;
+            let b = number(evaluate(b, env, defs, depth, source, context)?)?;
             let n = match op {
                 '+' => a + b,
                 '-' => a - b,
@@ -654,7 +671,13 @@ fn evaluate(
             number(Value::Number(n)).map(Value::Number)
         }
         Expr::Call(name, args) => {
-            let (pos, mut named) = arguments(args, env, defs, depth, source)?;
+            let (pos, mut named) = arguments(args, env, defs, depth, source, context)?;
+            if let Some(value) = construction::evaluate_call(name, &pos, &mut named, context)? {
+                return Ok(value);
+            }
+            if let Some(value) = sheets::evaluate_call(name, &pos, &mut named)? {
+                return Ok(value);
+            }
             if name == "bend" {
                 if !pos.is_empty() {
                     return Err("bend accepts named arguments only".into());
@@ -877,6 +900,7 @@ fn evaluate(
                         _ => return Err("closed requires a boolean on bezier_curve".into()),
                     }
                 }
+                sheets::apply_params(&mut object, &mut named)?;
                 if let SdfParams::SheetPanelParams(p) = &object.params {
                     p.validate()?;
                 }
@@ -887,6 +911,7 @@ fn evaluate(
                     }
                     _ => {}
                 }
+                construction::apply_modifiers(&mut object, &mut named)?;
                 let at = take_vec(&mut named, "at", Vec3::ZERO)?;
                 let rot = take_vec(&mut named, "rotation", Vec3::ZERO)?;
                 let scale = take_vec(&mut named, "scale", Vec3::ONE)?;
@@ -919,6 +944,7 @@ fn evaluate(
                     defs,
                     depth + 1,
                     source,
+                    context,
                 )?))
             } else {
                 Err(format!("unknown function '{name}'"))
@@ -932,6 +958,7 @@ fn run_body(
     defs: &Definitions,
     depth: usize,
     source: &str,
+    context: &mut CompileContext<'_>,
 ) -> Result<Vec<Part>, String> {
     let mut result = Vec::new();
     let mut declarations = Vec::new();
@@ -947,13 +974,41 @@ fn run_body(
                 Statement::Definition { .. } => {
                     return Err("object definitions must be top level".into())
                 }
-                Statement::Assignment { name, value, .. } => {
+                Statement::Assignment {
+                    name,
+                    value,
+                    offset,
+                } => {
                     if env.contains_key(name) {
                         return Err(format!("duplicate name '{name}'"));
                     }
-                    let v = evaluate(value, env, defs, depth, source)?;
+                    let v = evaluate(value, env, defs, depth, source, context)?;
+                    if matches!(v, Value::Binding(_)) {
+                        return Err("use bind(...) as a scene-root statement".into());
+                    }
+                    if let Value::Seam(seam) = &v {
+                        if depth != 0 {
+                            return Err(
+                                "declare seams at the scene root and bind named assembly parts"
+                                    .into(),
+                            );
+                        }
+                        context.seams.push((name.clone(), *offset, seam.clone()));
+                    }
                     env.insert(name.clone(), v);
                     declarations.push(name.clone());
+                }
+                Statement::Expression { value, .. } if matches!(value,Expr::Call(name,_) if name=="bind") =>
+                {
+                    if depth != 0 {
+                        return Err("declare bindings at the scene root".into());
+                    }
+                    let Value::Binding(binding) =
+                        evaluate(value, env, defs, depth, source, context)?
+                    else {
+                        unreachable!()
+                    };
+                    context.bindings.push((offset, binding));
                 }
                 Statement::Expression {
                     value: Expr::Call(name, args),
@@ -962,7 +1017,7 @@ fn run_body(
                     if let Some((None, Expr::Name(name))) = args.first() {
                         referenced.insert(name.clone());
                     }
-                    let (mut pos, mut named) = arguments(args, env, defs, depth, source)?;
+                    let (mut pos, mut named) = arguments(args, env, defs, depth, source, context)?;
                     if pos.len() != 1 {
                         return Err("place requires one positional object".into());
                     }
@@ -972,12 +1027,20 @@ fn run_body(
                     let at = take_vec(&mut named, "at", Vec3::ZERO)?;
                     let rotation = take_vec(&mut named, "rotation", Vec3::ZERO)?;
                     let scale = take_vec(&mut named, "scale", Vec3::ONE)?;
+                    let placement = named
+                        .remove("name")
+                        .map(construction::text)
+                        .transpose()?
+                        .unwrap_or_else(|| format!("place{index}"));
+                    if placement.is_empty() {
+                        return Err("placement name cannot be empty".into());
+                    }
                     if let Some(key) = named.keys().next() {
                         return Err(format!("unknown place argument '{key}'"));
                     }
                     apply_transform(&mut parts, at, rotation, scale)?;
                     for p in &mut parts {
-                        p.path = format!("place{index}/{}", p.path);
+                        p.path = format!("{placement}/{}", p.path);
                     }
                     result.extend(parts);
                 }
@@ -1013,6 +1076,26 @@ fn run_body(
 /// Compile a complete scene recipe into deterministic part paths and editable native objects.
 /// This function does not access files, create a GPU, or mutate application state.
 pub fn compile(source: &str) -> Result<Vec<(String, SdfObject)>, String> {
+    let scene = compile_scene(source)?;
+    if !scene.seams.seams.is_empty() || !scene.seams.bindings.is_empty() {
+        return Err(
+            "construction data requires compile_scene; compile returns geometry only".into(),
+        );
+    }
+    Ok(scene.parts)
+}
+
+pub fn compile_scene(source: &str) -> Result<CompiledScene, String> {
+    compile_with_assets(source, &mut |path| {
+        Err(format!("mesh_asset '{path}' requires an asset loader"))
+    })
+}
+
+pub fn compile_with_assets(
+    source: &str,
+    loader: &mut dyn FnMut(&str) -> Result<Vec<SdfObject>, String>,
+) -> Result<CompiledScene, String> {
+    let mut context = CompileContext::new(loader);
     if source.len() > 1_000_000 {
         return Err("source exceeds 1 MB".into());
     }
@@ -1028,6 +1111,10 @@ pub fn compile(source: &str) -> Result<Vec<(String, SdfObject)>, String> {
                 offset,
             } => {
                 if primitive(&name).is_some()
+                    || construction::reserved(&name)
+                    || sheets::reserved(&name)
+                    || name == "bend"
+                    || name == "place"
                     || defs.insert(name.clone(), (parameters, body)).is_some()
                 {
                     return Err(error(
@@ -1040,7 +1127,7 @@ pub fn compile(source: &str) -> Result<Vec<(String, SdfObject)>, String> {
             other => body.push(other),
         }
     }
-    let parts = run_body(&body, &mut HashMap::new(), &defs, 0, source)?;
+    let parts = run_body(&body, &mut HashMap::new(), &defs, 0, source, &mut context)?;
     let mut ids = HashSet::new();
     let mut output = Vec::new();
     for mut part in parts {
@@ -1057,6 +1144,9 @@ pub fn compile(source: &str) -> Result<Vec<(String, SdfObject)>, String> {
         bytes[6] = (bytes[6] & 15) | 0x50;
         bytes[8] = (bytes[8] & 63) | 0x80;
         part.object.uuid = uuid::Uuid::from_bytes(bytes);
+        if let Some(mesh) = &mut part.object.imported_mesh {
+            std::sync::Arc::make_mut(mesh).owners.fill(part.object.uuid);
+        }
         if !ids.insert(part.object.uuid) {
             return Err(format!("duplicate object path '{}'", part.path));
         }
@@ -1073,7 +1163,7 @@ pub fn compile(source: &str) -> Result<Vec<(String, SdfObject)>, String> {
                 .collect::<Vec<_>>(),
         )?;
     }
-    Ok(output)
+    construction::finish(output, context, source)
 }
 
 /// Axis-aligned world bounds of the generated geometry, including formed sheets and curve extrusion.
@@ -1081,7 +1171,22 @@ pub fn bounds(objects: &[SdfObject]) -> Result<(Vec3, Vec3), String> {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for object in objects {
-        if let Some((lo, hi)) = crate::model::lattice_bounds(objects, object.uuid) {
+        if let Some(mesh) = &object.imported_mesh {
+            let matrix = crate::model::object_world_matrix(objects, object.uuid);
+            for point in &mesh.positions {
+                let world = matrix.transform_point3(*point);
+                min = min.min(world);
+                max = max.max(world);
+            }
+            continue;
+        }
+        if let Some((mut lo, mut hi)) = crate::model::lattice_bounds(objects, object.uuid) {
+            if let Some(cage) = &object.lattice {
+                let lower = cage.offsets.iter().copied().fold(Vec3::ZERO, Vec3::min);
+                let upper = cage.offsets.iter().copied().fold(Vec3::ZERO, Vec3::max);
+                lo += lower;
+                hi += upper;
+            }
             let matrix = crate::model::lattice_world_matrix(objects, object.uuid);
             for x in [lo.x, hi.x] {
                 for y in [lo.y, hi.y] {

@@ -12,6 +12,7 @@ use crate::camera::SceneCamera;
 pub enum ClaydashValue {
     SceneDslRecipe(SceneDslRecipe),
     SceneVariables(super::SceneVariables),
+    Seams(super::SceneSeams),
     Animation(AnimationData),
     Material(Material),
     VecMaterialAsset(Vec<MaterialAsset>),
@@ -45,6 +46,10 @@ pub enum ClaydashValue {
 pub struct SceneDslRecipe {
     pub source: String,
     pub scene_digest: String,
+    #[serde(default)]
+    pub base_dir: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub part_paths: Vec<(String, uuid::Uuid)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,6 +362,11 @@ pub fn set_selected_box_face(tree: &mut DataTree, face: Option<BoxFaceSelection>
 }
 
 pub fn set_objects(tree: &mut DataTree, mut value: Vec<SdfObject>) {
+    let mut seams = super::scene_seams(tree);
+    seams.bindings.retain(|b| {
+        !objects_ref(tree).iter().any(|o| o.uuid == b.object)
+            || value.iter().any(|o| o.uuid == b.object)
+    });
     let mut variables = super::scene_variables(tree);
     super::evaluate_derived_variables(&mut variables);
     let previous_count = variables.bindings.len() + variables.rigid_bindings.len();
@@ -375,7 +385,9 @@ pub fn set_objects(tree: &mut DataTree, mut value: Vec<SdfObject>) {
     super::apply_vector_bindings(&variables, &mut value);
     // Routine editor edits maintain every directed seam. Incompatible edits are
     // rejected by retaining the previous objects; MCP has a fallible draft path.
-    if super::resolve_sheet_seams(&mut value).is_err() {
+    if super::resolve_sheet_seams(&mut value).is_err()
+        || super::resolve_seam_bindings(&seams, &mut value).is_err()
+    {
         return;
     }
     if variables.bindings.len() + variables.rigid_bindings.len() != previous_count
@@ -386,6 +398,9 @@ pub fn set_objects(tree: &mut DataTree, mut value: Vec<SdfObject>) {
             ClaydashValue::SceneVariables(variables.clone()),
         );
     }
+    if seams != super::scene_seams(tree) {
+        tree.set_path("scene.seams", ClaydashValue::Seams(seams));
+    }
     tree.set_path("scene.sdf_objects", ClaydashValue::VecSDFObject(value));
 }
 
@@ -393,7 +408,9 @@ pub fn set_objects_transient(tree: &mut DataTree, mut value: Vec<SdfObject>) {
     let mut variables = super::scene_variables(tree);
     super::evaluate_derived_variables(&mut variables);
     super::apply_vector_bindings(&variables, &mut value);
-    if super::resolve_sheet_seams(&mut value).is_err() {
+    if super::resolve_sheet_seams(&mut value).is_err()
+        || super::resolve_seam_bindings(&super::scene_seams(tree), &mut value).is_err()
+    {
         return;
     }
     tree.set_transient_path(

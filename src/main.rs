@@ -11,6 +11,7 @@ mod duck;
 mod examples;
 mod guides;
 mod interactions;
+mod mesh_assets;
 mod model;
 #[cfg(not(target_arch = "wasm32"))]
 mod render_export;
@@ -30,7 +31,9 @@ thread_local! {
 }
 
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "export function gaussianPlyProgress(loaded, total) { self.postMessage({kind:'progress', loaded, total}); }")]
+#[wasm_bindgen::prelude::wasm_bindgen(
+    inline_js = "export function gaussianPlyProgress(loaded, total) { self.postMessage({kind:'progress', loaded, total}); }"
+)]
 extern "C" {
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = gaussianPlyProgress)]
     fn gaussian_ply_progress(loaded: usize, total: usize);
@@ -48,12 +51,19 @@ pub fn parse_gaussian_ply_worker(bytes: &[u8]) -> Result<usize, wasm_bindgen::Js
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
-pub fn take_gaussian_ply_worker_batch(start: usize, count: usize) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+pub fn take_gaussian_ply_worker_batch(
+    start: usize,
+    count: usize,
+) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
     PLY_WORKER_SPLATS.with(|splats| {
         let splats = splats.borrow();
-        let end = start.checked_add(count).filter(|end| *end <= splats.len())
+        let end = start
+            .checked_add(count)
+            .filter(|end| *end <= splats.len())
             .ok_or_else(|| wasm_bindgen::JsValue::from_str("Invalid Gaussian batch range"))?;
-        Ok(claydash_engine::gaussian_ply::encode_batch(&splats[start..end]))
+        Ok(claydash_engine::gaussian_ply::encode_batch(
+            &splats[start..end],
+        ))
     })
 }
 

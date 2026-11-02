@@ -19,7 +19,7 @@ pub(super) fn schema() -> Value {
     json!({
         "version": 27,
         "operations": ["ValidateSceneDsl", "ApplySceneDsl", "GetSceneDsl", "GetSceneDslGuide", "CaptureSceneDsl", "GetState", "GetSceneSummary", "GetUserView", "GetSchema", "GetActionSchema", "GetGaussianCloud", "GetMesh", "AdjustGaussianColors", "EnableBooleanOperations", "EnableSlowSmoothBlends", "ListCommands", "Apply", "ExecuteCommand", "SetView", "SelectBox", "SelectCircle", "BuildPoissonMesh", "GetPoissonMeshStatus", "ExportGlb", "BakeDetailSubtree", "GetGlbExportStatus", "CancelGlbExport", "CaptureViewport", "PreviewPoints", "CaptureOrthographic", "CaptureComparison", "Undo", "Redo", "Save", "Open", "ImportGaussianPly", "ImportGlb"],
-        "actions": ["CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "CreateMesh", "AddMeshVertices", "AddMeshFaces", "SetMeshShading", "ProjectMeshUvs", "SetMeshUvs", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
+        "actions": ["SnapSeamPoint", "PutSeam", "DeleteSeam", "SetSeamBinding", "RemoveSeamBinding", "CreateObject", "PutObject", "SetObjectName", "SetObjectTransform", "SetObjectParams", "SetRenderRepresentation", "SetBoolean", "DeleteObject", "CreateMesh", "AddMeshVertices", "AddMeshFaces", "SetMeshShading", "ProjectMeshUvs", "SetMeshUvs", "SetWorld", "CreateVectorVariable", "UpdateVectorVariable", "DeleteVectorVariable", "SetVectorBinding", "RemoveVectorBinding", "SetRigidBinding", "RemoveRigidBinding", "SetVariables", "CreatePostProcessPass", "UpdatePostProcessPass", "MovePostProcessPass", "DeletePostProcessPass", "SetMaterials", "CreateCustomMaterial", "UpdateCustomMaterial", "AssignMaterial", "SetCameras", "SetAnimation", "SetSelection", "SetActiveCamera", "ReplaceScene"],
         "variable_spaces": ["Local", "World"],
         "vector_binding_targets": ["Position", "GroupPosition", {"BezierPoint": 0}],
         "variables_example": {"vectors": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Anchor", "value": [0, 1, 0], "space": "World"}], "bindings": []},
@@ -43,6 +43,8 @@ pub(super) fn schema() -> Value {
                 {"point":[0.35,0],"width":0.04,"depth":0.01,"profile":"Rounded"}],
                 "taper_start":0.12,"taper_end":0.12}], "stage":"Formed"
         }},
+        "seam_example": {"id":"SEAM_UUID","name":"Panel join","points":[{"World":[0,-0.5,0]},{"World":[0,0,0.04]},{"World":[0,0.5,0]}],"closed":false},
+        "seam_binding_example": {"object":"OBJECT_UUID","seam":"SEAM_UUID","target":{"LatticeEdge":{"axis":"Y","sides":[true,false]}},"span":null,"reverse":false,"tolerance":0.001},
         "sheet_seam_example": {"source":"SOURCE_PANEL_UUID","source_edge":"MaxX","edge":"MinX","gap":0.005},
         "render_representations": GroupRenderRepresentation::ALL.iter().map(|mode| json!({"value": mode, "label": mode.label(), "description": mode.description(), "limitation": mode.limitation()})).collect::<Vec<_>>(),
         "notes": format!("{}{}", MODEL_ORGANIZATION, concat!(
@@ -69,6 +71,7 @@ pub(super) fn schema() -> Value {
             "ExactSdf uses the source; BoxDepthAtlas captures from six box faces; SphereDepthAtlas captures with radial rays; GaussianSplats uses layered box-face captures rasterized as hybrid splats. ",
             "Captures retain depth, base color, and the hit material. ",
             "Older documents with removed choices load as ExactSdf. ",
+            "Seams are independent construction polylines, not geometry. PutSeam {seam:{id,name,points:[{World:[x,y,z]}|{Surface:{object,triangle,barycentric:[w0,w1,w2]}}],closed:false}} creates/replaces one; points use world coordinates or persistent triangle attachments. SnapSeamPoint {seam,point,source,position:[world x,y,z]} attaches a point to the nearest source triangle; point equal to current length appends. Closed loops omit a repeated endpoint. DeleteSeam {id} removes it and its bindings. GetState includes seams:{seams,bindings}. SetSeamBinding {binding:{object,seam,target:{LatticeEdge:{axis:X|Y|Z,sides:[false,true]}}|{SheetBoundary:MinX|MaxX|MinY|MaxY},span:null|[start,end],reverse:false,tolerance:0.001}} connects an existing edge. Lattice sides are min(false)/max(true) on the other two axes in XYZ order; e.g. axis:Y,sides:[true,false] means x=max,z=min. No cage or sheet is created automatically. Closed seams require an inclusive span, wrapping if start>end. Open seam knot parameters are equally spaced; cage resolution-1 must be divisible by span point count-1 so every knot is represented. Sheet boundaries use native bends and optionally solve existing lattice controls; incompatible recipes/constraints fail atomically. Sheet boundary connections require surviving full material edges on independent sheets; final native boundary error is checked in world units. Removing a binding keeps the current pose. Mirror is optional and applies to the base object's copies. Seam lines are red in the editor and absent from final renders/captures unless show_seams:true or CLI --show-seams is supplied. ",
             "SheetPanel uses SheetPanelParams {size:[width,height],thickness,cuts,bends,stage:Blank|Cut|Formed}. Material coordinates are centered XY, thickness is along Z. Up to 32 cuts: {Straight:{from:[x,y],to:[x,y]}} retains the left half-plane, {Circle:{center:[x,y],radius}} removes a disk. Bends are {start,radius,angle,direction?}; direction defaults to 0 and is radians from +X towards +Y, perpendicular to the fold line. All-zero directions retain up to 8 ordered nonoverlapping material-X zones inside the blank. Any nonzero direction enables up to 4 sequential spatial bends, applied in array order to already formed coordinates, with line cos(direction)*x+sin(direction)*y=start in sheet-local XY. The stationary side has projected coordinate <= start; the arc zone ends at start+radius*abs(angle); the far side rotates by angle. Nonparallel/crossing regions are supported as spatial deformation, not physically accurate compound stamping; order matters and surfaces can overlap. Cuts stay in original material coordinates. Every bend requires finite start/direction, radius > thickness/2 and 0 < abs(angle) < pi. Directional cylinder centres must stay outside preceding formed slab Z bounds with >=5% radial clearance (conservative bounds ignore cuts); otherwise validation rejects the recipe. Increase radius, reverse sign or reorder operations to avoid singular forming. Stage Blank shows the uncut blank, Cut shows cuts before bending, Formed shows cuts and bends. SetObjectParams changes stage without losing the recipe; then CaptureViewport or CaptureOrthographic supplies a snapshot. Use direction to orient each fold line independently. ",
             "A PutObject can set surface_inlay to a host object id, offset, and thickness. ",
             "SheetPanel also accepts optional embosses (default []), up to 8 {Circle:{center:[x,y],radius,depth,transition}} operations. The inner disk through radius has signed material-Z depth; the next positive transition width uses a cosine-rounded profile back to zero. Positive depth raises, negative depth recesses. Overlapping reliefs add. Embosses act in original material XY before bends and only in Formed stage; cuts remain in original XY and clip relief naturally at blank edges. A matching circular cut creates a formed arch lip. Radius/transition must be positive finite, depth finite nonzero, and the combined inverse metric scale must be >=0.05; very steep transitions are rejected. Bend radial-clearance validation includes embossed thickness bounds. Thickness is retained along material Z, not a physical stamping/thinning simulation. Creation and recipe editing are MCP-only; no sheet UI controls. ",
@@ -93,7 +96,9 @@ pub(super) fn run_mcp(mut call: impl FnMut(Value) -> AgentResult) {
         let Ok(request): Result<Value, _> = serde_json::from_str(&line) else {
             continue;
         };
-        let Some(response) = mcp_response(&request, &mut call) else { continue };
+        let Some(response) = mcp_response(&request, &mut call) else {
+            continue;
+        };
         if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
             break;
         }
@@ -178,7 +183,8 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
                 } else {
                     match call(request_payload(op, arguments)) {
                         Ok(value)
-                            if name == "capture_scene_dsl" || name == "capture_viewport"
+                            if name == "capture_scene_dsl"
+                                || name == "capture_viewport"
                                 || name == "preview_points"
                                 || name == "capture_orthographic"
                                 || name == "capture_comparison" =>
@@ -186,7 +192,10 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
                             let mut content = vec![
                                 json!({"type": "image", "data": value["data"], "mimeType": "image/png"}),
                             ];
-                            if name == "capture_scene_dsl" || name == "capture_comparison" || value.get("point_previews").is_some() {
+                            if name == "capture_scene_dsl"
+                                || name == "capture_comparison"
+                                || value.get("point_previews").is_some()
+                            {
                                 let mut metadata = value.clone();
                                 metadata.as_object_mut().unwrap().remove("data");
                                 content.push(json!({"type":"text", "text":metadata.to_string()}));
@@ -279,17 +288,27 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         {"type": "object", "properties": {"type": {"const": "SetActiveCamera"}, "id": {"type": ["string", "null"]}}, "required": ["type", "id"]},
         {"type": "object", "properties": {"type": {"const": "ReplaceScene"}, "scene": object}, "required": ["type", "scene"]}
     ]});
-    action["oneOf"].as_array_mut().unwrap().push(json!({"type":"object","properties":{
+    action["oneOf"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type":"object","properties":{
         "type":{"const":"SetMeshShading"},"id":uuid,
         "shading":{"enum":["Auto","Flat","Smooth"]}},
         "required":["type","id","shading"]}));
+    action["oneOf"].as_array_mut().unwrap().extend(vec![
+        json!({"type":"object","properties":{"type":{"const":"SnapSeamPoint"},"seam":uuid,"point":{"type":"integer","minimum":0},"source":uuid,"position":vector},"required":["type","seam","point","source","position"]}),
+        json!({"type":"object","properties":{"type":{"const":"PutSeam"},"seam":object},"required":["type","seam"]}),
+        json!({"type":"object","properties":{"type":{"const":"DeleteSeam"},"id":uuid},"required":["type","id"]}),
+        json!({"type":"object","properties":{"type":{"const":"SetSeamBinding"},"binding":object},"required":["type","binding"]}),
+        json!({"type":"object","properties":{"type":{"const":"RemoveSeamBinding"},"object":uuid,"target":object},"required":["type","object","target"]}),
+    ]);
     let empty = json!({"type": "object", "properties": {}, "additionalProperties": false});
     let mut tools: Vec<Value> = [
-        ("validate_scene_dsl", "Parse and validate a complete DSL scene without changing it. Returns deterministic part paths and IDs.", json!({"type":"object","properties":{"source":{"type":"string"}},"required":["source"],"additionalProperties":false})),
-        ("apply_scene_dsl", "Atomically replace the scene with an authored DSL recipe as one undoable edit. expected_revision rejects stale edits. Returns part paths and IDs.", json!({"type":"object","properties":{"source":{"type":"string"},"expected_revision":{"type":"integer"}},"required":["source"],"additionalProperties":false})),
+        ("validate_scene_dsl", "Parse and validate a complete DSL scene without changing it. Returns deterministic part paths and IDs.", json!({"type":"object","properties":{"source":{"type":"string"},"base_dir":{"type":"string"}},"required":["source"],"additionalProperties":false})),
+        ("apply_scene_dsl", "Atomically replace the scene with an authored DSL recipe as one undoable edit. expected_revision rejects stale edits. Returns part paths and IDs.", json!({"type":"object","properties":{"source":{"type":"string"},"expected_revision":{"type":"integer"},"base_dir":{"type":"string"}},"required":["source"],"additionalProperties":false})),
         ("get_scene_dsl", "Get the saved recipe and whether the live scene still matches it.", empty.clone()),
         ("get_scene_dsl_guide", "Read the scene DSL syntax, supported shapes, curve and sheet bend examples, and agent workflow.", empty.clone()),
-        ("capture_scene_dsl", "Capture automatically framed front, side, top and three-quarter views of the DSL scene or a path prefix. Does not change the scene or cameras.", json!({"type":"object","properties":{"path":{"type":"string"},"panel_size":{"type":"integer","minimum":96,"maximum":2048}},"additionalProperties":false})),
+        ("capture_scene_dsl", "Capture automatically framed front, side, top and three-quarter views of the DSL scene or a path prefix. Does not change the scene or cameras.", json!({"type":"object","properties":{"path":{"type":"string"},"panel_size":{"type":"integer","minimum":96,"maximum":2048},"show_seams":{"type":"boolean","default":false}},"additionalProperties":false})),
         ("get_state", "Read the editable live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene Boolean and smooth-blend opt-in flags, and revision. Rebuildable saved_mesh render caches are omitted from both objects and document; authored imported meshes and splats are retained. Use get_mesh for authored mesh data and get_poisson_mesh_status for computed mesh status.", empty.clone()),
         ("get_scene_summary", "Read scene revision, object IDs/names/transforms, selection, camera and Gaussian counts and bounds without embedded splat bytes.", empty.clone()),
         ("get_user_view", "Read the desktop user camera and viewport without changing the agent view.", empty.clone()),
@@ -341,7 +360,7 @@ pub(super) fn mcp_tools() -> Vec<Value> {
             "overwrite":{"type":"boolean","default":false}},"required":["path"],"additionalProperties":false})),
         ("get_glb_export_status", "Read GLB export status by job id: running (stage and per-stage progress), completed (file published), failed (error), or cancelled. Retains the most recent 32 terminal jobs for this process.", json!({"type":"object","properties":{"id":uuid},"required":["id"],"additionalProperties":false})),
         ("cancel_glb_export", "Cancel a GLB export by job id. Returns cancelled, or the terminal result if already finished. A cancelled job cannot subsequently publish its file.", json!({"type":"object","properties":{"id":uuid},"required":["id"],"additionalProperties":false})),
-        ("capture_viewport", "Render a viewport PNG from the agent camera by default. Set view:user to capture the desktop user camera. object_ids selects objects; isolation:groups (default) includes Boolean groups and inlays, while isolation:parts renders only those primitives at their world positions. Parts requires object_ids and cannot select an inlay without its host. sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"view":{"enum":["agent","user"],"default":"agent"}, "sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "isolation": {"enum": ["groups", "parts"], "default": "groups"}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
+        ("capture_viewport", "Render a viewport PNG from the agent camera by default. Set view:user to capture the desktop user camera. object_ids selects objects; isolation:groups (default) includes Boolean groups and inlays, while isolation:parts renders only those primitives at their world positions. Parts requires object_ids and cannot select an inlay without its host. sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"view":{"enum":["agent","user"],"default":"agent"}, "show_seams":{"type":"boolean","default":false}, "sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "isolation": {"enum": ["groups", "parts"], "default": "groups"}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("capture_comparison", "Capture aligned triangle-mesh reference, candidate and silhouette-overlay rows in one PNG, with one column per requested orthographic view. Explicit reference IDs must be triangle meshes; candidates use groups (default) or parts isolation. The cyan silhouette or outline is composited over the opaque candidate in image space, ignoring candidate depth. Reference-only and candidate-only rows retain shading. Read-only snapshots preserve both cameras and selection. Returns revision, view axes and reusable world-space framing {center,span}; reuse framing to compare iterations. Geometry depth must fit the camera clipping range per requested view; off-screen crops are allowed. Raster work is bounded to 8,000,000 projected bounding-box pixel tests per view; reduce panel_size or simplify the reference if exceeded. Gaussian and image references are currently unsupported. No texture import is required.", json!({"type":"object", "properties":{
             "reference_ids":{"type":"array","items":uuid,"minItems":1},
             "candidate_ids":{"type":"array","items":uuid,"minItems":1},
@@ -352,7 +371,7 @@ pub(super) fn mcp_tools() -> Vec<Value> {
             "panel_size":{"type":"integer","minimum":96,"maximum":2048,"default":256},
             "framing":{"type":"object","properties":{"center":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"span":{"type":"number","exclusiveMinimum":0}},"required":["center","span"],"additionalProperties":false}
         },"required":["reference_ids","candidate_ids"],"additionalProperties":false})),
-        ("capture_orthographic", "Return a PNG with X, Y, Z orthographic views. object_ids selects objects; isolation:groups (default) includes Boolean groups and inlays, while isolation:parts renders only those primitives at their world positions. Parts requires object_ids and cannot select an inlay without its host. sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "isolation": {"enum": ["groups", "parts"], "default": "groups"}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 2048, "default": 256, "description": "Pixels per orthographic panel. Default 256 for iteration; opt in to 1024–2048 for precision or final passes. Independent of window size."}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000, "default": 8.0}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
+        ("capture_orthographic", "Return a PNG with X, Y, Z orthographic views. object_ids selects objects; isolation:groups (default) includes Boolean groups and inlays, while isolation:parts renders only those primitives at their world positions. Parts requires object_ids and cannot select an inlay without its host. sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"show_seams":{"type":"boolean","default":false}, "sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "isolation": {"enum": ["groups", "parts"], "default": "groups"}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 2048, "default": 256, "description": "Pixels per orthographic panel. Default 256 for iteration; opt in to 1024–2048 for precision or final passes. Independent of window size."}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000, "default": 8.0}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("undo", "Undo the last scene edit.", empty.clone()),
         ("redo", "Redo the last undone scene edit.", empty.clone()),
         ("save", "Save the live scene to the current path or a specified .claydash path.", json!({"type": "object", "properties": {"path": {"type": "string"}}})),
@@ -363,7 +382,10 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         "label":{"type":"string","maxLength":24,"description":"Optional ASCII label"}
     },"required":["position"],"additionalProperties":false}});
     for tool in &mut tools {
-        if matches!(tool["name"].as_str(), Some("capture_viewport" | "capture_orthographic" | "capture_comparison")) {
+        if matches!(
+            tool["name"].as_str(),
+            Some("capture_viewport" | "capture_orthographic" | "capture_comparison")
+        ) {
             tool["inputSchema"]["properties"]["points"] = points.clone();
             let description = tool["description"].as_str().unwrap().to_owned();
             tool["description"] = json!(format!("{description} Optional points previews world coordinates as red center pixels with translucent 4px-radius circles, always on top; returns local and sheet pixel positions plus visibility status. Use higher resolution explicitly for refinement/final passes; defaults stay fast."));
@@ -372,7 +394,11 @@ pub(super) fn mcp_tools() -> Vec<Value> {
             tool["inputSchema"]["properties"]["resolution"] = json!({"type":"array","items":{"type":"integer","minimum":96,"maximum":2048},"minItems":2,"maxItems":2,"description":"Optional [width,height] in pixels; independent of editor window. Omit for current viewport size; use 1024–2048 for refinement/final checks."});
         }
     }
-    let mut preview = tools.iter().find(|tool| tool["name"] == "capture_viewport").unwrap().clone();
+    let mut preview = tools
+        .iter()
+        .find(|tool| tool["name"] == "capture_viewport")
+        .unwrap()
+        .clone();
     preview["name"] = json!("preview_points");
     preview["description"] = json!("Preview 1–64 proposed world-space coordinates on a read-only scene capture before placing vertices, curves or parts. Each point has a red center pixel and translucent 4px-radius circle, always visible on top of geometry (not a surface-hit or occlusion test). Optional ASCII labels. Returns PNG, scene revision, per-point projected/cropped pixel coordinates, sheet coordinates and visible/outside_frame/outside_depth_range/behind_camera status. Uses independent agent camera by default; set_view chooses camera, object_ids isolates context. Optional resolution [width,height], each 96–2048, opts in to high resolution for precise/final passes. Scene, selection and cameras remain unchanged.");
     preview["inputSchema"]["required"] = json!(["points"]);
@@ -383,10 +409,16 @@ pub(super) fn mcp_tools() -> Vec<Value> {
 
 pub(super) fn action_schema(action: &str, primitive: Option<PrimitiveKind>) -> AgentResult {
     let tools = mcp_tools();
-    let apply = tools.iter().find(|tool| tool["name"] == "apply").expect("apply tool exists");
+    let apply = tools
+        .iter()
+        .find(|tool| tool["name"] == "apply")
+        .expect("apply tool exists");
     let variants = apply["inputSchema"]["properties"]["actions"]["items"]["oneOf"]
-        .as_array().expect("action variants exist");
-    let variant = variants.iter().find(|variant| variant["properties"]["type"]["const"] == action)
+        .as_array()
+        .expect("action variants exist");
+    let variant = variants
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == action)
         .ok_or_else(|| format!("unknown action: {action}"))?;
     let mut result = json!({
         "apply_shape": {"expected_revision": "integer from get_scene_summary (optional)", "actions": "nonempty array of tagged actions"},
@@ -399,7 +431,8 @@ pub(super) fn action_schema(action: &str, primitive: Option<PrimitiveKind>) -> A
         result["primitive"] = json!(kind);
         result["params_example"] = json!(example.params);
         if action == "CreateObject" {
-            result["apply_example"] = json!({"actions":[{"type":"CreateObject","kind":kind,"params":example.params}]});
+            result["apply_example"] =
+                json!({"actions":[{"type":"CreateObject","kind":kind,"params":example.params}]});
         }
         if kind == PrimitiveKind::SheetPanel {
             result["sheet_bend"] = json!({

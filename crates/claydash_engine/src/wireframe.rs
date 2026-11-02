@@ -349,37 +349,53 @@ fn primitive_segments(
             if panel.stage == crate::model::SheetStage::Formed {
                 if panel.surface.is_some() {
                     for line in 1..8 {
-                        let t=line as f32/8.0;
+                        let t = line as f32 / 8.0;
                         for step in 0..64 {
-                            let a=step as f32/64.0; let b=(step+1) as f32/64.0;
-                            for (u,v) in [(Vec2::new(t,a),Vec2::new(t,b)),(Vec2::new(a,t),Vec2::new(b,t))] {
-                                let u=(u-Vec2::splat(0.5))*panel.size;
-                                let v=(v-Vec2::splat(0.5))*panel.size;
-                                if panel.outline_distance((u+v)*0.5)<0.0001 { result.push([panel.material_point(u),panel.material_point(v)]); }
+                            let a = step as f32 / 64.0;
+                            let b = (step + 1) as f32 / 64.0;
+                            for (u, v) in [
+                                (Vec2::new(t, a), Vec2::new(t, b)),
+                                (Vec2::new(a, t), Vec2::new(b, t)),
+                            ] {
+                                let u = (u - Vec2::splat(0.5)) * panel.size;
+                                let v = (v - Vec2::splat(0.5)) * panel.size;
+                                if panel.outline_distance((u + v) * 0.5) < 0.0001 {
+                                    result.push([panel.material_point(u), panel.material_point(v)]);
+                                }
                             }
                         }
                     }
                 }
                 for path in &panel.path_embosses {
                     for stations in path.stations.windows(2) {
-                        let a=&stations[0]; let b=&stations[1];
-                        let delta=b.point-a.point;
-                        let side=Vec2::new(-delta.y,delta.x)/delta.length();
-                        for offset in [-1.0,0.0,1.0] {
+                        let a = &stations[0];
+                        let b = &stations[1];
+                        let delta = b.point - a.point;
+                        let side = Vec2::new(-delta.y, delta.x) / delta.length();
+                        for offset in [-1.0, 0.0, 1.0] {
                             for step in 0..64 {
-                                let point=|step: usize| {
-                                    let t=step as f32/64.0;
-                                    a.point.lerp(b.point,t)+side*offset*(a.width+(b.width-a.width)*t)
+                                let point = |step: usize| {
+                                    let t = step as f32 / 64.0;
+                                    a.point.lerp(b.point, t)
+                                        + side * offset * (a.width + (b.width - a.width) * t)
                                 };
-                                let u=point(step); let v=point(step+1);
-                                if panel.outline_distance((u+v)*0.5)<0.0001 {result.push([panel.material_point(u),panel.material_point(v)]);}
+                                let u = point(step);
+                                let v = point(step + 1);
+                                if panel.outline_distance((u + v) * 0.5) < 0.0001 {
+                                    result.push([panel.material_point(u), panel.material_point(v)]);
+                                }
                             }
                         }
                     }
                 }
                 for emboss in &panel.embosses {
                     match emboss {
-                        crate::model::SheetEmboss::Circle { center, radius, transition, .. } => {
+                        crate::model::SheetEmboss::Circle {
+                            center,
+                            radius,
+                            transition,
+                            ..
+                        } => {
                             for r in [*radius, radius + transition * 0.5, radius + transition] {
                                 for i in 0..128 {
                                     let a = std::f32::consts::TAU * i as f32 / 128.0;
@@ -387,7 +403,10 @@ fn primitive_segments(
                                     let u = *center + Vec2::new(a.cos(), a.sin()) * r;
                                     let v = *center + Vec2::new(b.cos(), b.sin()) * r;
                                     if panel.outline_distance((u + v) * 0.5) < 0.0001 {
-                                        result.push([panel.material_point(u), panel.material_point(v)]);
+                                        result.push([
+                                            panel.material_point(u),
+                                            panel.material_point(v),
+                                        ]);
                                     }
                                 }
                             }
@@ -405,7 +424,8 @@ fn primitive_segments(
                                 let u = *center + Vec2::new(a.cos(), a.sin()) * *radius;
                                 let v = *center + Vec2::new(b.cos(), b.sin()) * *radius;
                                 let mid_angle = (a + b) * 0.5;
-                                let mid = *center + Vec2::new(mid_angle.cos(), mid_angle.sin()) * *radius;
+                                let mid =
+                                    *center + Vec2::new(mid_angle.cos(), mid_angle.sin()) * *radius;
                                 if panel.outline_distance(mid) < 0.0001 {
                                     result.push([panel.material_point(u), panel.material_point(v)]);
                                 }
@@ -416,9 +436,13 @@ fn primitive_segments(
                             let direction = delta / delta.length();
                             let mut previous = *from - direction * panel.size.length() * 2.0;
                             for i in 1..=256 {
-                                let next = *from + direction * panel.size.length() * (i as f32 / 64.0 - 2.0);
+                                let next = *from
+                                    + direction * panel.size.length() * (i as f32 / 64.0 - 2.0);
                                 if panel.outline_distance((previous + next) * 0.5) < 0.0001 {
-                                    result.push([panel.material_point(previous), panel.material_point(next)]);
+                                    result.push([
+                                        panel.material_point(previous),
+                                        panel.material_point(next),
+                                    ]);
                                 }
                                 previous = next;
                             }
@@ -503,7 +527,7 @@ fn clip_to_cell(a: Vec3, b: Vec3, minimum: Vec3, maximum: Vec3) -> Option<(Vec3,
     (start <= end).then_some((a + delta * start, a + delta * end))
 }
 
-fn project_segment(
+pub(crate) fn project_segment(
     matrix: Mat4,
     a: Vec3,
     b: Vec3,

@@ -14,11 +14,14 @@ mod object_panel;
 mod polygon_editor;
 pub(crate) mod scene_actions;
 mod scene_panel;
+mod seams;
 mod secondary_panels;
 mod selection_tools;
-#[cfg(unix)]
-pub(crate) use selection_tools::{box_selection, circle_selection, circle_variable_selection, region_selection_ids};
 pub(crate) use selection_tools::polygon_is_valid;
+#[cfg(unix)]
+pub(crate) use selection_tools::{
+    box_selection, circle_selection, circle_variable_selection, region_selection_ids,
+};
 mod status_bar;
 mod variable_gizmos;
 mod variables;
@@ -359,7 +362,8 @@ impl UiState {
             }
             file_action
         };
-        let cancel_render = self.draw_status_bar(viewport_ui, tree, render_progress, agent_bridge_error);
+        let cancel_render =
+            self.draw_status_bar(viewport_ui, tree, render_progress, agent_bridge_error);
         let viewport_frame = self
             .layout
             .find_pane(|pane| *pane == EditorPane::Viewport)
@@ -469,7 +473,10 @@ impl UiState {
                 } else {
                     false
                 };
-                if polygon_editor::active(tree).is_none() && !variable_pointer {
+                if polygon_editor::active(tree).is_none()
+                    && seams::selected_seam(tree).is_none()
+                    && !variable_pointer
+                {
                     if let Some((curve, hit)) = object_gizmos::draw_bezier_paths(ui, tree, camera) {
                         set_selected(tree, vec![curve]);
                         self.regions.push(hit);
@@ -523,6 +530,7 @@ impl UiState {
                 if let Some(active) = self.active_guide.or(interaction_guide) {
                     draw_active_guides(ui, camera, active);
                 }
+                seams::draw(ui, tree, camera, &mut self.regions);
                 self.draw_viewport_selection_label(ui, tree);
             });
         }
@@ -634,6 +642,10 @@ impl UiState {
     pub fn set_animation_frame(&mut self, tree: &mut DataTree, frame: f32) {
         self.animation.playing = false;
         self.animation.set_frame(tree, frame);
+    }
+
+    pub fn seam_editing(&self, tree: &DataTree) -> bool {
+        seams::selected_seam(tree).is_some()
     }
 
     pub fn contains_pointer(&self, physical_position: Vec2, pixels_per_point: f32) -> bool {

@@ -57,6 +57,7 @@ pub(super) fn scene_panel(ui: &mut egui::Ui, tree: &mut DataTree) {
         filtered_subtree_rows(ui, tree, &scene, object, &selection, &visible, 0);
     }
     variable_rows(ui, tree, &filter);
+    super::seams::list(ui, tree);
     let cameras: Vec<_> = crate::model::scene_cameras(tree)
         .into_iter()
         .filter(|camera| name_matches(&camera.name, &filter))
@@ -569,14 +570,17 @@ fn begin_row_rename(ctx: &egui::Context, rename: egui::Id, focus: egui::Id, name
 }
 
 fn variable_rows(ui: &mut egui::Ui, tree: &mut DataTree, filter: &str) {
-    use crate::model::{
-        scene_variables, selected_variable, set_selected_variable,
-    };
+    use crate::model::{scene_variables, selected_variable, set_selected_variable};
     let before = scene_variables(tree);
     let mut variables = before.clone();
     let mut begin_edit = false;
     let mut remove = None;
-    let world_locked_ids: Vec<_> = variables.vectors.iter().filter(|v| crate::model::is_variable_constraint_reference(&variables,v.id)).map(|v| v.id).collect();
+    let world_locked_ids: Vec<_> = variables
+        .vectors
+        .iter()
+        .filter(|v| crate::model::is_variable_constraint_reference(&variables, v.id))
+        .map(|v| v.id)
+        .collect();
     for variable in variables
         .vectors
         .iter_mut()
@@ -652,7 +656,15 @@ fn variable_rows(ui: &mut egui::Ui, tree: &mut DataTree, filter: &str) {
                         });
                 }
                 ui.menu_button("...", |ui| {
-                    variable_row_menu(ui, variable, world_locked_ids.contains(&variable.id), rename, focus, &mut remove, &mut begin_edit)
+                    variable_row_menu(
+                        ui,
+                        variable,
+                        world_locked_ids.contains(&variable.id),
+                        rename,
+                        focus,
+                        &mut remove,
+                        &mut begin_edit,
+                    )
                 });
             });
         });
@@ -696,8 +708,14 @@ fn variable_row_menu(
         "World coordinates",
     );
     ui.add_enabled_ui(!world_locked, |ui| {
-        ui.selectable_value(&mut variable.space, crate::model::VariableSpace::Local,"Local coordinates");
-    }).response.on_hover_text("Constraint points require World coordinates");
+        ui.selectable_value(
+            &mut variable.space,
+            crate::model::VariableSpace::Local,
+            "Local coordinates",
+        );
+    })
+    .response
+    .on_hover_text("Constraint points require World coordinates");
     *begin_edit |= before != variable.space;
     ui.separator();
     if ui.button("Delete").clicked() {
