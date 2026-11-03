@@ -599,6 +599,7 @@ impl Renderer {
                 viewport_origin: Vec2::ZERO,
                 up: camera.up,
                 projection_mode: camera.projection_mode,
+                orthographic_height: camera.orthographic_height,
             };
             // Stationary edits exercise geometry/material and selection cache
             // invalidation independently of camera movement. Restore the exact

@@ -46,12 +46,14 @@ pub struct RenderArgs {
     pub output: PathBuf,
     pub size: [u32; 2],
     pub view: RenderView,
+    pub pipeline: crate::model::RenderPipelineMode,
     pub show_seams: bool,
     pub part: Option<String>,
 }
 
 impl RenderArgs {
     pub fn parse(args: &[String]) -> Result<Self, String> {
+        let mut pipeline = None;
         let mut source = None;
         let mut output = None;
         let mut size = [1024, 768];
@@ -62,6 +64,14 @@ impl RenderArgs {
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--pipeline" => {
+                    if pipeline.is_some() { return Err("--pipeline may only be supplied once".into()); }
+                    pipeline = Some(match args.next().map(String::as_str) {
+                        Some("deferred") => crate::model::RenderPipelineMode::Deferred,
+                        Some("exact") => crate::model::RenderPipelineMode::Exact,
+                        _ => return Err("--pipeline requires deferred or exact".into()),
+                    });
+                }
                 "--part" => {
                     if part.is_some() {
                         return Err("--part may only be supplied once".into());
@@ -136,6 +146,7 @@ impl RenderArgs {
             output,
             size,
             view: view.unwrap_or_default(),
+            pipeline: pipeline.unwrap_or(crate::model::RenderPipelineMode::Deferred),
             show_seams,
             part,
         })
@@ -250,7 +261,8 @@ impl RenderArgs {
 
     pub fn run(self) -> Result<(), String> {
         // Read, compile and frame before requesting a GPU or writing the output.
-        let (objects, camera, seams, world, post) = self.scene()?;
+        let (objects, camera, seams, mut world, post) = self.scene()?;
+        world.render_pipeline = self.pipeline;
         let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
             width: self.size[0],
             height: self.size[1],
@@ -281,21 +293,15 @@ fn fitted_camera(
     view: RenderView,
 ) -> Result<Camera, String> {
     let (min, max) = scene_language::bounds(objects)?;
-    let diameter = (max - min).length();
-    let span = diameter.max(0.1) * 1.15;
-    let aspect = size[0] as f32 / size[1] as f32;
-    let distance = span / (0.84 * aspect.min(1.0));
-    if distance + diameter * 0.5 >= 100.0 {
-        return Err("scene exceeds render camera clipping range; scale it down".into());
-    }
     let mut camera = Camera::new();
     camera.target = (min + max) * 0.5;
     let (direction, up) = view.camera_axes();
-    camera.position = camera.target + direction * distance;
+    camera.position = camera.target + direction;
     camera.up = up;
     camera.projection_mode = ProjectionMode::Orthographic;
     camera.viewport = Vec2::new(size[0] as f32, size[1] as f32);
     camera.viewport_origin = Vec2::ZERO;
+    camera.fit_bounds(min, max, 10.0)?;
     Ok(camera)
 }
 
@@ -314,6 +320,7 @@ mod tests {
                 output: "scene.png".into(),
                 size: [1024, 768],
                 view: RenderView::Isometric,
+                pipeline: crate::model::RenderPipelineMode::Deferred,
                 show_seams: false,
                 part: None,
             }
@@ -343,6 +350,14 @@ mod tests {
             &["a.claydef", "--typo"],
         ] {
             assert!(args(values).is_err(), "{values:?}");
+        }
+    }
+    #[test]
+    fn pipeline_override_is_explicit_and_validated() {
+        assert_eq!(args(&["scene.claydef", "--pipeline", "exact"]).unwrap().pipeline, crate::model::RenderPipelineMode::Exact);
+        assert_eq!(args(&["scene.claydef", "--pipeline", "deferred"]).unwrap().pipeline, crate::model::RenderPipelineMode::Deferred);
+        for values in [vec!["scene.claydef","--pipeline"],vec!["scene.claydef","--pipeline","unknown"],vec!["scene.claydef","--pipeline","exact","--pipeline","deferred"]] {
+            assert!(args(&values).is_err());
         }
     }
     #[test]
@@ -411,6 +426,7 @@ mod tests {
             output: output.clone(),
             size: [96, 96],
             view: RenderView::Isometric,
+            pipeline: crate::model::RenderPipelineMode::Deferred,
             show_seams: false,
             part: None,
         }
@@ -450,6 +466,7 @@ mod tests {
             output: source.with_extension("png"),
             size: [128, 128],
             view: RenderView::Top,
+            pipeline: crate::model::RenderPipelineMode::Deferred,
             show_seams: false,
             part: Some("assembly".into()),
         };
@@ -467,13 +484,7 @@ mod tests {
         let landscape = fitted_camera(&objects, [512, 256], RenderView::Isometric).unwrap();
         let portrait = fitted_camera(&objects, [256, 512], RenderView::Isometric).unwrap();
         assert_eq!(landscape.target, Vec3::new(12., 3., 5.));
-        assert!(
-            (portrait.position.distance(portrait.target)
-                / landscape.position.distance(landscape.target)
-                - 2.)
-                .abs()
-                < 1e-5
-        );
+        assert!(portrait.position.distance(portrait.target) > landscape.position.distance(landscape.target));
         assert!(fitted_camera(&[], [256, 256], RenderView::Isometric).is_err());
     }
 }

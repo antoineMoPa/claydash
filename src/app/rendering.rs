@@ -747,13 +747,16 @@ impl App {
                 .unwrap_or_else(|| objects_ref(&self.tree));
             #[cfg(any(target_arch = "wasm32", not(unix)))]
             let scene_objects = objects_ref(&self.tree);
+            let world = crate::model::world(&self.tree);
+            #[cfg(all(not(target_arch = "wasm32"), unix))]
+            let world = self.agent_capture.as_ref().map_or(world, |capture| capture.world(world));
             let presented = renderer.render(
                 &render_camera,
                 scene_objects,
                 &effective_selection,
                 scene_versions,
                 mesh_source_revision(scene_objects),
-                crate::model::world(&self.tree),
+                world,
                 crate::model::post_processing_ref(&self.tree),
                 &self.egui,
                 &mut output,

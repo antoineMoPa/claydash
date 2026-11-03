@@ -197,7 +197,7 @@ mod capture_tests {
         let request = serde_json::from_value(request_payload(
             "PreviewPoints",
             json!({
-                "points":[{"position":agent.target,"label":"P1"}],"resolution":[1024,1024]
+                "points":[{"position":agent.target,"label":"P1"}],"resolution":[1024,1024],"fit":false
             }),
         ))
         .unwrap();

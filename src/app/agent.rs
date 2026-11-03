@@ -57,6 +57,7 @@ pub enum Request {
         panel_size: Option<u32>,
         #[serde(default)]
         show_seams: bool,
+        pipeline: Option<model::RenderPipelineMode>,
     },
     GetSceneSummary,
     GetUserView,
@@ -156,6 +157,8 @@ pub struct CaptureViewportArgs {
     pub isolation: CaptureIsolation,
     pub refine: Option<bool>,
     pub mode: Option<CaptureMode>,
+    pub pipeline: Option<model::RenderPipelineMode>,
+    pub fit: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -172,6 +175,8 @@ pub struct CaptureOrthographicArgs {
     pub distance: Option<f32>,
     pub refine: Option<bool>,
     pub mode: Option<CaptureMode>,
+    pub pipeline: Option<model::RenderPipelineMode>,
+    pub fit: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -824,9 +829,16 @@ impl App {
                                 CaptureCameraSource::User => self.camera.clone(),
                             };
                             if let Err(error) = capture::set_resolution(&mut camera, args.resolution) { let _ = reply.send(Err(error)); return; }
-                            let objects = objects.or_else(|| (!args.points.is_empty()).then(|| model::objects_ref(&self.tree).to_vec()));
+                            let fit = args.fit.unwrap_or(args.view == CaptureCameraSource::Agent);
+                            let objects = objects.unwrap_or_else(|| model::objects_ref(&self.tree).to_vec());
+                            if fit && !objects.is_empty() {
+                                let result = claydash_engine::scene_language::bounds(&objects)
+                                    .and_then(|(min, max)| camera.fit_bounds(min, max, 10.0));
+                                if let Err(error) = result { let _ = reply.send(Err(error)); return; }
+                            }
                             self.agent_capture = Some(AgentCapture {
-                                reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
+                                reply, objects: Some(objects), pipeline: args.pipeline.unwrap_or(model::RenderPipelineMode::Deferred),
+                                mode: CaptureMode::from_options(args.mode, args.refine),
                                 view: CaptureView::Viewport, camera, cancelled_retries: 0,
                                 seam_lines: if args.show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|seam.positions(model::objects_ref(&self.tree))).collect::<Result<Vec<_>,_>>().unwrap_or_default().into_iter().zip(model::scene_seams(&self.tree).seams).map(|(points,seam)|(points,seam.closed)).collect()}else{Vec::new()},
                                 points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
@@ -855,10 +867,16 @@ impl App {
                     } else {
                         match capture::capture_scene(model::objects_ref(&self.tree), args.object_ids.as_deref(), args.sheet_stage, args.isolation) {
                             Ok(objects) => {
-                                let objects = objects.or_else(|| (!args.points.is_empty()).then(|| model::objects_ref(&self.tree).to_vec()));
+                                let objects = objects.unwrap_or_else(|| model::objects_ref(&self.tree).to_vec());
+                                if args.fit.unwrap_or(args.distance.is_none()) {
+                                    if let Err(error) = capture::validate_fitted_views(&objects, panel_size) {
+                                        let _ = reply.send(Err(error)); return;
+                                    }
+                                }
                                 self.agent_capture = Some(AgentCapture {
-                                    reply, objects, mode: CaptureMode::from_options(args.mode, args.refine),
-                                    view: CaptureView::Orthographic { panel_size, distance, frames: Vec::with_capacity(3) },
+                                    reply, objects: Some(objects), pipeline: args.pipeline.unwrap_or(model::RenderPipelineMode::Deferred),
+                                    mode: CaptureMode::from_options(args.mode, args.refine),
+                                    view: CaptureView::Orthographic { panel_size, distance, fit: args.fit.unwrap_or(args.distance.is_none()), frames: Vec::with_capacity(3) },
                                     camera: self.agent_view_camera(), cancelled_retries: 0,
                                     seam_lines: if args.show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|seam.positions(model::objects_ref(&self.tree))).collect::<Result<Vec<_>,_>>().unwrap_or_default().into_iter().zip(model::scene_seams(&self.tree).seams).map(|(points,seam)|(points,seam.closed)).collect()}else{Vec::new()},
                                 points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
@@ -873,14 +891,14 @@ impl App {
                     }
                 }
             }
-            Request::CaptureSceneDsl { path, panel_size, show_seams } => {
+            Request::CaptureSceneDsl { path, panel_size, show_seams, pipeline } => {
                 if self.agent_capture.is_some() || self.pending_render.is_some() || self.guide_screenshot.is_some()
                     || self.discard_capture || self.renderer.as_ref().is_some_and(|renderer| renderer.capture_pending()) {
                     Err("a render is already in progress".into())
                 } else {
                     match self.prepare_dsl_capture(path.as_deref(), panel_size) {
                         Ok((objects,center,span,panel_size)) => {
-                            self.agent_capture = Some(AgentCapture { reply, objects: Some(objects), mode: CaptureMode::SimpleShading,
+                            self.agent_capture = Some(AgentCapture { reply, objects: Some(objects), pipeline: pipeline.unwrap_or(model::RenderPipelineMode::Deferred), mode: CaptureMode::SimpleShading,
                                 view: CaptureView::SceneViews { panel_size, center, span, frames: Vec::with_capacity(4) }, camera: self.agent_view_camera(), cancelled_retries: 0,
                                 seam_lines: if show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|Ok((seam.positions(model::objects_ref(&self.tree))?,seam.closed))).collect::<Result<Vec<_>,String>>().unwrap_or_default()}else{Vec::new()}, points: Vec::new(), point_metadata: Vec::new(), revision: self.scene_revision() });
                             if let Some(renderer) = &mut self.renderer { renderer.invalidate_scene(); }
@@ -896,10 +914,11 @@ impl App {
                     Err("a render is already in progress".into())
                 } else {
                     let revision = self.scene_revision();
+                    let pipeline = args.pipeline.unwrap_or(model::RenderPipelineMode::Deferred);
                     match comparison::prepare(model::objects_ref(&self.tree), args, self.agent_view_camera(), revision) {
                         Ok((comparison, camera)) => {
                             self.agent_capture = Some(AgentCapture {
-                                reply, objects: Some(comparison.references.clone()), mode: CaptureMode::SimpleShading,
+                                reply, objects: Some(comparison.references.clone()), pipeline, mode: CaptureMode::SimpleShading,
                                 view: CaptureView::Comparison(Box::new(comparison)), camera, cancelled_retries: 0,
                                 seam_lines: Vec::new(), points: Vec::new(), point_metadata: Vec::new(), revision,
                             });

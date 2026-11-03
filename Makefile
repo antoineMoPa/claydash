@@ -37,3 +37,16 @@ guide-splats-check:
 
 run-native:
 	cargo run
+
+# Use the same installer, CLI location and macOS app bundle as curl | sh.
+# Directory overrides work as environment variables or Make command-line variables.
+export CLAYDASH_INSTALL_DIR CLAYDASH_APP_DIR
+
+.PHONY: install-global clear-global-install uninstall-global
+install-global:
+	python3 scripts/release/local_install.py install
+
+clear-global-install:
+	python3 scripts/release/local_install.py uninstall
+
+uninstall-global: clear-global-install

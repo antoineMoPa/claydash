@@ -17,6 +17,7 @@ import unittest
 from unittest.mock import patch
 
 import release
+import local_install
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -196,6 +197,27 @@ class ReleaseTests(unittest.TestCase):
         failed = subprocess.run(["sh"], input=script, env=env, text=True, capture_output=True)
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("Supported:", failed.stderr)
+
+    @unittest.skipIf(os.name == "nt", "Unix local install")
+    def test_local_install_uses_verified_website_installer_and_cleanup(self):
+        # Use the real installer against a local archive, with all destinations isolated.
+        shutil.copy(self.original_root / "install.sh", self.root / "install.sh")
+        target = release.host_target()
+        archive = self.output / release.archive_name(target)
+        dest = self.root / "local install space"
+        apps = self.root / "Applications space"
+        env = dict(os.environ, CLAYDASH_INSTALL_DIR=str(dest), CLAYDASH_APP_DIR=str(apps))
+        with patch.dict(os.environ, env, clear=True), patch.object(release, "build", return_value=archive) as build:
+            local_install.install()
+            build.assert_called_once_with("v0.1.0", target)
+            self.assertEqual((dest / "claydash").read_bytes(), b"test executable\n")
+            sentinel = dest / "another-app"
+            sentinel.write_text("keep")
+            local_install.uninstall()
+            local_install.uninstall()  # Cleanup can be repeated before a curl installer test.
+            self.assertFalse((dest / "claydash").exists())
+            self.assertFalse((apps / "Claydash.app").exists())
+            self.assertEqual(sentinel.read_text(), "keep")
 
     @unittest.skipUnless(os.name == "nt", "Windows installer runs on Windows CI")
     def test_windows_installer_success_and_corruption(self):

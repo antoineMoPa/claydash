@@ -104,7 +104,7 @@ pub(super) fn pixels_per_unit_at_target(camera: &Camera, height: u32) -> f32 {
     match camera.projection_mode {
         ProjectionMode::Perspective => height as f32
             / (2.0 * distance * (45.0_f32.to_radians() * 0.5).tan()),
-        ProjectionMode::Orthographic => height as f32 / (0.84 * distance),
+        ProjectionMode::Orthographic => height as f32 * camera.projection().y_axis.y * 0.5,
     }
 }
 

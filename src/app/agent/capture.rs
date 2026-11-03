@@ -13,6 +13,22 @@ pub fn set_resolution(camera: &mut Camera, resolution: Option<[u32; 2]>) -> Resu
     Ok(())
 }
 
+/// Validate all panel orientations before a capture is queued.
+pub fn validate_fitted_views(objects: &[SdfObject], panel_size: u32) -> Result<(), String> {
+    if objects.is_empty() { return Ok(()); }
+    let (min, max) = claydash_engine::scene_language::bounds(objects)?;
+    for (direction, up) in [(Vec3::X, Vec3::Y), (Vec3::Y, Vec3::NEG_Z),
+        (Vec3::Z, Vec3::Y), (Vec3::splat(1.0 / 3.0_f32.sqrt()), Vec3::Y)] {
+        let mut camera = Camera::new();
+        camera.position = camera.target + direction;
+        camera.up = up;
+        camera.projection_mode = ProjectionMode::Orthographic;
+        camera.viewport = Vec2::splat(panel_size as f32);
+        camera.fit_bounds(min, max, 10.0)?;
+    }
+    Ok(())
+}
+
 pub enum CaptureView {
     Viewport,
     SceneViews {
@@ -25,6 +41,7 @@ pub enum CaptureView {
     Orthographic {
         panel_size: u32,
         distance: f32,
+        fit: bool,
         frames: Vec<crate::renderer::CapturedFrame>,
     },
 }
@@ -33,6 +50,7 @@ pub struct AgentCapture {
     pub reply: Sender<AgentResult>,
     pub objects: Option<Vec<SdfObject>>,
     pub mode: CaptureMode,
+    pub pipeline: model::RenderPipelineMode,
     pub view: CaptureView,
     pub camera: Camera,
     pub cancelled_retries: u8,
@@ -72,6 +90,7 @@ impl AgentCapture {
             panel_size,
             distance,
             frames,
+            ..
         } = &self.view
         {
             let (direction, up) = match frames.len() {
@@ -86,7 +105,21 @@ impl AgentCapture {
             camera.viewport = Vec2::splat(*panel_size as f32);
             camera.viewport_origin = Vec2::ZERO;
         }
+        let fit = matches!(self.view, CaptureView::SceneViews { .. } | CaptureView::Orthographic { fit: true, .. });
+        if fit {
+            if let Some(objects) = self.objects.as_deref().filter(|objects| !objects.is_empty()) {
+                if let Ok((min, max)) = claydash_engine::scene_language::bounds(objects) {
+                    // The request validates the scene clipping range before capture.
+                    camera.fit_bounds(min, max, 10.0).expect("panel framing validated before capture");
+                }
+            }
+        }
         camera
+    }
+
+    pub fn world(&self, mut world: model::World) -> model::World {
+        world.render_pipeline = self.pipeline;
+        world
     }
 
     pub fn accept_frame(

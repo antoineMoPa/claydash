@@ -7,6 +7,7 @@ const MAX_RASTER_PIXEL_TESTS: u64 = 8_000_000;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComparisonArgs {
+    pub pipeline: Option<model::RenderPipelineMode>,
     #[serde(default)]
     pub points: Vec<super::markers::PreviewPoint>,
     pub reference_ids: Vec<uuid::Uuid>,

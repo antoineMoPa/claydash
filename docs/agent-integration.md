@@ -209,8 +209,8 @@ Agents can author reusable text recipes for complete scenes and capture automati
    falloff. Simple shading omits contact AO. These are real-time shading approximations.
    Repeat the edit and capture steps until the design looks right.
 5. Call `capture_orthographic` for one PNG with X (side), Y (top), and Z (front) orthographic views
-   aimed at the origin. Each panel is 256 px square by default. `panel_size` accepts 96–2048 px
-   independently of the editor window; `distance` accepts 0.1–1000. It accepts the same `object_ids`,
+   fitted to the content with a 10px margin. Each panel is 256 px square by default. `panel_size` accepts 96–2048 px
+   independently of the editor window; `distance` accepts 0.1–1000 and opts into fixed framing at the origin. It accepts the same `object_ids`,
    `isolation`, and `mode`/`refine` options.
 6. Call `save` with a `.claydash` path, or use the current document path.
 
@@ -575,3 +575,17 @@ defaults to false. The flag adds a red line overlay; it does not turn seams into
 Scene DSL supports declared `mesh_asset` references, `seam` points (`snap` or explicit `surface_point`), ordinary `lattice` modifiers and named `bind` connections to sheet boundaries/cage edges. Prefer `.claydef` files for full-scene authoring; `claydash agent ValidateSceneDsl --file recipe.claydef` and `ApplySceneDsl --file recipe.claydef` load source and resolve relative assets. Responses contain compact named paths/IDs. `CaptureSceneDsl` accepts a part/assembly `path` and optional `show_seams`; standalone `render` accepts `--part` and `--show-seams`. See [the language guide](scene-definition-language.md) for syntax and limitations.
 
 Sheet recipes in scene DSL now expose native `cut_circle`, `cut_line`, `emboss_circle`, `sheet_surface`, `emboss_station`/`path_emboss`, and explicit `Blank`/`Cut`/`Formed` stages. Use material-space cuts for real openings and surface/relief controls for crown and creases; they remain one native sheet object and require no Boolean opt-in. See `examples/sheet-relief.claydef` and the language guide for validation limits.
+
+CLI renders and agent captures use the deferred pipeline by default. Pass
+`--pipeline exact` to `claydash render`, or `pipeline: "exact"` to
+`capture_viewport`, `capture_orthographic`, `capture_scene_dsl`, or
+`capture_comparison`, to override it.
+The scene's saved pipeline and the editor pipeline are unchanged.
+
+CLI renders, DSL capture panels, and agent viewport captures fit projected scene
+bounds with a 10-pixel margin on the limiting dimension. Orthographic captures
+fit each panel independently and center it on the content. An explicit `distance`
+preserves the previous origin-centered orthographic framing; `fit: true` overrides
+that distance. Use `fit: false` to keep an agent viewport's chosen camera framing.
+`view: "user"` preserves the user camera unless `fit: true` is requested.
+Very small CLI images use a proportionally smaller margin to leave room for content.

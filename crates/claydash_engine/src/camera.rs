@@ -49,6 +49,7 @@ impl SceneCamera {
         camera.target = self.target();
         camera.up = self.transform.rotation * Vec3::Y;
         camera.projection_mode = self.projection_mode;
+        camera.orthographic_height = None;
     }
 
     pub fn target(&self) -> Vec3 {
@@ -221,6 +222,8 @@ pub struct Camera {
     pub viewport_origin: Vec2,
     pub up: Vec3,
     pub projection_mode: ProjectionMode,
+    /// Capture-only orthographic height, independent of camera depth.
+    pub orthographic_height: Option<f32>,
 }
 
 impl Camera {
@@ -232,7 +235,59 @@ impl Camera {
             viewport_origin: Vec2::ZERO,
             up: Vec3::Y,
             projection_mode: ProjectionMode::Perspective,
+            orthographic_height: None,
         }
+    }
+
+    /// Fit projected scene bounds to the viewport, keeping a pixel margin.
+    /// Preserves the view direction, roll and projection mode.
+    pub fn fit_bounds(&mut self, min: Vec3, max: Vec3, margin: f32) -> Result<(), String> {
+        if !min.is_finite() || !max.is_finite() || !self.viewport.is_finite()
+            || self.viewport.min_element() <= 0.0 {
+            return Err("cannot fit non-finite bounds or an empty viewport".into());
+        }
+        let direction = (self.position - self.target).normalize_or_zero();
+        if direction == Vec3::ZERO {
+            return Err("camera position must differ from target".into());
+        }
+        let view = self.view();
+        let right = view.row(0).truncate();
+        let up = view.row(1).truncate();
+        let center = (min + max) * 0.5;
+        let usable = (self.viewport - Vec2::splat(2.0 * margin)).max(self.viewport * 0.1);
+        let aspect = self.viewport.x / self.viewport.y;
+        let fraction = usable / self.viewport;
+        let mut distance = 0.001_f32;
+        let mut depth = 0.0_f32;
+        let mut zoom_distance = 0.001_f32;
+        for x in [min.x, max.x] {
+            for y in [min.y, max.y] {
+                for z in [min.z, max.z] {
+                    let offset = Vec3::new(x, y, z) - center;
+                    let horizontal = offset.dot(right).abs() / (aspect * fraction.x);
+                    let vertical = offset.dot(up).abs() / fraction.y;
+                    let near_depth = offset.dot(direction);
+                    depth = depth.max(near_depth.abs());
+                    let required = match self.projection_mode {
+                        ProjectionMode::Orthographic => horizontal.max(vertical) / 0.42,
+                        ProjectionMode::Perspective => near_depth
+                            + horizontal.max(vertical) / (22.5_f32.to_radians().tan()),
+                    };
+                    zoom_distance = zoom_distance.max(required);
+                    distance = distance.max(required).max(near_depth + 0.02);
+                }
+            }
+        }
+        if distance + depth >= 100.0 {
+            return Err("scene exceeds render camera clipping range; scale it down".into());
+        }
+        self.orthographic_height = match self.projection_mode {
+            ProjectionMode::Orthographic => Some(zoom_distance * 0.84),
+            ProjectionMode::Perspective => None,
+        };
+        self.target = center;
+        self.position = center + direction * distance;
+        Ok(())
     }
 
     pub fn view(&self) -> Mat4 {
@@ -253,7 +308,10 @@ impl Camera {
                 Mat4::perspective_rh(45_f32.to_radians(), aspect, 0.01, 100.0)
             }
             ProjectionMode::Orthographic => {
-                let half_height = (self.position - self.target).length() * 0.42;
+                let half_height = self.orthographic_height.map_or_else(
+                    || (self.position - self.target).length() * 0.42,
+                    |height| height * 0.5,
+                );
                 Mat4::orthographic_rh(
                     -half_height * aspect,
                     half_height * aspect,
@@ -404,5 +462,46 @@ impl Camera {
             (self.viewport_origin.x + (ndc.x * 0.5 + 0.5) * self.viewport.x) / pixels_per_point,
             (self.viewport_origin.y + (0.5 - ndc.y * 0.5) * self.viewport.y) / pixels_per_point,
         ))
+    }
+}
+
+#[cfg(test)]
+mod framing_tests {
+    use super::*;
+
+    #[test]
+    fn fits_projected_bounds_with_pixel_margin_in_both_projections() {
+        for projection in [ProjectionMode::Orthographic, ProjectionMode::Perspective] {
+            for viewport in [Vec2::new(512.,256.),Vec2::new(256.,512.),Vec2::splat(96.)] {
+                for direction in [Vec3::Z,Vec3::X,Vec3::ONE.normalize()] {
+                    let mut camera = Camera::new();
+                    camera.position = direction;
+                    camera.viewport = viewport;
+                    camera.projection_mode = projection;
+                    let center = Vec3::new(12.,3.,5.);
+                    let extent = Vec3::new(3.,0.5,1.);
+                    camera.fit_bounds(center-extent,center+extent,10.).unwrap();
+                    let mut nearest = f32::INFINITY;
+                    for x in [-extent.x,extent.x] { for y in [-extent.y,extent.y] { for z in [-extent.z,extent.z] {
+                        let pixel = camera.project(center+Vec3::new(x,y,z),1.).unwrap();
+                        let margin = pixel.x.min(pixel.y).min(viewport.x-pixel.x).min(viewport.y-pixel.y);
+                        assert!(margin >= 9.99, "{projection:?}: {pixel:?}");
+                        nearest = nearest.min(margin);
+                    }}}
+                    assert!((nearest-10.).abs() < 0.01, "margin {nearest}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fitting_rejects_invalid_or_clipped_bounds_and_handles_tiny_images() {
+        let mut camera = Camera::new();
+        camera.viewport = Vec2::splat(256.);
+        assert!(camera.fit_bounds(Vec3::NAN,Vec3::ONE,10.).is_err());
+        assert!(camera.fit_bounds(Vec3::splat(-100.),Vec3::splat(100.),10.).is_err());
+        camera.viewport = Vec2::ONE;
+        camera.fit_bounds(-Vec3::ONE,Vec3::ONE,10.).unwrap();
+        assert!(camera.position.is_finite());
     }
 }

@@ -186,9 +186,7 @@ impl super::App {
         }
         let (min, max) = claydash_engine::scene_language::bounds(&selected)?;
         let span = (max - min).length().max(0.1) * 1.15;
-        if span / 0.84 + (max - min).length() * 0.5 >= 100. {
-            return Err("scene exceeds capture camera clipping range; scale it down".into());
-        }
+        super::capture::validate_fitted_views(&selected, panel_size)?;
         Ok((selected, (min + max) * 0.5, span, panel_size))
     }
 }

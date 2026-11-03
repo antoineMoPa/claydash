@@ -177,7 +177,7 @@ impl App {
                 &[],
                 super::super::rendering::scene_render_versions(&self.tree, true),
                 super::super::rendering::mesh_source_revision(objects),
-                model::world(&self.tree),
+                capture.world(model::world(&self.tree)),
                 model::post_processing_ref(&self.tree),
                 &self.egui,
                 &mut output,

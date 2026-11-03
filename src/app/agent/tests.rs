@@ -519,11 +519,13 @@ fn orthographic_capture_uses_three_axes_and_combines_panels() {
         reply,
         objects: None,
         mode: CaptureMode::SimpleShading,
+        pipeline: model::RenderPipelineMode::Deferred,
         camera: Camera::new(),
         cancelled_retries: 0,
         view: CaptureView::Orthographic {
             panel_size: 96,
             distance: 8.0,
+            fit: false,
             frames: Vec::new(),
         },
     };
@@ -1102,6 +1104,7 @@ fn dsl_capture_frames_off_origin_assembly_in_four_views() {
         reply,
         objects: Some(objects),
         mode: CaptureMode::SimpleShading,
+        pipeline: model::RenderPipelineMode::Deferred,
         view: CaptureView::SceneViews {
             panel_size,
             center,

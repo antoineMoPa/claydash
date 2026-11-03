@@ -729,3 +729,66 @@ fn direct_image_plane_glb_export_preserves_baked_alpha() {
         }
     }
 }
+
+#[test]
+fn captures_fit_content_and_override_pipeline_without_editing_scene() {
+    for (op, options, pipeline, fit) in [
+        ("CaptureViewport", json!({"resolution":[512,256]}), model::RenderPipelineMode::Deferred, true),
+        ("CaptureViewport", json!({"resolution":[512,256],"fit":false,"pipeline":"exact"}), model::RenderPipelineMode::Exact, false),
+        ("CaptureViewport", json!({"resolution":[512,256],"view":"user"}), model::RenderPipelineMode::Deferred, false),
+        ("CaptureOrthographic", json!({}), model::RenderPipelineMode::Deferred, true),
+        ("CaptureOrthographic", json!({"distance":8,"pipeline":"exact"}), model::RenderPipelineMode::Exact, false),
+    ] {
+        let mut app = App::new();
+        app.new_document();
+        app.agent_apply_scene_dsl("part=box(size:[4,1,2],at:[12,3,5]);".into(), None, None).unwrap();
+        let before = document::serialize_scene(&app.tree).unwrap();
+        let user_position = app.camera.position;
+        let agent_position = app.agent_view_camera().position;
+        let request = serde_json::from_value(request_payload(op, options)).unwrap();
+        let (reply, _response) = mpsc::channel();
+        app.process_agent_request(Inbound { request, reply });
+        let mut capture = app.agent_capture.take().expect("capture queued");
+        assert_eq!(capture.world(model::world(&app.tree)).render_pipeline, pipeline);
+        for _ in 0..if op == "CaptureOrthographic" {3} else {1} {
+            let camera = capture.camera();
+            if fit {
+                assert_eq!(camera.target, Vec3::new(12.,3.,5.));
+                assert_projected_margin(&camera, capture.objects.as_ref().unwrap());
+            } else if op == "CaptureViewport" {
+                assert_eq!(camera.position, if matches!(pipeline, model::RenderPipelineMode::Exact) {agent_position} else {user_position});
+            } else {
+                assert_eq!(camera.target, Vec3::ZERO);
+                assert!((camera.position.length() - 8.).abs() < 1e-5);
+            }
+            let frame = crate::renderer::CapturedFrame { width: camera.viewport.x as u32, height: camera.viewport.y as u32, rgba: vec![0; (camera.viewport.x * camera.viewport.y * 4.) as usize] };
+            capture.accept_frame(frame, &camera).unwrap();
+        }
+        assert_eq!(app.camera.position, user_position);
+        assert_eq!(app.agent_view_camera().position, agent_position);
+        assert_eq!(document::serialize_scene(&app.tree).unwrap(), before);
+    }
+}
+
+fn assert_projected_margin(camera: &Camera, objects: &[SdfObject]) {
+    let (min, max) = claydash_engine::scene_language::bounds(objects).unwrap();
+    let mut nearest = f32::INFINITY;
+    for x in [min.x,max.x] { for y in [min.y,max.y] { for z in [min.z,max.z] {
+        let pixel = camera.project(Vec3::new(x,y,z),1.0).unwrap();
+        let margin = pixel.x.min(pixel.y).min(camera.viewport.x-pixel.x).min(camera.viewport.y-pixel.y);
+        assert!(margin >= 9.99, "pixel {pixel:?} has margin {margin}");
+        nearest = nearest.min(margin);
+    }}}
+    assert!((nearest-10.).abs() < 0.01, "nearest margin {nearest}");
+}
+
+#[test]
+fn capture_tools_advertise_pipeline_and_fit_overrides() {
+    for name in ["capture_viewport", "preview_points", "capture_orthographic", "capture_scene_dsl", "capture_comparison"] {
+        let tool = mcp_tools().into_iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(tool["inputSchema"]["properties"]["pipeline"]["enum"], json!(["deferred","exact"]));
+        if matches!(name,"capture_viewport" | "preview_points" | "capture_orthographic") {
+            assert_eq!(tool["inputSchema"]["properties"]["fit"]["type"], "boolean");
+        }
+    }
+}

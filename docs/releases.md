@@ -32,6 +32,23 @@ the desktop app, and a working Vulkan/OpenGL driver. macOS requires Apple Silico
 Intel macOS is unsupported. Windows builds are x64. Local MCP/headless commands
 currently exist only on Unix platforms. Archives contain the executable and license.
 
+## Testing a local global installation
+
+```sh
+make install-global       # Build this checkout in release mode and install it
+make clear-global-install # Remove the CLI and macOS app bundle (uninstall-global also works)
+curl -fsSL https://claydash.com/install.sh | sh
+```
+
+`install-global` builds and packages locally, then runs the website installer
+against those local archives, including its checksum verification. It does not
+publish a release. Both Make targets honor `CLAYDASH_INSTALL_DIR` and
+`CLAYDASH_APP_DIR`, including overrides passed directly to Make. Without an app
+directory override, cleanup removes `Claydash.app` from both `/Applications` and
+`~/Applications` on macOS. Saved projects, application settings, and shell PATH
+configuration are preserved. Use the same directory overrides when testing the
+website installer. An existing terminal may need `hash -r` after uninstalling.
+
 ## Shipping
 
 Requirements: Python 3.11+, Rust 1.97.1, Git, and authenticated GitHub CLI with
