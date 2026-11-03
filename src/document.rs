@@ -129,6 +129,12 @@ impl DocumentState {
         self.imported_clouds_since_save.clear();
     }
 
+    pub fn mark_scene_trimmed(&mut self, tree: &DataTree, bytes: Vec<u8>) {
+        self.saved_scene = Some(bytes);
+        self.observed_authored_version = tree.authored_version();
+        self.dirty = true;
+    }
+
     pub fn mark_cloud_imported(&mut self, tree: &DataTree, id: uuid::Uuid) {
         self.imported_clouds_since_save.push(id);
         self.observed_authored_version = tree.authored_version();

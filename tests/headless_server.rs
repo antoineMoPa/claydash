@@ -117,7 +117,7 @@ fn private_mcp_edits_captures_saves_and_exits_on_eof() {
         .unwrap()
         .iter()
         .any(|t| t["name"] == "capture_viewport"));
-    let before = tool(&mut process.0, &lines, "get_state", json!({}));
+    let before = tool(&mut process.0, &lines, "get_scene_summary", json!({}));
     let count = before["objects"].as_array().unwrap().len();
     assert_eq!(
         count, 0,
@@ -125,8 +125,20 @@ fn private_mcp_edits_captures_saves_and_exits_on_eof() {
     );
     assert_eq!(before["selection"], json!([]));
     assert!(before["document_path"].is_null());
-    assert_eq!(before["world"]["background"], "Studio");
-    assert_eq!(before["world"]["ambient_light"], 1.0);
+    let preview = rpc(
+        &mut process.0,
+        &lines,
+        "tools/call",
+        json!({"name":"get_state","arguments":{}}),
+    );
+    assert!(
+        preview["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count()
+            <= 4096
+    );
     let edit = tool(
         &mut process.0,
         &lines,
@@ -134,7 +146,7 @@ fn private_mcp_edits_captures_saves_and_exits_on_eof() {
         json!({"expected_revision":before["revision"], "actions":[{"type":"CreateObject", "kind":"Sphere", "name":"Headless sphere"}]}),
     );
     let id = edit["created_ids"][0].clone();
-    let state = tool(&mut process.0, &lines, "get_state", json!({}));
+    let state = tool(&mut process.0, &lines, "get_scene_summary", json!({}));
     assert_eq!(state["objects"].as_array().unwrap().len(), count + 1);
     let stale = rpc(
         &mut process.0,
@@ -145,7 +157,7 @@ fn private_mcp_edits_captures_saves_and_exits_on_eof() {
     assert_eq!(stale["isError"], true);
     tool(&mut process.0, &lines, "undo", json!({}));
     assert_eq!(
-        tool(&mut process.0, &lines, "get_state", json!({}))["objects"]
+        tool(&mut process.0, &lines, "get_scene_summary", json!({}))["objects"]
             .as_array()
             .unwrap()
             .len(),
@@ -167,20 +179,26 @@ fn private_mcp_edits_captures_saves_and_exits_on_eof() {
         "capture_orthographic",
         json!({"panel_size":96}),
     );
-    assert_png(&image, 288, 120);
+    assert_png(&image, 288, 96);
     let path = directory.0.join("saved.claydash");
     tool(&mut process.0, &lines, "save", json!({"path":path}));
     tool(&mut process.0, &lines, "open", json!({"path":path}));
     assert_eq!(
-        tool(&mut process.0, &lines, "get_state", json!({}))["objects"]
+        tool(&mut process.0, &lines, "get_scene_summary", json!({}))["objects"]
             .as_array()
             .unwrap()
             .len(),
         count + 1
     );
     assert!(id.is_string(), "{edit}");
-    let state = tool(&mut process.0, &lines, "get_state", json!({}));
-    let mut sphere = state["objects"]
+    tool(
+        &mut process.0,
+        &lines,
+        "save",
+        json!({"path":path,"packAllData":true}),
+    );
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut sphere = saved["subtree"]["sdf_objects"]["value"]["VecSDFObject"]
         .as_array()
         .unwrap()
         .iter()
@@ -263,12 +281,19 @@ fn private_mcp_edits_captures_saves_and_exits_on_eof() {
         let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
         let doc: Value = serde_json::from_slice(&bytes[20..20 + length]).unwrap();
         assert_eq!(doc["nodes"].as_array().unwrap().len(), 1);
-        let attribute = if geometry == "smooth" {
-            "TEXCOORD_0"
+        let primitive = &doc["meshes"][0]["primitives"][0];
+        for attribute in ["POSITION", "NORMAL"] {
+            assert!(primitive["attributes"][attribute].is_number());
+        }
+        if geometry == "smooth" {
+            // Solid materials now export as PBR rather than baked texture UVs.
+            let material = primitive["material"].as_u64().unwrap() as usize;
+            assert!(
+                doc["materials"][material]["pbrMetallicRoughness"]["baseColorFactor"].is_array()
+            );
         } else {
-            "COLOR_0"
-        };
-        assert!(doc["meshes"][0]["primitives"][0]["attributes"][attribute].is_number());
+            assert!(primitive["attributes"]["COLOR_0"].is_number());
+        }
         assert_eq!(
             tool(
                 &mut process.0,
@@ -369,8 +394,22 @@ fn server_accepts_cli_and_mcp_and_rejects_another_owner() {
             .unwrap(),
     );
     let lines = output_lines(&mut bridge.0);
-    let result = tool(&mut bridge.0, &lines, "get_state", json!({}));
-    assert_eq!(result["objects"], state["objects"]);
+    let result = rpc(
+        &mut bridge.0,
+        &lines,
+        "tools/call",
+        json!({"name":"get_state","arguments":{}}),
+    );
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count()
+            <= 4096
+    );
+    let view = tool(&mut bridge.0, &lines, "get_user_view", json!({}));
+    assert_eq!(view["view"]["viewport"], json!([128.0, 128.0]));
     assert_png(
         &tool(&mut bridge.0, &lines, "capture_viewport", json!({})),
         128,

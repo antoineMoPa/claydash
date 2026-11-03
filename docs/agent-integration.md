@@ -390,14 +390,24 @@ change fields, and finish with `return surface;`. The editor accepts up to 8192 
 and 16 custom materials per scene. Invalid WGSL makes the entire `apply` call fail without
 changing the live scene. The Material panel offers the same editor and a sphere preview.
 
-`get_state` omits rebuildable `saved_mesh` caches from both its `objects` list and
-`document`, and reports `render_caches_omitted: true`. Authored imported meshes and splats
-remain intact. This keeps cache-heavy scenes from expanding into two copies of the same
-large render mesh in JSON. Use `get_mesh` for authored mesh data and `get_poisson_mesh_status` for computed mesh status.
-Normal project saves retain their existing cache behavior.
+MCP tool text replies are capped at 4096 Unicode characters, including a truncation notice.
+Arrays and objects in reply snapshots are recursively limited to 256 entries before the text
+cap. Truncated text is a preview and may not be valid JSON. Capture PNG attachments are
+preserved; their text metadata follows the same cap. Tool errors follow the text cap too.
+There is no reply-limit bypass.
 
-`ReplaceScene` accepts the complete `document` value returned by `get_state` and must be its only
-action. `list_commands` and `execute_command` expose the existing command palette; some palette
+MCP `get_state` also omits `saved_mesh`, `imported_mesh` and `imported_splats` from its
+response snapshot. CLI `GetState` retains authored geometry, omitting rebuildable render
+caches. For complete data, call MCP `save` with `packAllData: true`, then read/filter the
+file locally. This flag is supported only by `save` and never changes reply limits.
+
+By default, MCP `save` recursively trims every array/object in the `.claydash` file to
+256 entries. Its reply reports `collections_trimmed`; when true, the live document stays
+intact and dirty because the saved file is incomplete. Use `packAllData: true` to preserve
+all file contents. Manual interface saves and CLI saves preserve all data.
+
+`ReplaceScene` requires a complete document, such as one read from a full saved file.
+`list_commands` and `execute_command` expose the existing command palette; some palette
 commands initiate a mouse gesture, so typed actions are the reliable way to model geometry.
 
 ## CLI

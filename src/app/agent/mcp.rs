@@ -1,6 +1,8 @@
 use super::*;
 
+mod output;
 mod skills;
+pub(super) use output::compact_file;
 
 const MODEL_ORGANIZATION: &str = concat!(
     "Workflow skills are available through skills/list and skills/get, with SKILL.md content served by resources/read; legacy clients can use resources/list. ",
@@ -137,7 +139,23 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
             "tools/call" => {
                 let params = request.get("params").cloned().unwrap_or(Value::Null);
                 let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-                let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+                let mut arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+                if name != "save" && arguments.get("packAllData").is_some() {
+                    return Some(json!({"jsonrpc":"2.0", "id":id, "result":{
+                        "isError":true, "content":[{"type":"text", "text":"packAllData is only supported by save and only controls file contents"}]
+                    }}));
+                }
+                if name == "save" {
+                    if arguments.is_null() {
+                        arguments = json!({});
+                    }
+                    let Some(arguments) = arguments.as_object_mut() else {
+                        return Some(json!({"jsonrpc":"2.0", "id":id, "result":{
+                            "isError":true, "content":[{"type":"text", "text":"save arguments must be an object"}]
+                        }}));
+                    };
+                    arguments.insert("mcp_save".into(), json!(true));
+                }
                 let op = match name {
                     "validate_scene_dsl" => "ValidateSceneDsl",
                     "apply_scene_dsl" => "ApplySceneDsl",
@@ -179,7 +197,9 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
                     _ => "",
                 };
                 if op.is_empty() {
-                    Err(format!("unknown tool: {name}"))
+                    Ok(
+                        json!({"isError":true, "content":[{"type":"text", "text":output::error_text(format!("unknown tool: {name}"))}]}),
+                    )
                 } else {
                     match call(request_payload(op, arguments)) {
                         Ok(value)
@@ -198,15 +218,17 @@ fn mcp_response(request: &Value, call: &mut impl FnMut(Value) -> AgentResult) ->
                             {
                                 let mut metadata = value.clone();
                                 metadata.as_object_mut().unwrap().remove("data");
-                                content.push(json!({"type":"text", "text":metadata.to_string()}));
+                                content.push(
+                                    json!({"type":"text", "text":output::text(metadata, false)}),
+                                );
                             }
                             Ok(json!({"content":content}))
                         }
-                        Ok(value) => {
-                            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
-                        }
+                        Ok(value) => Ok(
+                            json!({"content": [{"type": "text", "text": output::text(value, name == "get_state" || name == "save")}]}),
+                        ),
                         Err(error) => Ok(
-                            json!({"isError": true, "content": [{"type": "text", "text": error}]}),
+                            json!({"isError": true, "content": [{"type": "text", "text": output::error_text(error)}]}),
                         ),
                     }
                 }
@@ -309,7 +331,7 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         ("get_scene_dsl", "Get the saved recipe and whether the live scene still matches it.", empty.clone()),
         ("get_scene_dsl_guide", "Read the scene DSL syntax, supported shapes, curve and sheet bend examples, and agent workflow.", empty.clone()),
         ("capture_scene_dsl", "Capture automatically framed front, side, top and three-quarter views of the DSL scene or a path prefix. Does not change the scene or cameras.", json!({"type":"object","properties":{"path":{"type":"string"},"panel_size":{"type":"integer","minimum":96,"maximum":2048},"show_seams":{"type":"boolean","default":false}},"additionalProperties":false})),
-        ("get_state", "Read the editable live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene Boolean and smooth-blend opt-in flags, and revision. Rebuildable saved_mesh render caches are omitted from both objects and document; authored imported meshes and splats are retained. Use get_mesh for authored mesh data and get_poisson_mesh_status for computed mesh status.", empty.clone()),
+        ("get_state", "Read the editable live Claydash scene, selection, materials, shared vector variables and bindings, post-processing passes, animation, camera, scene Boolean and smooth-blend opt-in flags, and revision. Replies default to 4096 characters and 256 entries per collection; scene mesh/splat payloads are omitted. Scene previews may be truncated and are not round-trippable documents. Use get_mesh for authored mesh data and get_poisson_mesh_status for computed mesh status.", empty.clone()),
         ("get_scene_summary", "Read scene revision, object IDs/names/transforms, selection, camera and Gaussian counts and bounds without embedded splat bytes.", empty.clone()),
         ("get_user_view", "Read the desktop user camera and viewport without changing the agent view.", empty.clone()),
         ("get_schema", "Get action names and example serialized objects for each primitive type.", empty.clone()),
@@ -374,7 +396,7 @@ pub(super) fn mcp_tools() -> Vec<Value> {
         ("capture_orthographic", "Return a PNG with X, Y, Z orthographic views. object_ids selects objects; isolation:groups (default) includes Boolean groups and inlays, while isolation:parts renders only those primitives at their world positions. Parts requires object_ids and cannot select an inlay without its host. sheet_stage previews Blank, Cut, or Formed without editing the recipe. mode selects simple_shading (default), full_material, or outline. Explicit mode overrides legacy refine. The live editor view is unchanged.", json!({"type": "object", "properties": {"show_seams":{"type":"boolean","default":false}, "sheet_stage":{"enum":["Blank","Cut","Formed"]}, "object_ids": {"type": "array", "items": uuid, "minItems": 1}, "isolation": {"enum": ["groups", "parts"], "default": "groups"}, "panel_size": {"type": "integer", "minimum": 96, "maximum": 2048, "default": 256, "description": "Pixels per orthographic panel. Default 256 for iteration; opt in to 1024–2048 for precision or final passes. Independent of window size."}, "distance": {"type": "number", "minimum": 0.1, "maximum": 1000, "default": 8.0}, "mode": {"enum": ["simple_shading", "full_material", "outline"]}, "refine": {"type": "boolean", "description": "Legacy option: true selects full_material, false selects simple_shading. Ignored when mode is provided."}}, "additionalProperties": false})),
         ("undo", "Undo the last scene edit.", empty.clone()),
         ("redo", "Redo the last undone scene edit.", empty.clone()),
-        ("save", "Save the live scene to the current path or a specified .claydash path.", json!({"type": "object", "properties": {"path": {"type": "string"}}})),
+        ("save", "Save the scene. By default recursively trim file collections to 256 entries; packAllData:true preserves complete file contents. Replies always stay capped at 4096 characters.", json!({"type": "object", "properties": {"path": {"type": "string"}, "packAllData":{"type":"boolean","default":false,"description":"Preserve all data in the saved file only; reply limits still apply."}}})),
         ("open", "Open a .claydash project in the live window.", json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})),
     ].into_iter().map(|(name, description, input_schema)| json!({"name": name, "description": description, "inputSchema": input_schema})).collect();
     let points = json!({"type":"array","maxItems":64,"items":{"type":"object","properties":{

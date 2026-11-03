@@ -106,6 +106,10 @@ pub enum Request {
     Redo,
     Save {
         path: Option<PathBuf>,
+        #[serde(default, rename = "packAllData")]
+        pack_all_data: bool,
+        #[serde(default)]
+        mcp_save: bool,
     },
     Open {
         path: PathBuf,
@@ -914,14 +918,28 @@ impl App {
                 self.tree.redo();
                 Ok(json!({"revision": self.scene_revision()}))
             }
-            Request::Save { path } => {
+            Request::Save { path, pack_all_data, mcp_save } => {
                 let path = path.or_else(|| self.document.current_path().map(ToOwned::to_owned));
                 match path {
-                    Some(path) => document::write_scene(&path, &self.project_tree_for_save()).map(|_| {
+                    Some(path) => (|| {
+                        let tree = self.project_tree_for_save();
+                        let full = document::serialize_scene(&tree)?;
+                        let mut trimmed = false;
+                        let bytes = if mcp_save && !pack_all_data {
+                            let original: Value = serde_json::from_slice(&full).map_err(|e| e.to_string())?;
+                            let compact = mcp::compact_file(original.clone());
+                            trimmed = compact != original;
+                            serde_json::to_vec_pretty(&compact).map_err(|e| e.to_string())?
+                        } else { full };
+                        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
                         self.document.mark_saved(path.clone());
-                        self.document.mark_scene_clean(&self.tree);
-                        json!({"path": path})
-                    }),
+                        if trimmed {
+                            self.document.mark_scene_trimmed(&self.tree, bytes);
+                        } else {
+                            self.document.mark_scene_clean(&self.tree);
+                        }
+                        Ok(json!({"path": path, "collections_trimmed": trimmed}))
+                    })(),
                     None => Err("provide a path for the first save".to_string()),
                 }
             }
