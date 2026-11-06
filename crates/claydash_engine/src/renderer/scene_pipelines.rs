@@ -23,9 +23,9 @@ impl Renderer {
             ScenePipelineKind::MeshBackground => hybrid_splats::create_mesh_background_pipeline(
                 &self.device, &self.pipeline_layout, self.render_format, features.bloom,
             ),
-            ScenePipelineKind::MeshMaterial { capacity } => poisson_material::create_pipeline(
+            ScenePipelineKind::MeshMaterial { capacity, transparent } => poisson_material::create_pipeline(
                 &self.device, Some(&self.pipeline_layout), &self.shader_source,
-                self.render_format, capacity, features,
+                self.render_format, capacity, features, transparent,
             ),
             ScenePipelineKind::Shaded {
                 capacity,
@@ -105,7 +105,8 @@ impl Renderer {
             self.viewport.set_contact_pipeline(None);
             self.mesh_background_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshBackground, features);
             if self.mesh_vertex_count > 0 {
-                self.mesh_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshMaterial { capacity }, features);
+                self.mesh_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshMaterial { capacity, transparent: false }, features);
+                self.transparent_mesh_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshMaterial { capacity, transparent: true }, features);
             }
             self.deferred_geometry_pipeline = None;
             self.hybrid_depth_pipeline = None;
@@ -127,7 +128,8 @@ impl Renderer {
         self.viewport.set_contact_pipeline(contact);
         self.mesh_background_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshBackground, features);
         if self.mesh_vertex_count > 0 {
-            self.mesh_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshMaterial { capacity }, features);
+            self.mesh_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshMaterial { capacity, transparent: false }, features);
+            self.transparent_mesh_pipeline = self.cached_scene_pipeline(ScenePipelineKind::MeshMaterial { capacity, transparent: true }, features);
         }
         if world.render_pipeline == crate::model::RenderPipelineMode::Deferred
             && self.deferred_supported

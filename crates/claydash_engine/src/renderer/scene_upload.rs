@@ -391,6 +391,13 @@ impl Renderer {
         } = self.pack_scene_objects(objects, scene_objects, source_objects, selected,
             prepared_scene.as_ref(), &mut atlases, training_only);
         let super::atlas_upload::UploadedAtlases { materials, splat_samples, .. } = atlases;
+        self.mesh_transparent_owners = gpu_objects.iter().map(|object| {
+            materials.materials.get(object.component[3] as usize).is_none_or(|material| {
+                material.opacity < 0.999
+                    || material.kind == crate::model::MaterialKind::Custom
+                    || (object.stencil_meta[3] > 0.5 && object.stencil_meta[0] > 0.5)
+            })
+        }).collect();
         let primitive_bounds = bounds.clone();
         expand_soft_bounds(&gpu_objects, &mut bounds);
         let mut component_bounds = boolean_component_bounds(&gpu_objects, &bounds);

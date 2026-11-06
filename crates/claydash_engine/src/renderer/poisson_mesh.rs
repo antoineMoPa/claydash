@@ -170,6 +170,191 @@ pub(crate) fn mesh_at_pose(
     Ok(mesh)
 }
 
+#[derive(Clone, Copy)]
+struct MirrorCorner {
+    position: glam::Vec3,
+    normal: glam::Vec3,
+    uv: [f32; 2],
+    color: [f32; 3],
+    distance: f32,
+}
+
+fn mirror_imported_axis(
+    mesh: &geometry::Mesh,
+    plane_to_mesh: glam::Mat4,
+    axis: usize,
+) -> geometry::Mesh {
+    let mesh_to_plane = plane_to_mesh.inverse();
+    // A clipped negative half should mirror just as a positive half does.
+    // Keep the historical positive-side behavior when both sides are present.
+    let has_positive = mesh.triangles.iter().flatten().any(|&index|
+        mesh_to_plane.transform_point3(mesh.positions[index as usize])[axis] > 1e-6);
+    let retained_sign = if has_positive { 1.0 } else { -1.0 };
+    let mut scale = glam::Vec3::ONE;
+    scale[axis] = -1.0;
+    let reflection = plane_to_mesh * glam::Mat4::from_scale(scale) * mesh_to_plane;
+    let reflected_normal = reflection.inverse().transpose();
+    let has_uvs = mesh.uvs.len() == mesh.triangles.len() || mesh.baked_texture.is_some();
+    let has_colors = mesh.colors.len() == mesh.positions.len();
+    let mut positions = Vec::with_capacity(mesh.triangles.len() * 6);
+    let mut triangles = Vec::with_capacity(mesh.triangles.len() * 2);
+    let mut owners = Vec::with_capacity(mesh.triangles.len() * 2);
+    let mut normals = Vec::with_capacity(mesh.triangles.len() * 2);
+    let mut uvs = Vec::new();
+    let mut colors = Vec::new();
+    for (face_index, face) in mesh.triangles.iter().enumerate() {
+        let mut corners = face.map(|index| {
+            let position = mesh.positions[index as usize];
+            MirrorCorner {
+                position,
+                normal: glam::Vec3::ZERO,
+                uv: [0.0; 2],
+                color: if has_colors {
+                    mesh.colors[index as usize]
+                } else {
+                    [0.0; 3]
+                },
+                distance: retained_sign * mesh_to_plane.transform_point3(position)[axis],
+            }
+        });
+        for (index, corner) in corners.iter_mut().enumerate() {
+            corner.normal = mesh.normals[face_index][index];
+        }
+        if corners.iter().all(|corner| corner.distance.abs() <= 1e-6) {
+            // The source half's cut cap lies on the mirror plane. Keeping it
+            // would create two coincident interior faces after reflection.
+            continue;
+        }
+        let mut polygon = Vec::with_capacity(4);
+        let source_uvs = if mesh.uvs.len() == mesh.triangles.len() {
+            mesh.uvs[face_index]
+        } else if let Some(texture) = &mesh.baked_texture {
+            geometry::baked_triangle_uv(face_index, texture.size, mesh.triangles.len())
+        } else {
+            [[0.0; 2]; 3]
+        };
+        for edge in 0..3 {
+            let mut start = corners[edge];
+            let mut end = corners[(edge + 1) % 3];
+            if has_uvs {
+                start.uv = source_uvs[edge];
+                end.uv = source_uvs[(edge + 1) % 3];
+            }
+            if start.distance >= -1e-6 {
+                polygon.push(start);
+            }
+            if (start.distance > 1e-6 && end.distance < -1e-6)
+                || (start.distance < -1e-6 && end.distance > 1e-6)
+            {
+                let t = start.distance / (start.distance - end.distance);
+                polygon.push(MirrorCorner {
+                    position: start.position.lerp(end.position, t),
+                    normal: start.normal.lerp(end.normal, t).normalize_or_zero(),
+                    uv: [
+                        start.uv[0] + (end.uv[0] - start.uv[0]) * t,
+                        start.uv[1] + (end.uv[1] - start.uv[1]) * t,
+                    ],
+                    color: [
+                        start.color[0] + (end.color[0] - start.color[0]) * t,
+                        start.color[1] + (end.color[1] - start.color[1]) * t,
+                        start.color[2] + (end.color[2] - start.color[2]) * t,
+                    ],
+                    distance: 0.0,
+                });
+            }
+        }
+        if polygon.len() < 3 {
+            continue;
+        }
+        for corner in 1..polygon.len() - 1 {
+            let tri = [polygon[0], polygon[corner], polygon[corner + 1]];
+            for mirrored in [false, true] {
+                let base = positions.len() as u32;
+                for point in tri {
+                    positions.push(if mirrored {
+                        reflection.transform_point3(point.position)
+                    } else {
+                        point.position
+                    });
+                    if has_colors {
+                        colors.push(point.color);
+                    }
+                }
+                triangles.push(if mirrored {
+                    [base, base + 2, base + 1]
+                } else {
+                    [base, base + 1, base + 2]
+                });
+                owners.push(mesh.owners[face_index]);
+                let face_normals = tri.map(|point| {
+                    if mirrored {
+                        reflected_normal.transform_vector3(point.normal).normalize_or_zero()
+                    } else {
+                        point.normal
+                    }
+                });
+                normals.push(if mirrored {
+                    [face_normals[0], face_normals[2], face_normals[1]]
+                } else {
+                    face_normals
+                });
+                if has_uvs {
+                    let uv = tri.map(|point| point.uv);
+                    uvs.push(if mirrored { [uv[0], uv[2], uv[1]] } else { uv });
+                }
+            }
+        }
+    }
+    let mut result = geometry::Mesh::from_parts(positions, triangles, owners);
+    result.revision = mesh.revision;
+    result.shading = mesh.shading;
+    result.uvs = uvs;
+    result.colors = colors;
+    result.baked_texture = mesh.baked_texture.clone();
+    result.normals = normals;
+    result
+}
+
+fn mirrored_imported_mesh(
+    scene: &[SdfObject],
+    object: &SdfObject,
+    mesh: &geometry::Mesh,
+) -> geometry::Mesh {
+    let Some(mirror) = object.mirror else {
+        return mesh.clone();
+    };
+    let object_frame = crate::model::object_world_matrix(scene, object.uuid);
+    let group_frame = crate::model::group_world_matrix(scene, object.uuid);
+    if !object_frame.is_finite() || object_frame.determinant().abs() < 1e-12 {
+        return mesh.clone();
+    }
+    let plane_to_mesh = object_frame.inverse() * group_frame;
+    let mut result = mesh.clone();
+    for axis in 0..3 {
+        if mirror.axes[axis] {
+            result = mirror_imported_axis(&result, plane_to_mesh, axis);
+        }
+    }
+    result
+}
+
+pub fn imported_mesh_world(
+    scene: &[SdfObject],
+    object: &SdfObject,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Option<geometry::Mesh>, String> {
+    let Some(mesh) = &object.imported_mesh else {
+        return Ok(None);
+    };
+    let local = mirrored_imported_mesh(scene, object, mesh);
+    mesh_at_pose(
+        local,
+        crate::model::object_world_matrix(scene, object.uuid),
+        cancel,
+    )
+    .map(Some)
+}
+
 impl Renderer {
     pub fn cached_mesh_for_export(
         &self,
@@ -200,6 +385,8 @@ pub(super) struct PoissonMeshState {
     failure_sources: HashMap<uuid::Uuid, (i32, MeshAlgorithm, u32)>,
     cancelled: std::collections::HashSet<uuid::Uuid>,
     last_revision: Option<i32>,
+    uploaded_vertices: Vec<super::hybrid_splats::GpuMeshVertex>,
+    uploaded_generation: u64,
 }
 
 impl PoissonMeshState {
@@ -245,7 +432,12 @@ impl PoissonMeshState {
                 .iter()
                 .flatten()
                 .all(|normal| normal.is_finite());
-        let valid_uvs = mesh.uvs.iter().flatten().flatten().all(|coordinate| coordinate.is_finite());
+        let valid_uvs = mesh
+            .uvs
+            .iter()
+            .flatten()
+            .flatten()
+            .all(|coordinate| coordinate.is_finite());
         let valid_colors = (mesh.colors.is_empty() || mesh.colors.len() == mesh.positions.len())
             && mesh.colors.iter().flatten().all(|color| color.is_finite())
             && mesh.baked_texture.as_ref().is_none_or(|texture| {
@@ -284,6 +476,11 @@ impl PoissonMeshState {
                     && !mesh.positions.is_empty()
                     && !mesh.triangles.is_empty()
                 {
+                    let displayed = if object.mirror.is_some() {
+                        Arc::new(mirrored_imported_mesh(source, object, mesh))
+                    } else {
+                        mesh.clone()
+                    };
                     self.ready.insert(
                         object.uuid,
                         Ready {
@@ -293,11 +490,18 @@ impl PoissonMeshState {
                             sample_resolution: object.gaussian_splats.resolution,
                             mesh_resolution: object.poisson_mesh.resolution,
                             algorithm: MeshAlgorithm::Direct,
-                            baked_frame_inverse: glam::Mat4::IDENTITY,
-                            vertices: mesh.positions.len(),
-                            triangles: mesh.triangles.len(),
+                            // Mirrored vertices stay in the imported leaf's
+                            // local frame even though mirror changes the
+                            // generic mesh pose to the group frame.
+                            baked_frame_inverse: if object.mirror.is_some() {
+                                object.transform.matrix()
+                            } else {
+                                glam::Mat4::IDENTITY
+                            },
+                            vertices: displayed.positions.len(),
+                            triangles: displayed.triangles.len(),
                             showing: true,
-                            mesh: mesh.clone(),
+                            mesh: displayed,
                         },
                     );
                     changed = true;
@@ -795,7 +999,7 @@ impl PoissonMeshState {
     }
 
     pub fn rebuild_buffer(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         source: &[SdfObject],
@@ -881,8 +1085,10 @@ impl PoissonMeshState {
             }
         }
         voxels.append_vertices(source, &mut vertices);
+        self.uploaded_generation = self.uploaded_generation.wrapping_add(1);
         *count = vertices.len() as u32;
         if vertices.is_empty() {
+            self.uploaded_vertices.clear();
             // Deleting the last mesh should release a large retained allocation.
             if buffer.size() > std::mem::size_of::<super::hybrid_splats::GpuMeshVertex>() as u64 {
                 *buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -895,15 +1101,28 @@ impl PoissonMeshState {
             return;
         }
         let bytes = bytemuck::cast_slice(&vertices);
-        if buffer.size() < bytes.len() as u64 || !buffer.usage().contains(wgpu::BufferUsages::COPY_DST) {
+        if buffer.size() < bytes.len() as u64
+            || !buffer.usage().contains(wgpu::BufferUsages::COPY_DST)
+        {
             *buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Poisson mesh vertices"),
-                size: (bytes.len() as u64).next_power_of_two().min(device.limits().max_buffer_size),
+                size: (bytes.len() as u64)
+                    .next_power_of_two()
+                    .min(device.limits().max_buffer_size),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
         }
         queue.write_buffer(buffer, 0, bytes);
+        self.uploaded_vertices = vertices;
+    }
+
+    pub(super) fn uploaded_vertices(&self) -> &[super::hybrid_splats::GpuMeshVertex] {
+        &self.uploaded_vertices
+    }
+
+    pub(super) fn uploaded_generation(&self) -> u64 {
+        self.uploaded_generation
     }
 
     pub fn baked_texture_pages(&self) -> Vec<(uuid::Uuid, &geometry::BakedTexture)> {
@@ -988,12 +1207,16 @@ mod tests {
             vec![uuid::Uuid::nil()],
         );
         mesh.uvs = vec![[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]];
-        mesh.baked_texture = Some(geometry::BakedTexture { size: 64, png: vec![1, 2, 3] });
+        mesh.baked_texture = Some(geometry::BakedTexture {
+            size: 64,
+            png: vec![1, 2, 3],
+        });
         let reflected = mesh_at_pose(
             mesh,
             glam::Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)),
             &std::sync::atomic::AtomicBool::new(false),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(reflected.triangles, vec![[0, 2, 1]]);
         assert_eq!(reflected.uvs, vec![[[0.1, 0.2], [0.5, 0.6], [0.3, 0.4]]]);
         assert_eq!(reflected.baked_texture.unwrap().png, vec![1, 2, 3]);
@@ -1018,6 +1241,67 @@ mod tests {
         let mut saved = vec![object.clone()];
         state.objects_for_save(&[object], &mut saved, 8);
         assert!(saved[0].saved_mesh.is_none());
+    }
+
+    #[test]
+    fn imported_half_mirror_uses_group_plane_for_render_and_export() {
+        let mut object = SdfObject::create_kind(crate::model::PrimitiveKind::Box);
+        object.render_representation = crate::model::GroupRenderRepresentation::DirectMesh;
+        // The importer recenters a mesh and keeps its authored center in the
+        // leaf transform. The mirror plane remains at group Z = 0.
+        object.transform.translation.z = 1.0;
+        object.mirror = Some(crate::model::Mirror { axes: [false, false, true] });
+        let source = geometry::Mesh::from_parts(
+            vec![
+                Vec3::new(-1.0, -1.0, -1.0),
+                Vec3::new(1.0, -1.0, -1.0),
+                Vec3::new(0.0, 1.0, -1.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]],
+            vec![object.uuid; 4],
+        );
+        object.imported_mesh = Some(Arc::new(source.clone()));
+        let objects = [object.clone()];
+        let mut unmirrored = object.clone();
+        unmirrored.mirror = None;
+        let unmirrored_world = imported_mesh_world(
+            &[unmirrored.clone()], &unmirrored, &std::sync::atomic::AtomicBool::new(false),
+        ).unwrap().unwrap();
+        assert_eq!(unmirrored_world.triangles.len(), 4);
+        assert!(unmirrored_world.positions.iter().any(|point| point.z == 2.0));
+        let exported = imported_mesh_world(&objects, &object, &std::sync::atomic::AtomicBool::new(false))
+            .unwrap().unwrap();
+        assert_eq!(exported.triangles.len(), 6, "cut cap must not be doubled");
+        let min = exported.positions.iter().fold(Vec3::splat(f32::INFINITY), |a, p| a.min(*p));
+        let max = exported.positions.iter().fold(Vec3::splat(f32::NEG_INFINITY), |a, p| a.max(*p));
+        assert!((min.z + 2.0).abs() < 1e-5 && (max.z - 2.0).abs() < 1e-5);
+        for face in &exported.triangles {
+            let z = face.map(|index| exported.positions[index as usize].z);
+            assert!(!z.iter().all(|value| value.abs() < 1e-6));
+        }
+        for pair in exported.triangles.chunks_exact(2) {
+            let positive = pair[0].map(|index| exported.positions[index as usize]);
+            let negative = pair[1].map(|index| exported.positions[index as usize]);
+            let positive_normal = (positive[1] - positive[0]).cross(positive[2] - positive[0]);
+            let negative_normal = (negative[1] - negative[0]).cross(negative[2] - negative[0]);
+            assert!((negative_normal - positive_normal * Vec3::new(1.0, 1.0, -1.0)).length() < 1e-5);
+        }
+        for pair in exported.normals.chunks_exact(2) {
+            for corner in 0..3 {
+                let positive = pair[0][corner];
+                let reflected = pair[1][[0, 2, 1][corner]];
+                assert!((reflected - positive * Vec3::new(1.0, 1.0, -1.0)).length() < 1e-5);
+            }
+        }
+        let mut state = PoissonMeshState::default();
+        assert!(state.restore_saved(&objects, 7));
+        assert_eq!(state.ready[&object.uuid].mesh.triangles.len(), 6);
+        let cached = state.cached_for_export(&objects, object.uuid, 7, MeshAlgorithm::Direct).unwrap();
+        let cached_world = cached.world_mesh(&std::sync::atomic::AtomicBool::new(false)).unwrap();
+        let cached_min = cached_world.positions.iter().map(|point| point.z).fold(f32::INFINITY, f32::min);
+        assert!((cached_min + 2.0).abs() < 1e-5);
+        assert_eq!(object.imported_mesh.as_ref().unwrap().triangles.len(), 4);
     }
 
     #[test]

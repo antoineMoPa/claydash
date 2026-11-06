@@ -449,6 +449,11 @@ impl Renderer {
         let viewport = crate::viewport::Viewport::new(&device, render_format, timestamps, &layout);
         let post_processing = post_processing::PostProcessor::new(&device, render_format);
         let scene_pipeline_cache = std::collections::VecDeque::new();
+        let transparent_mesh_indices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("transparent mesh indices"), size: 4,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let renderer = Self {
             viewport,
             post_processing,
@@ -466,10 +471,15 @@ impl Renderer {
             deferred_geometry_pipeline: None,
             deferred_supported: true,
             splat_pipeline,
+            transparent_mesh_pipeline: mesh_pipeline.clone(),
             mesh_pipeline,
             mesh_background_pipeline,
             mesh_buffer,
             mesh_vertex_count: 0,
+            transparent_mesh_indices,
+            transparent_mesh_index_count: 0,
+            transparent_mesh_sort_key: None,
+            mesh_transparent_owners: Vec::new(),
             poisson_bake_pipeline: None,
             poisson_mesh: Default::default(),
             voxels: Default::default(),

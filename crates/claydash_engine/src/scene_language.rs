@@ -718,10 +718,6 @@ fn evaluate(
                 if kind == PrimitiveKind::BezierCurve {
                     object.path_extrusion = Some(crate::model::PathExtrusion::default());
                 }
-                if let Some(value) = named.remove("color") {
-                    object.color = color(value)?;
-                    object.material.color = object.color;
-                }
                 if let Some(value) = named.remove("size") {
                     match &mut object.params {
                         SdfParams::BoxParams(p) => {
@@ -1173,10 +1169,26 @@ pub fn bounds(objects: &[SdfObject]) -> Result<(Vec3, Vec3), String> {
     for object in objects {
         if let Some(mesh) = &object.imported_mesh {
             let matrix = crate::model::object_world_matrix(objects, object.uuid);
+            let mirror_frame = crate::model::group_world_matrix(objects, object.uuid);
+            let mirror_inverse = mirror_frame.inverse();
             for point in &mesh.positions {
                 let world = matrix.transform_point3(*point);
                 min = min.min(world);
                 max = max.max(world);
+                if let Some(mirror) = object.mirror {
+                    for mask in 1..8 {
+                        if (0..3).any(|axis| mask & (1 << axis) != 0 && !mirror.axes[axis]) {
+                            continue;
+                        }
+                        let mut local = mirror_inverse.transform_point3(world);
+                        for axis in 0..3 {
+                            if mask & (1 << axis) != 0 { local[axis] = -local[axis]; }
+                        }
+                        let reflected = mirror_frame.transform_point3(local);
+                        min = min.min(reflected);
+                        max = max.max(reflected);
+                    }
+                }
             }
             continue;
         }

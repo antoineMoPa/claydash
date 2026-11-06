@@ -7,6 +7,10 @@ mod initialization;
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_actions;
 #[cfg(not(target_arch = "wasm32"))]
+mod mesh_plane_clip;
+#[cfg(not(target_arch = "wasm32"))]
+mod mesh_polygon_separate;
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(target_arch = "wasm32"))]
 mod mesh_export;
 #[cfg(target_arch = "wasm32")]

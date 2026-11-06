@@ -515,6 +515,7 @@ fn orthographic_capture_uses_three_axes_and_combines_panels() {
         seam_lines: Vec::new(),
         points: Vec::new(),
         point_metadata: Vec::new(),
+        panel_metadata: Vec::new(),
         revision: 1,
         reply,
         objects: None,
@@ -1116,6 +1117,7 @@ fn dsl_capture_frames_off_origin_assembly_in_four_views() {
         seam_lines: Vec::new(),
         points: Vec::new(),
         point_metadata: Vec::new(),
+        panel_metadata: Vec::new(),
         revision,
     };
     for i in 0..4 {

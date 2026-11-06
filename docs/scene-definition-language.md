@@ -97,6 +97,7 @@ Author the complete scene in a `.claydef` file. Keep the reference in that recip
 
 ```text
 reference = mesh_asset(path: "reference.glb", mesh: 0);
+body_half = mesh_asset(path: "body-half.glb", color: "#d3d7d8", mirror: ["Z"]);
 
 object body({}):
     hood = sheet_panel(size: [2,1], thickness: 0.02,
@@ -111,6 +112,8 @@ bind(object: "vehicle/hood", seam: "hood_join", target: sheet_edge("MinY"));
 ```
 
 This join uses world points. To attach a point to a reference mesh, replace a vector with `snap(source: "reference", at: [x,y,z])` for the closest surface point, or `surface_point(source: "reference", triangle: 12, barycentric: [0.2,0.3,0.5])`. Snapping occurs during compilation; saved seams retain triangle attachments. Seam points are in world coordinates, including seams connected to assembly members. Seams and `bind(...)` statements belong at the scene root. `closed: true` adds the last-to-first segment.
+
+`mesh_asset` accepts `color`, `opacity`, and `mirror` alongside `at`, `rotation`, and `scale`. A mirror keeps the source half on either side of each named axis and reflects it across the asset's authored origin. The GLB importer stores its recentered vertex offset in the object's transform; this does not move the mirror plane. Cut a source mesh at the intended symmetry plane before mirroring it. Faces wholly on that plane are removed from the mirrored result to avoid coincident seam caps.
 
 A lattice accepts resolution 2–9 (default 3), optional explicit `min` and `max` in the object's local cage frame, and sparse controls:
 

@@ -7,10 +7,13 @@ moves the entire pattern. Each copy retains the same object identity for picking
 and editing. Save files retain the radial settings; older Repeat settings load as
 Linear.
 
-For a reproducible wheel-spoke example, create a box with half extents
+For a reproducible radial geometry test fixture, create a box with half extents
 `(0.65, 0.035, 0.035)`, no corner radius, then set Radial to axis **Z**, count **12**,
-and pivot **(-0.8, 0, 0)**. This places the hub just beyond one end of the source
-spoke. Change the object's position and rotation to place the wheel in a scene.
+and pivot **(-0.8, 0, 0)**. This puts the repetition center just beyond one end
+of the source box. Change the object's position and rotation to place the pattern
+in a scene. These thick bars are a mathematical test fixture, not a finished
+vehicle wheel reference. For a vehicle, measure the reference face profile and
+keep the hub recessed behind the rim face.
 The `radial_spokes_match_explicit_rotated_primitives` test evaluates this fixture
 against twelve explicitly rotated primitives on a dense point grid.
 

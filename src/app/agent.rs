@@ -74,6 +74,9 @@ pub enum Request {
     GetMesh {
         id: uuid::Uuid,
     },
+    InspectMeshFaces(mesh_inspection::InspectMeshFacesArgs),
+    PreviewMeshImagePolygon(image_mesh::MeshImagePolygonArgs),
+    PreviewMeshFairing(mesh::FairMeshRegionArgs),
     AdjustGaussianColors(color::AdjustGaussianColorsArgs),
     ListCommands,
     EnableSlowSmoothBlends,
@@ -263,6 +266,10 @@ pub enum Action {
         id: uuid::Uuid,
         transform: Transform,
     },
+    SetObjectMirror {
+        id: uuid::Uuid,
+        mirror: Option<model::Mirror>,
+    },
     SetObjectParams {
         id: uuid::Uuid,
         params: SdfParams,
@@ -286,6 +293,52 @@ pub enum Action {
         vertices: Vec<[f32; 3]>,
         faces: Vec<[u32; 3]>,
         shading: Option<crate::renderer::poisson_mesh::geometry::MeshShading>,
+    },
+    SeparateMeshFaces {
+        id: uuid::Uuid,
+        expected_mesh_revision: Option<u64>,
+        face_indices: Vec<usize>,
+        name: Option<String>,
+    },
+    ClipMeshPlane {
+        id: uuid::Uuid,
+        expected_mesh_revision: Option<u64>,
+        axis: crate::app::mesh_plane_clip::PlaneAxis,
+        offset: f32,
+        keep: crate::app::mesh_plane_clip::PlaneSide,
+    },
+    SeparateMeshPolygon {
+        id: uuid::Uuid,
+        expected_mesh_revision: Option<u64>,
+        projection: crate::app::mesh_polygon_separate::Projection,
+        polygon: Vec<[f32; 2]>,
+        depth: [f32; 2],
+        name: Option<String>,
+    },
+    SeparateMeshImagePolygon {
+        id: uuid::Uuid,
+        expected_mesh_revision: u64,
+        panel: image_mesh::MeshImagePanel,
+        polygon_pixels: Vec<[f32; 2]>,
+        depth: [f32; 2],
+        name: Option<String>,
+    },
+    ClearMeshAppearance {
+        id: uuid::Uuid,
+    },
+    FairMeshRegion {
+        id: uuid::Uuid,
+        face_indices: Vec<usize>,
+        expected_mesh_revision: u64,
+        max_displacement: f32,
+        #[serde(default = "mesh::default_fair_iterations")]
+        iterations: u8,
+        #[serde(default = "mesh::default_fair_strength")]
+        strength: f32,
+        #[serde(default = "mesh::default_crease_angle")]
+        crease_angle_degrees: f32,
+        #[serde(default)]
+        coincident_position_policy: mesh::CoincidentPositionPolicy,
     },
     AddMeshVertices {
         id: uuid::Uuid,
@@ -694,12 +747,20 @@ pub fn run_from_args() -> bool {
                             .get("data")
                             .and_then(Value::as_str)
                             .ok_or("capture returned no PNG data")?;
-                        base64::engine::general_purpose::STANDARD
+                        let bytes = base64::engine::general_purpose::STANDARD
                             .decode(data)
-                            .map_err(|error| error.to_string())
-                    })
-                    .and_then(|bytes| {
-                        std::fs::write(&path, bytes).map_err(|error| error.to_string())
+                            .map_err(|error| error.to_string())?;
+                        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+                        if value.get("mesh_image_panels").is_some() {
+                            let mut sidecar_name=path.as_os_str().to_os_string();
+                            sidecar_name.push(".json");
+                            let mut metadata=value;
+                            metadata.as_object_mut().unwrap().remove("data");
+                            std::fs::write(PathBuf::from(sidecar_name),
+                                serde_json::to_vec_pretty(&metadata).map_err(|error|error.to_string())?)
+                                .map_err(|error|error.to_string())?;
+                        }
+                        Ok(())
                     });
                 match result {
                     Ok(()) => println!("{}", path.display()),
@@ -779,6 +840,9 @@ impl App {
             Request::GetActionSchema { action, primitive } => mcp::action_schema(&action, primitive),
             Request::GetGaussianCloud { id, space, sample_count } => self.agent_gaussian_cloud(id, space, sample_count),
             Request::GetMesh { id } => mesh::get_mesh(&self.tree, id),
+            Request::InspectMeshFaces(args) => mesh_inspection::inspect(&self.tree, args),
+            Request::PreviewMeshImagePolygon(args) => image_mesh::preview(&self.tree,self.scene_revision(),args),
+            Request::PreviewMeshFairing(args) => mesh::preview_fair_region(&self.tree, args),
             Request::AdjustGaussianColors(args) => self.agent_adjust_gaussian_colors(args),
             Request::ListCommands => Ok(Value::Array(self.commands.commands.iter().map(|(name, command)| {
                 json!({"name": name, "title": command.title, "description": command.docs, "shortcut": command.shortcut})
@@ -841,7 +905,7 @@ impl App {
                                 mode: CaptureMode::from_options(args.mode, args.refine),
                                 view: CaptureView::Viewport, camera, cancelled_retries: 0,
                                 seam_lines: if args.show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|seam.positions(model::objects_ref(&self.tree))).collect::<Result<Vec<_>,_>>().unwrap_or_default().into_iter().zip(model::scene_seams(&self.tree).seams).map(|(points,seam)|(points,seam.closed)).collect()}else{Vec::new()},
-                                points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
+                                points: args.points, point_metadata: Vec::new(), panel_metadata: Vec::new(), revision: self.scene_revision(),
                             });
                             if let Some(renderer) = &mut self.renderer {
                                 renderer.invalidate_scene();
@@ -879,7 +943,7 @@ impl App {
                                     view: CaptureView::Orthographic { panel_size, distance, fit: args.fit.unwrap_or(args.distance.is_none()), frames: Vec::with_capacity(3) },
                                     camera: self.agent_view_camera(), cancelled_retries: 0,
                                     seam_lines: if args.show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|seam.positions(model::objects_ref(&self.tree))).collect::<Result<Vec<_>,_>>().unwrap_or_default().into_iter().zip(model::scene_seams(&self.tree).seams).map(|(points,seam)|(points,seam.closed)).collect()}else{Vec::new()},
-                                points: args.points, point_metadata: Vec::new(), revision: self.scene_revision(),
+                                points: args.points, point_metadata: Vec::new(), panel_metadata: Vec::new(), revision: self.scene_revision(),
                                 });
                                 if let Some(renderer) = &mut self.renderer {
                                     renderer.invalidate_scene();
@@ -900,7 +964,7 @@ impl App {
                         Ok((objects,center,span,panel_size)) => {
                             self.agent_capture = Some(AgentCapture { reply, objects: Some(objects), pipeline: pipeline.unwrap_or(model::RenderPipelineMode::Deferred), mode: CaptureMode::SimpleShading,
                                 view: CaptureView::SceneViews { panel_size, center, span, frames: Vec::with_capacity(4) }, camera: self.agent_view_camera(), cancelled_retries: 0,
-                                seam_lines: if show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|Ok((seam.positions(model::objects_ref(&self.tree))?,seam.closed))).collect::<Result<Vec<_>,String>>().unwrap_or_default()}else{Vec::new()}, points: Vec::new(), point_metadata: Vec::new(), revision: self.scene_revision() });
+                                seam_lines: if show_seams {model::scene_seams(&self.tree).seams.iter().map(|seam|Ok((seam.positions(model::objects_ref(&self.tree))?,seam.closed))).collect::<Result<Vec<_>,String>>().unwrap_or_default()}else{Vec::new()}, points: Vec::new(), point_metadata: Vec::new(), panel_metadata: Vec::new(), revision: self.scene_revision() });
                             if let Some(renderer) = &mut self.renderer { renderer.invalidate_scene(); }
                             return;
                         }
@@ -920,7 +984,7 @@ impl App {
                             self.agent_capture = Some(AgentCapture {
                                 reply, objects: Some(comparison.references.clone()), pipeline, mode: CaptureMode::SimpleShading,
                                 view: CaptureView::Comparison(Box::new(comparison)), camera, cancelled_retries: 0,
-                                seam_lines: Vec::new(), points: Vec::new(), point_metadata: Vec::new(), revision,
+                                seam_lines: Vec::new(), points: Vec::new(), point_metadata: Vec::new(), panel_metadata: Vec::new(), revision,
                             });
                             if let Some(renderer) = &mut self.renderer { renderer.invalidate_scene(); }
                             return;
@@ -1274,6 +1338,8 @@ mod color;
 mod export;
 mod headless;
 mod mcp;
+mod mesh_inspection;
+mod image_mesh;
 mod scene_dsl;
 mod selection;
 mod smooth_blend_policy;

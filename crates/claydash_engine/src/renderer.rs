@@ -130,7 +130,7 @@ struct SceneShaderFeatures {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScenePipelineKind {
     MeshBackground,
-    MeshMaterial { capacity: u32 },
+    MeshMaterial { capacity: u32, transparent: bool },
     Shaded { capacity: u32, fast: bool, hybrid: bool },
     Deferred { capacity: u32, hybrid: bool },
     HybridDepth { capacity: u32, skip_splats: bool },
@@ -281,9 +281,14 @@ pub struct Renderer {
     deferred_supported: bool,
     splat_pipeline: wgpu::RenderPipeline,
     mesh_pipeline: wgpu::RenderPipeline,
+    transparent_mesh_pipeline: wgpu::RenderPipeline,
     mesh_background_pipeline: wgpu::RenderPipeline,
     mesh_buffer: wgpu::Buffer,
     mesh_vertex_count: u32,
+    transparent_mesh_indices: wgpu::Buffer,
+    transparent_mesh_index_count: u32,
+    transparent_mesh_sort_key: Option<(u64, glam::Vec3, glam::Vec3)>,
+    mesh_transparent_owners: Vec<bool>,
     poisson_bake_pipeline: Option<(u64, wgpu::RenderPipeline)>,
     poisson_mesh: poisson_mesh::PoissonMeshState,
     voxels: voxels::VoxelState,

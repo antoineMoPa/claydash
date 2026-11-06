@@ -44,7 +44,7 @@ fn ambient_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 { return 1.0; }
 
 pub(super) fn create_pipeline(device: &wgpu::Device, layout: Option<&wgpu::PipelineLayout>,
     scene: &str, format: wgpu::TextureFormat, capacity: u32,
-    features: SceneShaderFeatures) -> wgpu::RenderPipeline {
+    features: SceneShaderFeatures, transparent: bool) -> wgpu::RenderPipeline {
     let source = super::material_gpu::shader_source_for_features(
         &source(scene, capacity), features.materials);
     let source = if features.bloom { super::bloom::scene_source(&source, "fs_poisson") } else { source };
@@ -64,9 +64,27 @@ pub(super) fn create_pipeline(device: &wgpu::Device, layout: Option<&wgpu::Pipel
         ("HAS_LATTICE_MODIFIERS", f64::from(features.spatial.lattice)),
         ("HAS_MIRRORS", f64::from(features.spatial.mirror)),
         ("HAS_REPETITION", f64::from(features.spatial.repetition)),
+        ("TRANSPARENT_PASS", f64::from(transparent)),
     ];
+    let mut targets = super::bloom::scene_targets(format, features.bloom);
+    if transparent {
+        targets[0].as_mut().unwrap().blend = Some(wgpu::BlendState::ALPHA_BLENDING);
+        if features.bloom {
+            // The opaque scene already accumulated emission. Glass only
+            // contributes its own emission through the same alpha coverage.
+            targets[1].as_mut().unwrap().blend = Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::REPLACE,
+            });
+        }
+    }
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Poisson source material raster"), layout,
+        label: Some(if transparent { "Poisson transparent material raster" }
+            else { "Poisson source material raster" }), layout,
         vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_poisson"),
             buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<hybrid_splats::GpuMeshVertex>() as u64,
@@ -74,12 +92,12 @@ pub(super) fn create_pipeline(device: &wgpu::Device, layout: Option<&wgpu::Pipel
                 attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
             })], compilation_options: Default::default() },
         fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_poisson"),
-            targets: &super::bloom::scene_targets(format, features.bloom),
+            targets: &targets,
             compilation_options: wgpu::PipelineCompilationOptions { constants: &constants,
                 ..Default::default() } }),
         primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
         depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(true), depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_write_enabled: Some(!transparent), depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: Default::default(), bias: Default::default() }),
         multisample: Default::default(), multiview_mask: None, cache: None,
     })
@@ -209,7 +227,9 @@ mod tests {
             for (label, capacity) in [("simple", 1), ("polygon and metal", 2)] {
                 let start = std::time::Instant::now();
                 let _pipeline = super::create_pipeline(&device, None, &scene,
-                    wgpu::TextureFormat::Rgba8Unorm, capacity, features);
+                    wgpu::TextureFormat::Rgba8Unorm, capacity, features, false);
+                let _transparent = super::create_pipeline(&device, None, &scene,
+                    wgpu::TextureFormat::Rgba8Unorm, capacity, features, true);
                 eprintln!("Poisson material Metal pipeline ({label}): {:?}", start.elapsed());
                 features.primitives.polygon_prisms = true;
                 features.materials.metal = true;

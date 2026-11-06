@@ -57,6 +57,7 @@ pub struct AgentCapture {
     pub seam_lines: Vec<(Vec<Vec3>, bool)>,
     pub points: Vec<super::markers::PreviewPoint>,
     pub point_metadata: Vec<Value>,
+    pub panel_metadata: Vec<Value>,
     pub revision: u64,
 }
 
@@ -179,6 +180,15 @@ impl AgentCapture {
             } => [*panel_size * frames.len() as u32, 0],
             _ => [0, 0],
         };
+        if let CaptureView::Orthographic { frames, .. } = &self.view {
+            let projection=match frames.len() {
+                0 => crate::app::mesh_polygon_separate::Projection::Yz,
+                1 => crate::app::mesh_polygon_separate::Projection::Xz,
+                _ => crate::app::mesh_polygon_separate::Projection::Xy,
+            };
+            let panel=super::image_mesh::MeshImagePanel::from_camera(camera,offset,projection,self.revision)?;
+            self.panel_metadata.push(json!(panel));
+        }
         self.point_metadata.extend(super::markers::annotate(
             &mut cropped,
             camera,
@@ -208,9 +218,12 @@ impl AgentCapture {
     }
 
     fn with_point_metadata(&self, mut result: Value) -> AgentResult {
+        result["revision"] = json!(self.revision);
+        if !self.panel_metadata.is_empty() {
+            result["mesh_image_panels"] = json!(self.panel_metadata);
+        }
         if !self.points.is_empty() {
             result["point_previews"] = json!(self.point_metadata);
-            result["revision"] = json!(self.revision);
             result["point_display"] = json!("red center pixel with translucent 4px radius circle; drawn on top, without depth occlusion");
         }
         Ok(result)

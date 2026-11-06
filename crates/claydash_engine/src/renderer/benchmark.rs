@@ -389,6 +389,7 @@ impl Renderer {
             };
             let work = self.viewport.prepare(&self.device, key, false, true, false);
             assert_eq!(work, crate::viewport::Work::Preview);
+            self.update_transparent_mesh_indices(camera);
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let pipeline = if self.hybrid_enabled {
                 self.hybrid_pipeline.as_ref().expect("hybrid pipeline")
@@ -417,9 +418,12 @@ impl Renderer {
                     splat_extra_buffers: &self.splat_extra_buffers,
                     splat_count: self.splat_instances.len() as u32,
                     mesh_pipeline: &self.mesh_pipeline,
+                    transparent_mesh_pipeline: &self.transparent_mesh_pipeline,
                     mesh_bind_group: &self.bind_group,
                     mesh_buffer: &self.mesh_buffer,
                     mesh_vertex_count,
+                    transparent_mesh_indices: &self.transparent_mesh_indices,
+                    transparent_mesh_index_count: self.transparent_mesh_index_count,
                 }),
                 Some(crate::viewport::DeferredPass {
                     geometry_pipeline: &self
@@ -657,6 +661,7 @@ impl Renderer {
                 deferred,
                 !raster_only && !deferred && !self.hybrid_enabled,
             );
+            self.update_transparent_mesh_indices(&current);
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let quick_preview = matches!(work, crate::viewport::Work::Preview)
                 || matches!(work, crate::viewport::Work::Interleave { first, .. }
@@ -702,9 +707,12 @@ impl Renderer {
                     splat_extra_buffers: &self.splat_extra_buffers,
                     splat_count: self.splat_instances.len() as u32,
                     mesh_pipeline: &self.mesh_pipeline,
+                    transparent_mesh_pipeline: &self.transparent_mesh_pipeline,
                     mesh_bind_group: &self.bind_group,
                     mesh_buffer: &self.mesh_buffer,
                     mesh_vertex_count,
+                    transparent_mesh_indices: &self.transparent_mesh_indices,
+                    transparent_mesh_index_count: self.transparent_mesh_index_count,
                 }),
                 deferred.then(|| crate::viewport::DeferredPass {
                     geometry_pipeline: &self

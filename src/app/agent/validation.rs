@@ -22,6 +22,11 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
     let assets = model::material_assets(tree);
     crate::renderer::validate_custom_materials(&assets)?;
     let objects = model::objects_ref(tree);
+    for object in objects {
+        if let Some(mesh) = &object.imported_mesh {
+            validate_imported_mesh(mesh, object.uuid)?;
+        }
+    }
     let mut seam_objects = objects.to_vec();
     model::resolve_sheet_seams(&mut seam_objects)?;
     model::resolve_seam_bindings(&model::scene_seams(tree), &mut seam_objects)?;
@@ -272,6 +277,48 @@ pub(super) fn validate_scene(tree: &model::DataTree) -> Result<(), String> {
             return Err("nonfinite rigid local anchors".into());
         }
         model::rigid_binding_pose(&variables, objects, binding)?;
+    }
+    Ok(())
+}
+
+pub(super) fn validate_imported_mesh(
+    mesh: &crate::renderer::poisson_mesh::geometry::Mesh,
+    id: uuid::Uuid,
+) -> Result<(), String> {
+    let faces = mesh.triangles.len();
+    let vertices = mesh.positions.len();
+    if vertices > 10_000_000
+        || faces > 10_000_000
+        || mesh.owners.len() != faces
+        || mesh.normals.len() != faces
+        || (!mesh.uvs.is_empty() && mesh.uvs.len() != faces)
+        || (!mesh.colors.is_empty() && mesh.colors.len() != vertices)
+        || mesh
+            .triangles
+            .iter()
+            .flatten()
+            .any(|&index| index as usize >= vertices)
+        || mesh.positions.iter().any(|point| !point.is_finite())
+        || mesh
+            .normals
+            .iter()
+            .flatten()
+            .any(|normal| !normal.is_finite())
+        || mesh
+            .uvs
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|coordinate| !coordinate.is_finite())
+        || mesh
+            .colors
+            .iter()
+            .flatten()
+            .any(|component| !component.is_finite())
+    {
+        return Err(format!(
+            "imported mesh on {id} has inconsistent geometry or attributes"
+        ));
     }
     Ok(())
 }

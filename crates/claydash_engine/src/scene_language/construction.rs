@@ -280,13 +280,14 @@ pub(super) fn evaluate_call(
                 let objects = (context.loader)(&path)?;
                 context.assets.insert(path.clone(), objects);
             }
-            let object = context.assets[&path]
+            let mut object = context.assets[&path]
                 .get(mesh)
                 .cloned()
                 .ok_or_else(|| format!("mesh_asset '{path}' has no mesh {mesh}"))?;
             if object.imported_mesh.is_none() {
                 return Err("mesh_asset loader must return triangle meshes".into());
             }
+            apply_modifiers(&mut object, args)?;
             let mut parts = vec![Part {
                 path: String::new(),
                 object,
@@ -307,6 +308,10 @@ pub(super) fn apply_modifiers(
     object: &mut SdfObject,
     args: &mut BTreeMap<String, Value>,
 ) -> Result<(), String> {
+    if let Some(v) = args.remove("color") {
+        object.color = color(v)?;
+        object.material.color = object.color;
+    }
     if let Some(v) = args.remove("opacity") {
         let alpha = number(v)?;
         if !(0.0..=1.0).contains(&alpha) {
@@ -611,5 +616,52 @@ panel=sheet_panel(size:[2,1],bends:[bend(start:0,radius:0.3,angle:45)]);
             .err()
             .unwrap()
             .contains("asset loader"));
+    }
+    #[test]
+    fn mesh_asset_modifiers_preserve_authored_frame_and_loaded_source() {
+        let mut source = SdfObject::create_kind(PrimitiveKind::Box);
+        source.transform.translation = Vec3::new(3.0, 1.0, 2.0);
+        source.color = Vec4::new(0.8, 0.7, 0.6, 1.0);
+        source.material.color = source.color;
+        source.imported_mesh = Some(std::sync::Arc::new(
+            crate::renderer::poisson_mesh::geometry::Mesh::from_parts(
+                vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+                vec![[0, 1, 2]],
+                vec![source.uuid],
+            ),
+        ));
+        let scene = compile_with_assets(
+            "plain=mesh_asset(path:\"half.glb\"); painted=mesh_asset(path:\"half.glb\",color:\"#336699\",opacity:0.35,mirror:[\"Z\"],at:[2,0,0]);",
+            &mut |_| Ok(vec![source.clone()]),
+        )
+        .unwrap();
+        let plain = &scene.parts[0].1;
+        let painted = &scene.parts[1].1;
+        assert_eq!(plain.transform.translation, source.transform.translation);
+        assert_eq!(plain.color, source.color);
+        assert_eq!(plain.mirror, None);
+        assert_eq!(painted.transform.translation, Vec3::new(5.0, 1.0, 2.0));
+        assert_eq!(painted.color, Vec4::new(0.2, 0.4, 0.6, 0.35));
+        assert_eq!(painted.material.color, painted.color);
+        assert_eq!(painted.mirror.unwrap().axes, [false, false, true]);
+        let (minimum, maximum) = bounds(&[painted.clone()]).unwrap();
+        assert_eq!(minimum.z, -2.0);
+        assert_eq!(maximum.z, 2.0);
+        // Mirror uses the group frame: the importer center remains a leaf transform.
+        let frame = crate::model::group_world_matrix(&[painted.clone()], painted.uuid);
+        assert_eq!(frame.transform_point3(Vec3::ZERO), Vec3::ZERO);
+        assert_eq!(source.color, Vec4::new(0.8, 0.7, 0.6, 1.0));
+        assert!(
+            compile_with_assets("a=mesh_asset(path:\"half.glb\",opacity:1.2);", &mut |_| Ok(
+                vec![source.clone()]
+            ),)
+            .is_err()
+        );
+        assert!(
+            compile_with_assets("a=mesh_asset(path:\"half.glb\",unknown:1);", &mut |_| Ok(
+                vec![source.clone()]
+            ),)
+            .is_err()
+        );
     }
 }

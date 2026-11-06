@@ -1,6 +1,6 @@
 ---
-name: claydash-reference-modeling
-description: Rebuild reference GLBs with Claydash's independent seam, sheet and lattice tools.
+name: claydash-modeling
+description: Build a multi-part Claydash model with per-part placement, appearance, and assembly alignment checks.
 ---
 
 Use in conjunction with claydash-modeling skill when a reference is available.
@@ -15,6 +15,7 @@ Use in conjunction with claydash-modeling skill when a reference is available.
 8. Study which part of the reference is bent / curved and make sur modelled result reflects that.
 9. Model holes and cavities with subtractive SDF geometry than additive instead of snapping objects to create details.
 10. Remove leftover scaffold sdfs.
+For a reference vehicle wheel, inspect its face from side and oblique views. Seat the hub below the rim lip and use the reference's actual openings and spoke relief; a repeated box-bar fixture or raised solid disc is not a wheel design reference. See `../../docs/vehicle-wheel-modeling.md` for the specific geometry check.
 11. Assess wheter model looks like reference and have corrections done by fresh sub agents.
 
 Have fresh sub agents (not forks) build parts in parallel, with a 1 feedback cycle for model quality.

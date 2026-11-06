@@ -589,3 +589,23 @@ preserves the previous origin-centered orthographic framing; `fit: true` overrid
 that distance. Use `fit: false` to keep an agent viewport's chosen camera framing.
 `view: "user"` preserves the user camera unless `fit: true` is requested.
 Very small CLI images use a proportionally smaller margin to leave room for content.
+
+## Separating imported mesh parts
+
+`SeparateMeshFaces` accepts `id`, nonempty `face_indices` (zero-based source triangle
+indices), and optional `name` and `expected_mesh_revision`. Supply the revision returned by
+inspection to reject stale triangle indices. It moves those faces into one new object and returns
+its UUID in `created_ids`. At least one face must remain in the source. Duplicates
+and invalid indices fail atomically. Meshes with surface-attached seam points must
+have those points detached first, so separation cannot silently invalidate them.
+Sources with boolean children also require detaching the children first. Both outputs compact unused vertices, preserve
+object transforms/materials and exact corner normals/UVs, and remap vertex colors.
+Legacy baked atlases gain explicit UVs so reordering cannot shift their textures.
+Face order is retained within each output; inspect the source again before another
+separation because its indices have changed. Use `expected_mesh_revision` to reject stale
+face selections and Apply's `expected_revision` to reject intervening scene edits. Each Apply batch is a single undo step.
+
+`ClearMeshAppearance` with `id` explicitly removes the imported baked texture,
+vertex colors and UVs while preserving geometry, normals and assigned material.
+Use it before assigning new body/glass materials when original scan appearance
+should be discarded. Separation alone never discards imported appearance.

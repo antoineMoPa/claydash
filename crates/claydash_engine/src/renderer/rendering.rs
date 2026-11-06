@@ -225,6 +225,9 @@ impl Renderer {
             interleaved,
         );
         if work != crate::viewport::Work::Cached {
+            self.update_transparent_mesh_indices(camera);
+        }
+        if work != crate::viewport::Work::Cached {
             self.upload_splat_camera(camera, world);
         }
         let quick_preview = matches!(work, crate::viewport::Work::Preview)
@@ -275,9 +278,12 @@ impl Renderer {
                 splat_extra_buffers: &self.splat_extra_buffers,
                 splat_count: if self.hybrid_enabled { self.splat_draw_count } else { 0 },
                 mesh_pipeline: &self.mesh_pipeline,
+                transparent_mesh_pipeline: &self.transparent_mesh_pipeline,
                 mesh_bind_group: &self.bind_group,
                 mesh_buffer: &self.mesh_buffer,
                 mesh_vertex_count,
+                transparent_mesh_indices: &self.transparent_mesh_indices,
+                transparent_mesh_index_count: self.transparent_mesh_index_count,
             }),
             deferred.then(|| crate::viewport::DeferredPass {
                 geometry_pipeline: &self
@@ -576,6 +582,155 @@ impl Renderer {
             if let Some(fault) = self.gpu_fault() { return Some(Err(fault.to_owned())); }
         }
         frame
+    }
+}
+
+impl Renderer {
+    pub(super) fn update_transparent_mesh_indices(&mut self, camera: &Camera) {
+        let key = (self.poisson_mesh.uploaded_generation(), camera.position, camera.target);
+        if self.transparent_mesh_sort_key == Some(key) { return; }
+        self.transparent_mesh_sort_key = Some(key);
+        let indices = sorted_transparent_mesh_indices(self.poisson_mesh.uploaded_vertices(),
+            &self.mesh_transparent_owners, camera.position, camera.target);
+        self.transparent_mesh_index_count = indices.len() as u32;
+        if indices.is_empty() { return; }
+        let bytes = bytemuck::cast_slice(&indices);
+        if self.transparent_mesh_indices.size() < bytes.len() as u64 {
+            self.transparent_mesh_indices = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("transparent mesh indices"),
+                size: (bytes.len() as u64).next_power_of_two(),
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        self.queue.write_buffer(&self.transparent_mesh_indices, 0, bytes);
+    }
+}
+
+fn sorted_transparent_mesh_indices(vertices: &[hybrid_splats::GpuMeshVertex],
+    transparent_owners: &[bool], position: glam::Vec3, target: glam::Vec3) -> Vec<u32> {
+    // Procedural triangles use alpha zero because their owner is resolved per
+    // fragment. None can blend when every packed scene owner is opaque.
+    if !transparent_owners.iter().any(|&transparent| transparent) {
+        return Vec::new();
+    }
+    let view = (target - position).normalize_or_zero();
+    let mut triangles: Vec<(f32, u32)> = vertices.chunks_exact(3).enumerate()
+        .filter(|(_, corners)| {
+            let alpha = corners[0].captured_color[3];
+            if alpha > 0.0 { return false; }
+            if alpha == 0.0 { return true; } // Procedural meshes may resolve another owner per fragment.
+            let owner = (corners[0].normal[3] + 0.5) as usize;
+            transparent_owners.get(owner).copied().unwrap_or(true)
+        })
+        .map(|(triangle, corners)| {
+            let center = (glam::Vec3::from_array(corners[0].position[..3].try_into().unwrap())
+                + glam::Vec3::from_array(corners[1].position[..3].try_into().unwrap())
+                + glam::Vec3::from_array(corners[2].position[..3].try_into().unwrap())) / 3.0;
+            ((center - position).dot(view), triangle as u32 * 3)
+        }).collect();
+    triangles.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
+    triangles.into_iter().flat_map(|(_, first)| [first, first + 1, first + 2]).collect()
+}
+
+#[cfg(test)]
+mod transparency_tests {
+    use super::*;
+
+    #[test]
+    fn glass_triangles_sort_back_to_front_and_skip_captured_colors() {
+        let vertex = |z: f32, alpha: f32| hybrid_splats::GpuMeshVertex {
+            position: [0.0, 0.0, z, 1.0], normal: [0.0, 0.0, 1.0, 0.0],
+            captured_color: [0.0, 0.0, 0.0, alpha],
+        };
+        let vertices = [vertex(1.0, -1.0); 3].into_iter()
+            .chain([vertex(2.0, 1.0); 3])
+            .chain([vertex(3.0, -1.0); 3]).collect::<Vec<_>>();
+        assert_eq!(sorted_transparent_mesh_indices(&vertices, &[true], glam::Vec3::ZERO,
+            glam::Vec3::Z), [6, 7, 8, 0, 1, 2]);
+        assert_eq!(sorted_transparent_mesh_indices(&vertices, &[true], glam::Vec3::new(0.0, 0.0, 4.0),
+            glam::Vec3::ZERO), [0, 1, 2, 6, 7, 8]);
+        assert!(sorted_transparent_mesh_indices(&vertices, &[false], glam::Vec3::ZERO,
+            glam::Vec3::Z).is_empty());
+    }
+
+    #[test]
+    fn opaque_scene_skips_procedural_mesh_transparency_pass() {
+        let vertex = hybrid_splats::GpuMeshVertex {
+            position: [0.0, 0.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0, 0.0],
+            captured_color: [0.0; 4],
+        };
+        let vertices = [vertex; 3];
+        assert!(sorted_transparent_mesh_indices(&vertices, &[false], glam::Vec3::ZERO,
+            glam::Vec3::Z).is_empty());
+        assert_eq!(sorted_transparent_mesh_indices(&vertices, &[true], glam::Vec3::ZERO,
+            glam::Vec3::Z), [0, 1, 2]);
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter and offscreen readback"]
+    fn imported_glass_blends_over_interior_in_exact_and_deferred() {
+        use crate::model::{GroupRenderRepresentation, PrimitiveKind, RenderPipelineMode};
+        use poisson_mesh::geometry::Mesh;
+        use std::{sync::Arc, time::Duration};
+
+        let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 65, height: 65, ..Default::default()
+        })).unwrap();
+        let mut camera = Camera::new();
+        camera.position = glam::Vec3::new(0.0, 0.0, 3.0);
+        camera.target = glam::Vec3::ZERO;
+        let panel = |z: f32, color: glam::Vec4, opacity: f32| {
+            let mut object = SdfObject::create_kind(PrimitiveKind::Box);
+            object.render_representation = GroupRenderRepresentation::DirectMesh;
+            object.imported_mesh = Some(Arc::new(Mesh::from_parts(
+                vec![glam::Vec3::new(-0.7, -0.7, z), glam::Vec3::new(0.7, -0.7, z),
+                    glam::Vec3::new(0.7, 0.7, z), glam::Vec3::new(-0.7, 0.7, z)],
+                vec![[0, 1, 2], [0, 2, 3]], vec![object.uuid; 2])));
+            object.color = color;
+            object.material.color = color;
+            object.material.opacity = opacity;
+            object
+        };
+        let interior = panel(0.0, glam::Vec4::new(0.05, 0.1, 0.95, 1.0), 1.0);
+        let glass = panel(0.3, glam::Vec4::new(0.9, 0.05, 0.05, 1.0), 0.35);
+        for render_pipeline in [RenderPipelineMode::Exact, RenderPipelineMode::Deferred] {
+            let world = World { render_pipeline, ..World::default() };
+            let capture = |renderer: &mut Renderer, scene: &[SdfObject]| {
+                renderer.render_offscreen(&camera, scene, world, &[], Duration::from_secs(30))
+                    .unwrap().rgba
+            };
+            let back = capture(&mut renderer, std::slice::from_ref(&interior));
+            let front = capture(&mut renderer, std::slice::from_ref(&glass));
+            let mixed = capture(&mut renderer, &[interior.clone(), glass.clone()]);
+            let center = (32 * 65 + 32) * 4;
+            assert!(mixed[center] > back[center] + 10,
+                "glass red should contribute in {render_pipeline:?}");
+            assert!(mixed[center + 2] > front[center + 2] + 10,
+                "blue interior should remain visible in {render_pipeline:?}");
+            assert!(mixed[center + 2] < back[center + 2],
+                "glass should tint the interior in {render_pipeline:?}");
+        }
+
+        // Opening another document resets mesh generations. Its first mesh
+        // upload must not reuse the prior document's empty glass index list.
+        let world = World { render_pipeline: RenderPipelineMode::Exact, ..World::default() };
+        let mut reopened = pollster::block_on(Renderer::new_headless(HeadlessOptions {
+            width: 65, height: 65, ..Default::default()
+        })).unwrap();
+        let mut opaque_glass = glass.clone();
+        opaque_glass.material.opacity = 1.0;
+        reopened.render_offscreen(&camera, &[interior.clone(), opaque_glass], world,
+            &[], Duration::from_secs(30)).unwrap();
+        assert_eq!(reopened.transparent_mesh_index_count, 0);
+        reopened.reset_optimized_fields();
+        let reopened_pixels = reopened.render_offscreen(&camera,
+            &[interior.clone(), glass.clone()], world, &[], Duration::from_secs(30))
+            .unwrap().rgba;
+        assert!(reopened.transparent_mesh_index_count > 0);
+        let center = (32 * 65 + 32) * 4;
+        assert!(reopened_pixels[center] > reopened_pixels[center + 2] / 2,
+            "glass should tint after replacing an opaque document");
     }
 }
 

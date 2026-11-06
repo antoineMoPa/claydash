@@ -248,11 +248,32 @@ impl Viewport {
                             draw_splat_work(&mut pass, shading_work, size, *count);
                         }
                     }
+                }
+                if let Some(hybrid) = &hybrid {
                     if hybrid.mesh_vertex_count > 0 {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Poisson mesh material batch"),
+                            color_attachments: attachments,
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: depth_view,
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            ..Default::default()
+                        });
                         pass.set_pipeline(hybrid.mesh_pipeline);
                         pass.set_bind_group(0, hybrid.mesh_bind_group, &[]);
                         pass.set_vertex_buffer(0, hybrid.mesh_buffer.slice(..));
                         draw_mesh_work(&mut pass, shading_work, size, hybrid.mesh_vertex_count);
+                        if hybrid.transparent_mesh_index_count > 0 {
+                            pass.set_pipeline(hybrid.transparent_mesh_pipeline);
+                            pass.set_index_buffer(hybrid.transparent_mesh_indices.slice(..), wgpu::IndexFormat::Uint32);
+                            draw_transparent_mesh_work(&mut pass, shading_work, size,
+                                hybrid.transparent_mesh_index_count);
+                        }
                     }
                 }
             }
@@ -482,6 +503,26 @@ fn draw_mesh_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], c
                 let last = tile_rect(size, row_end - 1);
                 pass.set_scissor_rect(x, y, last[0] + last[2] - x, height);
                 pass.draw(0..count, 0..1);
+                tile = row_end;
+            }
+        }
+        Work::Interleave { .. } => unreachable!("hybrid mesh uses tiled refinement"),
+        Work::Relight { .. } | Work::Cached => unreachable!(),
+    }
+}
+
+fn draw_transparent_mesh_work(pass: &mut wgpu::RenderPass<'_>, work: Work, size: [u32; 2], count: u32) {
+    match work {
+        Work::Preview => pass.draw_indexed(0..count, 0, 0..1),
+        Work::Refine { first, end } => {
+            let columns = size[0].div_ceil(TILE);
+            let mut tile = first;
+            while tile < end {
+                let row_end = ((tile / columns + 1) * columns).min(end);
+                let [x, y, _, height] = tile_rect(size, tile);
+                let last = tile_rect(size, row_end - 1);
+                pass.set_scissor_rect(x, y, last[0] + last[2] - x, height);
+                pass.draw_indexed(0..count, 0, 0..1);
                 tile = row_end;
             }
         }

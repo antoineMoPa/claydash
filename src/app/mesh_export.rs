@@ -169,7 +169,9 @@ impl App {
                     let object = worker_source.iter().find(|object| object.uuid == *root)
                         .ok_or("Selected object disappeared")?;
                     let mut colors = None;
-                    let mesh = if let MeshKind::Voxels { resolution } = options.mesh_kind(object) {
+                    let mesh = if let Some(imported) = crate::renderer::poisson_mesh::imported_mesh_world(&worker_source, object, &worker_cancel)? {
+                        imported
+                    } else if let MeshKind::Voxels { resolution } = options.mesh_kind(object) {
                         *worker_stage.lock().unwrap() = ExportStage::Capturing {
                             name: object.name.clone(), index: index + 1, total: roots.len(),
                             direct: matches!(options.mesh_kind(object), MeshKind::Direct { .. }),

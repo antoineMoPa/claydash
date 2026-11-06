@@ -24,10 +24,15 @@ impl App {
             return Err("ReplaceScene must be the only action".to_string());
         }
         let mut draft = self.tree.clone();
+        // Imports and editor gestures can leave an edit pending. Keep that edit
+        // as its own undo step before committing this atomic agent batch.
+        // Do this on the draft so a rejected batch leaves live history intact.
+        draft.make_undo_redo_snapshot();
         let mut created = Vec::new();
         let mut created_variables = Vec::new();
         let mut created_materials = Vec::new();
         let mut created_post_process_passes = Vec::new();
+        let mut mesh_edits = Vec::new();
         let mut replace = false;
         for action in args.actions {
             match action {
@@ -89,6 +94,9 @@ impl App {
                     set_draft_objects(&mut draft, objects);
                 }
                 Action::PutObject { object } => {
+                    if let Some(mesh) = &object.imported_mesh {
+                        super::validation::validate_imported_mesh(mesh, object.uuid)?;
+                    }
                     let mut objects = model::objects(&draft);
                     let Some(existing) = objects
                         .iter_mut()
@@ -189,6 +197,19 @@ impl App {
                     object.transform = transform;
                     set_draft_objects(&mut draft, objects);
                 }
+                Action::SetObjectMirror { id, mirror } => {
+                    let mut objects = model::objects(&draft);
+                    let object = objects.iter_mut().find(|object| object.uuid == id)
+                        .ok_or_else(|| format!("object {id} does not exist"))?;
+                    if mirror.is_some_and(|mirror| !mirror.axes.iter().any(|enabled| *enabled)) {
+                        return Err("mirror must enable an axis; use null to clear it".into());
+                    }
+                    object.mirror = mirror;
+                    object.saved_mesh = None;
+                    object.saved_group_capture = None;
+                    object.saved_neural_field = None;
+                    set_draft_objects(&mut draft, objects);
+                }
                 Action::SetObjectParams { id, params } => {
                     let mut objects = model::objects(&draft);
                     let object = objects
@@ -274,6 +295,48 @@ impl App {
                     created.push(mesh::create_mesh(
                         &mut draft, name, vertices, faces, shading,
                     )?);
+                }
+                Action::SeparateMeshFaces {
+                    id,
+                    face_indices,
+                    name,
+                    expected_mesh_revision,
+                } => {
+                    created.push(mesh::separate_faces(
+                        &mut draft,
+                        id,
+                        face_indices,
+                        name,
+                        expected_mesh_revision,
+                    )?);
+                }
+                Action::ClipMeshPlane { id, expected_mesh_revision, axis, offset, keep } => {
+                    crate::app::mesh_plane_clip::clip_mesh_plane(
+                        &mut draft, id, expected_mesh_revision, axis, offset, keep,
+                    )?;
+                }
+                Action::SeparateMeshPolygon { id, expected_mesh_revision, projection, polygon, depth, name } => {
+                    created.push(crate::app::mesh_polygon_separate::separate_mesh_polygon(
+                        &mut draft, id, expected_mesh_revision, projection, polygon, depth, name,
+                    )?);
+                }
+                Action::SeparateMeshImagePolygon { id, expected_mesh_revision, panel,
+                    polygon_pixels, depth, name } => {
+                    super::image_mesh::validate_source(&draft,id)?;
+                    let polygon=panel.polygon(&polygon_pixels,self.scene_revision())?;
+                    created.push(crate::app::mesh_polygon_separate::separate_mesh_polygon(
+                        &mut draft,id,Some(expected_mesh_revision),panel.projection,polygon,depth,name)?);
+                }
+                Action::ClearMeshAppearance { id } => {
+                    mesh::clear_appearance(&mut draft, id)?;
+                }
+                Action::FairMeshRegion { id, face_indices, expected_mesh_revision,
+                    max_displacement, iterations, strength, crease_angle_degrees,
+                    coincident_position_policy } => {
+                    mesh_edits.push(mesh::fair_region(&mut draft, mesh::FairMeshRegionArgs {
+                        id, face_indices, expected_mesh_revision, max_displacement,
+                        iterations, strength, crease_angle_degrees, coincident_position_policy,
+                    })?);
                 }
                 Action::AddMeshVertices { id, vertices } => {
                     mesh::add_vertices(&mut draft, id, vertices)?;
@@ -594,7 +657,8 @@ impl App {
             json!({"revision": self.scene_revision(), "created_ids": created,
             "created_material_ids": created_materials,
             "created_variable_ids": created_variables,
-            "created_post_process_pass_ids": created_post_process_passes}),
+            "created_post_process_pass_ids": created_post_process_passes,
+            "mesh_edits": mesh_edits}),
         )
     }
 }

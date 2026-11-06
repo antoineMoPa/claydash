@@ -825,6 +825,12 @@ impl Renderer {
             self.poisson_mesh = Default::default();
             self.voxels = Default::default();
             self.mesh_vertex_count = 0;
+            // A new document starts mesh generations again at zero. Its first
+            // upload can otherwise match the previous document's sort key and
+            // reuse transparent indices from that document.
+            self.transparent_mesh_sort_key = None;
+            self.transparent_mesh_index_count = 0;
+            self.mesh_transparent_owners.clear();
         }
         self.neural_jobs = NeuralJobs::default();
         self.group_capture_cache.clear();
