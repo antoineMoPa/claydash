@@ -41,6 +41,7 @@ jobs:
         if: matrix.target != inputs.local_target
         with:
           persist-credentials: false
+          submodules: true
       - uses: actions/setup-python@v5
         if: matrix.target != inputs.local_target
         with:
