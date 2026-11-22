@@ -46,6 +46,7 @@ pub struct RenderArgs {
     pub output: PathBuf,
     pub size: [u32; 2],
     pub view: RenderView,
+    pub studio: Option<crate::studio::View>,
     pub pipeline: crate::model::RenderPipelineMode,
     pub show_seams: bool,
     pub part: Option<String>,
@@ -53,6 +54,7 @@ pub struct RenderArgs {
 
 impl RenderArgs {
     pub fn parse(args: &[String]) -> Result<Self, String> {
+        let mut studio = None;
         let mut pipeline = None;
         let mut source = None;
         let mut output = None;
@@ -64,6 +66,15 @@ impl RenderArgs {
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--studio" => {
+                    if studio.is_some() { return Err("--studio may only be supplied once".into()); }
+                    studio = Some(match args.next().map(String::as_str) {
+                        Some("bow") => crate::studio::View::Bow,
+                        Some("stern") => crate::studio::View::Stern,
+                        Some("deck") => crate::studio::View::Deck,
+                        _ => return Err("--studio requires bow, stern, or deck".into()),
+                    });
+                }
                 "--pipeline" => {
                     if pipeline.is_some() { return Err("--pipeline may only be supplied once".into()); }
                     pipeline = Some(match args.next().map(String::as_str) {
@@ -141,7 +152,14 @@ impl RenderArgs {
         if output == source {
             return Err("render output must differ from the source file".into());
         }
+        if studio.is_some() {
+            if pipeline.is_some() || view.is_some() || show_seams {
+                return Err("--studio has its own camera and lighting; omit --view, --pipeline and --show-seams".into());
+            }
+            if !size_given { size = [1000, 800]; }
+        }
         Ok(Self {
+            studio,
             source,
             output,
             size,
@@ -157,7 +175,7 @@ impl RenderArgs {
     ) -> Result<
         (
             Vec<SdfObject>,
-            Camera,
+            Vec<crate::model::MaterialAsset>,
             crate::model::SceneSeams,
             World,
             Vec<crate::model::PostProcessPass>,
@@ -166,7 +184,7 @@ impl RenderArgs {
     > {
         let source = std::fs::read_to_string(&self.source)
             .map_err(|e| format!("read {}: {e}", self.source.display()))?;
-        let (objects, seams, world, post) =
+        let (objects, assets, seams, world, post) =
             if self.source.extension().and_then(|s| s.to_str()) == Some("claydash") {
                 let scene = crate::document::deserialize_scene(source.as_bytes())?;
                 let mut tree = crate::model::DataTree::default();
@@ -208,6 +226,7 @@ impl RenderArgs {
                 }
                 (
                     objects,
+                    crate::model::material_assets(&tree),
                     seams,
                     crate::model::world(&tree),
                     crate::model::post_processing_ref(&tree).to_vec(),
@@ -253,15 +272,18 @@ impl RenderArgs {
                 if objects.is_empty() {
                     return Err("no geometry matches the requested part".into());
                 }
-                (objects, seams, World::default(), Vec::new())
+                (objects, Vec::new(), seams, World::default(), Vec::new())
             };
-        let camera = fitted_camera(&objects, self.size, self.view)?;
-        Ok((objects, camera, seams, world, post))
+        Ok((objects, assets, seams, world, post))
     }
 
     pub fn run(self) -> Result<(), String> {
         // Read, compile and frame before requesting a GPU or writing the output.
-        let (objects, camera, seams, mut world, post) = self.scene()?;
+        let (objects, assets, seams, mut world, post) = self.scene()?;
+        if let Some(view) = self.studio {
+            return crate::studio::render(&objects, &assets, view, self.size, &self.output, &Default::default(), &Default::default());
+        }
+        let camera = fitted_camera(&objects, self.size, self.view)?;
         world.render_pipeline = self.pipeline;
         let mut renderer = pollster::block_on(Renderer::new_headless(HeadlessOptions {
             width: self.size[0],
@@ -319,6 +341,7 @@ mod tests {
                 source: "scene.claydef".into(),
                 output: "scene.png".into(),
                 size: [1024, 768],
+                studio: None,
                 view: RenderView::Isometric,
                 pipeline: crate::model::RenderPipelineMode::Deferred,
                 show_seams: false,
@@ -352,6 +375,15 @@ mod tests {
             assert!(args(values).is_err(), "{values:?}");
         }
     }
+    #[test]
+    fn studio_preset_has_reference_size_and_explicit_views() {
+        let studio = args(&["boat.claydash", "--studio", "stern"]).unwrap();
+        assert_eq!(studio.studio, Some(crate::studio::View::Stern));
+        assert_eq!(studio.size, [1000, 800]);
+        assert!(args(&["boat.claydash", "--studio", "bow", "--view", "top"]).is_err());
+        assert!(args(&["boat.claydash", "--studio", "other"]).is_err());
+    }
+
     #[test]
     fn pipeline_override_is_explicit_and_validated() {
         assert_eq!(args(&["scene.claydef", "--pipeline", "exact"]).unwrap().pipeline, crate::model::RenderPipelineMode::Exact);
@@ -425,6 +457,7 @@ mod tests {
             source,
             output: output.clone(),
             size: [96, 96],
+            studio: None,
             view: RenderView::Isometric,
             pipeline: crate::model::RenderPipelineMode::Deferred,
             show_seams: false,
@@ -465,6 +498,7 @@ mod tests {
             source: source.clone(),
             output: source.with_extension("png"),
             size: [128, 128],
+            studio: None,
             view: RenderView::Top,
             pipeline: crate::model::RenderPipelineMode::Deferred,
             show_seams: false,

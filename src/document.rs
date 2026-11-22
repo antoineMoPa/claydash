@@ -22,6 +22,8 @@ pub enum FileMenuAction {
     SaveAs,
     #[cfg(target_arch = "wasm32")]
     SaveNamed(String),
+    #[cfg(not(target_arch = "wasm32"))]
+    Studio(crate::studio::View),
     Render(RenderFormat),
     ExportGlb,
 }

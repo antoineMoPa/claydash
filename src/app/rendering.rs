@@ -341,7 +341,12 @@ impl App {
             self.encoding.as_ref().map(|job| {
                 if job.cancelling {
                     crate::ui::RenderProgress::Cancelling
-                } else if job.format == crate::document::RenderFormat::WebP {
+                } else if matches!(job.kind, EncodingKind::Studio) {
+                    crate::ui::RenderProgress::Studio {
+                        completed: job.control.completed.load(Ordering::Relaxed),
+                        total: job.total,
+                    }
+                } else if matches!(job.kind, EncodingKind::Still) {
                     crate::ui::RenderProgress::Finalizing
                 } else {
                     crate::ui::RenderProgress::Encoding {
@@ -422,12 +427,12 @@ impl App {
         match job.completed.try_recv() {
             Ok(result) => {
                 let cancelled = job.cancelling;
-                let format = job.format;
+                let video = matches!(job.kind, EncodingKind::Video);
                 self.encoding = None;
                 if !cancelled {
                     if let Err(error) = result {
                         self.document.set_error(
-                            if format == crate::document::RenderFormat::WebP {
+                            if !video {
                                 "render the scene"
                             } else {
                                 "encode the animation"
@@ -438,12 +443,12 @@ impl App {
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                let format = job.format;
+                let video = matches!(job.kind, EncodingKind::Video);
                 let cancelled = job.cancelling;
                 self.encoding = None;
                 if !cancelled {
                     self.document.set_error(
-                        if format == crate::document::RenderFormat::WebP {
+                        if !video {
                             "render the scene"
                         } else {
                             "encode the animation"
@@ -897,7 +902,7 @@ impl App {
                                         completed,
                                         total: 0,
                                         cancelling: false,
-                                        format: crate::document::RenderFormat::WebP,
+                                        kind: EncodingKind::Still,
                                     });
                                 }
                                 PendingRender::Video {
@@ -971,7 +976,7 @@ impl App {
                                             completed,
                                             total: end_frame - start_frame + 1,
                                             cancelling: false,
-                                            format: crate::document::RenderFormat::Mp4,
+                                            kind: EncodingKind::Video,
                                         });
                                     }
                                 }

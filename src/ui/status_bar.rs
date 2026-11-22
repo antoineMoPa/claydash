@@ -6,6 +6,8 @@ const BAR_HEIGHT: f32 = 24.0;
 #[derive(Clone, Copy)]
 pub(crate) enum RenderProgress {
     Image,
+    #[cfg(not(target_arch = "wasm32"))]
+    Studio { completed: u32, total: u32 },
     Video {
         completed: u32,
         total: u32,
@@ -171,6 +173,10 @@ impl UiState {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let (title, completed, total) = match progress {
                             RenderProgress::Image => ("Rendering image", None, None),
+                            #[cfg(not(target_arch = "wasm32"))]
+                            RenderProgress::Studio { completed, total } => {
+                                ("Rendering studio PNG", Some(completed), Some(total))
+                            }
                             RenderProgress::Video { completed, total } => {
                                 ("Rendering animation", Some(completed), Some(total))
                             }
@@ -190,7 +196,11 @@ impl UiState {
                             cancel = ui.small_button("Cancel").clicked();
                         }
                         if let (Some(completed), Some(total)) = (completed, total) {
-                            ui.label(format!("{completed}/{total} frames"));
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let unit = if matches!(progress, RenderProgress::Studio { .. }) { "rows" } else { "frames" };
+                            #[cfg(target_arch = "wasm32")]
+                            let unit = "frames";
+                            ui.label(format!("{completed}/{total} {unit}"));
                             ui.add(
                                 egui::ProgressBar::new(completed as f32 / total.max(1) as f32)
                                     .desired_width(150.0)

@@ -13,6 +13,8 @@ pub struct ExportGlbArgs {
     object_ids: Option<Vec<uuid::Uuid>>,
     #[serde(default)]
     overwrite: bool,
+    #[serde(default)]
+    bake_ao: bool,
 }
 
 impl App {
@@ -44,6 +46,7 @@ impl App {
             }
         }
         let options = ExportOptions {
+            bake_ao: args.bake_ao,
             direct_error: args.direct_error,
             direct_resolution: args.direct_resolution.unwrap_or(crate::renderer::direct_mesh::DEFAULT_RESOLUTION),
             geometry: args.geometry,

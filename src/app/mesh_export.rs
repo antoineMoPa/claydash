@@ -2,7 +2,7 @@ use super::*;
 use super::mesh_export_options::{ExportOptions, MeshKind};
 use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
 use crate::renderer::computation::{Computation, Stage};
-use crate::renderer::poisson_mesh::textured_glb::{Page, PAGE_TRIANGLES};
+use crate::renderer::poisson_mesh::textured_glb::{Page, material_pages};
 use crate::renderer::poisson_mesh::BuildProgress;
 
 #[derive(serde::Serialize)]
@@ -29,6 +29,7 @@ enum ExportResult {
 pub(super) struct MeshExportJob {
     id: uuid::Uuid,
     overwrite: bool,
+    bake_ao: bool,
     publication: Arc<Mutex<Publication>>,
     completed: Option<Receiver<Result<ExportResult, String>>>,
     stage: Arc<Mutex<ExportStage>>,
@@ -47,6 +48,7 @@ enum ExportStage {
     PreparingMesh { name: String, index: usize, total: usize },
     Capturing { name: String, index: usize, total: usize, direct: bool },
     Baking { index: usize, total: usize },
+    AmbientOcclusion,
     Writing,
 }
 
@@ -78,6 +80,7 @@ impl App {
                     (stage, Some(name.clone()), *index, *total, Some(percent))
                 }
                 ExportStage::Baking { index, total } => ("baking", None, *index, *total, None),
+                ExportStage::AmbientOcclusion => ("baking_ao", None, 0, 0, None),
                 ExportStage::Writing => ("writing", None, 0, 0, None),
             };
             return Ok(json!({"id":id,"path":job.path,"status":"running", "stage":stage,
@@ -218,7 +221,7 @@ impl App {
             }).unwrap_or_else(|_| Err("Mesh export failed unexpectedly".into()));
             let _ = sender.send(result);
         });
-        self.mesh_export = Some(MeshExportJob { id, overwrite, publication: Arc::default(), completed: Some(completed), stage, work,
+        self.mesh_export = Some(MeshExportJob { id, overwrite, bake_ao: options.bake_ao, publication: Arc::default(), completed: Some(completed), stage, work,
             source, assets: crate::model::material_assets(&self.tree),
             camera: self.camera.clone(), world: crate::model::world(&self.tree), path,
             pages: Vec::new(), texture: None, texture_index: 0 });
@@ -240,21 +243,7 @@ impl App {
                 Ok(Ok(ExportResult::Meshes(objects))) => {
                     job.completed = None;
                     for (root, object, colors) in objects {
-                        let baked = if colors.is_none() && job.source.iter()
-                            .find(|source| source.uuid == root)
-                            .is_some_and(|source| source.material_id.is_none()) {
-                            object.mesh.baked_texture.clone()
-                        } else { None };
-                        let materials=if colors.is_none() && baked.is_none() { crate::renderer::poisson_mesh::solid_glb::materials_for_mesh(&job.source,&object.mesh).map(Arc::new) } else { None };
-                        let mesh = Arc::new(object.mesh);
-                        let page_triangles = if baked.is_some() || colors.is_some() || materials.is_some() { mesh.triangles.len().max(1) } else { PAGE_TRIANGLES };
-                        for first in (0..mesh.triangles.len()).step_by(page_triangles) {
-                            let count = (mesh.triangles.len() - first).min(page_triangles);
-                            job.pages.push(Page { detail_maps: None, name: object.name.clone(), root,
-                                mesh: mesh.clone(), first, count,
-                                size: if colors.is_some() { 64 } else { baked.as_ref().map_or_else(|| crate::renderer::poisson_mesh::textured_glb::page_size(count), |texture| texture.size) },
-                                png: baked.as_ref().map_or_else(Vec::new, |texture| texture.png.clone()), colors: colors.clone(), materials: materials.clone() });
-                        }
+                        job.pages.extend(material_pages(&job.source, root, object, colors));
                     }
                     if job.pages.is_empty() { finish = Some(Err("There are no meshes to export".into())); }
                 }
@@ -289,17 +278,23 @@ impl App {
                 }
             }
         } else {
-            *job.stage.lock().unwrap() = ExportStage::Writing;
+            let stage = job.stage.clone();
+            *stage.lock().unwrap() = if job.bake_ao { ExportStage::AmbientOcclusion } else { ExportStage::Writing };
             let pages = std::mem::take(&mut job.pages);
             let path = job.path.clone();
             let cancel = job.work.cancel.clone();
             let publication = job.publication.clone();
             let overwrite = job.overwrite;
+            let bake_ao = job.bake_ao;
             let (sender, receiver) = channel();
             job.completed = Some(receiver);
             std::thread::spawn(move || {
                 let result = crate::renderer::poisson_mesh::textured_glb::encode_textured(&pages)
-                    .and_then(|bytes| write_glb(&path, &bytes, &cancel, &publication, overwrite))
+                    .and_then(|bytes| if bake_ao { crate::studio::bake::bake(bytes, &cancel) } else { Ok(bytes) })
+                    .and_then(|bytes| {
+                        *stage.lock().unwrap() = ExportStage::Writing;
+                        write_glb(&path, &bytes, &cancel, &publication, overwrite)
+                    })
                     .map(|_| ExportResult::Written);
                 let _ = sender.send(result);
             });
@@ -337,6 +332,7 @@ impl App {
                 }
             }
             ExportStage::Baking { index, total } => format!("Baking materials · texture {index}/{total}"),
+            ExportStage::AmbientOcclusion => "Baking ambient occlusion…".into(),
             ExportStage::Writing => "Writing Glb…".into(),
         }};
         let estimate = match &*job.stage.lock().unwrap() {
@@ -345,6 +341,7 @@ impl App {
                 BuildProgress::from_code(job.work.progress.load(Ordering::Relaxed)).snapshot(&job.work),
             ExportStage::Baking { index, total } => job.work.snapshot(Stage::TextureBake,
                 Some((index.saturating_sub(1) * 100 / (*total).max(1)) as u32)),
+            ExportStage::AmbientOcclusion => job.work.snapshot(Stage::TextureBake, None),
             ExportStage::Writing => job.work.snapshot(Stage::Writing, None),
         };
         let mut cancel = false;
@@ -398,7 +395,7 @@ fn changing_documents_cancels_an_export_before_it_can_reupload_the_old_scene() {
     let work = Computation::new(Stage::Sampling);
     let cancel = work.cancel.clone();
     app.mesh_export = Some(MeshExportJob {
-        id: uuid::Uuid::new_v4(), overwrite: false, publication: Arc::default(),
+        id: uuid::Uuid::new_v4(), overwrite: false, bake_ao: false, publication: Arc::default(),
         completed: None,
         stage: Arc::new(Mutex::new(ExportStage::Writing)),
         work,
@@ -420,7 +417,7 @@ fn inactive_window_finishes_exports_without_a_viewport_redraw() {
     app.window_occluded = true;
     let (sender, receiver) = channel();
     app.mesh_export = Some(MeshExportJob {
-        id: uuid::Uuid::new_v4(), overwrite: false, publication: Arc::default(),
+        id: uuid::Uuid::new_v4(), overwrite: false, bake_ao: false, publication: Arc::default(),
         completed: Some(receiver),
         stage: Arc::new(Mutex::new(ExportStage::Writing)),
         work: Computation::new(Stage::Writing),
@@ -449,7 +446,7 @@ fn voxel_export_writes_glb_without_requesting_a_material_bake() {
     let path = std::env::temp_dir().join(format!("claydash-voxel-export-{}.glb", uuid::Uuid::new_v4()));
     let (sender, receiver) = channel();
     app.mesh_export = Some(MeshExportJob {
-        id: uuid::Uuid::new_v4(), overwrite: false, publication: Arc::default(),
+        id: uuid::Uuid::new_v4(), overwrite: false, bake_ao: false, publication: Arc::default(),
         completed: Some(receiver), stage: Arc::new(Mutex::new(ExportStage::Writing)),
         work: Computation::new(Stage::Sampling), source, assets: Vec::new(), camera: app.camera.clone(),
         world: crate::model::World::default(), path: path.clone(), pages: Vec::new(),

@@ -129,6 +129,15 @@ pub(super) fn draw_file_menu(
                 });
             });
             ui.menu_button("Render", |ui| {
+                #[cfg(not(target_arch = "wasm32"))]
+                ui.menu_button("Studio PNG", |ui| {
+                    for view in crate::studio::View::ALL {
+                        if ui.button(view.label()).clicked() {
+                            action = Some(FileMenuAction::Studio(view));
+                            ui.close();
+                        }
+                    }
+                });
                 for format in crate::document::RenderFormat::ALL {
                     if ui.button(format.label()).clicked() {
                         action = Some(FileMenuAction::Render(format));

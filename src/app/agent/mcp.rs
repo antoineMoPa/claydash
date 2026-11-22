@@ -410,6 +410,7 @@ pub(super) fn mcp_tools() -> Vec<Value> {
             "path":{"type":"string","minLength":1,"description":"Absolute output file path; parent directory must exist."},
             "geometry":{"enum":["current_representation","smooth","direct","voxels"],"default":"current_representation","description":"Mesh export representation. smooth selects Poisson meshing and does not enable smooth Boolean blends."},
             "direct_resolution":{"type":"integer","minimum":8,"maximum":256,"description":"Only for geometry:direct. Defaults to 32."},
+            "bake_ao":{"type":"boolean","description":"Bake local scene visibility into a glTF occlusion texture."},
             "direct_error":{"type":"number","exclusiveMinimum":0,"description":"Maximum world-space surface deviation for geometry:direct; default 0.032/direct_resolution."},
             "voxel_resolution":{"type":"integer","minimum":8,"maximum":128,"description":"Only for geometry:voxels. Defaults to 32."},
             "object_ids":{"type":"array","items":uuid,"minItems":1},

@@ -19,6 +19,8 @@ pub(super) enum MeshKind {
 
 #[derive(Clone, Copy)]
 pub(super) struct ExportOptions {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub bake_ao: bool,
     pub geometry: ExportGeometry,
     pub voxel_resolution: u32,
     pub direct_resolution: u32,
@@ -28,6 +30,8 @@ pub(super) struct ExportOptions {
 impl Default for ExportOptions {
     fn default() -> Self {
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            bake_ao: false,
             geometry: ExportGeometry::default(),
             direct_resolution: crate::renderer::direct_mesh::DEFAULT_RESOLUTION,
             direct_error: None,
@@ -118,6 +122,8 @@ impl App {
                     });
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.checkbox(&mut options.bake_ao, "Bake ambient occlusion");
             ui.weak("Exports the selection, or the whole scene when nothing is selected.");
             ui.horizontal(|ui| {
                 export = ui.button("Export…").clicked();

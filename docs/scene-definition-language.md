@@ -12,6 +12,20 @@ claydash render examples/table.claydef --view top --output table-top.png
 
 The command reads and compiles the file, then renders an orthographic view fitted to the scene bounds with a 10-pixel margin on the limiting dimension. Deferred rendering is the default; `--pipeline exact` selects exact ray shading. `--view` accepts `isometric` (the default three-quarter view), `top`, `left`, or `right`. Top looks down from +Y with −Z upward; left looks from −X and right from +X, with +Y upward in both side views. The default output uses the input path with a `.png` extension, at 1024 × 768 pixels. `--output` (or `-o`) and `--size WIDTHxHEIGHT` override these defaults. A local GPU is required; no desktop window, running Claydash instance, MCP connection, or agent session is needed.
 
+### Studio PNG and baked ambient occlusion
+
+In the desktop editor, open the scene and choose **Render → Studio PNG → Bow**, **Stern**, or **Deck**. Choose a PNG destination. The same preset is available headlessly.
+
+```sh
+for view in bow stern deck; do
+  claydash render boat.claydash --studio "$view" --output "boat-$view.png"
+done
+```
+
+Studio captures default to 1000 × 800. Use `--size` for another aspect ratio. The orthographic camera fits the projected mesh vertices with a 17% framing margin. Two disk lights, cool sky fill and a matte floor follow the model bounds. Glass uses the exported material’s alpha. The studio traces triangles on the CPU. Procedural materials use Claydash’s native GPU material baker.
+
+To include AO in a model, clear the selection to export the whole assembly, open **File → Export → Glb…**, choose the geometry, and enable **Bake ambient occlusion**. In the native agent API, pass `"bake_ao": true` to `ExportGlb`. The bake traces 24 cosine-weighted directions per surface texel over 18% of the assembly’s longest dimension. Transparent surfaces attenuate each ray by their opacity. The glTF occlusion textures have their own UV islands sized by world-space triangle dimensions. Triangle corners are split at atlas seams while the surface, base colors and authored UVs are preserved. The floor and its shadow exist only in the PNG.
+
 The parser, evaluator, deterministic part IDs and geometry bounds live in the public `claydash_engine::scene_language` module. `compile_scene(source)` returns native parts plus seams and connections. `compile_with_assets(source, loader)` additionally resolves declared triangle assets through a caller-supplied loader. The legacy `compile(source)` returns geometry only and rejects construction metadata; `bounds(objects)` supplies world-space bounds. Both APIs are usable independently of the application and agent transport, including WebAssembly builds.
 
 ## Recipes

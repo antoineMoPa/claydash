@@ -229,12 +229,19 @@ enum PendingRender {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+enum EncodingKind {
+    Still,
+    Studio,
+    Video,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 struct NativeEncoding {
     control: Arc<crate::render_export::EncodingControl>,
     completed: Receiver<Result<(), String>>,
     total: u32,
     cancelling: bool,
-    format: crate::document::RenderFormat,
+    kind: EncodingKind,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -763,6 +770,33 @@ impl App {
                 }
             }
             FileMenuAction::ExportGlb => self.request_mesh_export(),
+            FileMenuAction::Studio(view) => {
+                if self.pending_render.is_some() || self.encoding.is_some() {
+                    return;
+                }
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("PNG image", &["png"])
+                    .set_file_name("studio.png")
+                    .save_file()
+                else { return };
+                let objects = crate::model::objects(&self.tree);
+                let assets = crate::model::material_assets(&self.tree);
+                let control = Arc::new(crate::render_export::EncodingControl::default());
+                let worker = control.clone();
+                let (sender, completed) = channel();
+                std::thread::spawn(move || {
+                    let result = crate::studio::render(
+                        &objects, &assets, view, [1000, 800], &path,
+                        &worker.cancelled, &worker.completed,
+                    );
+                    let _ = sender.send(result);
+                });
+                self.encoding = Some(NativeEncoding {
+                    control, completed, total: 800,
+                    cancelling: false, kind: EncodingKind::Studio,
+                });
+                self.egui.request_repaint();
+            }
             FileMenuAction::Render(format) => {
                 if self.pending_render.is_some() || self.encoding.is_some() {
                     return;
@@ -1449,7 +1483,7 @@ mod file_action_tests {
             completed,
             total: 1,
             cancelling: false,
-            format: crate::document::RenderFormat::WebP,
+            kind: EncodingKind::Still,
         });
         app.pending_render = Some(PendingRender::Still {
             path: "unused.webp".into(),

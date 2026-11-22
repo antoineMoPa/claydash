@@ -2,6 +2,8 @@ mod animation;
 mod app;
 #[cfg(not(target_arch = "wasm32"))]
 mod cli;
+#[cfg(not(target_arch = "wasm32"))]
+mod studio;
 use claydash_engine::camera;
 mod cloud_edit;
 mod commands;

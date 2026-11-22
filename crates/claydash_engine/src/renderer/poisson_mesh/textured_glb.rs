@@ -17,6 +17,34 @@ pub struct Page {
     pub materials:
         Option<std::sync::Arc<std::collections::BTreeMap<uuid::Uuid, crate::model::Material>>>,
 }
+/// Partition a finished world-space mesh for the material encoder. Empty PNG
+/// pages without vertex colors or solid materials require a GPU material bake.
+pub fn material_pages(
+    source: &[crate::model::SdfObject],
+    root: uuid::Uuid,
+    object: super::glb::ObjectMesh,
+    colors: Option<std::sync::Arc<Vec<[f32; 4]>>>,
+) -> Vec<Page> {
+    use std::sync::Arc;
+    let mesh = Arc::new(object.mesh);
+    let baked = mesh.baked_texture.as_ref().filter(|_| colors.is_none()
+        && source.iter().find(|o| o.uuid == root).is_some_and(|o| o.material_id.is_none()));
+    let materials = if colors.is_none() && baked.is_none() {
+        super::solid_glb::materials_for_mesh(source, &mesh).map(Arc::new)
+    } else { None };
+    let per_page = if baked.is_some() || colors.is_some() || materials.is_some() {
+        mesh.triangles.len().max(1)
+    } else { PAGE_TRIANGLES };
+    (0..mesh.triangles.len()).step_by(per_page).map(|first| {
+        let count = (mesh.triangles.len() - first).min(per_page);
+        Page {
+            detail_maps: None, name: object.name.clone(), root, mesh: mesh.clone(), first, count,
+            size: if colors.is_some() { 64 } else { baked.map_or_else(|| page_size(count), |b| b.size) },
+            png: baked.map_or_else(Vec::new, |b| b.png.clone()), colors: colors.clone(),
+            materials: materials.clone(),
+        }
+    }).collect()
+}
 pub fn page_size(count: usize) -> u32 {
     ((count as f32).sqrt().ceil() as u32 * TILE)
         .next_power_of_two()
