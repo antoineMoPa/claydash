@@ -4,6 +4,8 @@ Claydash is an experimental 3D modeler built with Rust, winit, wgpu, and egui. I
 
 [Try the web app](https://app.claydash.com/) (the live version may differ from `main`).
 
+Agents love working with Claydash MCP / CLI.
+
 ## Get started
 
 Run the native editor:
